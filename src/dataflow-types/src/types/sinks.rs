@@ -9,6 +9,7 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -20,7 +21,8 @@ use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
 
 use crate::client::controller::storage::CollectionMetadata;
-use crate::connections::{CsrConnection, KafkaConnection};
+use crate::connections::{CsrConnection, KafkaConnection, StringOrSecret};
+use crate::PopulateClientConfig;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -63,9 +65,9 @@ impl Arbitrary for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
 impl RustType<ProtoSinkDesc> for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoSinkDesc {
         ProtoSinkDesc {
+            connection: Some(self.connection.into_proto()),
             from: Some(self.from.into_proto()),
             from_desc: Some(self.from_desc.into_proto()),
-            connection: Some(self.connection.into_proto()),
             envelope: self.envelope.into_proto(),
             as_of: Some(self.as_of.into_proto()),
         }
@@ -216,6 +218,7 @@ impl RustType<ProtoKafkaSinkConsistencyConnection> for KafkaSinkConsistencyConne
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection {
     pub connection: KafkaConnection,
+    pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     pub topic_prefix: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -231,9 +234,22 @@ pub struct KafkaSinkConnection {
     pub fuel: usize,
 }
 
+impl PopulateClientConfig for KafkaSinkConnection {
+    fn kafka_connection(&self) -> &KafkaConnection {
+        &self.connection
+    }
+    fn options(&self) -> &BTreeMap<String, StringOrSecret> {
+        &self.options
+    }
+    fn drop_option_keys() -> HashSet<&'static str> {
+        ["statistics.interval.ms", "isolation.level"].into()
+    }
+}
+
 proptest::prop_compose! {
     fn any_kafka_sink_connection()(
         connection in any::<KafkaConnection>(),
+        options in any::<BTreeMap<String, StringOrSecret>>(),
         topic in any::<String>(),
         topic_prefix in any::<String>(),
         key_desc_and_indices in any::<Option<(RelationDesc, Vec<usize>)>>(),
@@ -247,6 +263,7 @@ proptest::prop_compose! {
     ) -> KafkaSinkConnection {
         KafkaSinkConnection {
             connection,
+            options,
             topic,
             topic_prefix,
             key_desc_and_indices,
@@ -308,6 +325,11 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
     fn into_proto(&self) -> ProtoKafkaSinkConnection {
         ProtoKafkaSinkConnection {
             connection: Some(self.connection.into_proto()),
+            options: self
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into_proto()))
+                .collect(),
             topic: self.topic.clone(),
             topic_prefix: self.topic_prefix.clone(),
             key_desc_and_indices: self.key_desc_and_indices.into_proto(),
@@ -322,10 +344,16 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
     }
 
     fn from_proto(proto: ProtoKafkaSinkConnection) -> Result<Self, TryFromProtoError> {
+        let options: Result<_, TryFromProtoError> = proto
+            .options
+            .into_iter()
+            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+            .collect();
         Ok(KafkaSinkConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoKafkaSinkConnection::connection")?,
+            options: options?,
             topic: proto.topic,
             topic_prefix: proto.topic_prefix,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
@@ -451,6 +479,7 @@ pub struct PersistSinkConnectionBuilder {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionBuilder {
     pub connection: KafkaConnection,
+    pub options: BTreeMap<String, StringOrSecret>,
     pub format: KafkaSinkFormat,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
@@ -470,6 +499,18 @@ pub struct KafkaSinkConnectionBuilder {
     // Source dependencies for exactly-once sinks.
     pub transitive_source_dependencies: Vec<GlobalId>,
     pub retention: KafkaSinkConnectionRetention,
+}
+
+impl PopulateClientConfig for KafkaSinkConnectionBuilder {
+    fn kafka_connection(&self) -> &crate::connections::KafkaConnection {
+        &self.connection
+    }
+    fn options(&self) -> &BTreeMap<String, crate::connections::StringOrSecret> {
+        &self.options
+    }
+    fn drop_option_keys() -> HashSet<&'static str> {
+        ["statistics.interval.ms", "isolation.level"].into()
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

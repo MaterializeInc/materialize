@@ -326,6 +326,18 @@ reduce
 ----
 #0
 
+## list_index(list_create, literal), e.g., list[f1, f2][2] --> f2
+## See rest of the tests for this in list.slt
+
+reduce
+(call_variadic list_index [
+    (call_variadic (list_create int32) [#1 #2])
+    2
+])
+[int32 int32 int32]
+----
+#2
+
 ## Case/If optimizations
 
 reduce

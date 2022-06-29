@@ -17,7 +17,6 @@ Flag | Default | Modifies
 -----|---------|----------
 [`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags.
-[`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for HTTP and SQL connections.
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements.
 [`--log-filter`](#log-filter) | `info` | Which log messages to emit.
@@ -219,8 +218,6 @@ compatibility][moz-intermediate] level, which requires TLS v1.2+ and recent
 cipher suites. Using weaker cipher suites or older TLS protocol versions is not
 supported.
 
-[moz-intermediate]: https://wiki.mozilla.org/Security/Server_Side_TLS#Intermediate_compatibility_.28recommended.29
-
 #### Generating TLS certificates
 
 You can generate a self-signed certificate for development use with the
@@ -234,42 +231,10 @@ $ openssl req -new -x509 -days 365 -nodes -text \
 Production deployments typically should not use self-signed certificates.
 Acquire a certificate from a proper certificate authority (CA) instead.
 
-[OpenSSL]: https://www.openssl.org
-
-### Experimental mode
-
-{{< warning >}}
-
-If you want to use experimental mode, you should **really** read the section below!
-
-{{< /warning >}}
-
-Materialize offers access to experimental features through the `--experimental`
-flag. Unlike most features in Materialize, experimental features' syntax and/or
-semantics can shift at any time, and **there is no guarantee that future
-versions of Materialize will be interoperable with the experimental features**.
-
-Using experimental mode means that **you are likely to lose access to all of
-your sources and views within Materialize** and will have to recreate them and
-re-ingest all of your data.
-
-Because of this volatility:
-- You can only initialize new servers in experimental mode.
-- Servers started in experimental mode must always be started in experimental
-  mode.
-
-We recommend only using experimental mode to explore Materialize, i.e.
-absolutely never in production. If your explorations yield interesting results
-or things you'd like to see changed, let us know on [GitHub][gh-feature].
-
-#### Disabling experimental mode
-
-You cannot disable experimental mode for a server. You can, however, extract your
-view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
-etc.), and then create a new server with those items.
-
 [api-indexes]: /overview/key-concepts/#indexes
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
+[moz-intermediate]: https://wiki.mozilla.org/Security/Server_Side_TLS#Intermediate_compatibility_.28recommended.29
+[OpenSSL]: https://www.openssl.org
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
 [sys-cat]: /sql/system-catalog

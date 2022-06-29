@@ -33,6 +33,7 @@ Array
 As
 Asc
 At
+Authority
 Availability
 Avro
 Begin
@@ -42,12 +43,14 @@ Boolean
 Both
 Bpchar
 Broker
+Brokers
 Bucket
 By
 Bytes
 Cascade
 Case
 Cast
+Certificate
 Chain
 Channel
 Char
@@ -178,6 +181,7 @@ Map
 Matching
 Materialize
 Materialized
+Mechanisms
 Message
 Metadata
 Minute
@@ -204,6 +208,7 @@ On
 Only
 Operator
 Optimized
+Optimizer
 Option
 Or
 Order
@@ -211,6 +216,7 @@ Ordinality
 Outer
 Over
 Partition
+Password
 Persist
 Physical
 Plan
@@ -251,6 +257,7 @@ Rollback
 Row
 Rows
 S3
+Sasl
 Scan
 Schema
 Schemas
@@ -274,6 +281,7 @@ Some
 Source
 Sources
 Sqs
+Ssl
 Start
 Stdin
 Stdout
@@ -295,6 +303,7 @@ Timestamp
 Timing
 To
 Topic
+Trace
 Trailing
 Transaction
 Trim
@@ -310,6 +319,7 @@ Unknown
 Update
 Upsert
 User
+Username
 Users
 Using
 Value

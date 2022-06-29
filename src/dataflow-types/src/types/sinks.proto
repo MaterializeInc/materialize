@@ -74,6 +74,7 @@ message ProtoKafkaSinkConnection {
     bool exactly_once = 9;
     repeated mz_repr.global_id.ProtoGlobalId transitive_source_dependencies = 10;
     uint64 fuel = 11;
+    map<string, mz_dataflow_types.types.connections.ProtoStringOrSecret> options = 12;
 }
 
 message ProtoPublishedSchemaInfo {

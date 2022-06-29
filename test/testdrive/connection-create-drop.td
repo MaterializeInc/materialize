@@ -28,7 +28,7 @@ testconn   kafka
 > SHOW CREATE CONNECTION testconn
 Connection   "Create Connection"
 ---------------------------------
-materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER '${testdrive.kafka-addr}'"
+materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
 
 
 > DROP CONNECTION testconn
@@ -111,7 +111,6 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 {"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "mudskipper"}}, "after": {"row": {"id": 1, "creature": "salamander"}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
-
 
 
 > CREATE CONNECTION csr_conn
@@ -240,3 +239,45 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 importee1  importee2            mz_offset
 -----------------------------------------
 (f)        "(\"(1234,5678)\")"  1
+
+# Test invalid connection parameter combinations
+! CREATE CONNECTION not_a_secret
+  FOR KAFKA
+    BROKER '',
+    SASL PASSWORD = ''
+contains:invalid SASL PASSWORD: must provide a secret value
+
+! CREATE CONNECTION not_a_secret
+  FOR KAFKA
+    BROKER '',
+    SSL KEY = ''
+contains:invalid SSL KEY: must provide a secret value
+
+! CREATE CONNECTION duplicate_option
+  FOR KAFKA
+    BROKER '',
+    BROKER ''
+contains:BROKER specified more than once
+
+! CREATE CONNECTION no_broker
+  FOR KAFKA
+    SASL MECHANISMS = 'PLAIN';
+contains:must set either BROKER or BROKERS
+
+! CREATE CONNECTION ssl_underspeced
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    BROKERS ['kafka:9092', 'kafka:9093'];
+contains:cannot set BROKER and BROKERS
+
+! CREATE CONNECTION ssl_underspeced
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    SSL CERTIFICATE = '';
+contains:under-specified security configuration
+
+! CREATE CONNECTION sasl_underspeced
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = 'PLAIN';
+contains:under-specified security configuration

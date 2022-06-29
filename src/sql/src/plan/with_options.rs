@@ -12,10 +12,14 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
+use mz_dataflow_types::connections::StringOrSecret;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
+use mz_repr::GlobalId;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
+use crate::names::ResolvedObjectName;
+use crate::plan::Aug;
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, anyhow::Error>;
@@ -23,6 +27,47 @@ pub trait TryFromValue<T>: Sized {
 
 pub trait ImpliedValue: Sized {
     fn implied_value() -> Result<Self, anyhow::Error>;
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Secret(GlobalId);
+
+impl From<Secret> for GlobalId {
+    fn from(secret: Secret) -> Self {
+        secret.0
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Secret {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, anyhow::Error> {
+        match StringOrSecret::try_from_value(v)? {
+            StringOrSecret::Secret(id) => Ok(Secret(id)),
+            _ => bail!("must provide a secret value"),
+        }
+    }
+}
+
+impl ImpliedValue for Secret {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide a secret value")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, anyhow::Error> {
+        Ok(match v {
+            WithOptionValue::Secret(ResolvedObjectName::Object { id, .. }) => {
+                StringOrSecret::Secret(id)
+            }
+            v => StringOrSecret::String(String::try_from_value(v)?),
+        })
+    }
+}
+
+impl ImpliedValue for StringOrSecret {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide a string or secret value")
+    }
 }
 
 impl TryFromValue<Value> for Interval {
@@ -143,8 +188,10 @@ impl<V: TryFromValue<Value>> ImpliedValue for Vec<V> {
     }
 }
 
-impl<V: TryFromValue<Value>> TryFromValue<Value> for Option<V> {
-    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+impl<T: AstInfo, V: TryFromValue<WithOptionValue<T>>> TryFromValue<WithOptionValue<T>>
+    for Option<V>
+{
+    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, anyhow::Error> {
         Ok(Some(V::try_from_value(v)?))
     }
 }

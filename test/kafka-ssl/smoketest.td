@@ -111,9 +111,9 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
   WITH (
       security_protocol = 'SSL',
       ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_key_password = SECRET ssl_key_password_kafka,
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      ssl_key_password = SECRET ssl_key_password_kafka
+      ssl_ca_pem = '${arg.ca-crt}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
@@ -162,16 +162,27 @@ contains:error publishing kafka schemas for sink: unable to publish value schema
   ENVELOPE DEBEZIUM
 contains:self signed certificate in certificate chain
 
-# Ensure that connectors work with SSL basic_auth
-> CREATE CONNECTION kafka_ssl
-  FOR KAFKA BROKER 'kafka:9092'
+# missing config
+! CREATE MATERIALIZED SOURCE data
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
-      ssl_key_pem = SECRET ssl_key_kafka,
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
       ssl_ca_pem = '${arg.ca-crt}',
       ssl_key_password = SECRET ssl_key_password_kafka
   )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+contains:missing SSL KEY (ssl.key.pem)
+
+# Ensure that connectors work with SSL basic_auth
+> CREATE CONNECTION kafka_ssl
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    SSL KEY = SECRET ssl_key_kafka,
+    SSL KEY PASSWORD = SECRET ssl_key_password_kafka,
+    SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
 
 > CREATE MATERIALIZED SOURCE connector_source
   FROM KAFKA CONNECTION kafka_ssl
@@ -192,3 +203,22 @@ a
 ---
 1
 2
+
+# Options that conflict between CONNECTION and WITH error
+
+! CREATE SOURCE IF NOT EXISTS duplicate_option_specified
+  FROM KAFKA CONNECTION kafka_ssl
+  TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+    security_protocol = 'ssl'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_key_pem = SECRET ssl_key_csr,
+      ssl_certificate_pem = '${arg.materialized-schema-registry-crt}',
+      ssl_ca_pem = '${arg.ca-crt}',
+      username = "materialize",
+      password = SECRET password_csr
+  )
+  ENVELOPE DEBEZIUM
+contains:cannot set option security.protocol for SOURCE using CONNECTION materialize.public.kafka_ssl

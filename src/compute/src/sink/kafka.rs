@@ -19,7 +19,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use futures::executor::block_on;
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use prometheus::core::AtomicU64;
@@ -50,6 +49,7 @@ use mz_dataflow_types::sinks::{
     KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
     SinkEnvelope,
 };
+use mz_dataflow_types::PopulateClientConfig;
 use mz_interchange::avro::{
     self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
 };
@@ -497,10 +497,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        config.set(
-            "bootstrap.servers",
-            &connection.connection.broker.to_string(),
-        );
+        connection.populate_client_config(&mut config, &connection_context.secrets_reader);
 
         // Ensure that messages are sinked in order and without duplicates. Note that
         // this only applies to a single instance of a producer - in the case of restarts,
@@ -526,19 +523,6 @@ impl KafkaSinkState {
         // if it makes a big difference
         config.set("queue.buffering.max.ms", &format!("{}", 10));
 
-        for (k, v) in connection.connection.options.iter() {
-            // We explicitly reject `statistics.interval.ms` here so that we don't
-            // flood the INFO log with statistics messages.
-            // TODO: properly support statistics on Kafka sinks
-            // We explicitly reject 'isolation.level' as it's a consumer property
-            // and, while benign, will fill the log with WARN messages
-            if k != "statistics.interval.ms" && k != "isolation.level" {
-                let v = block_on(v.get_string(&connection_context.secrets_reader))
-                    .expect("reading kafka secret unexpectedly failed");
-                config.set(k, v);
-            }
-        }
-
         if connection.exactly_once {
             // TODO(aljoscha): this only works for now, once there's an actual
             // Kafka producer on each worker they would step on each others toes
@@ -554,22 +538,8 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        config.set(
-            "bootstrap.servers",
-            &connection.connection.broker.to_string(),
-        );
-        for (k, v) in connection.connection.options.iter() {
-            // We explicitly reject `statistics.interval.ms` here so that we don't
-            // flood the INFO log with statistics messages.
-            // TODO: properly support statistics on Kafka sinks
-            // We explicitly reject 'isolation.level' as it's a consumer property
-            // and, while benign, will fill the log with WARN messages
-            if k != "statistics.interval.ms" && k != "isolation.level" {
-                let v = block_on(v.get_string(&connection_context.secrets_reader))
-                    .expect("reading kafka secret unexpectedly failed");
-                config.set(k, v);
-            }
-        }
+        connection.populate_client_config(&mut config, &connection_context.secrets_reader);
+
         config
             .set(
                 "group.id",

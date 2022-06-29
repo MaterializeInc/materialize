@@ -124,7 +124,7 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident,
+    CreateIndexStatement, CreateSourceStatement, ExplainStageOld, FetchStatement, Ident,
     IndexOptionName, InsertSource, ObjectType, Query, Raw, RawClusterName, RawObjectName, SetExpr,
     Statement,
 };
@@ -4740,7 +4740,7 @@ impl<S: Append + 'static> Coordinator<S> {
             };
 
         let mut explanation_string = match stage {
-            ExplainStage::RawPlan => {
+            ExplainStageOld::RawPlan => {
                 let catalog = self.catalog.for_session(session);
                 let mut explanation = mz_sql::plan::Explanation::new(&raw_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
@@ -4751,18 +4751,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 explanation.to_string()
             }
-            ExplainStage::QueryGraph => {
+            ExplainStageOld::QueryGraph => {
                 let catalog = self.catalog.for_session(session);
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 model.as_dot("", &catalog, options.typed)?
             }
-            ExplainStage::OptimizedQueryGraph => {
+            ExplainStageOld::OptimizedQueryGraph => {
                 let catalog = self.catalog.for_session(session);
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 model.optimize();
                 model.as_dot("", &catalog, options.typed)?
             }
-            ExplainStage::DecorrelatedPlan => {
+            ExplainStageOld::DecorrelatedPlan => {
                 let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
                     &mut timings,
                     raw_plan,
@@ -4777,7 +4777,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 explanation.to_string()
             }
-            ExplainStage::OptimizedPlan => {
+            ExplainStageOld::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
@@ -4792,7 +4792,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 explanation.to_string()
             }
-            ExplainStage::PhysicalPlan => {
+            ExplainStageOld::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
@@ -4810,7 +4810,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 explanation.to_string()
             }
-            ExplainStage::Timestamp => {
+            ExplainStageOld::Timestamp => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
                 self.validate_timeline(optimized_plan.depends_on())?;
@@ -5630,7 +5630,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.dataflow_client
                 .compute_mut(compute_instance)
                 .unwrap()
-                .drop_sinks(ids)
+                .drop_indexes(ids)
                 .await
                 .unwrap();
         }

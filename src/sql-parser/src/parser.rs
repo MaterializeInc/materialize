@@ -1927,13 +1927,9 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FOR)?;
         let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
             Keyword::Kafka => {
-                self.expect_keyword(BROKER)?;
-                let broker = self.parse_literal_string()?;
-                let with_options = self.parse_opt_with_options()?;
-                CreateConnection::Kafka {
-                    broker,
-                    with_options,
-                }
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
+                CreateConnection::Kafka { with_options }
             }
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
@@ -1951,6 +1947,45 @@ impl<'a> Parser<'a> {
             connection,
             if_not_exists,
         }))
+    }
+
+    fn parse_kafka_connection_options(
+        &mut self,
+    ) -> Result<KafkaConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, SASL, SSL])? {
+            BROKER => KafkaConnectionOptionName::Broker,
+            BROKERS => KafkaConnectionOptionName::Brokers,
+            SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
+                MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
+                PASSWORD => KafkaConnectionOptionName::SaslPassword,
+                USERNAME => KafkaConnectionOptionName::SaslUsername,
+                _ => unreachable!(),
+            },
+            SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+                KEY => {
+                    if self.parse_keyword(PASSWORD) {
+                        KafkaConnectionOptionName::SslKeyPassword
+                    } else {
+                        KafkaConnectionOptionName::SslKey
+                    }
+                }
+                CERTIFICATE => {
+                    if self.parse_keyword(AUTHORITY) {
+                        KafkaConnectionOptionName::SslCertificateAuthority
+                    } else {
+                        KafkaConnectionOptionName::SslCertificate
+                    }
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(KafkaConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4894,7 +4929,83 @@ impl<'a> Parser<'a> {
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain_new(&mut self) -> Result<Statement<Raw>, ParserError> {
-        Err(ParserError::new(self.index, "unimplemented"))
+        let stage = match self.parse_one_of_keywords(&[
+            RAW,
+            DECORRELATED,
+            OPTIMIZED,
+            PHYSICAL,
+            OPTIMIZER,
+            QUERY,
+        ]) {
+            Some(RAW) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::RawPlan
+            }
+            Some(QUERY) => {
+                self.expect_keyword(GRAPH)?;
+                ExplainStageNew::QueryGraph
+            }
+            Some(DECORRELATED) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::DecorrelatedPlan
+            }
+            Some(OPTIMIZED) => {
+                if self.parse_keyword(QUERY) {
+                    self.expect_keyword(GRAPH)?;
+                    ExplainStageNew::OptimizedQueryGraph
+                } else {
+                    self.expect_keyword(PLAN)?;
+                    ExplainStageNew::OptimizedPlan
+                }
+            }
+            Some(PHYSICAL) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::PhysicalPlan
+            }
+            Some(OPTIMIZER) => {
+                self.expect_keyword(TRACE)?;
+                ExplainStageNew::Trace
+            }
+            None => ExplainStageNew::OptimizedPlan,
+            _ => unreachable!(),
+        };
+
+        let config_flags = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let config_flags = self.parse_comma_separated(Self::parse_identifier)?;
+            self.expect_token(&Token::RParen)?;
+            config_flags
+        } else {
+            vec![]
+        };
+
+        // TODO (#13299): Make specifying the format optional upon getting rid
+        // of the old explain syntax
+        self.expect_keyword(AS)?;
+        let format = match self.parse_one_of_keywords(&[TEXT, JSON]) {
+            Some(TEXT) => ExplainFormat::Text,
+            Some(JSON) => ExplainFormat::Json,
+            None => return Err(ParserError::new(self.index, "expected a format")),
+            _ => unreachable!(),
+        };
+
+        self.expect_keyword(FOR)?;
+
+        // VIEW view_name | query
+        let explainee = if self.parse_keyword(VIEW) {
+            Explainee::View(self.parse_raw_name()?)
+        } else {
+            Explainee::Query(self.parse_query()?)
+        };
+
+        Ok(Statement::Explain(ExplainStatement::New(
+            ExplainStatementNew {
+                stage,
+                config_flags,
+                format,
+                explainee,
+            },
+        )))
     }
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
@@ -4936,38 +5047,38 @@ impl<'a> Parser<'a> {
         ]) {
             Some(RAW) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::RawPlan
+                ExplainStageOld::RawPlan
             }
             Some(QUERY) => {
                 self.expect_keywords(&[GRAPH, FOR])?;
-                ExplainStage::QueryGraph
+                ExplainStageOld::QueryGraph
             }
             Some(DECORRELATED) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::DecorrelatedPlan
+                ExplainStageOld::DecorrelatedPlan
             }
             Some(OPTIMIZED) => {
                 if self.parse_keyword(QUERY) {
                     self.expect_keywords(&[GRAPH, FOR])?;
-                    ExplainStage::OptimizedQueryGraph
+                    ExplainStageOld::OptimizedQueryGraph
                 } else {
                     self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::OptimizedPlan
+                    ExplainStageOld::OptimizedPlan
                 }
             }
             Some(PLAN) => {
                 self.expect_keyword(FOR)?;
-                ExplainStage::OptimizedPlan
+                ExplainStageOld::OptimizedPlan
             }
             Some(PHYSICAL) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::PhysicalPlan
+                ExplainStageOld::PhysicalPlan
             }
             Some(TIMESTAMP) => {
                 self.expect_keywords(&[FOR])?;
-                ExplainStage::Timestamp
+                ExplainStageOld::Timestamp
             }
-            None => ExplainStage::OptimizedPlan,
+            None => ExplainStageOld::OptimizedPlan,
             _ => unreachable!(),
         };
 

@@ -350,7 +350,7 @@ both list indexing and list slicing as subscripting.
 
 **Lists** require explicitly declared layers, and each possible layer is treated
 as a distinct type. For example, a list of `int`s with two layers is `int list
-list` and one with three is `int list list list`. Because their number of lyaers
+list` and one with three is `int list list list`. Because their number of layers
 differ, they cannot be used interchangeably.
 
 **Arrays** only have one type for each non-array type, and all arrays share that

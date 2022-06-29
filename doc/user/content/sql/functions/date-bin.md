@@ -33,8 +33,6 @@ strides, rather than only unit times.
 
 ## Signatures
 
-### Stable
-
 {{< diagram "func-date-bin.svg" >}}
 
 Parameter | Type | Description
@@ -42,20 +40,6 @@ Parameter | Type | Description
 _stride_ | [`interval`] | Define bins of this width.
 _source_ | [`timestamp`], [`timestamp with time zone`] | Determine this value's bin.
 _origin_ | Must be the same as _source_ | Align bins to this value.
-
-### Experimental
-
-{{< experimental v0.9.11 >}}
-The binary implementation of `date_bin`
-{{< /experimental >}}
-
-{{< diagram "func-date-bin-experimental.svg" >}}
-
-Parameter | Type | Description
-----------|------|------------
-_stride_ | [`interval`] | Define bins of this width.
-_source_ | [`timestamp`], [`timestamp with time zone`] | Determine this value's bin.
-_origin_ | Must be the same as _source_ | Align bins to this value. If not provided, defaults to the Unix epoch.
 
 ### Return value
 

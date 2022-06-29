@@ -1872,12 +1872,25 @@ impl_display_t!(ExplainStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainStatementNew<T: AstInfo> {
+    pub stage: ExplainStageNew,
+    pub config_flags: Vec<Ident>,
+    pub format: ExplainFormat,
     pub explainee: Explainee<T>,
 }
 
 impl<T: AstInfo> AstDisplay for ExplainStatementNew<T> {
-    fn fmt<W: fmt::Write>(&self, _f: &mut AstFormatter<W>) {
-        // TODO #13294
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN ");
+        f.write_node(&self.stage);
+        if !self.config_flags.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.config_flags));
+            f.write_str(")");
+        }
+        f.write_str(" AS ");
+        f.write_node(&self.format);
+        f.write_str(" FOR ");
+        f.write_node(&self.explainee);
     }
 }
 impl_display_t!(ExplainStatementNew);
@@ -1885,7 +1898,7 @@ impl_display_t!(ExplainStatementNew);
 /// `EXPLAIN ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainStatementOld<T: AstInfo> {
-    pub stage: ExplainStage,
+    pub stage: ExplainStageOld,
     pub explainee: Explainee<T>,
     pub options: ExplainOptions,
 }
@@ -2123,7 +2136,7 @@ impl_display_t!(Assignment);
 
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ExplainStage {
+pub enum ExplainStageOld {
     /// The sql::HirRelationExpr after parsing
     RawPlan,
     /// Query Graph
@@ -2140,20 +2153,55 @@ pub enum ExplainStage {
     Timestamp,
 }
 
-impl AstDisplay for ExplainStage {
+impl AstDisplay for ExplainStageOld {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ExplainStage::RawPlan => f.write_str("RAW PLAN"),
-            ExplainStage::OptimizedQueryGraph => f.write_str("OPTIMIZED QUERY GRAPH"),
-            ExplainStage::QueryGraph => f.write_str("QUERY GRAPH"),
-            ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
-            ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
-            ExplainStage::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
-            ExplainStage::Timestamp => f.write_str("TIMESTAMP"),
+            ExplainStageOld::RawPlan => f.write_str("RAW PLAN"),
+            ExplainStageOld::OptimizedQueryGraph => f.write_str("OPTIMIZED QUERY GRAPH"),
+            ExplainStageOld::QueryGraph => f.write_str("QUERY GRAPH"),
+            ExplainStageOld::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
+            ExplainStageOld::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            ExplainStageOld::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
+            ExplainStageOld::Timestamp => f.write_str("TIMESTAMP"),
         }
     }
 }
-impl_display!(ExplainStage);
+impl_display!(ExplainStageOld);
+
+/// Specifies what [Statement::Explain] is actually explaining
+/// The new API
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExplainStageNew {
+    /// The mz_sql::HirRelationExpr after parsing
+    RawPlan,
+    /// Query Graph
+    QueryGraph,
+    /// Optimized Query Graph
+    OptimizedQueryGraph,
+    /// The mz_expr::MirRelationExpr after decorrelation
+    DecorrelatedPlan,
+    /// The mz_expr::MirRelationExpr after optimization
+    OptimizedPlan,
+    /// The mz_dataflow_types::plan::Plan
+    PhysicalPlan,
+    /// The complete trace of the plan through the optimizer
+    Trace,
+}
+
+impl AstDisplay for ExplainStageNew {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ExplainStageNew::RawPlan => f.write_str("RAW PLAN"),
+            ExplainStageNew::OptimizedQueryGraph => f.write_str("OPTIMIZED QUERY GRAPH"),
+            ExplainStageNew::QueryGraph => f.write_str("QUERY GRAPH"),
+            ExplainStageNew::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
+            ExplainStageNew::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            ExplainStageNew::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
+            ExplainStageNew::Trace => f.write_str("OPTIMIZER TRACE"),
+        }
+    }
+}
+impl_display!(ExplainStageNew);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee<T: AstInfo> {
@@ -2179,6 +2227,23 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
     }
 }
 impl_display_t!(Explainee);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainFormat {
+    /// Human readable display format
+    Text,
+    Json,
+}
+
+impl AstDisplay for ExplainFormat {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Text => f.write_str("TEXT"),
+            Self::Json => f.write_str("JSON"),
+        }
+    }
+}
+impl_display!(ExplainFormat);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IfExistsBehavior {

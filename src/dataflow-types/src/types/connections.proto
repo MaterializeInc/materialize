@@ -23,9 +23,32 @@ message ProtoStringOrSecret {
     }
 }
 
+message ProtoKafkaConnectionSslConfig {
+    mz_repr.global_id.ProtoGlobalId key = 1;
+    mz_repr.global_id.ProtoGlobalId key_password = 2;
+    ProtoStringOrSecret certificate = 3;
+    ProtoStringOrSecret certificate_authority = 4;
+}
+
+message ProtoKafkaConnectionSaslConfig {
+    string mechanisms = 1;
+    ProtoStringOrSecret username = 2;
+    mz_repr.global_id.ProtoGlobalId password = 3;
+    ProtoStringOrSecret certificate_authority = 4;
+}
+
+message ProtoKafkaConnectionSecurity {
+    oneof kind {
+        ProtoKafkaConnectionSslConfig ssl = 1;
+        ProtoKafkaConnectionSaslConfig sasl = 2;
+    }
+}
+
 message ProtoKafkaConnection {
-    mz_kafka_util.addr.ProtoKafkaAddrs broker = 1;
-    map<string, ProtoStringOrSecret> options = 2;
+    reserved 1, 2;
+    reserved "broker", "options";
+    repeated string brokers = 3;
+    optional ProtoKafkaConnectionSecurity security = 4;
 }
 
 message ProtoCsrConnection {

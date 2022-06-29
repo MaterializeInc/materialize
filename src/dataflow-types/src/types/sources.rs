@@ -36,7 +36,7 @@ pub mod encoding;
 
 use crate::client::controller::storage::CollectionMetadata;
 use crate::connections::aws::AwsConfig;
-use crate::connections::KafkaConnection;
+use crate::connections::{KafkaConnection, StringOrSecret};
 use crate::DataflowError;
 
 include!(concat!(
@@ -460,9 +460,6 @@ pub enum SourceEnvelope {
     /// `CdcV2` requires sources output messages in a strict form that requires a upstream-provided
     /// timeline.
     CdcV2,
-    /// An envelope for sources that directly read differential Rows. This is internal and
-    /// cannot be requested via SQL.
-    DifferentialRow,
 }
 
 impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
@@ -474,7 +471,6 @@ impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
                 SourceEnvelope::Debezium(e) => Kind::Debezium(e.into_proto()),
                 SourceEnvelope::Upsert(e) => Kind::Upsert(e.into_proto()),
                 SourceEnvelope::CdcV2 => Kind::CdcV2(()),
-                SourceEnvelope::DifferentialRow => Kind::DifferentialRow(()),
             }),
         }
     }
@@ -489,7 +485,6 @@ impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
             Kind::Debezium(e) => SourceEnvelope::Debezium(e.into_rust()?),
             Kind::Upsert(e) => SourceEnvelope::Upsert(e.into_rust()?),
             Kind::CdcV2(()) => SourceEnvelope::CdcV2,
-            Kind::DifferentialRow(()) => SourceEnvelope::DifferentialRow,
         })
     }
 }
@@ -504,9 +499,6 @@ pub enum UnplannedSourceEnvelope {
     Debezium(DebeziumEnvelope),
     Upsert(UpsertStyle),
     CdcV2,
-    /// An envelope for sources that directly read differential Rows. This is internal and
-    /// cannot be requested via SQL.
-    DifferentialRow,
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -982,7 +974,6 @@ impl UnplannedSourceEnvelope {
                 key_arity: key_arity.unwrap_or(0),
             }),
             UnplannedSourceEnvelope::CdcV2 => SourceEnvelope::CdcV2,
-            UnplannedSourceEnvelope::DifferentialRow => SourceEnvelope::DifferentialRow,
         }
     }
 
@@ -1103,10 +1094,6 @@ impl UnplannedSourceEnvelope {
                     ty => bail!("Unexpected type for MATERIALIZE envelope: {:?}", ty),
                 }
             }
-            UnplannedSourceEnvelope::DifferentialRow => (
-                self.into_source_envelope(None, None),
-                value_desc.concat(metadata_desc),
-            ),
         })
     }
 }
@@ -1114,6 +1101,7 @@ impl UnplannedSourceEnvelope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnection {
     pub connection: KafkaConnection,
+    pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, MzOffset>,
@@ -1137,6 +1125,7 @@ impl Arbitrary for KafkaSourceConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<KafkaConnection>(),
+            any::<BTreeMap<String, StringOrSecret>>(),
             any::<String>(),
             any::<HashMap<i32, MzOffset>>(),
             any::<Option<String>>(),
@@ -1150,6 +1139,7 @@ impl Arbitrary for KafkaSourceConnection {
             .prop_map(
                 |(
                     connection,
+                    options,
                     topic,
                     start_offsets,
                     group_id_prefix,
@@ -1161,6 +1151,7 @@ impl Arbitrary for KafkaSourceConnection {
                     include_headers,
                 )| KafkaSourceConnection {
                     connection,
+                    options,
                     topic,
                     start_offsets,
                     group_id_prefix,
@@ -1180,6 +1171,11 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     fn into_proto(&self) -> ProtoKafkaSourceConnection {
         ProtoKafkaSourceConnection {
             connection: Some(self.connection.into_proto()),
+            options: self
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into_proto()))
+                .collect(),
             topic: self.topic.clone(),
             start_offsets: self
                 .start_offsets
@@ -1202,10 +1198,16 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
             .into_iter()
             .map(|(k, v)| MzOffset::from_proto(v).map(|v| (k, v)))
             .collect();
+        let options: Result<_, TryFromProtoError> = proto
+            .options
+            .into_iter()
+            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+            .collect();
         Ok(KafkaSourceConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
+            options: options?,
             topic: proto.topic,
             start_offsets: start_offsets?,
             group_id_prefix: proto.group_id_prefix,
@@ -1446,10 +1448,7 @@ impl SourceConnection {
             // Other combinations may produce retractions.
             SourceConnection::External {
                 envelope:
-                    SourceEnvelope::Debezium(_)
-                    | SourceEnvelope::Upsert(_)
-                    | SourceEnvelope::CdcV2
-                    | SourceEnvelope::DifferentialRow,
+                    SourceEnvelope::Debezium(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
                 connection:
                     ExternalSourceConnection::S3(_)
                     | ExternalSourceConnection::Kafka(_)

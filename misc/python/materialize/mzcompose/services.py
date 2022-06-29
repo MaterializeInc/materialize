@@ -600,7 +600,7 @@ class Testdrive(Service):
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
         aws_region: Optional[str] = None,
-        aws_endpoint: str = "http://localstack:4566",
+        aws_endpoint: Optional[str] = "http://localstack:4566",
     ) -> None:
         if environment is None:
             environment = [
