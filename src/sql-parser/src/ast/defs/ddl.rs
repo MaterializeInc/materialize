@@ -418,9 +418,6 @@ pub enum Envelope<T: AstInfo> {
     Debezium(DbzMode<T>),
     Upsert,
     CdcV2,
-    /// An envelope for sources that directly read differential Rows. This is internal and cannot
-    /// be requested via SQL.
-    DifferentialRow,
 }
 
 impl<T: AstInfo> AstDisplay for Envelope<T> {
@@ -439,9 +436,6 @@ impl<T: AstInfo> AstDisplay for Envelope<T> {
             }
             Self::CdcV2 => {
                 f.write_str("MATERIALIZE");
-            }
-            Self::DifferentialRow => {
-                f.write_str("DIFFERENTIAL ROW");
             }
         }
     }

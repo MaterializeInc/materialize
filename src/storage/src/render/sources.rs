@@ -412,9 +412,6 @@ where
                             (stream.as_collection(), Some(errors))
                         }
                         SourceEnvelope::CdcV2 => unreachable!(),
-                        SourceEnvelope::DifferentialRow => {
-                            unreachable!("persist sources go through a special render path")
-                        }
                     }
                 }
             };
