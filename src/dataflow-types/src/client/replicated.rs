@@ -68,7 +68,7 @@ pub fn spawn_client_task<
                         Some(c) => {
                             // Issues should be detected, and
                             // reconnect attempted, on the `client.recv` path.
-                            let _ = client.send(c).await;
+                            let _ = client.send(c);
                         },
                         None => break,
                     }
@@ -210,7 +210,7 @@ where
     ///
     /// If this function every become blocking (e.g. making networking calls),
     /// the ADAPTER must amend its contract with COMPUTE.
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         // Update our tracking of peek commands.
         match &cmd {
             ComputeCommand::Peek(Peek { uuid, otel_ctx, .. }) => {

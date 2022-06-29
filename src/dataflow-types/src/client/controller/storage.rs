@@ -524,7 +524,6 @@ where
 
             client
                 .send(StorageCommand::CreateSources(vec![augmented_ingestion]))
-                .await
                 .expect("Storage command failed; unrecoverable");
 
             self.state.clients.insert(source.ingestion.id, client);
@@ -741,12 +740,10 @@ where
 
         for (id, frontier) in compaction_commands {
             if let Some(client) = self.state.clients.get_mut(&id) {
-                client
-                    .send(StorageCommand::AllowCompaction(vec![(
-                        id,
-                        frontier.clone(),
-                    )]))
-                    .await?;
+                client.send(StorageCommand::AllowCompaction(vec![(
+                    id,
+                    frontier.clone(),
+                )]))?;
 
                 if frontier.is_empty() {
                     self.state.clients.remove(&id);

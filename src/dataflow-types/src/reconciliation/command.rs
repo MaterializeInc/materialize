@@ -65,8 +65,8 @@ where
     C: ComputeClient<T>,
     T: timely::progress::Timestamp + Copy,
 {
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-        self.absorb_command(cmd).await
+    fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+        self.absorb_command(cmd)
     }
 
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
@@ -161,7 +161,7 @@ where
         }
     }
 
-    async fn absorb_command(&mut self, command: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    fn absorb_command(&mut self, command: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         use ComputeCommand::*;
         match command {
             CreateInstance(config) => {
@@ -175,7 +175,7 @@ where
                             }
                         }
                     }
-                    self.client.send(CreateInstance(config)).await?;
+                    self.client.send(CreateInstance(config))?;
                     self.created = true;
                 }
                 Ok(())
@@ -184,7 +184,7 @@ where
                 if self.created {
                     self.created = false;
                     self.uppers.clear();
-                    self.client.send(cmd).await
+                    self.client.send(cmd)
                 } else {
                     Ok(())
                 }
@@ -210,7 +210,7 @@ where
                     }
                 }
                 if !create.is_empty() {
-                    self.client.send(CreateDataflows(create)).await?
+                    self.client.send(CreateDataflows(create))?
                 }
                 Ok(())
             }
@@ -220,17 +220,17 @@ where
                         self.stop_tracking(*id);
                     }
                 }
-                self.client.send(AllowCompaction(frontiers)).await
+                self.client.send(AllowCompaction(frontiers))
             }
             Peek(peek) => {
                 self.peeks.insert(peek.uuid);
-                self.client.send(ComputeCommand::Peek(peek)).await
+                self.client.send(ComputeCommand::Peek(peek))
             }
             CancelPeeks { uuids } => {
                 for uuid in &uuids {
                     self.peeks.remove(uuid);
                 }
-                self.client.send(CancelPeeks { uuids }).await
+                self.client.send(CancelPeeks { uuids })
             }
         }
     }

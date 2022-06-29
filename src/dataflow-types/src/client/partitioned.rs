@@ -133,13 +133,13 @@ where
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
 {
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+    fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         if self.reconnect.is_some() {
             anyhow::bail!("client is reconnecting");
         }
         let cmd_parts = self.state.split_command(cmd);
         for (shard, cmd_part) in self.parts.iter_mut().zip(cmd_parts) {
-            shard.send(cmd_part).await?;
+            shard.send(cmd_part)?;
         }
         Ok(())
     }

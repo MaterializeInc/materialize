@@ -375,7 +375,7 @@ where
             self.compute_orchestrator
                 .drop_service(&format!("cluster-{instance}"))
                 .await?;
-            compute.client.send(ComputeCommand::DropInstance).await?;
+            compute.client.send(ComputeCommand::DropInstance)?;
         }
         Ok(())
     }

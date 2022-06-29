@@ -162,12 +162,10 @@ where
             }
         }
         let mut client = crate::client::replicated::ActiveReplication::default();
-        client
-            .send(ComputeCommand::CreateInstance(InstanceConfig {
-                replica_id: Default::default(),
-                logging: logging.clone(),
-            }))
-            .await?;
+        client.send(ComputeCommand::CreateInstance(InstanceConfig {
+            replica_id: Default::default(),
+            logging: logging.clone(),
+        }))?;
 
         Ok(Self {
             client,
@@ -402,7 +400,6 @@ where
         self.compute
             .client
             .send(ComputeCommand::CreateDataflows(augmented_dataflows))
-            .await
             .expect("Compute command failed; unrecoverable");
 
         Ok(())
@@ -469,7 +466,6 @@ where
                 // tree to forward it on to the compute worker.
                 otel_ctx: OpenTelemetryContext::obtain(),
             }))
-            .await
             .map_err(ComputeError::from)
     }
 
@@ -491,7 +487,6 @@ where
             .send(ComputeCommand::CancelPeeks {
                 uuids: uuids.clone(),
             })
-            .await
             .map_err(ComputeError::from)
     }
 
@@ -692,7 +687,6 @@ where
             self.compute
                 .client
                 .send(ComputeCommand::AllowCompaction(compaction_commands))
-                .await
                 .expect("Compute instance command failed; unrecoverable");
         }
 

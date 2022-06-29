@@ -827,7 +827,7 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     /// Sends a command to the dataflow server.
     ///
     /// The command can error for various reasons.
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error>;
+    fn send(&mut self, cmd: C) -> Result<(), anyhow::Error>;
 
     /// Receives the next response from the dataflow server.
     ///
@@ -880,8 +880,8 @@ impl<C, R> GenericClient<C, R> for Box<dyn GenericClient<C, R>>
 where
     C: Send,
 {
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-        (**self).send(cmd).await
+    fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+        (**self).send(cmd)
     }
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         (**self).recv().await
@@ -890,8 +890,8 @@ where
 
 #[async_trait]
 impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn ComputeClient<T>> {
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-        (**self).send(cmd).await
+    fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+        (**self).send(cmd)
     }
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
         (**self).recv().await
@@ -900,8 +900,8 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
 
 #[async_trait]
 impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn StorageClient<T>> {
-    async fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
-        (**self).send(cmd).await
+    fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
+        (**self).send(cmd)
     }
     async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
         (**self).recv().await
@@ -950,9 +950,9 @@ where
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
 {
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+    fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         trace!("SEND dataflow command: {:?}", cmd);
-        self.client.send(cmd).await
+        self.client.send(cmd)
     }
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         let response = self.client.recv().await;
@@ -1044,9 +1044,9 @@ where
     R: DeserializeOwned + fmt::Debug + Unpin + Send,
     G: GenericClient<C, R> + Reconnect + FromAddr,
 {
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+    fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         trace!("Sending dataflow command: {:?}", cmd);
-        self.client.send(cmd).await
+        self.client.send(cmd)
     }
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         let response = self.client.recv().await;
@@ -1087,7 +1087,7 @@ pub mod process_local {
         C: fmt::Debug + Send,
         R: fmt::Debug + Send,
     {
-        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+        fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
             self.worker_tx
                 .send(cmd)
                 .expect("worker command receiver should not drop first");
@@ -1265,7 +1265,7 @@ pub mod grpc {
         PC: Send + Sync + fmt::Debug,
         PR: Send + Sync + fmt::Debug,
     {
-        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+        fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
             let sender = if let GrpcTcpConn::Connected((sender, _)) = &self.state {
                 sender
             } else {
@@ -1683,7 +1683,7 @@ pub mod grpc {
                 tokio::select! {
                     res = grpc_serve.recv() => {
                         match res {
-                            Ok(cmd) => client.send(cmd).await.unwrap(),
+                            Ok(cmd) => client.send(cmd).unwrap(),
                             Err(err) => {
                                 tracing::warn!("Lost connection: {}", err);
                                 break;
