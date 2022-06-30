@@ -27,6 +27,16 @@ the v0.26.x series through at least August 31 2022, issuing **patch releases** a
 necessary to address severe bugs and security vulnerabilities.
 {{</ note >}}
 
+{{% version-header v0.26.4 %}}
+
+- In Kafka sources that enable the [`INCLUDE KEY`](/sql/create-source/kafka/#key)
+  option in combination with
+  [`ENVELOPE NONE`](/sql/create-source/#append-only-envelope), support ingesting
+  messages whose key is null {{% gh 12275 %}}.
+
+- Support [Avro-formatted sources](/sql/create-source/#avro) with Avro schemas
+  containing arrays or maps with nullable element types {{% gh 8917 %}}.
+
 {{% version-header v0.26.3 %}}
 
 - Accept the special CORS origin `*` to allow cross-origin requests from any
