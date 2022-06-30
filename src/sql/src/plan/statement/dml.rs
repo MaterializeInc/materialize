@@ -19,15 +19,16 @@ use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{AstInfo, ExplainStatementNew, ExplainStatementOld};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateViewStatement, DeleteStatement, ExplainStageOld, ExplainStatement, Explainee, Ident,
-    InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
-    TailStatement, UpdateStatement, ViewDefinition,
+    CreateViewStatement, DeleteStatement, ExplainStageNew, ExplainStageOld, ExplainStatement,
+    Explainee, Ident, InsertStatement, Query, SelectStatement, Statement, TailOption,
+    TailOptionName, TailRelation, TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedObjectName};
@@ -35,8 +36,9 @@ use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanOld, InsertPlan, MutationKind, Params,
-    PeekPlan, Plan, PlanError, QueryContext, ReadThenWritePlan, TailFrom, TailPlan,
+    query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld, InsertPlan,
+    MutationKind, Params, PeekPlan, Plan, PlanError, QueryContext, ReadThenWritePlan, TailFrom,
+    TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -192,10 +194,36 @@ pub fn describe_explain(
 }
 
 pub fn describe_explain_new(
-    _scx: &StatementContext,
-    _explain: ExplainStatementNew<Aug>,
+    scx: &StatementContext,
+    ExplainStatementNew {
+        stage, explainee, ..
+    }: ExplainStatementNew<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    sql_bail!("unimplemented interface") // TODO: #13295
+    Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
+        match stage {
+            ExplainStageNew::RawPlan => "Raw Plan",
+            ExplainStageNew::QueryGraph => "Query Graph",
+            ExplainStageNew::OptimizedQueryGraph => "Optimized Query Graph",
+            ExplainStageNew::DecorrelatedPlan => "Decorrelated Plan",
+            ExplainStageNew::OptimizedPlan { .. } => "Optimized Plan",
+            ExplainStageNew::PhysicalPlan => "Physical Plan",
+            ExplainStageNew::Trace => "Plan", // TODO: add more columns as part of #13139
+        },
+        ScalarType::String.nullable(false),
+    )))
+    .with_params(match explainee {
+        Explainee::Query(q) => {
+            describe_select(
+                scx,
+                SelectStatement {
+                    query: q,
+                    as_of: None,
+                },
+            )?
+            .param_types
+        }
+        _ => vec![],
+    }))
 }
 
 pub fn describe_explain_old(
@@ -298,11 +326,73 @@ pub fn plan_explain_old(
 }
 
 pub fn plan_explain_new(
-    _scx: &StatementContext,
-    _explain: ExplainStatementNew<Aug>,
-    _params: &Params,
+    scx: &StatementContext,
+    ExplainStatementNew {
+        stage,
+        config_flags,
+        format,
+        explainee,
+    }: ExplainStatementNew<Aug>,
+    params: &Params,
 ) -> Result<Plan, PlanError> {
-    sql_bail!("unimplemented interface") // TODO: #13295
+    let is_view = matches!(explainee, Explainee::View(_));
+    let query = match explainee {
+        Explainee::View(name) => {
+            let view = scx.get_item_by_resolved_name(&name)?;
+            if view.item_type() != CatalogItemType::View {
+                sql_bail!("Expected {} to be a view, not a {}", name, view.item_type());
+            }
+            let parsed = crate::parse::parse(view.create_sql())
+                .expect("Sql for existing view should be valid sql");
+            let query = match parsed.into_last() {
+                Statement::CreateView(CreateViewStatement {
+                    definition: ViewDefinition { query, .. },
+                    ..
+                }) => query,
+                _ => panic!("Sql for existing view should parse as a view"),
+            };
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            names::resolve(qcx.scx.catalog, query)?.0
+        }
+        Explainee::Query(query) => query,
+    };
+    // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
+    // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
+    let query::PlannedQuery {
+        mut expr,
+        desc,
+        finishing,
+    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+    let finishing = if is_view {
+        // views don't use a separate finishing
+        expr.finish(finishing);
+        None
+    } else if finishing.is_trivial(desc.arity()) {
+        None
+    } else {
+        Some(finishing)
+    };
+    expr.bind_parameters(&params)?;
+
+    let config_flags = config_flags
+        .iter()
+        .map(|ident| ident.to_string().to_lowercase())
+        .collect::<HashSet<_>>();
+    let config = ExplainConfig::try_from(config_flags)?;
+
+    let format = match format {
+        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
+        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+    };
+
+    Ok(Plan::Explain(ExplainPlan::New(ExplainPlanNew {
+        raw_plan: expr,
+        row_set_finishing: finishing,
+        stage,
+        format,
+        config,
+    })))
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
