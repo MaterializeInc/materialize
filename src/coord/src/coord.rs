@@ -927,6 +927,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await
             .unwrap();
 
+        // Add builtin table updates the clear the contents of all system tables
         let read_ts = self.get_local_read_ts();
         for system_table in entries
             .iter()
