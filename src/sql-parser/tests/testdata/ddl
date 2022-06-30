@@ -651,20 +651,6 @@ CREATE SOURCE remote_fail_in_planning FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' 
                                                                                                          ^
 
 parse-statement
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
-                              ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
-                              ^
-
-parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT
@@ -726,55 +712,6 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
 error: Expected end of statement, found KEY
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
                                                                ^
-
-parse-statement
-CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
-                                            ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF 123
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF 123
-                              ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
-                              ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF now()
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF now()
-                              ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
-                              ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
-                              ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
-----
-error: Expected one of KAFKA or AVRO or PERSIST, found FILE
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
-                              ^
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'

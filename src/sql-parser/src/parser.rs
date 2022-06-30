@@ -1926,12 +1926,12 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
         let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
-            Keyword::Kafka => {
+            KAFKA => {
                 let with_options =
                     self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
                 CreateConnection::Kafka { with_options }
             }
-            Keyword::Confluent => {
+            CONFLUENT => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
                 let with_options = self.parse_opt_with_options()?;
@@ -2154,7 +2154,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
@@ -2267,7 +2267,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, AVRO, PERSIST])? {
+        match self.expect_one_of_keywords(&[KAFKA, PERSIST])? {
             KAFKA => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
