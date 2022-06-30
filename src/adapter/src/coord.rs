@@ -80,6 +80,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_repr::explain_new::Explain;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
@@ -121,9 +122,9 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSourceStatement, ExplainStageOld, FetchStatement, Ident,
-    IndexOptionName, InsertSource, ObjectType, Query, Raw, RawClusterName, RawObjectName, SetExpr,
-    Statement,
+    CreateIndexStatement, CreateSourceStatement, ExplainStageNew, ExplainStageOld, FetchStatement,
+    Ident, IndexOptionName, InsertSource, ObjectType, Query, Raw, RawClusterName, RawObjectName,
+    SetExpr, Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog as _,
@@ -165,6 +166,7 @@ use crate::command::{
 use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::AdapterError;
+use crate::explain_new::{ExplainContext, Explainable};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -4469,10 +4471,89 @@ impl<S: Append + 'static> Coordinator<S> {
 
     fn sequence_explain_new(
         &mut self,
-        _session: &Session,
-        _plan: ExplainPlanNew,
+        session: &Session,
+        plan: ExplainPlanNew,
     ) -> Result<ExecuteResponse, AdapterError> {
-        unimplemented!() // TODO #13296
+        let compute_instance = self
+            .catalog
+            .resolve_compute_instance(session.vars().cluster())?
+            .id;
+
+        let ExplainPlanNew {
+            mut raw_plan,
+            row_set_finishing,
+            stage,
+            format,
+            config,
+        } = plan;
+
+        let _decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
+            let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
+                qgm_optimizations: session.vars().qgm_optimizations(),
+            })?;
+            Ok(decorrelated_plan)
+        };
+
+        let _optimize =
+            |coord: &mut Self,
+             decorrelated_plan: MirRelationExpr|
+             -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
+                let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
+                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                coord
+                    .dataflow_builder(compute_instance)
+                    .import_view_into_dataflow(
+                        // TODO: If explaining a view, pipe the actual id of the view.
+                        &GlobalId::Explain,
+                        &optimized_plan,
+                        &mut dataflow,
+                    )?;
+                mz_transform::optimize_dataflow(
+                    &mut dataflow,
+                    &coord.index_oracle(compute_instance),
+                )?;
+                Ok(dataflow)
+            };
+
+        let explanation_string = match stage {
+            ExplainStageNew::RawPlan => {
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut raw_plan).explain(&format, &config, &context)?
+            }
+            ExplainStageNew::QueryGraph => {
+                let feature = "ExplainStageNew::QueryGraph";
+                Err(AdapterError::Unsupported(feature))?
+            }
+            ExplainStageNew::OptimizedQueryGraph => {
+                let feature = "ExplainStageNew::OptimizedQueryGraph";
+                Err(AdapterError::Unsupported(feature))?
+            }
+            ExplainStageNew::DecorrelatedPlan => {
+                let feature = "ExplainStageNew::DecorrelatedPlan";
+                Err(AdapterError::Unsupported(feature))?
+            }
+            ExplainStageNew::OptimizedPlan => {
+                let feature = "ExplainStageNew::OptimizedPlan";
+                Err(AdapterError::Unsupported(feature))?
+            }
+            ExplainStageNew::PhysicalPlan => {
+                let feature = "ExplainStageNew::PhysicalPlan";
+                Err(AdapterError::Unsupported(feature))?
+            }
+            ExplainStageNew::Trace => {
+                let feature = "ExplainStageNew::Trace";
+                Err(AdapterError::Unsupported(feature))?
+            }
+        };
+
+        let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
+        Ok(send_immediate_rows(rows))
     }
 
     fn sequence_explain_old(
