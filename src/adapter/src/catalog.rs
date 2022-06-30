@@ -351,12 +351,15 @@ impl CatalogState {
             })
             | CatalogItem::Sink(Sink {
                 compute_instance, ..
+            })
+            | CatalogItem::RecordedView(RecordedView {
+                compute_instance, ..
             }) = item
             {
                 self.compute_instances_by_id
                     .get_mut(&compute_instance)
                     .unwrap()
-                    .indexes
+                    .exports
                     .insert(id);
             };
         }
@@ -473,7 +476,7 @@ impl CatalogState {
             ComputeInstance {
                 name: name.clone(),
                 id,
-                indexes: HashSet::new(),
+                exports: HashSet::new(),
                 logging,
                 replica_id_by_name: HashMap::new(),
                 replicas_by_id: HashMap::new(),
@@ -921,8 +924,9 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub logging: Option<DataflowLoggingConfig>,
-    // does not include introspection source indexes
-    pub indexes: HashSet<GlobalId>,
+    /// Indexes, sinks, and recorded views exported by this compute instance.
+    /// Does not include introspection source indexes.
+    pub exports: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
     pub replicas_by_id: HashMap<ReplicaId, ComputeInstanceReplica>,
 }
@@ -3056,7 +3060,7 @@ impl<S: Append> Catalog<S> {
                         .expect("can only drop known instances");
 
                     assert!(
-                        instance.indexes.is_empty() && instance.replicas_by_id.is_empty(),
+                        instance.exports.is_empty() && instance.replicas_by_id.is_empty(),
                         "not all items dropped before compute instance"
                     );
                 }
@@ -3103,6 +3107,9 @@ impl<S: Append> Catalog<S> {
                     })
                     | CatalogItem::Sink(Sink {
                         compute_instance, ..
+                    })
+                    | CatalogItem::RecordedView(RecordedView {
+                        compute_instance, ..
                     }) = metadata.item
                     {
                         assert!(
@@ -3110,7 +3117,7 @@ impl<S: Append> Catalog<S> {
                                 .compute_instances_by_id
                                 .get_mut(&compute_instance)
                                 .unwrap()
-                                .indexes
+                                .exports
                                 .remove(&id),
                             "catalog out of sync"
                         );
@@ -3805,8 +3812,8 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
         self.id
     }
 
-    fn indexes(&self) -> &HashSet<GlobalId> {
-        &self.indexes
+    fn exports(&self) -> &HashSet<GlobalId> {
+        &self.exports
     }
 
     fn replica_names(&self) -> HashSet<&String> {

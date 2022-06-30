@@ -260,8 +260,9 @@ pub trait CatalogComputeInstance<'a> {
     /// Returns a stable ID for the compute instance.
     fn id(&self) -> ComputeInstanceId;
 
-    /// Returns the set of non-transient indexes on this cluster.
-    fn indexes(&self) -> &std::collections::HashSet<GlobalId>;
+    /// Returns the set of non-transient exports (indexes, sinks, recorded
+    /// views) of this cluster.
+    fn exports(&self) -> &std::collections::HashSet<GlobalId>;
 
     /// Returns the set of non-transient indexes on this cluster.
     fn replica_names(&self) -> HashSet<&String>;

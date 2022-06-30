@@ -3548,7 +3548,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     compute_id: instance.id,
                 });
             }
-            let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
+            let ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
