@@ -521,6 +521,7 @@ mod tests {
             },
             remap_shard: shard,
             data_shard: ShardId::new(),
+            status_shard: ShardId::new(),
         };
 
         ReclockOperator::new(

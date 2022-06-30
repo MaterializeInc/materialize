@@ -856,6 +856,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         }
                     }
 
+                    let source_status_table_id = self
+                        .catalog
+                        .resolve_builtin_table(&crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+
                     self.controller
                         .storage_mut()
                         .create_collections(vec![(
@@ -865,6 +869,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 ingestion: Some(ingestion),
                                 remote_addr: source.remote_addr.clone(),
                                 since: None,
+                                status_collection_id: Some(source_status_table_id),
                             },
                         )])
                         .await
@@ -1050,10 +1055,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Add builtin table updates the clear the contents of all system tables
         let read_ts = self.get_local_read_ts();
-        for system_table in entries
-            .iter()
-            .filter(|entry| entry.is_table() && entry.id().is_system())
-        {
+        for system_table in entries.iter().filter(|entry| {
+            entry.is_table() && entry.id().is_system() && !entry.is_externally_managed_table()
+        }) {
             let current_contents = self
                 .controller
                 .storage_mut()
@@ -1214,9 +1218,14 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn advance_local_inputs(&mut self, advance_to: mz_repr::Timestamp) {
         self.advance_tables.insert(
             advance_to,
-            self.catalog
-                .entries()
-                .filter_map(|e| if e.is_table() { Some(e.id()) } else { None }),
+            self.catalog.entries().filter_map(|e| {
+                // TODO(andrioni): figure out if there's a way to let this not conflict with updates from storaged
+                if e.is_table() && !e.is_externally_managed_table() {
+                    Some(e.id())
+                } else {
+                    None
+                }
+            }),
         );
     }
 
@@ -3039,6 +3048,7 @@ impl<S: Append + 'static> Coordinator<S> {
             defaults: table.defaults,
             conn_id,
             depends_on,
+            externally_managed: false,
         };
         let table_oid = self.catalog.allocate_oid().await?;
         let ops = vec![catalog::Op::CreateItem {
@@ -3126,6 +3136,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
 
+                let source_status_table_id = self
+                    .catalog
+                    .resolve_builtin_table(&crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+
                 self.controller
                     .storage_mut()
                     .create_collections(vec![(
@@ -3135,6 +3149,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             ingestion: Some(ingestion),
                             remote_addr: source.remote_addr,
                             since: None,
+                            status_collection_id: Some(source_status_table_id),
                         },
                     )])
                     .await
@@ -3548,6 +3563,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             ingestion: None,
                             remote_addr: None,
                             since: Some(as_of),
+                            status_collection_id: None,
                         },
                     )])
                     .await
