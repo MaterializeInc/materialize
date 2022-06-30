@@ -225,6 +225,21 @@ impl ReclockOperator {
         }
     }
 
+    /// Calculates the source upper frontier at a particular timestamp
+    pub fn source_upper_at(&self, target: Timestamp) -> HashMap<PartitionId, MzOffset> {
+        let mut source_upper = HashMap::new();
+        for pid in self.remap_trace.keys() {
+            let binding = self
+                .partition_bindings(pid)
+                .take_while(|(ts, _)| ts <= &target)
+                .last();
+            if let Some((_, part_upper)) = binding {
+                source_upper.insert(pid.clone(), part_upper);
+            }
+        }
+        source_upper
+    }
+
     /// Syncs the state of this operator to match that of the persist shard until the provided
     /// frontier
     async fn sync(&mut self, target_upper: &Antichain<Timestamp>) {

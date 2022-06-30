@@ -22,7 +22,6 @@ use futures::stream::StreamExt;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::progress::ChangeBatch;
@@ -134,7 +133,7 @@ impl ProtoStorage for GrpcServer<ProtoStorageCommand, ProtoStorageResponse> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    IngestSources(Vec<IngestSourceCommand>),
+    IngestSources(Vec<IngestSourceCommand<T>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -143,19 +142,42 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
 }
 
 /// A command that starts ingesting the given ingestion description
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct IngestSourceCommand {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct IngestSourceCommand<T> {
     /// The id of the storage collection being ingested.
     pub id: GlobalId,
     /// The description of what source type should be ingested and what post-processing steps must
     /// be applied to the data before writing them down into the storage collection
     pub description: IngestionDescription<CollectionMetadata>,
+    /// The upper frontier that this ingestion should resume at
+    pub resume_upper: Antichain<T>,
 }
-impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand {
+
+impl Arbitrary for IngestSourceCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<GlobalId>(),
+            any::<IngestionDescription<CollectionMetadata>>(),
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4).prop_map(Antichain::from),
+        )
+            .prop_map(|(id, description, resume_upper)| Self {
+                id,
+                description,
+                resume_upper,
+            })
+            .boxed()
+    }
+}
+
+impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoIngestSourceCommand {
         ProtoIngestSourceCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
+            resume_upper: Some((&self.resume_upper).into()),
         }
     }
 
@@ -165,6 +187,10 @@ impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand {
             description: proto
                 .description
                 .into_rust_if_some("ProtoIngestSourceCommand::description")?,
+            resume_upper: proto
+                .resume_upper
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoCompaction::resume_upper"))?,
         })
     }
 }
@@ -208,7 +234,7 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec(any::<IngestSourceCommand>(), 1..4)
+            proptest::collection::vec(any::<IngestSourceCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::IngestSources),
             proptest::collection::vec(
                 (

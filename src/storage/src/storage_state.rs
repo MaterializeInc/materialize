@@ -125,7 +125,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         &mut self.storage_state,
                         ingestion.id,
                         ingestion.description,
-                        Antichain::from_elem(Timestamp::minimum()),
+                        ingestion.resume_upper,
                     );
 
                     self.storage_state.reported_frontiers.insert(
