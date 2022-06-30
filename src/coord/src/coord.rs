@@ -67,6 +67,7 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::ops::Neg;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -695,7 +696,7 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn bootstrap(
         &mut self,
-        builtin_table_updates: Vec<BuiltinTableUpdate>,
+        mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
@@ -836,6 +837,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         None,
                     )
                     .await?;
+                    // Sinks are not automatically included in `builtin_table_updates`.
+                    // `handle_sink_connection_ready` will automatically send over a builtin
+                    // update, so we need to include the sink in `builtin_table_updates` to
+                    // indicate that it is part of our desired state.
+                    builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), 1));
                 }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
@@ -846,13 +852,11 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        self.send_builtin_table_updates(builtin_table_updates).await;
-
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
             let log_id = &self.catalog.resolve_builtin_log(log).to_string();
-            self.send_builtin_table_updates(
+            builtin_table_updates.extend(
                 log.variant
                     .desc()
                     .typ()
@@ -872,18 +876,13 @@ impl<S: Append + 'static> Coordinator<S> {
                                 diff: 1,
                             }
                         })
-                    })
-                    .collect(),
-            )
-            .await;
+                    }),
+            );
 
             let mz_foreign_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
-            self.send_builtin_table_updates(
-                log.variant
-                    .foreign_keys()
-                    .into_iter()
-                    .enumerate()
-                    .flat_map(|(index, (parent, pairs))| {
+            builtin_table_updates.extend(
+                log.variant.foreign_keys().into_iter().enumerate().flat_map(
+                    |(index, (parent, pairs))| {
                         let parent_log =
                             BUILTINS::logs().find(|src| src.variant == parent).unwrap();
                         let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
@@ -901,11 +900,49 @@ impl<S: Append + 'static> Coordinator<S> {
                                 diff: 1,
                             }
                         })
-                    })
-                    .collect(),
+                    },
+                ),
             )
-            .await;
         }
+
+        // Advance all tables to the current timestamp
+        let WriteTimestamp {
+            timestamp: _,
+            advance_to,
+        } = self.get_and_step_local_write_ts();
+        let appends = entries
+            .iter()
+            .filter(|entry| entry.is_table())
+            .map(|entry| (entry.id(), Vec::new(), advance_to))
+            .collect();
+        self.dataflow_client
+            .storage_mut()
+            .append(appends)
+            .await
+            .unwrap();
+
+        let read_ts = self.get_local_read_ts();
+        for system_table in entries
+            .iter()
+            .filter(|entry| entry.is_table() && entry.id().is_system())
+        {
+            let current_contents = self
+                .dataflow_client
+                .storage_mut()
+                .snapshot(system_table.id(), read_ts)
+                .await
+                .unwrap();
+            let retractions = current_contents
+                .into_iter()
+                .map(|(row, diff)| BuiltinTableUpdate {
+                    id: system_table.id(),
+                    row,
+                    diff: diff.neg(),
+                });
+            builtin_table_updates.extend(retractions);
+        }
+
+        self.send_builtin_table_updates(builtin_table_updates).await;
 
         Ok(())
     }
@@ -5156,17 +5193,26 @@ impl<S: Append + 'static> Coordinator<S> {
             timestamp,
             advance_to,
         } = self.get_and_step_local_write_ts();
-        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
+        let mut appends: HashMap<GlobalId, Vec<(Row, Diff)>> = HashMap::new();
         for u in updates {
-            appends.entry(u.id).or_default().push(Update {
-                row: u.row,
-                diff: u.diff,
-                timestamp,
-            });
+            appends.entry(u.id).or_default().push((u.row, u.diff));
+        }
+        for (_, updates) in &mut appends {
+            differential_dataflow::consolidation::consolidate(updates);
         }
         let appends = appends
             .into_iter()
-            .map(|(id, updates)| (id, updates, advance_to))
+            .map(|(id, updates)| {
+                let updates = updates
+                    .into_iter()
+                    .map(|(row, diff)| Update {
+                        row,
+                        diff,
+                        timestamp,
+                    })
+                    .collect();
+                (id, updates, advance_to)
+            })
             .collect();
         self.dataflow_client
             .storage_mut()

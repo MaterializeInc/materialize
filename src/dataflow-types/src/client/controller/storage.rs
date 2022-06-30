@@ -50,7 +50,7 @@ use mz_persist_client::{
 };
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
@@ -119,6 +119,13 @@ pub trait StorageController: Debug + Send {
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError>;
+
+    /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
+    async fn snapshot(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<Vec<(Row, Diff)>, StorageError>;
 
     /// Assigns a read policy to specific identifiers.
     ///
@@ -388,22 +395,18 @@ where
                 remap_shard: ShardId::new(),
             };
             let metadata = match description {
-                // We can't persist the shards for tables until we figure out what ADAPTERs wants
-                // to do with system tables that are assumed to be empty on creation
-                CollectionDescription {
-                    ingestion: None,
-                    ..
-                }
                 // We also can't persist the shards for postgres collections until we wire up
                 // correct start offsets to the SourceReaders
-                | CollectionDescription {
-                    ingestion: Some(IngestionDescription {
-                        desc: SourceDesc {
-                            connection: SourceConnection::Postgres(_),
+                CollectionDescription {
+                    ingestion:
+                        Some(IngestionDescription {
+                            desc:
+                                SourceDesc {
+                                    connection: SourceConnection::Postgres(_),
+                                    ..
+                                },
                             ..
-                        },
-                        ..
-                    }),
+                        }),
                     ..
                 } => metadata,
                 _ => {
@@ -603,6 +606,33 @@ where
         self.update_write_frontiers(&change_batches).await?;
 
         Ok(())
+    }
+
+    async fn snapshot(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<Vec<(Row, Diff)>, StorageError> {
+        let as_of = Antichain::from_elem(as_of);
+        let mut snapshot = self.state.persist_handles[&id]
+            .read
+            .snapshot(as_of)
+            .await
+            .expect("cannot read snapshot");
+
+        let mut contents = Vec::new();
+
+        while let Some(updates) = snapshot.next().await {
+            for ((source_data, _pid), _ts, diff) in updates {
+                let row = source_data
+                    .expect("cannot read snapshot")
+                    .0
+                    .expect("cannot read snapshot");
+                contents.push((row, diff));
+            }
+        }
+
+        Ok(contents)
     }
 
     async fn set_read_policy(
