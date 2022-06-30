@@ -67,7 +67,8 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::num::{Neg, NonZeroI64, NonZeroUsize};
+use std::num::{NonZeroI64, NonZeroUsize};
+use std::ops::Neg;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -829,6 +830,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await
                     .with_context(|| format!("recreating sink {}", entry.name()))?;
+                    // `builtin_table_updates` is the desired state of the system tables. However,
+                    // it already contains a (cur_sink, +1) entry from [`Catalog::open`]. The line
+                    // below this will negate that entry with a (cur_sink, -1) entry. The
+                    // `handle_sink_connection_ready` call will delete the current sink, create a
+                    // new sink, and send the following appends to STORAGE: (cur_sink, -1),
+                    // (new_sink, +1). Then we add a (new_sink, +1) entry to
+                    // `builtin_table_updates`.
+                    builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), -1));
                     self.handle_sink_connection_ready(
                         entry.id(),
                         entry.oid(),
@@ -838,10 +847,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         None,
                     )
                     .await?;
-                    // Sinks are not automatically included in `builtin_table_updates`.
-                    // `handle_sink_connection_ready` will automatically send over a builtin
-                    // update, so we need to include the sink in `builtin_table_updates` to
-                    // indicate that it is part of our desired state.
                     builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), 1));
                 }
                 // Nothing to do for these cases
