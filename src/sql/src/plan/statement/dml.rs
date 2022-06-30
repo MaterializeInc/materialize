@@ -53,11 +53,16 @@ pub fn describe_insert(
         table_name,
         columns,
         source,
-        ..
+        returning,
     }: InsertStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    query::plan_insert_query(scx, table_name, columns, source)?;
-    Ok(StatementDesc::new(None))
+    let (_, _, returning) = query::plan_insert_query(scx, table_name, columns, source, returning)?;
+    let desc = if returning.expr.is_empty() {
+        None
+    } else {
+        Some(returning.desc)
+    };
+    Ok(StatementDesc::new(desc))
 }
 
 pub fn plan_insert(
@@ -66,14 +71,25 @@ pub fn plan_insert(
         table_name,
         columns,
         source,
+        returning,
     }: InsertStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
+    let (id, mut expr, returning) =
+        query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(&params)?;
     let expr = expr.optimize_and_lower(&scx.into())?;
+    let returning = returning
+        .expr
+        .into_iter()
+        .map(|expr| expr.lower_uncorrelated())
+        .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(Plan::Insert(InsertPlan { id, values: expr }))
+    Ok(Plan::Insert(InsertPlan {
+        id,
+        values: expr,
+        returning,
+    }))
 }
 
 pub fn describe_delete(
@@ -136,6 +152,7 @@ pub fn plan_read_then_write(
         finishing,
         assignments: assignments_outer,
         kind,
+        returning: Vec::new(),
     }))
 }
 

@@ -81,6 +81,7 @@ use crate::plan::typeconv::{self, CastContext};
 use crate::plan::{transform_ast, PlanContext};
 use crate::plan::{Params, QueryWhen};
 
+#[derive(Debug)]
 pub struct PlannedQuery<E> {
     pub expr: E,
     pub desc: RelationDesc,
@@ -168,7 +169,8 @@ pub fn plan_insert_query(
     table_name: ResolvedObjectName,
     columns: Vec<Ident>,
     source: InsertSource<Aug>,
-) -> Result<(GlobalId, HirRelationExpr), PlanError> {
+    returning: Vec<SelectItem<Aug>>,
+) -> Result<(GlobalId, HirRelationExpr, PlannedQuery<Vec<HirScalarExpr>>), PlanError> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     let table = scx.get_item_by_resolved_name(&table_name)?;
 
@@ -255,7 +257,7 @@ pub fn plan_insert_query(
         }
     };
 
-    let typ = qcx.relation_type(&expr);
+    let expr_arity = expr.arity();
 
     // Validate that the arity of the source query is at most the size of declared columns or the
     // size of the table if none are declared
@@ -264,17 +266,17 @@ pub fn plan_insert_query(
     } else {
         columns.len()
     };
-    if typ.arity() > max_columns {
+    if expr_arity > max_columns {
         sql_bail!("INSERT has more expressions than target columns");
     }
     // But it should never have less than the declared columns (or zero)
-    if typ.arity() < columns.len() {
+    if expr_arity < columns.len() {
         sql_bail!("INSERT has more target columns than expressions");
     }
 
     // Trim now that we know for sure the correct arity of the source query
-    source_types.truncate(typ.arity());
-    ordering.truncate(typ.arity());
+    source_types.truncate(expr_arity);
+    ordering.truncate(expr_arity);
 
     // Ensure the types of the source query match the types of the target table,
     // installing assignment casts where necessary and possible.
@@ -300,12 +302,64 @@ pub fn plan_insert_query(
             project_key.push(*src_idx);
         } else {
             let hir = plan_default_expr(scx, default, &col_typ.scalar_type)?;
-            project_key.push(typ.arity() + map_exprs.len());
+            project_key.push(expr_arity + map_exprs.len());
             map_exprs.push(hir);
         }
     }
 
-    Ok((table.id(), expr.map(map_exprs).project(project_key)))
+    let returning = {
+        let (scope, typ) = if let ResolvedObjectName::Object { full_name, .. } = table_name {
+            let desc = table.desc(&full_name)?;
+            let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
+            let typ = desc.typ().clone();
+            (scope, typ)
+        } else {
+            (Scope::empty(), RelationType::empty())
+        };
+        let ecx = &ExprContext {
+            qcx: &qcx,
+            name: "RETURNING clause",
+            scope: &scope,
+            relation_type: &typ,
+            allow_aggregates: false,
+            allow_subqueries: false,
+            allow_windows: false,
+        };
+        let table_func_names = HashMap::new();
+        let mut output_columns = vec![];
+        let mut new_exprs = vec![];
+        let mut new_type = RelationType::empty();
+        for si in returning {
+            for (select_item, column_name) in expand_select_item(&ecx, &si, &table_func_names)? {
+                let expr = match &select_item {
+                    ExpandedSelectItem::InputOrdinal(i) => HirScalarExpr::column(*i),
+                    ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)?.type_as_any(ecx)?,
+                };
+                output_columns.push(column_name);
+                let typ = ecx.column_type(&expr);
+                new_type.column_types.push(typ);
+                new_exprs.push(expr);
+            }
+        }
+        let desc = RelationDesc::new(new_type, output_columns);
+        let desc_arity = desc.arity();
+        PlannedQuery {
+            expr: new_exprs,
+            desc,
+            finishing: RowSetFinishing {
+                order_by: vec![],
+                limit: None,
+                offset: 0,
+                project: (0..desc_arity).collect(),
+            },
+        }
+    };
+
+    Ok((
+        table.id(),
+        expr.map(map_exprs).project(project_key),
+        returning,
+    ))
 }
 
 pub fn plan_copy_from(

@@ -34,6 +34,8 @@ _query_ | A [`SELECT`](../select) statements whose returned rows you want to wri
 
 ## Details
 
+The optional `RETURNING` clause causes `INSERT` to return values based on each inserted row.
+
 ### Restrictions
 
 Tables do not persist any data that is inserted. This means that restarting a
