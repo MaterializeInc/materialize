@@ -422,7 +422,7 @@ where
                     desc: req.desc,
                     inputs: req.inputs,
                 };
-                compactor.compact_and_apply(&self.machine, req).await;
+                compactor.compact_and_apply(&self.machine, req);
             }
         }
 

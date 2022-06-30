@@ -266,7 +266,7 @@ where
                         return;
                     }
                     // WIP explain
-                    if !self.frontier.less_than(&t) {
+                    if !self.frontier.less_equal(&t) {
                         return;
                     }
                     // WIP not sure why this would be necessary but shrug
@@ -790,10 +790,10 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
                 update_fn(k, v, t, d);
             }
         }
-        eprintln!(
-            "WIP fetch_batch_part {} key {} yielded {} skipped {} updates: {:?}",
-            shard_id, key, yielded, skipped, output_desc
-        );
+        // eprintln!(
+        //     "WIP fetch_batch_part {} key {} yielded {} skipped {} updates: {:?}",
+        //     shard_id, key, yielded, skipped, output_desc
+        // );
     })
 }
 
