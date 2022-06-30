@@ -62,7 +62,7 @@ disruptions = [
         name="drop-cluster",
         disruption=lambda c: c.testdrive(
             """
-> DROP CLUSTER cluster1
+> DROP CLUSTER cluster1 CASCADE
 """,
         ),
     ),

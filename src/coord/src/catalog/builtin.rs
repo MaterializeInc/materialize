@@ -989,7 +989,6 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("on_id", ScalarType::String.nullable(false))
-        .with_column("volatility", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::Int64.nullable(false)),
 });
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1029,8 +1028,7 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false))
-        .with_column("volatility", ScalarType::String.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false)),
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
@@ -1041,7 +1039,6 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
-        .with_column("volatility", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::Int64.nullable(false)),
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1052,7 +1049,6 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("volatility", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false)),
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1147,8 +1143,8 @@ pub static MZ_CLUSTER_REPLICAS_BASE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
         .with_column("availability_zone", ScalarType::String.nullable(true)),
 });
 
-pub static MZ_CLUSTER_REPLICAS_STATUS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_replicas_status",
+pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_replica_statuses",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::Int64.nullable(false))
@@ -1157,11 +1153,19 @@ pub static MZ_CLUSTER_REPLICAS_STATUS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
         .with_column("last_update", ScalarType::TimestampTz.nullable(false)),
 });
 
+pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_replica_heartbeats",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::Int64.nullable(false))
+        .with_column("last_heartbeat", ScalarType::TimestampTz.nullable(false)),
+});
+
 pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("uuid", ScalarType::Uuid.nullable(false))
+        .with_column("id", ScalarType::Int64.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
         .with_column("event_details", ScalarType::Jsonb.nullable(false))
@@ -1259,7 +1263,7 @@ WITH counts AS (
         count(*) AS total,
         sum(CASE WHEN status = 'ready' THEN 1 else 0 END) AS ready,
         sum(CASE WHEN status = 'not_ready' THEN 1 else 0 END) AS not_ready
-    FROM mz_catalog.mz_cluster_replicas_status
+    FROM mz_catalog.mz_cluster_replica_statuses
     GROUP BY replica_id
 )
 SELECT
@@ -2097,7 +2101,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS_BASE),
-        Builtin::Table(&MZ_CLUSTER_REPLICAS_STATUS),
+        Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
+        Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),

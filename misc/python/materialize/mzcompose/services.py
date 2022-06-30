@@ -40,6 +40,7 @@ class Materialized(Service):
         name: str = "materialized",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
+        ports: Optional[List[str]] = None,
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/mzdata",
@@ -52,6 +53,7 @@ class Materialized(Service):
         volumes: Optional[List[str]] = None,
         volumes_extra: Optional[List[str]] = None,
         depends_on: Optional[List[str]] = None,
+        allow_host_ports: bool = False,
     ) -> None:
         if environment is None:
             environment = [
@@ -89,7 +91,9 @@ class Materialized(Service):
             f"--timestamp-frequency {timestamp_frequency}",
         ]
 
-        config_ports = [6875, 5432, *extra_ports, 6876]
+        config_ports: List[Union[str, int]] = (
+            [*ports, *extra_ports] if ports else [6875, 5432, *extra_ports, 6876]
+        )
 
         if isinstance(image, str) and ":v" in image:
             requested_version = image.split(":v")[1]
@@ -124,6 +128,7 @@ class Materialized(Service):
                 "ports": config_ports,
                 "environment": environment,
                 "volumes": volumes,
+                "allow_host_ports": allow_host_ports,
             }
         )
 
@@ -193,6 +198,64 @@ class Computed(Service):
         super().__init__(name=name, config=config)
 
 
+class Storaged(Service):
+    def __init__(
+        self,
+        name: str = "storaged",
+        hostname: Optional[str] = None,
+        image: Optional[str] = None,
+        ports: List[int] = [2100],
+        memory: Optional[str] = None,
+        options: Optional[Union[str, List[str]]] = "",
+        environment: Optional[List[str]] = None,
+        volumes: Optional[List[str]] = None,
+        workers: Optional[int] = None,
+    ) -> None:
+        if environment is None:
+            environment = [
+                "STORAGED_LOG_FILTER",
+                "MZ_SOFT_ASSERTIONS=1",
+            ]
+
+        if volumes is None:
+            # We currently give computed access to /tmp so that it can load CSV files
+            # but this requirement is expected to go away in the future.
+            volumes = DEFAULT_MZ_VOLUMES
+
+        config: ServiceConfig = {"image": image} if image else {"mzbuild": "storaged"}
+
+        if hostname:
+            config["hostname"] = hostname
+
+        # Depending on the docker-compose version, this may either work or be ignored with a warning
+        # Unfortunately no portable way of setting the memory limit is known
+        if memory:
+            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+
+        command_list = []
+        if options:
+            if isinstance(options, str):
+                command_list.append(options)
+            else:
+                command_list.extend(options)
+
+        if workers:
+            command_list.append(f"--workers {workers}")
+
+        command_list.append("--secrets-path=/mzdata/secrets")
+
+        config.update(
+            {
+                "command": " ".join(command_list),
+                "ports": ports,
+                "environment": environment,
+                "volumes": volumes,
+            }
+        )
+
+        super().__init__(name=name, config=config)
+
+
 class Zookeeper(Service):
     def __init__(
         self,
@@ -200,6 +263,7 @@ class Zookeeper(Service):
         image: str = "confluentinc/cp-zookeeper",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 2181,
+        volumes: List[str] = [],
         environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
     ) -> None:
         super().__init__(
@@ -207,6 +271,7 @@ class Zookeeper(Service):
             config={
                 "image": f"{image}:{tag}",
                 "ports": [port],
+                "volumes": volumes,
                 "environment": environment,
             },
         )
@@ -535,7 +600,7 @@ class Testdrive(Service):
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
         aws_region: Optional[str] = None,
-        aws_endpoint: str = "http://localstack:4566",
+        aws_endpoint: Optional[str] = "http://localstack:4566",
     ) -> None:
         if environment is None:
             environment = [

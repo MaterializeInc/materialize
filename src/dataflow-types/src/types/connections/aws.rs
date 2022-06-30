@@ -14,7 +14,7 @@ use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::URL_PATTERN;
 use mz_repr::GlobalId;
 

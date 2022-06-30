@@ -20,7 +20,7 @@ fn main() {
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
-        .extern_path(".mz_repr.proto", "::mz_repr::proto")
+        .extern_path(".mz_proto", "::mz_proto")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")

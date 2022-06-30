@@ -22,6 +22,7 @@ use std::fmt;
 use std::pin::Pin;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::Stream;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -34,8 +35,8 @@ use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::proto::any_uuid;
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::any_uuid;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -263,7 +264,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
 }
 
 impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
-    fn into_proto(self: &Self) -> ProtoCompaction {
+    fn into_proto(&self) -> ProtoCompaction {
         ProtoCompaction {
             id: Some(self.0.into_proto()),
             frontier: Some((&self.1).into()),
@@ -358,7 +359,7 @@ impl<T> ComputeCommand<T> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
+    IngestSources(Vec<IngestSourceCommand>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -366,17 +367,41 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 }
 
+/// A command that starts ingesting the given ingestion description
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct IngestSourceCommand {
+    /// The id of the storage collection being ingested.
+    pub id: GlobalId,
+    /// The description of what source type should be ingested and what post-processing steps must
+    /// be applied to the data before writing them down into the storage collection
+    pub description: IngestionDescription<CollectionMetadata>,
+}
+impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand {
+    fn into_proto(&self) -> ProtoIngestSourceCommand {
+        ProtoIngestSourceCommand {
+            id: Some(self.id.into_proto()),
+            description: Some(self.description.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoIngestSourceCommand) -> Result<Self, TryFromProtoError> {
+        Ok(IngestSourceCommand {
+            id: proto.id.into_rust_if_some("ProtoIngestSourceCommand::id")?,
+            description: proto
+                .description
+                .into_rust_if_some("ProtoIngestSourceCommand::description")?,
+        })
+    }
+}
+
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageCommand {
         use proto_storage_command::Kind::*;
-        use proto_storage_command::*;
         ProtoStorageCommand {
             kind: Some(match self {
-                StorageCommand::CreateSources(ingestion_descriptions) => {
-                    CreateSources(ProtoCreateSources {
-                        ingestion_descriptions: ingestion_descriptions.into_proto(),
-                    })
-                }
+                StorageCommand::IngestSources(ingestions) => IngestSources(ProtoIngestSources {
+                    ingestions: ingestions.into_proto(),
+                }),
                 StorageCommand::AllowCompaction(collections) => {
                     AllowCompaction(ProtoAllowCompaction {
                         collections: collections.into_proto(),
@@ -388,13 +413,10 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
-        use proto_storage_command::*;
         match proto.kind {
-            Some(CreateSources(ProtoCreateSources {
-                ingestion_descriptions,
-            })) => Ok(StorageCommand::CreateSources(
-                ingestion_descriptions.into_rust()?,
-            )),
+            Some(IngestSources(ProtoIngestSources { ingestions })) => {
+                Ok(StorageCommand::IngestSources(ingestions.into_rust()?))
+            }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
@@ -411,11 +433,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec(
-                any::<IngestionDescription<CollectionMetadata, mz_repr::Timestamp>>(),
-                1..4
-            )
-            .prop_map(StorageCommand::CreateSources),
+            proptest::collection::vec(any::<IngestSourceCommand>(), 1..4)
+                .prop_map(StorageCommand::IngestSources),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
@@ -652,6 +671,21 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// of a specific "linearized" read request.
     // TODO(benesch,gus): update language to avoid the term "linearizability".
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
+    /// Notification that we have received a message from the given compute replica
+    /// at the given time.
+    ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
+}
+
+/// A response from the ActiveReplication client:
+/// either a deduplicated compute response, or a notification
+/// that we heard from a given replica and should update its recency status.
+#[derive(Debug, Clone)]
+pub enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
+    /// A response from the compute layer.
+    ComputeResponse(ComputeResponse<T>),
+    /// A notification that we heard a response
+    /// from the given replica at the given time.
+    ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
@@ -1116,8 +1150,8 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod grpc {
-    use mz_repr::proto::ProtoType;
-    use mz_repr::proto::RustType;
+    use mz_proto::ProtoType;
+    use mz_proto::RustType;
     use std::cmp;
     use std::fmt;
     use std::net::ToSocketAddrs;
@@ -1707,7 +1741,7 @@ pub mod grpc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

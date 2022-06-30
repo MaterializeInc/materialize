@@ -15,13 +15,15 @@ use std::sync::Arc;
 use derivative::Derivative;
 use serde::Serialize;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 
 use mz_ore::str::StrExt;
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
-use tokio::sync::watch;
 
+use crate::client::ConnectionId;
 use crate::coord::PeekResponseUnary;
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -77,12 +79,8 @@ pub enum Command {
     },
 
     CancelRequest {
-        conn_id: u32,
+        conn_id: ConnectionId,
         secret_key: u32,
-    },
-
-    RemovePendingPeeks {
-        conn_id: u32,
     },
 
     DumpCatalog {
@@ -180,7 +178,7 @@ pub enum ExecuteResponse {
     CopyFrom {
         id: GlobalId,
         columns: Vec<usize>,
-        params: mz_sql::plan::CopyParams,
+        params: CopyFormatParams<'static>,
     },
     /// The requested connection was created.
     CreatedConnection {
@@ -262,6 +260,8 @@ pub enum ExecuteResponse {
     DroppedTable,
     /// The requested view was dropped.
     DroppedView,
+    /// The requested recorded view was dropped.
+    DroppedRecordedView,
     /// The requested index was dropped.
     DroppedIndex,
     /// The requested sink was dropped.

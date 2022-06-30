@@ -1144,7 +1144,9 @@ class StartupEmpty(Startup):
         ]
 
 
-class StartupLoaded(Startup):
+# Scenario is not currently compatible with Platform -- the computed instances
+# also need to be taken into account, which is currently not the case
+class StartupLoaded(ScenarioDisabled):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
     # Create 10^1.2 ~ 15 objects of each kind

@@ -45,12 +45,13 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
+use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Mutex};
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
@@ -595,6 +596,9 @@ impl Runner {
             command_wrapper: vec![],
         })
         .await?;
+        let metrics_registry = MetricsRegistry::new();
+        let persist_clients = PersistClientCache::new(&metrics_registry);
+        let persist_clients = Arc::new(Mutex::new(persist_clients));
         let server_config = mz_environmentd::Config {
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
@@ -608,6 +612,7 @@ impl Runner {
                     blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
                     consensus_uri,
                 },
+                persist_clients,
                 storage_stash_url: storage_postgres_stash,
             },
             secrets_controller: SecretsControllerConfig::LocalFileSystem(
@@ -623,7 +628,7 @@ impl Runner {
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
-            metrics_registry: MetricsRegistry::new(),
+            metrics_registry,
             now: SYSTEM_TIME.clone(),
             replica_sizes: Default::default(),
             availability_zones: Default::default(),

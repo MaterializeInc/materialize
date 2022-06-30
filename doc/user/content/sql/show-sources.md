@@ -26,9 +26,9 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 `SHOW FULL SOURCES`'s output is a table, with this structure:
 
 ```nofmt
- name  | type | materialized | volatility | type
--------+------+--------------+------------+-----
- ...   | ...  | ...          | ...        | ...
+ name  | type | materialized | type
+-------+------+--------------+------
+ ...   | ...  | ...          | ...
 ```
 
 Field | Meaning
@@ -36,7 +36,6 @@ Field | Meaning
 **name** | The name of the source
 **type** | Whether the source was created by the `user` or the `system`.
 **materialized** | Does the source have an in-memory index? For more details, see [`CREATE INDEX`](../create-index).
-**volatility** | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 **type** | The type of the source:  `kafka`, `postgres`, or `pubnub`.
 
 ### Internal statistic sources
@@ -93,7 +92,7 @@ SHOW MATERIALIZED SOURCES;
 ### Show details about sources
 
 ```sql
-SHOW FULL SOURCES
+SHOW FULL SOURCES;
 ```
 ```nofmt
             name           | type | materialized

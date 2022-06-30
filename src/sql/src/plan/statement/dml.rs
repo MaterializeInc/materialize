@@ -12,20 +12,22 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, bail};
 
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
+use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::AstInfo;
+use mz_sql_parser::ast::{AstInfo, ExplainStatementNew, ExplainStatementOld};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateViewStatement, DeleteStatement, ExplainStage, ExplainStatement, Explainee, Ident,
+    CreateViewStatement, DeleteStatement, ExplainStageOld, ExplainStatement, Explainee, Ident,
     InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
     TailStatement, UpdateStatement, ViewDefinition,
 };
@@ -34,10 +36,9 @@ use crate::names::{self, Aug, ResolvedObjectName};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{query, QueryContext};
 use crate::plan::{
-    CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
-    Plan, ReadThenWritePlan, TailFrom, TailPlan,
+    query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanOld, InsertPlan, MutationKind, Params,
+    PeekPlan, Plan, QueryContext, ReadThenWritePlan, TailFrom, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -52,11 +53,16 @@ pub fn describe_insert(
         table_name,
         columns,
         source,
-        ..
+        returning,
     }: InsertStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    query::plan_insert_query(scx, table_name, columns, source)?;
-    Ok(StatementDesc::new(None))
+    let (_, _, returning) = query::plan_insert_query(scx, table_name, columns, source, returning)?;
+    let desc = if returning.expr.is_empty() {
+        None
+    } else {
+        Some(returning.desc)
+    };
+    Ok(StatementDesc::new(desc))
 }
 
 pub fn plan_insert(
@@ -65,14 +71,25 @@ pub fn plan_insert(
         table_name,
         columns,
         source,
+        returning,
     }: InsertStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
+    let (id, mut expr, returning) =
+        query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(&params)?;
     let expr = expr.optimize_and_lower(&scx.into())?;
+    let returning = returning
+        .expr
+        .into_iter()
+        .map(|expr| expr.lower_uncorrelated())
+        .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(Plan::Insert(InsertPlan { id, values: expr }))
+    Ok(Plan::Insert(InsertPlan {
+        id,
+        values: expr,
+        returning,
+    }))
 }
 
 pub fn describe_delete(
@@ -135,6 +152,7 @@ pub fn plan_read_then_write(
         finishing,
         assignments: assignments_outer,
         kind,
+        returning: Vec::new(),
     }))
 }
 
@@ -167,19 +185,36 @@ pub fn plan_select(
 
 pub fn describe_explain(
     scx: &StatementContext,
-    ExplainStatement {
+    explain: ExplainStatement<Aug>,
+) -> Result<StatementDesc, anyhow::Error> {
+    match explain {
+        ExplainStatement::New(explain) => describe_explain_new(scx, explain),
+        ExplainStatement::Old(explain) => describe_explain_old(scx, explain),
+    }
+}
+
+pub fn describe_explain_new(
+    _scx: &StatementContext,
+    _explain: ExplainStatementNew<Aug>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Err(anyhow!("unimplemented interface")) // TODO: #13295
+}
+
+pub fn describe_explain_old(
+    scx: &StatementContext,
+    ExplainStatementOld {
         stage, explainee, ..
-    }: ExplainStatement<Aug>,
+    }: ExplainStatementOld<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
         match stage {
-            ExplainStage::RawPlan => "Raw Plan",
-            ExplainStage::QueryGraph => "Query Graph",
-            ExplainStage::OptimizedQueryGraph => "Optimized Query Graph",
-            ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-            ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-            ExplainStage::PhysicalPlan => "Physical Plan",
-            ExplainStage::Timestamp => "Timestamp",
+            ExplainStageOld::RawPlan => "Raw Plan",
+            ExplainStageOld::QueryGraph => "Query Graph",
+            ExplainStageOld::OptimizedQueryGraph => "Optimized Query Graph",
+            ExplainStageOld::DecorrelatedPlan => "Decorrelated Plan",
+            ExplainStageOld::OptimizedPlan { .. } => "Optimized Plan",
+            ExplainStageOld::PhysicalPlan => "Physical Plan",
+            ExplainStageOld::Timestamp => "Timestamp",
         },
         ScalarType::String.nullable(false),
     )))
@@ -200,11 +235,22 @@ pub fn describe_explain(
 
 pub fn plan_explain(
     scx: &StatementContext,
-    ExplainStatement {
+    explain: ExplainStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    match explain {
+        ExplainStatement::Old(explain) => plan_explain_old(scx, explain, params),
+        ExplainStatement::New(explain) => plan_explain_new(scx, explain, params),
+    }
+}
+
+pub fn plan_explain_old(
+    scx: &StatementContext,
+    ExplainStatementOld {
         stage,
         explainee,
         options,
-    }: ExplainStatement<Aug>,
+    }: ExplainStatementOld<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let is_view = matches!(explainee, Explainee::View(_));
@@ -245,12 +291,20 @@ pub fn plan_explain(
         Some(finishing)
     };
     expr.bind_parameters(&params)?;
-    Ok(Plan::Explain(ExplainPlan {
+    Ok(Plan::Explain(ExplainPlan::Old(ExplainPlanOld {
         raw_plan: expr,
         row_set_finishing: finishing,
         stage,
         options,
-    }))
+    })))
+}
+
+pub fn plan_explain_new(
+    _scx: &StatementContext,
+    _explain: ExplainStatementNew<Aug>,
+    _params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    Err(anyhow!("unimplemented interface")) // TODO: #13295
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
@@ -327,9 +381,10 @@ pub fn plan_tail(
         TailRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
             match entry.item_type() {
-                CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
-                    TailFrom::Id(entry.id())
-                }
+                CatalogItemType::Table
+                | CatalogItemType::Source
+                | CatalogItemType::View
+                | CatalogItemType::RecordedView => TailFrom::Id(entry.id()),
                 CatalogItemType::Func
                 | CatalogItemType::Index
                 | CatalogItemType::Sink
@@ -363,7 +418,9 @@ pub fn plan_tail(
     };
 
     let when = query::plan_as_of(scx, as_of)?;
-    let TailOptionExtracted { progress, snapshot } = options.try_into()?;
+    let TailOptionExtracted {
+        progress, snapshot, ..
+    } = options.try_into()?;
     Ok(Plan::Tail(TailPlan {
         from,
         when,
@@ -398,8 +455,69 @@ fn plan_copy_from(
     scx: &StatementContext,
     table_name: ResolvedObjectName,
     columns: Vec<Ident>,
-    params: CopyParams,
+    format: CopyFormat,
+    options: CopyOptionExtracted,
 ) -> Result<Plan, anyhow::Error> {
+    fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), anyhow::Error> {
+        match option {
+            Some(_) => bail!("COPY {} available only in CSV mode", param),
+            None => Ok(()),
+        }
+    }
+
+    fn extract_byte_param_value(
+        v: Option<String>,
+        default: u8,
+        param_name: &str,
+    ) -> Result<u8, anyhow::Error> {
+        match v {
+            Some(v) if v.len() == 1 => Ok(v.as_bytes()[0]),
+            Some(..) => bail!("COPY {} must be a single one-byte character", param_name),
+            None => Ok(default),
+        }
+    }
+
+    let params = match format {
+        CopyFormat::Text => {
+            only_available_with_csv(options.quote, "quote")?;
+            only_available_with_csv(options.escape, "escape")?;
+            only_available_with_csv(options.header, "HEADER")?;
+            let delimiter = match options.delimiter {
+                Some(delimiter) if delimiter.len() > 1 => {
+                    bail!("COPY delimiter must be a single one-byte character");
+                }
+                Some(delimiter) => Cow::from(delimiter),
+                None => Cow::from("\t"),
+            };
+            let null = match options.null {
+                Some(null) => Cow::from(null),
+                None => Cow::from("\\N"),
+            };
+            CopyFormatParams::Text(CopyTextFormatParams { null, delimiter })
+        }
+        CopyFormat::Csv => {
+            let quote = extract_byte_param_value(options.quote, b'"', "quote")?;
+            let escape = extract_byte_param_value(options.escape, quote, "escape")?;
+            let header = options.header.unwrap_or(false);
+            let delimiter = extract_byte_param_value(options.delimiter, b',', "delimiter")?;
+            if delimiter == quote {
+                bail!("COPY delimiter and quote must be different");
+            }
+            let null = match options.null {
+                Some(null) => Cow::from(null),
+                None => Cow::from(""),
+            };
+            CopyFormatParams::Csv(CopyCsvFormatParams {
+                delimiter,
+                quote,
+                escape,
+                null,
+                header,
+            })
+        }
+        CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
+    };
+
     let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(Plan::CopyFrom(CopyFromPlan {
         id,
@@ -427,51 +545,32 @@ pub fn plan_copy(
         options,
     }: CopyStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let CopyOptionExtracted {
-        format,
-        delimiter,
-        null,
-        escape,
-        quote,
-        header,
-    } = CopyOptionExtracted::try_from(options)?;
-
-    let copy_params = CopyParams {
-        format: match format.to_lowercase().as_str() {
-            "text" => CopyFormat::Text,
-            "csv" => CopyFormat::Csv,
-            "binary" => CopyFormat::Binary,
-            _ => bail!("unknown FORMAT: {}", format),
-        },
-        delimiter,
-        null,
-        escape,
-        quote,
-        header,
+    let options = CopyOptionExtracted::try_from(options)?;
+    let format = match options.format.to_lowercase().as_str() {
+        "text" => CopyFormat::Text,
+        "csv" => CopyFormat::Csv,
+        "binary" => CopyFormat::Binary,
+        _ => bail!("unknown FORMAT: {}", options.format),
     };
-
     if let CopyDirection::To = direction {
-        if copy_params.delimiter.is_some() {
+        if options.delimiter.is_some() {
             bail!("COPY TO does not support DELIMITER option yet");
         }
-        if copy_params.null.is_some() {
+        if options.null.is_some() {
             bail!("COPY TO does not support NULL option yet");
         }
     }
     match (&direction, &target) {
         (CopyDirection::To, CopyTarget::Stdout) => match relation {
             CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
-            CopyRelation::Select(stmt) => Ok(plan_select(
-                scx,
-                stmt,
-                &Params::empty(),
-                Some(copy_params.format),
-            )?),
-            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(copy_params.format))?),
+            CopyRelation::Select(stmt) => {
+                Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
+            }
+            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(format))?),
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Table { name, columns } => {
-                plan_copy_from(scx, name, columns, copy_params)
+                plan_copy_from(scx, name, columns, format, options)
             }
             _ => bail!("COPY FROM {} not supported", target),
         },

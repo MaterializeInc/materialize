@@ -37,6 +37,7 @@ use crate::client::replicated::ActiveReplication;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
+use crate::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -338,28 +339,56 @@ where
             }
         }
 
-        // Here we augment all the imported sources with the appropriate storage metadata needed by
-        // the compute instance to read them
+        // Here we augment all imported sources and all exported sinks with with the appropriate
+        // storage metadata needed by the compute instance.
         let mut augmented_dataflows = Vec::with_capacity(dataflows.len());
         for d in dataflows {
             let mut source_imports = BTreeMap::new();
-            for (id, si) in d.source_imports {
-                let metadata = self.storage_controller.collection_metadata(id)?;
+            for (id, (si, monotonic)) in d.source_imports {
+                let collection = self.storage_controller.collection(id)?;
                 let desc = SourceInstanceDesc {
-                    description: si.description,
-                    storage_metadata: metadata,
+                    storage_metadata: collection.collection_metadata.clone(),
                     arguments: si.arguments,
+                    typ: collection.description.desc.typ().clone(),
                 };
-                source_imports.insert(id, desc);
+                source_imports.insert(id, (desc, monotonic));
+            }
+
+            let mut sink_exports = BTreeMap::new();
+            for (id, se) in d.sink_exports {
+                let connection = match se.connection {
+                    SinkConnection::Persist(conn) => {
+                        let metadata = self
+                            .storage_controller
+                            .collection(id)?
+                            .collection_metadata
+                            .clone();
+                        let conn = PersistSinkConnection {
+                            value_desc: conn.value_desc,
+                            storage_metadata: metadata,
+                        };
+                        SinkConnection::Persist(conn)
+                    }
+                    SinkConnection::Kafka(conn) => SinkConnection::Kafka(conn),
+                    SinkConnection::Tail(conn) => SinkConnection::Tail(conn),
+                };
+                let desc = SinkDesc {
+                    from: se.from,
+                    from_desc: se.from_desc,
+                    connection,
+                    envelope: se.envelope,
+                    as_of: se.as_of,
+                };
+                sink_exports.insert(id, desc);
             }
 
             augmented_dataflows.push(DataflowDescription {
                 source_imports,
+                sink_exports,
                 // The rest of the fields are identical
                 index_imports: d.index_imports,
                 objects_to_build: d.objects_to_build,
                 index_exports: d.index_exports,
-                sink_exports: d.sink_exports,
                 as_of: d.as_of,
                 debug_name: d.debug_name,
                 id: d.id,
@@ -587,6 +616,21 @@ where
             self.update_read_capabilities(&mut read_capability_changes)
                 .await?;
         }
+
+        // Tell the storage controller about new write frontiers for storage
+        // collections that are advanced by compute sinks.
+        // TODO(teskje): The storage controller should have a task to directly
+        // keep track of the frontiers of storage collections, instead of
+        // relying on others for that information.
+        let storage_updates: Vec<_> = updates
+            .iter()
+            .filter(|(id, _)| self.storage_mut().collection(*id).is_ok())
+            .cloned()
+            .collect();
+        self.storage_mut()
+            .update_write_frontiers(&storage_updates)
+            .await?;
+
         Ok(())
     }
 

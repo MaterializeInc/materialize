@@ -22,7 +22,6 @@ import importlib.abc
 import importlib.util
 import inspect
 import os
-import re
 import subprocess
 import sys
 import time
@@ -30,7 +29,6 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import getmembers, isfunction
-from pathlib import Path
 from tempfile import TemporaryFile
 from typing import (
     Any,
@@ -69,87 +67,8 @@ class UnknownCompositionError(UIError):
         super().__init__(f"unknown composition {name!r}")
 
 
-class LintError:
-    def __init__(self, file: Path, message: str):
-        self.file = file
-        self.message = message
-
-    def __str__(self) -> str:
-        return f"{os.path.relpath(self.file)}: {self.message}"
-
-    def __lt__(self, other: "LintError") -> bool:
-        return (self.file, self.message) < (other.file, other.message)
-
-
-def _lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
-    if "services" not in composition:
-        return
-
-    for (name, service) in composition["services"].items():
-        if "mzbuild" not in service and "image" in service:
-            _lint_image_name(path, service["image"], errors)
-
-        if isinstance(service.get("environment"), dict):
-            errors.append(
-                LintError(
-                    path, f"environment for service {name} uses dict instead of list"
-                )
-            )
-
-
-def _lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
-    from materialize.mzcompose.services import (
-        DEFAULT_CONFLUENT_PLATFORM_VERSION,
-        LINT_DEBEZIUM_VERSIONS,
-    )
-
-    match = re.search(r"((?P<repo>[^/]+)/)?(?P<image>[^:]+)(:(?P<tag>.*))?", spec)
-    if not match:
-        errors.append(LintError(path, f"malformatted image specification: {spec}"))
-        return
-    (repo, image, tag) = (match.group("repo"), match.group("image"), match.group("tag"))
-
-    if not tag:
-        errors.append(LintError(path, f"image {spec} missing tag"))
-    elif tag == "latest":
-        errors.append(LintError(path, f'image {spec} depends on floating "latest" tag'))
-
-    if repo == "confluentinc" and image.startswith("cp-"):
-        # An '$XXX' environment variable may have been used to specify the version
-        if "$" not in tag and tag != DEFAULT_CONFLUENT_PLATFORM_VERSION:
-            errors.append(
-                LintError(
-                    path,
-                    f"image {spec} depends on wrong version of Confluent Platform "
-                    f"(want {DEFAULT_CONFLUENT_PLATFORM_VERSION})",
-                )
-            )
-
-    if repo == "debezium":
-        if "$" not in tag and tag not in LINT_DEBEZIUM_VERSIONS:
-            errors.append(
-                LintError(
-                    path,
-                    f"image {spec} depends on wrong version of Debezium "
-                    f"(want {LINT_DEBEZIUM_VERSIONS})",
-                )
-            )
-
-    if not repo and image == "zookeeper":
-        errors.append(
-            LintError(
-                path, f"replace {spec} with official confluentinc/cp-zookeeper image"
-            )
-        )
-
-    if repo == "wurstmeister" and image == "kafka":
-        errors.append(
-            LintError(path, f"replace {spec} with official confluentinc/cp-kafka image")
-        )
-
-
 class Composition:
-    """A parsed mzcompose.yml with a loaded mzcompose.py file."""
+    """A loaded mzcompose.py file."""
 
     @dataclass
     class TestResult:
@@ -177,21 +96,10 @@ class Composition:
         else:
             raise UnknownCompositionError(name)
 
-        # load the mzcompose.yml file, if one exists
-        mzcompose_yml = self.path / "mzcompose.yml"
-        if mzcompose_yml.exists():
-            with open(mzcompose_yml) as f:
-                compose = yaml.safe_load(f) or {}
-        else:
-            compose = {}
-
-        self.compose = compose
-
-        if "version" not in compose:
-            compose["version"] = "3.7"
-
-        if "services" not in compose:
-            compose["services"] = {}
+        self.compose: dict[str, Any] = {
+            "version": "3.7",
+            "services": {},
+        }
 
         # Load the mzcompose.py file, if one exists
         mzcompose_py = self.path / "mzcompose.py"
@@ -212,12 +120,12 @@ class Composition:
 
             for python_service in getattr(module, "SERVICES", []):
                 name = python_service.name
-                if name in compose["services"]:
+                if name in self.compose["services"]:
                     raise UIError(f"service {name!r} specified more than once")
-                compose["services"][name] = python_service.config
+                self.compose["services"][name] = python_service.config
 
         # Add default volumes
-        compose.setdefault("volumes", {}).update(
+        self.compose.setdefault("volumes", {}).update(
             {
                 "mzdata": None,
                 "pgdata": None,
@@ -229,7 +137,7 @@ class Composition:
 
         # The CLI driver will handle acquiring these dependencies.
         if munge_services:
-            self.dependencies = self._munge_services(compose["services"].items())
+            self.dependencies = self._munge_services(self.compose["services"].items())
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
@@ -299,36 +207,19 @@ class Composition:
         yaml.dump(self.compose, self.file)
         self.file.flush()
 
-    @classmethod
-    def lint(cls, repo: mzbuild.Repository, name: str) -> List[LintError]:
-        """Checks a composition for common errors."""
-        if not name in repo.compositions:
-            raise UnknownCompositionError(name)
-
-        errs: List[LintError] = []
-
-        path = repo.compositions[name] / "mzcompose.yml"
-
-        if path.exists():
-            with open(path) as f:
-                composition = yaml.safe_load(f) or {}
-
-            _lint_composition(path, composition, errs)
-        return errs
-
     def invoke(
         self, *args: str, capture: bool = False, stdin: Optional[str] = None
     ) -> subprocess.CompletedProcess:
-        """Invoke `docker-compose` on the rendered composition.
+        """Invoke `docker compose` on the rendered composition.
 
         Args:
-            args: The arguments to pass to `docker-compose`.
+            args: The arguments to pass to `docker compose`.
             capture: Whether to capture the child's stdout stream.
             input: A string to provide as stdin for the command.
         """
 
         if not self.silent:
-            print(f"$ docker-compose {' '.join(args)}", file=sys.stderr)
+            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
 
         self.file.seek(0)
 
@@ -339,8 +230,8 @@ class Composition:
         try:
             return subprocess.run(
                 [
-                    "docker-compose",
-                    *(["--log-level=ERROR"] if self.silent else []),
+                    "docker",
+                    "compose",
                     f"-f/dev/fd/{self.file.fileno()}",
                     "--project-directory",
                     self.path,
@@ -355,12 +246,12 @@ class Composition:
         except subprocess.CalledProcessError as e:
             if e.stdout:
                 print(e.stdout)
-            raise UIError(f"running docker-compose failed (exit status {e.returncode})")
+            raise UIError(f"running docker compose failed (exit status {e.returncode})")
 
     def port(self, service: str, private_port: Union[int, str]) -> int:
         """Get the public port for a service's private port.
 
-        Delegates to `docker-compose port`. See that command's help for details.
+        Delegates to `docker compose port`. See that command's help for details.
 
         Args:
             service: The name of a service in the composition.
@@ -383,7 +274,7 @@ class Composition:
         ports = self.compose["services"][service]["ports"]
         if not ports:
             raise UIError(f"service f{service!r} does not expose any ports")
-        private_port = str(ports[0]).split(":")[0]
+        private_port = str(ports[0]).split(":")[-1]
         return self.port(service, private_port)
 
     def workflow(self, name: str, *args: str) -> None:
@@ -558,9 +449,9 @@ class Composition:
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
-        Delegates to `docker-compose run`. See that command's help for details.
+        Delegates to `docker compose run`. See that command's help for details.
         Note that unlike `docker compose run`, any services whose definitions
-        have changed are rebuilt (like `docker-compose up` would do) before the
+        have changed are rebuilt (like `docker compose up` would do) before the
         command is executed.
 
         Args:
@@ -570,7 +461,7 @@ class Composition:
             stdin: read STDIN from a string.
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
-            capture: Capture the stdout of the `docker-compose` invocation.
+            capture: Capture the stdout of the `docker compose` invocation.
         """
         # Restart any dependencies whose definitions have changed. The trick,
         # taken from Buildkite's Docker Compose plugin, is to run an `up`
@@ -597,7 +488,7 @@ class Composition:
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
-        Delegates to `docker-compose exec`.
+        Delegates to `docker compose exec`.
 
         Args:
             service: The service whose container will be used.
@@ -639,7 +530,7 @@ class Composition:
     def up(self, *services: str, detach: bool = True, persistent: bool = False) -> None:
         """Build, (re)create, and start the named services.
 
-        Delegates to `docker-compose up`. See that command's help for details.
+        Delegates to `docker compose up`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -664,7 +555,7 @@ class Composition:
     def down(self, destroy_volumes: bool = True, remove_orphans: bool = True) -> None:
         """Stop and remove resources.
 
-        Delegates to `docker-compose down`. See that command's help for details.
+        Delegates to `docker compose down`. See that command's help for details.
 
         Args:
             destroy_volumes: Remove named volumes and anonymous volumes attached
@@ -679,7 +570,7 @@ class Composition:
     def stop(self, *services: str) -> None:
         """Stop the docker containers for the named services.
 
-        Delegates to `docker-compose stop`. See that command's help for details.
+        Delegates to `docker compose stop`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -689,7 +580,7 @@ class Composition:
     def kill(self, *services: str, signal: str = "SIGKILL") -> None:
         """Force stop service containers.
 
-        Delegates to `docker-compose kill`. See that command's help for details.
+        Delegates to `docker compose kill`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -700,7 +591,7 @@ class Composition:
     def pause(self, *services: str) -> None:
         """Pause service containers.
 
-        Delegates to `docker-compose pause`. See that command's help for details.
+        Delegates to `docker compose pause`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -710,7 +601,7 @@ class Composition:
     def unpause(self, *services: str) -> None:
         """Unpause service containers
 
-        Delegates to `docker-compose unpause`. See that command's help for details.
+        Delegates to `docker compose unpause`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.
@@ -722,7 +613,7 @@ class Composition:
     ) -> None:
         """Remove stopped service containers.
 
-        Delegates to `docker-compose rm`. See that command's help for details.
+        Delegates to `docker compose rm`. See that command's help for details.
 
         Args:
             services: The names of services in the composition.

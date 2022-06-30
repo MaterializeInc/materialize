@@ -11,17 +11,17 @@ anyhow = "1.0.58"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-trait = "0.1.56"
 atty = "0.2.0"
-aws-config = { version = "0.13.0", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-s3 = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sqs = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sts = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-smithy-http = "0.43.0"
-aws-types = { version = "0.13.0", features = ["hardcoded-credentials"] }
+aws-config = { version = "0.14.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-s3 = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sqs = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sts = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-smithy-http = "0.44.0"
+aws-types = { version = "0.14.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.2.5", features = ["derive"] }
+clap = { version = "3.2.6", features = ["derive"] }
 flate2 = "1.0.24"
 futures = "0.3.21"
 globset = "0.4.9"
@@ -42,6 +42,7 @@ mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-pgrepr = { path = "../pgrepr" }
+mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
@@ -60,7 +61,7 @@ similar = "2.1.0"
 tempfile = "3.2.0"
 termcolor = "1.1.3"
 tiberius = { version = "0.9.3", default-features = false }
-time = "0.3.10"
+time = "0.3.11"
 tracing = "0.1.35"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
 tokio = { version = "1.19.2", features = ["process"] }

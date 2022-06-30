@@ -15,44 +15,46 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use url::Url;
 
-use crate::file::{FileBlobConfig, FileBlobMulti};
-use crate::location::{BlobMulti, Consensus, ExternalError};
+use crate::file::{FileBlob, FileBlobConfig};
+use crate::location::{Blob, Consensus, ExternalError};
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
-use crate::s3::{S3BlobConfig, S3BlobMulti};
+use crate::s3::{S3Blob, S3BlobConfig};
 
 #[cfg(any(test, debug_assertions))]
-use crate::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
+use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 
-/// Config for an implementation of [BlobMulti].
+/// Config for an implementation of [Blob].
 #[derive(Debug, Clone)]
-pub enum BlobMultiConfig {
-    /// Config for [FileBlobMulti].
+pub enum BlobConfig {
+    /// Config for [FileBlob].
     File(FileBlobConfig),
-    /// Config for [S3BlobMulti].
+    /// Config for [S3Blob].
     S3(S3BlobConfig),
-    /// Config for [MemBlobMulti], only available in testing to prevent
+    /// Config for [MemBlob], only available in testing to prevent
     /// footguns.
     #[cfg(any(test, debug_assertions))]
     Mem,
 }
 
-impl BlobMultiConfig {
-    /// Opens the associated implementation of [BlobMulti].
-    pub async fn open(self) -> Result<Arc<dyn BlobMulti + Send + Sync>, ExternalError> {
+impl BlobConfig {
+    /// Opens the associated implementation of [Blob].
+    pub async fn open(self) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
         match self {
-            BlobMultiConfig::File(config) => FileBlobMulti::open(config)
+            BlobConfig::File(config) => FileBlob::open(config)
                 .await
-                .map(|x| Arc::new(x) as Arc<dyn BlobMulti + Send + Sync>),
-            BlobMultiConfig::S3(config) => S3BlobMulti::open(config)
+                .map(|x| Arc::new(x) as Arc<dyn Blob + Send + Sync>),
+            BlobConfig::S3(config) => S3Blob::open(config)
                 .await
-                .map(|x| Arc::new(x) as Arc<dyn BlobMulti + Send + Sync>),
+                .map(|x| Arc::new(x) as Arc<dyn Blob + Send + Sync>),
             #[cfg(any(test, debug_assertions))]
-            BlobMultiConfig::Mem => Ok(Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()))
-                as Arc<dyn BlobMulti + Send + Sync>),
+            BlobConfig::Mem => {
+                Ok(Arc::new(MemBlob::open(MemBlobConfig::default()))
+                    as Arc<dyn Blob + Send + Sync>)
+            }
         }
     }
 
-    /// Parses a [BlobMulti] config from a uri string.
+    /// Parses a [Blob] config from a uri string.
     pub async fn try_from(value: &str) -> Result<Self, ExternalError> {
         let url = Url::parse(value)
             .map_err(|err| anyhow!("failed to parse blob location {} as a url: {}", &value, err))?;
@@ -61,7 +63,7 @@ impl BlobMultiConfig {
         let config = match url.scheme() {
             "file" => {
                 let config = FileBlobConfig::from(url.path());
-                Ok(BlobMultiConfig::File(config))
+                Ok(BlobConfig::File(config))
             }
             "s3" => {
                 let bucket = url
@@ -75,12 +77,12 @@ impl BlobMultiConfig {
                     .to_string();
                 let role_arn = query_params.remove("aws_role_arn").map(|x| x.into_owned());
                 let config = S3BlobConfig::new(bucket, prefix, role_arn).await?;
-                Ok(BlobMultiConfig::S3(config))
+                Ok(BlobConfig::S3(config))
             }
             #[cfg(any(test, debug_assertions))]
             "mem" => {
                 query_params.clear();
-                Ok(BlobMultiConfig::Mem)
+                Ok(BlobConfig::Mem)
             }
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",

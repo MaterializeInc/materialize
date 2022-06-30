@@ -43,7 +43,6 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.bootstrap.servers": "kafka:9092",
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
-  "provide.transaction.metadata": "true",
   "decimal.handling.mode": "double"
 }
 
@@ -123,7 +122,6 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.bootstrap.servers": "kafka:9092",
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
-  "provide.transaction.metadata": "true",
   "decimal.handling.mode": "precise"
 }
 

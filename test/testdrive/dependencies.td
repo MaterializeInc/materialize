@@ -13,42 +13,26 @@
 $ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
 
 $ set schema={
+    "name": "row",
     "type": "record",
-    "name": "envelope",
     "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "x", "type": "long"},
-              {"name": "y", "type": "string"}
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
+      {"name": "x", "type": "long"},
+      {"name": "y", "type": "string"}
     ]
   }
 
 > CREATE SOURCE s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 ! CREATE SOURCE s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-blah-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 contains:catalog item 's' already exists
 
 > CREATE SOURCE IF NOT EXISTS s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-blah-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW test1 AS SELECT 1;
 
@@ -117,7 +101,6 @@ contains:unknown catalog item 'test4'
 > CREATE SOURCE s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 > CREATE SINK s1 FROM s
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v'
@@ -268,7 +251,6 @@ contains:unknown catalog item 'i4'
 > CREATE MATERIALIZED SOURCE s3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 # Test that dependent indexes do not prevent source deletion when restrict is specified
 > CREATE INDEX j1 on s3(ascii(y))
@@ -293,7 +275,6 @@ contains:unknown catalog item 'j1'
 > CREATE MATERIALIZED SOURCE s4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 > CREATE INDEX j2 on s4(x+2);
 
@@ -332,7 +313,6 @@ contains:unknown catalog item 'j2'
 > CREATE MATERIALIZED SOURCE s5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 > DROP INDEX s5_primary_idx CASCADE;
 

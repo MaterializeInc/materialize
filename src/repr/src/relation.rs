@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
-use crate::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::{Datum, ScalarType};
 
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
@@ -227,7 +227,7 @@ impl RustType<ProtoRelationType> for RelationType {
 }
 
 impl RustType<ProtoKey> for Vec<usize> {
-    fn into_proto(self: &Self) -> ProtoKey {
+    fn into_proto(&self) -> ProtoKey {
         ProtoKey {
             keys: self.into_proto(),
         }
@@ -334,7 +334,7 @@ pub struct RelationDesc {
 }
 
 impl RustType<ProtoRelationDesc> for RelationDesc {
-    fn into_proto(self: &Self) -> ProtoRelationDesc {
+    fn into_proto(&self) -> ProtoRelationDesc {
         ProtoRelationDesc {
             typ: Some(self.typ.into_proto()),
             names: self.names.into_proto(),

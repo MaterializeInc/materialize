@@ -27,14 +27,17 @@ use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
-    MZ_CLUSTER_REPLICAS_STATUS, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES,
-    MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_FUNCTIONS,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES,
+    MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, Sink, SinkConnection,
     SinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
+use crate::coord::ReplicaMetadata;
+
+use super::builtin::MZ_CLUSTER_REPLICA_HEARTBEATS;
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -168,7 +171,7 @@ impl CatalogState {
         };
 
         BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_STATUS),
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
             row: Row::pack_slice(&[
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                 Datum::Int64(replica_id as i64),
@@ -198,7 +201,7 @@ impl CatalogState {
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                self.pack_source_update(id, oid, schema_id, name, source.connection.name(), diff)
+                self.pack_source_update(id, oid, schema_id, name, source.source_desc.name(), diff)
             }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
@@ -268,7 +271,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
-        source_connection_name: &str,
+        source_desc_name: &str,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -279,8 +282,7 @@ impl CatalogState {
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
-                Datum::String(source_connection_name),
-                Datum::String(self.is_volatile(id).as_str()),
+                Datum::String(source_desc_name),
             ]),
             diff,
         }]
@@ -344,7 +346,6 @@ impl CatalogState {
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
-                Datum::String(self.is_volatile(id).as_str()),
                 Datum::String(&query_string),
             ]),
             diff,
@@ -396,7 +397,6 @@ impl CatalogState {
                     Datum::Int64(u64::from(schema_id) as i64),
                     Datum::String(name),
                     Datum::String(connection.name()),
-                    Datum::String(self.is_volatile(id).as_str()),
                     // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                     Datum::Int64(sink.compute_instance as i64),
                 ]),
@@ -431,7 +431,6 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
-                Datum::String(self.is_volatile(id).as_str()),
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                 Datum::Int64(index.compute_instance as i64),
             ]),
@@ -616,8 +615,7 @@ impl CatalogState {
         &self,
         event: &VersionedEvent,
     ) -> Result<BuiltinTableUpdate, Error> {
-        let (id, event_type, object_type, event_details, user, occurred_at): (
-            uuid::Uuid,
+        let (event_type, object_type, event_details, user, occurred_at): (
             &EventType,
             &ObjectType,
             &EventDetails,
@@ -625,7 +623,6 @@ impl CatalogState {
             u64,
         ) = match event {
             VersionedEvent::V1(ev) => (
-                ev.uuid,
                 &ev.event_type,
                 &ev.object_type,
                 &ev.event_details,
@@ -643,13 +640,19 @@ impl CatalogState {
             .into_row();
         let event_details = event_details.iter().next().unwrap();
         let dt = NaiveDateTime::from_timestamp(
-            (occurred_at / 1_000_000_000).try_into().expect("must fit"),
-            (occurred_at % 1_000_000_000).try_into().expect("must fit"),
+            (occurred_at / 1_000).try_into().expect("must fit"),
+            (occurred_at % 1_000).try_into().expect("must fit"),
         );
+        let id = i64::try_from(event.sortable_id()).map_err(|e| {
+            Error::new(ErrorKind::Unstructured(format!(
+                "exceeded event id space: {}",
+                e
+            )))
+        })?;
         Ok(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_AUDIT_EVENTS),
             row: Row::pack_slice(&[
-                Datum::Uuid(id),
+                Datum::Int64(id),
                 Datum::String(&format!("{}", event_type)),
                 Datum::String(&format!("{}", object_type)),
                 event_details,
@@ -658,5 +661,25 @@ impl CatalogState {
             ]),
             diff: 1,
         })
+    }
+
+    pub fn pack_replica_heartbeat_update(
+        &self,
+        id: ReplicaId,
+        md: ReplicaMetadata,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let ReplicaMetadata { last_heartbeat } = md;
+        let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
+        let row = Row::pack_slice(&[
+            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+            Datum::Int64(id.try_into().expect("Replica IDs should not overflow i64")),
+            Datum::TimestampTz(last_heartbeat),
+        ]);
+        BuiltinTableUpdate {
+            id: table,
+            row,
+            diff,
+        }
     }
 }

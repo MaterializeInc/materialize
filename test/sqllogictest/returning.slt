@@ -1,0 +1,134 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This test may seem simple, but it is surprisingly good at verifying that
+# logical timestamp handling for internal inputs is sane.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a INT, b INT DEFAULT 11)
+
+query I
+INSERT INTO t (b, a) VALUES (2, 1) RETURNING a
+----
+1
+
+query III
+INSERT INTO t VALUES (3, 4) RETURNING a, *
+----
+3  3  4
+
+query IIITII rowsort,colnames
+INSERT INTO t VALUES (5, 6), (9, 10) RETURNING *, a + 10 AS ten, 'c', *
+----
+a b ten ?column? a b
+5  6  15  c  5  6
+9  10  19  c  9  10
+
+query I
+INSERT INTO t VALUES (7, 8) RETURNING 1
+----
+1
+
+query I
+INSERT INTO t (a) VALUES (10) RETURNING b
+----
+11
+
+query I
+INSERT INTO t (b) VALUES (10) RETURNING a
+----
+NULL
+
+query II
+INSERT INTO t DEFAULT VALUES RETURNING a, b
+----
+NULL  11
+
+query I
+INSERT INTO t (a) VALUES (100) RETURNING t.a
+----
+100
+
+# Work around our table parse alias bug, but verify we can RETURNING results
+# of queries.
+query I
+INSERT INTO t SELECT count(*), 0 FROM t AS t RETURNING a
+----
+9
+
+# TODO(mjibson): This works in Postgres. We currently parse the RETURNING as a
+# table alias for t.
+statement error Expected end of statement
+INSERT INTO t SELECT count(*), 0 FROM t RETURNING a
+
+# TODO(mjibson): This works in Postgres.
+statement error Expected right parenthesis
+INSERT INTO t (SELECT count(*), 0 FROM t) RETURNING a
+
+statement error column "c" does not exist
+INSERT INTO t VALUES (7, 8) RETURNING c
+
+statement error column "t2.a" does not exist
+INSERT INTO t VALUES (7, 8) RETURNING t2.a
+
+statement error division by zero
+INSERT INTO t VALUES (7, 8) RETURNING 1/0
+
+statement error column "z" does not exist
+INSERT INTO t VALUES (7, 8) RETURNING z
+
+statement error aggregate functions are not allowed in RETURNING clause
+INSERT INTO t VALUES (7, 8) RETURNING count(*)
+
+statement error window functions are not allowed in RETURNING clause
+INSERT INTO t VALUES (7, 8) RETURNING row_number()
+
+statement error RETURNING clause does not allow subqueries
+INSERT INTO t VALUES (7, 8) RETURNING (SELECT 1)
+
+statement error RETURNING clause does not allow subqueries
+INSERT INTO t VALUES (7, 8) RETURNING a + b + (SELECT 1)
+
+statement error expected expression, but found reserved keyword
+INSERT INTO t VALUES (7, 8) RETURNING SELECT 1
+
+statement error Expected end of statement, found AS
+INSERT INTO t VALUES (7, 8) RETURNING * AS a
+
+statement error Unexpected EOF
+INSERT INTO t VALUES (7, 8) RETURNING
+
+statement error Expected end of statement, found RETURNING
+UPDATE t SET a = 0 RETURNING b
+
+statement error Expected end of statement, found RETURNING
+DELETE FROM t AS t RETURNING *
+
+statement error cannot evaluate unmaterializable function
+INSERT INTO t VALUES (7, 8) RETURNING now()
+
+statement error cannot evaluate unmaterializable function
+INSERT INTO t VALUES (7, 8) RETURNING mz_logical_timestamp()
+
+# Verify the above errors didn't have any side effects.
+query II
+SELECT * FROM t ORDER BY a, b
+----
+1  2
+3  4
+5  6
+7  8
+9  0
+9  10
+10  11
+100  11
+NULL  10
+NULL  11

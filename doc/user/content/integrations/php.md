@@ -44,33 +44,6 @@ $connection = connect('localhost', 6875, 'materialize', 'materialize', 'material
 
 You can add the above code to a `config.php` file and then include it in your application with `require 'connect.php';`.
 
-### Materialize Cloud Instance
-
-Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-cloud/) dialog and specify the path to each file in the [`PDO_PGSQL DSN` definition](https://www.php.net/manual/en/ref.pdo-pgsql.connection.php). Replace `MY_INSTANCE_ID` in the connection string property with your Materialize Cloud instance ID.
-
-```php
-<?php
-
-function cloudConnect(string $host, int $port, string $db, string $user, string $password): PDO
-{
-    try {
-        $dsn = "pgsql:host=$host;port=$port;dbname=$db;sslmode=verify-full;sslcert=materialize.crt;sslkey=materialize.key;sslrootcert=ca.crt";
-
-        // make a database connection
-        return new PDO(
-            $dsn,
-            $user,
-            $password,
-            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-        );
-    } catch (PDOException $e) {
-        die($e->getMessage());
-    }
-}
-
-$connection = cloudConnect('MY_INSTANCE_ID', 6875, 'materialize', 'materialize', 'materialize');
-```
-
 ## Stream
 
 To take full advantage of incrementally updated materialized views from a PHP application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.

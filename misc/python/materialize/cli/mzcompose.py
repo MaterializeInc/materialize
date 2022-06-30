@@ -37,7 +37,7 @@ from humanize import naturalsize
 from materialize import ROOT, ci_util, mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
 
-MIN_COMPOSE_VERSION = (1, 24, 0)
+MIN_COMPOSE_VERSION = (2, 6, 0)
 RECOMMENDED_MIN_MEM = 8 * 1024**3  # 8GiB
 RECOMMENDED_MIN_CPUS = 2
 
@@ -47,11 +47,11 @@ def main(argv: List[str]) -> None:
         prog="mzcompose",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""
-mzcompose orchestrates services defined in mzcompose.yml or mzcompose.py.
+mzcompose orchestrates services defined in mzcompose.py.
 It wraps Docker Compose to add some Materialize-specific features.""",
         epilog="""
 These are only the most common options. There are additional Docker Compose
-options that are also supported. Consult `docker-compose help` for the full
+options that are also supported. Consult `docker compose help` for the full
 set.
 
 For help on a specific command, run `mzcompose COMMAND --help`.
@@ -68,7 +68,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     parser.add_argument(
         "--find",
         metavar="DIR",
-        help="use the mzcompose.yml file from DIR, rather than the current directory",
+        help="use the mzcompose.py file from DIR, rather than the current directory",
     )
     parser.add_argument(
         "--preserve-ports",
@@ -101,7 +101,6 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     help_command.register(parser, subparsers)
     ImagesCommand.register(parser, subparsers)
     KillCommand.register(parser, subparsers)
-    LintCommand().register(parser, subparsers)
     ListCompositionsCommand().register(parser, subparsers)
     ListWorkflowsCommand().register(parser, subparsers)
     LogsCommand.register(parser, subparsers)
@@ -152,7 +151,7 @@ def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
             for path in repo.compositions.values():
                 hint += f"    {path.relative_to(Path.cwd())}\n"
             raise UIError(
-                "directory does not contain an mzcompose.yml or mzcompose.py",
+                "directory does not contain mzcompose.py",
                 hint,
             )
 
@@ -245,21 +244,6 @@ exec "$(dirname "$0")"/{}/bin/pyactivate -m materialize.cli.mzcompose "$@"
             with open(mzcompose_path, "w") as f:
                 f.write(template.format(os.path.relpath(repo.root, path)))
             mzbuild.chmod_x(mzcompose_path)
-
-
-class LintCommand(Command):
-    name = "lint"
-    help = "surface common errors in compositions"
-
-    def run(cls, args: argparse.Namespace) -> None:
-        repo = mzbuild.Repository.from_arguments(ROOT, args)
-        errors = []
-        for name in repo.compositions:
-            errors += mzcompose.Composition.lint(repo, name)
-        for error in sorted(errors):
-            print(error)
-        if errors:
-            raise UIError("lint errors discovered")
 
 
 class ListCompositionsCommand(Command):
@@ -403,9 +387,9 @@ class DockerComposeCommand(Command):
     def run(self, args: argparse.Namespace) -> None:
         if args.help:
             output = self.capture(
-                ["docker-compose", self.name, "--help"], stderr=subprocess.STDOUT
+                ["docker", "compose", self.name, "--help"], stderr=subprocess.STDOUT
             )
-            output = output.replace("docker-compose", "./mzcompose")
+            output = output.replace("docker compose", "./mzcompose")
             output += "\nThis command is a wrapper around Docker Compose."
             if self.help_epilog:
                 output += "\n"
@@ -416,7 +400,7 @@ class DockerComposeCommand(Command):
         # Make sure Docker Compose is new enough.
         output = (
             self.capture(
-                ["docker-compose", "version", "--short"], stderr=subprocess.STDOUT
+                ["docker", "compose", "version", "--short"], stderr=subprocess.STDOUT
             )
             .strip()
             .strip("v")
@@ -424,7 +408,7 @@ class DockerComposeCommand(Command):
         version = tuple(int(i) for i in output.split("."))
         if version < MIN_COMPOSE_VERSION:
             raise UIError(
-                f"unsupported docker-compose version v{output}",
+                f"unsupported docker compose version v{output}",
                 hint=f"minimum version allowed: v{'.'.join(str(p) for p in MIN_COMPOSE_VERSION)}",
             )
 
@@ -654,14 +638,14 @@ UpCommand = DockerComposeCommand(
 #
 #   * `version`, because mzcompose isn't versioned. If someone wants their
 #     Docker Compose version, it's clearer to have them run
-#     `docker-compose version` explicitly.
+#     `docker compose version` explicitly.
 
 
 # The following `ArgumentParser` subclasses attach unknown arguments as
 # `unknown_args` and `unknown_subargs` to the returned arguments object. The
 # difference between unknown arguments that occur *before* the command vs. after
 # (consider `./mzcompose --before command --after) is important when forwarding
-# arguments to `docker-compose`.
+# arguments to `docker compose`.
 #
 # `argparse.REMAINDER` seems like it'd be useful here, but it doesn't maintain
 # the above distinction, plus was deprecated in Python 3.9 due to unfixable

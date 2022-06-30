@@ -18,8 +18,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
+use mz_proto::{RustType, TryFromProtoError};
 
-use crate::proto::{RustType, TryFromProtoError};
 use crate::row::DatumList;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
@@ -220,7 +220,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #[test]

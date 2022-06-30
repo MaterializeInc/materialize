@@ -103,23 +103,11 @@
     - signature: 'list_cat(l1: listany, l2: listany) -> L'
       description: Concatenates `l1` and `l2`.
 
-    - signature: 'list_n_layers(l: listany) -> int'
-      description: '[Experimental](/cli/#experimental-mode)––Returns the number of dimensions on `l`.'
-
     - signature: 'list_length(l: listany) -> int'
       description: Return the number of elements in `l`.
 
-    - signature: 'list_length_max(l: listany, d: int) -> int'
-      description: '[Experimental](/cli/#experimental-mode)––Return the greatest length among all lists on dimension `d` of `l`.'
-
     - signature: 'list_prepend(e: listelementany, l: listany) -> listany'
       description: Prepends `e` to `l`.
-
-    - signature: 'list_remove(l: listany, e: listelementany) -> listany'
-      description: >-
-        [Experimental](/cli/#experimental-mode)––Returns the list `l` without
-        any elements equal to the given value `e`. Comparisons are done using
-        IS NOT DISTINCT FROM semantics, so it is possible to remove NULLs.
 
 - type: Map
   description: Map functions take [`map`](../types/map) arguments, and are [polymorphic](../types/#polymorphism).
@@ -440,10 +428,6 @@
     description: Align `source` with `origin` along `stride`.
     url: date-bin
 
-  - signature: 'date_bin(stride: interval, source: timestamp) -> timestamp'
-    description: '**Experimental**: Align `source` with the UNIX epoch along `stride`.'
-    url: date-bin
-
   - signature: 'date_trunc(time_component: str, val: timestamp) -> timestamp'
     description: Largest `time_component` <= `val`
     url: date-trunc
@@ -674,6 +658,9 @@
     unmaterializable: true
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
+    unmaterializable: true
+  - signature: 'mz_version_num() -> int'
+    description: Returns the server's version as an integer having the format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version.
     unmaterializable: true
   - signature: 'current_database() -> text'
     description: >-

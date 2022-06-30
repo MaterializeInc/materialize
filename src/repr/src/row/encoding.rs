@@ -19,11 +19,11 @@ use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::numeric::Numeric;
 use crate::chrono::{ProtoNaiveDate, ProtoNaiveTime};
-use crate::proto::{ProtoType, RustType, TryFromProtoError};
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
@@ -263,7 +263,7 @@ impl TryFrom<&ProtoRow> for Row {
 }
 
 impl RustType<ProtoRow> for Row {
-    fn into_proto(self: &Self) -> ProtoRow {
+    fn into_proto(&self) -> ProtoRow {
         let datums = self.iter().map(|x| x.into()).collect();
         ProtoRow { datums }
     }

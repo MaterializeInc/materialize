@@ -33,6 +33,7 @@ use mz_ore::cast;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
 use mz_pgrepr::Type;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
@@ -40,7 +41,6 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::chrono::any_naive_datetime;
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
@@ -71,6 +71,7 @@ pub enum UnmaterializableFunc {
     MzSessionId,
     MzUptime,
     MzVersion,
+    MzVersionNum,
     PgBackendPid,
     PgPostmasterStartTime,
     Version,
@@ -97,6 +98,7 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
             UnmaterializableFunc::MzUptime => ScalarType::Interval.nullable(true),
             UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzVersionNum => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::Version => ScalarType::String.nullable(false),
@@ -119,6 +121,7 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
             UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
             UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
+            UnmaterializableFunc::MzVersionNum => f.write_str("mz_version_num"),
             UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
             UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
             UnmaterializableFunc::Version => f.write_str("version"),
@@ -140,6 +143,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::MzSessionId => MzSessionId(()),
             UnmaterializableFunc::MzUptime => MzUptime(()),
             UnmaterializableFunc::MzVersion => MzVersion(()),
+            UnmaterializableFunc::MzVersionNum => MzVersionNum(()),
             UnmaterializableFunc::PgBackendPid => PgBackendPid(()),
             UnmaterializableFunc::PgPostmasterStartTime => PgPostmasterStartTime(()),
             UnmaterializableFunc::Version => Version(()),
@@ -163,6 +167,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 MzSessionId(()) => Ok(UnmaterializableFunc::MzSessionId),
                 MzUptime(()) => Ok(UnmaterializableFunc::MzUptime),
                 MzVersion(()) => Ok(UnmaterializableFunc::MzVersion),
+                MzVersionNum(()) => Ok(UnmaterializableFunc::MzVersionNum),
                 PgBackendPid(()) => Ok(UnmaterializableFunc::PgBackendPid),
                 PgPostmasterStartTime(()) => Ok(UnmaterializableFunc::PgPostmasterStartTime),
                 Version(()) => Ok(UnmaterializableFunc::Version),
@@ -5808,7 +5813,7 @@ mod test {
     use chrono::prelude::*;
     use proptest::prelude::*;
 
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     use super::*;
 

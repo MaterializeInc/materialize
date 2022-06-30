@@ -18,9 +18,7 @@ use timely::scheduling::SyncActivator;
 use tracing::info;
 
 use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnection, MzOffset,
-};
+use mz_dataflow_types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
@@ -45,18 +43,16 @@ impl SourceReader for PubNubSourceReader {
         _worker_id: usize,
         _worker_count: usize,
         _consumer_activator: SyncActivator,
-        connection: ExternalSourceConnection,
+        connection: SourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _: crate::source::metrics::SourceBaseMetrics,
         _: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
         let pubnub_conn = match connection {
-            ExternalSourceConnection::PubNub(pubnub_conn) => pubnub_conn,
+            SourceConnection::PubNub(pubnub_conn) => pubnub_conn,
             _ => {
-                panic!(
-                    "PubNub is the only legitimate ExternalSourceConnection for PubNubSourceReader"
-                )
+                panic!("PubNub is the only legitimate SourceConnection for PubNubSourceReader")
             }
         };
         let transport = DefaultTransport::new()

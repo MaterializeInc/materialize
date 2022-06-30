@@ -25,11 +25,11 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement,
-    TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOption, WithOptionValue,
+    CreateConnectionStatement, CreateIndexStatement, CreateRecordedViewStatement,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 
 use crate::names::{
@@ -153,7 +153,7 @@ pub fn options(
                 SqlValueOrSecret::Value(Value::String(data_type.to_ast_string()))
             }
             Some(WithOptionValue::Secret(ResolvedObjectName::Object { id, .. })) => {
-                SqlValueOrSecret::Secret(id.clone())
+                SqlValueOrSecret::Secret(*id)
             }
             Some(WithOptionValue::Secret(_)) => {
                 panic!("SECRET option {} must be Object", option.key)
@@ -359,6 +359,7 @@ pub fn create_statement(
             if_not_exists,
             materialized,
             key_constraint: _,
+            remote: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
@@ -413,7 +414,6 @@ pub fn create_statement(
                     name,
                     query,
                     columns: _,
-                    with_options: _,
                 },
         }) => {
             *name = if *temporary {
@@ -429,6 +429,24 @@ pub fn create_statement(
                 }
             }
             *materialized = false;
+            *if_exists = IfExistsBehavior::Error;
+        }
+
+        Statement::CreateRecordedView(CreateRecordedViewStatement {
+            if_exists,
+            name,
+            columns: _,
+            in_cluster: _,
+            query,
+        }) => {
+            *name = allocate_name(name)?;
+            {
+                let mut normalizer = QueryNormalizer::new(scx);
+                normalizer.visit_query_mut(query);
+                if let Some(err) = normalizer.err {
+                    return Err(err.into());
+                }
+            }
             *if_exists = IfExistsBehavior::Error;
         }
 
@@ -543,7 +561,9 @@ macro_rules! generate_extracted_config {
     };
     ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr))+]) => {
         paste::paste! {
+            #[derive(Debug)]
             pub struct [<$option_ty Extracted>] {
+                seen: HashSet::<[<$option_ty Name>]>,
                 $(
                     [<$option_name:snake>]: $t,
                 )*
@@ -552,6 +572,7 @@ macro_rules! generate_extracted_config {
             impl std::default::Default for [<$option_ty Extracted>] {
                 fn default() -> Self {
                     [<$option_ty Extracted>] {
+                        seen: HashSet::<[<$option_ty Name>]>::new(),
                         $(
                             [<$option_name:snake>]: $v.into(),
                         )*
@@ -563,10 +584,9 @@ macro_rules! generate_extracted_config {
                 type Error = anyhow::Error;
                 fn try_from(v: Vec<$option_ty<Aug>>) -> Result<[<$option_ty Extracted>], Self::Error> {
                     use [<$option_ty Name>]::*;
-                    let mut seen = HashSet::<[<$option_ty Name>]>::new();
                     let mut extracted = [<$option_ty Extracted>]::default();
                     for option in v {
-                        if !seen.insert(option.name.clone()) {
+                        if !extracted.seen.insert(option.name.clone()) {
                             bail!("{} specified more than once", option.name.to_ast_string());
                         }
                         match option.name {

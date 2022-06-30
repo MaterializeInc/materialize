@@ -31,7 +31,7 @@ use mz_dataflow_types::client::{
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection, Timeline};
+use mz_dataflow_types::sources::{SourceDesc, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -51,9 +51,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, StatementDesc,
+    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
+    CreateRecordedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
@@ -80,8 +80,9 @@ pub use crate::catalog::config::Config;
 pub use crate::catalog::error::AmbiguousRename;
 pub use crate::catalog::error::Error;
 pub use crate::catalog::error::ErrorKind;
+use crate::client::ConnectionId;
 
-pub const SYSTEM_CONN_ID: u32 = 0;
+pub const SYSTEM_CONN_ID: ConnectionId = 0;
 const SYSTEM_USER: &str = "mz_system";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -132,7 +133,7 @@ pub struct CatalogState {
     entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
     ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
-    temporary_schemas: HashMap<u32, Schema>,
+    temporary_schemas: HashMap<ConnectionId, Schema>,
     compute_instances_by_id: HashMap<ComputeInstanceId, ComputeInstance>,
     compute_instances_by_name: HashMap<String, ComputeInstanceId>,
     roles: HashMap<String, Role>,
@@ -148,34 +149,6 @@ impl CatalogState {
         }
         self.oid_counter += 1;
         Ok(oid)
-    }
-
-    /// Encapsulates the logic for creating a source description for a source or table in the catalog.
-    pub fn source_description_for(
-        &self,
-        id: GlobalId,
-    ) -> Option<mz_dataflow_types::sources::SourceDesc> {
-        let entry = self.get_entry(&id);
-
-        match entry.item() {
-            CatalogItem::Table(table) => {
-                let connection = SourceConnection::Local {
-                    timeline: table.timeline(),
-                };
-                Some(mz_dataflow_types::sources::SourceDesc {
-                    connection,
-                    desc: table.desc.clone(),
-                })
-            }
-            CatalogItem::Source(source) => {
-                let connection = source.connection.clone();
-                Some(mz_dataflow_types::sources::SourceDesc {
-                    connection,
-                    desc: source.desc.clone(),
-                })
-            }
-            _ => None,
-        }
     }
 
     /// Computes the IDs of any indexes that transitively depend on this catalog
@@ -243,7 +216,7 @@ impl CatalogState {
     pub fn resolve_full_name(
         &self,
         name: &QualifiedObjectName,
-        conn_id: Option<u32>,
+        conn_id: Option<ConnectionId>,
     ) -> FullObjectName {
         let conn_id = conn_id.unwrap_or(SYSTEM_CONN_ID);
 
@@ -276,7 +249,7 @@ impl CatalogState {
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Option<&CatalogEntry> {
         self.get_schema(
             &name.qualifiers.database_spec,
@@ -314,14 +287,14 @@ impl CatalogState {
         res.unwrap_or_else(|| panic!("cannot find {} in system schema", item))
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
+    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: ConnectionId) -> bool {
         self.try_get_entry_in_schema(name, conn_id).is_some()
     }
 
     fn find_available_name(
         &self,
         mut name: QualifiedObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> QualifiedObjectName {
         let mut i = 0;
         let orig_item_name = name.item.clone();
@@ -575,7 +548,7 @@ impl CatalogState {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         let schema = match database_spec {
             ResolvedDatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
@@ -598,7 +571,7 @@ impl CatalogState {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> &Schema {
         // Keep in sync with `get_schemas_mut`
         match (database_spec, schema_spec) {
@@ -622,7 +595,7 @@ impl CatalogState {
         &mut self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> &mut Schema {
         // Keep in sync with `get_schemas`
         match (database_spec, schema_spec) {
@@ -689,46 +662,6 @@ impl CatalogState {
         schema.items[builtin.name()].clone()
     }
 
-    /// Reports whether the item identified by `id` is considered volatile.
-    ///
-    /// `None` indicates that the volatility of `id` is unknown.
-    pub fn is_volatile(&self, id: GlobalId) -> Volatility {
-        use Volatility::*;
-
-        let item = self.get_entry(&id).item();
-        match item {
-            CatalogItem::Source(source) => match &source.connection {
-                SourceConnection::External { connection, .. } => match &connection {
-                    ExternalSourceConnection::PubNub(_) => Volatile,
-                    ExternalSourceConnection::Kinesis(_) => Volatile,
-                    _ => Unknown,
-                },
-                SourceConnection::Local { .. } => Volatile,
-            },
-            CatalogItem::Log(_) => Volatile,
-            CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
-                // Volatility follows trinary logic like SQL. If even one
-                // volatile dependency exists, then this item is volatile.
-                // Otherwise, if a single dependency with unknown volatility
-                // exists, then this item is also of unknown volatility. Only if
-                // all dependencies are nonvolatile (including the trivial case
-                // of no dependencies) is this item nonvolatile.
-                item.uses().iter().fold(Nonvolatile, |memo, id| {
-                    match (memo, self.is_volatile(*id)) {
-                        (Volatile, _) | (_, Volatile) => Volatile,
-                        (Unknown, _) | (_, Unknown) => Unknown,
-                        (Nonvolatile, Nonvolatile) => Nonvolatile,
-                    }
-                })
-            }
-            CatalogItem::Table(_) => Volatile,
-            CatalogItem::Type(_) => Unknown,
-            CatalogItem::Func(_) => Unknown,
-            CatalogItem::Secret(_) => Nonvolatile,
-            CatalogItem::Connection(_) => Unknown,
-        }
-    }
-
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
@@ -745,7 +678,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         database_name: Option<&str>,
         schema_name: &str,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         let database_spec = match database_name {
             // If a database is explicitly specified, validate it. Note that we
@@ -802,7 +735,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
         // schema. If no schema was specified, try to find the item in the connection's
@@ -850,7 +783,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.resolve(
             |schema| &schema.items,
@@ -867,7 +800,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.resolve(
             |schema| &schema.functions,
@@ -891,7 +824,8 @@ impl CatalogState {
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
     state: Cow<'a, CatalogState>,
-    conn_id: u32,
+    //TODO(jkosh44) usages
+    conn_id: ConnectionId,
     compute_instance: String,
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
@@ -900,7 +834,7 @@ pub struct ConnCatalog<'a> {
 }
 
 impl ConnCatalog<'_> {
-    pub fn conn_id(&self) -> u32 {
+    pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
     }
 
@@ -1027,7 +961,7 @@ pub struct Table {
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Aug>>,
-    pub conn_id: Option<u32>,
+    pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1042,15 +976,11 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    pub connection: SourceConnection,
+    pub source_desc: SourceDesc,
     pub desc: RelationDesc,
+    pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
-}
-
-impl Source {
-    pub fn requires_single_materialization(&self) -> bool {
-        self.connection.requires_single_materialization()
-    }
+    pub remote_addr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1075,7 +1005,7 @@ pub struct View {
     pub create_sql: String,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
-    pub conn_id: Option<u32>,
+    pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1084,7 +1014,7 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<MirScalarExpr>,
-    pub conn_id: Option<u32>,
+    pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
     pub compute_instance: ComputeInstanceId,
 }
@@ -1112,23 +1042,6 @@ pub struct Secret {
 pub struct Connection {
     pub create_sql: String,
     pub connection: mz_dataflow_types::connections::Connection,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum Volatility {
-    Volatile,
-    Nonvolatile,
-    Unknown,
-}
-
-impl Volatility {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Volatility::Volatile => "volatile",
-            Volatility::Nonvolatile => "nonvolatile",
-            Volatility::Unknown => "unknown",
-        }
-    }
 }
 
 impl CatalogItem {
@@ -1176,12 +1089,9 @@ impl CatalogItem {
         }
     }
 
-    pub fn source_connection(
-        &self,
-        name: &QualifiedObjectName,
-    ) -> Result<&SourceConnection, SqlCatalogError> {
+    pub fn source_desc(&self, name: &QualifiedObjectName) -> Result<&SourceDesc, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => Ok(&source.connection),
+            CatalogItem::Source(source) => Ok(&source.source_desc),
             _ => Err(SqlCatalogError::UnknownSource(name.item.clone())),
         }
     }
@@ -1225,7 +1135,7 @@ impl CatalogItem {
 
     /// Returns the connection ID that this item belongs to, if this item is
     /// temporary.
-    pub fn conn_id(&self) -> Option<u32> {
+    pub fn conn_id(&self) -> Option<ConnectionId> {
         match self {
             CatalogItem::View(view) => view.conn_id,
             CatalogItem::Index(index) => index.conn_id,
@@ -1306,18 +1216,6 @@ impl CatalogItem {
             }
         }
     }
-
-    pub fn requires_single_materialization(&self) -> bool {
-        if let CatalogItem::Source(Source {
-            connection: SourceConnection::External { ref connection, .. },
-            ..
-        }) = self
-        {
-            connection.requires_single_materialization()
-        } else {
-            false
-        }
-    }
 }
 
 impl CatalogEntry {
@@ -1370,10 +1268,10 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_dataflow_types::sources::SourceConnection`] associated with
+    /// Returns the [`mz_dataflow_types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`.
-    pub fn source_connection(&self) -> Result<&SourceConnection, SqlCatalogError> {
-        self.item.source_connection(self.name())
+    pub fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
+        self.item.source_desc(self.name())
     }
 
     /// Reports whether this catalog entry is a table.
@@ -1414,7 +1312,7 @@ impl CatalogEntry {
 
     /// Returns the connection ID that this item belongs to, if this item is
     /// temporary.
-    pub fn conn_id(&self) -> Option<u32> {
+    pub fn conn_id(&self) -> Option<ConnectionId> {
         self.item.conn_id()
     }
 }
@@ -2138,7 +2036,7 @@ impl<S: Append> Catalog<S> {
         current_database: Option<&DatabaseId>,
         database_name: Option<&str>,
         schema_name: &str,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema(current_database, database_name, schema_name, conn_id)
@@ -2148,7 +2046,7 @@ impl<S: Append> Catalog<S> {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
@@ -2160,7 +2058,7 @@ impl<S: Append> Catalog<S> {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.state
             .resolve_entry(current_database, search_path, name, conn_id)
@@ -2182,7 +2080,7 @@ impl<S: Append> Catalog<S> {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.state
             .resolve_function(current_database, search_path, name, conn_id)
@@ -2202,7 +2100,7 @@ impl<S: Append> Catalog<S> {
     pub fn resolve_full_name(
         &self,
         name: &QualifiedObjectName,
-        conn_id: Option<u32>,
+        conn_id: Option<ConnectionId>,
     ) -> FullObjectName {
         self.state.resolve_full_name(name, conn_id)
     }
@@ -2211,12 +2109,12 @@ impl<S: Append> Catalog<S> {
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Option<&CatalogEntry> {
         self.state.try_get_entry_in_schema(name, conn_id)
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
+    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: ConnectionId) -> bool {
         self.state.item_exists(name, conn_id)
     }
 
@@ -2232,7 +2130,7 @@ impl<S: Append> Catalog<S> {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> &Schema {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
@@ -2255,7 +2153,7 @@ impl<S: Append> Catalog<S> {
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub async fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
+    pub async fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
         let oid = self.allocate_oid().await?;
         self.state.temporary_schemas.insert(
             conn_id,
@@ -2273,13 +2171,13 @@ impl<S: Append> Catalog<S> {
         Ok(())
     }
 
-    fn item_exists_in_temp_schemas(&self, conn_id: u32, item_name: &str) -> bool {
+    fn item_exists_in_temp_schemas(&self, conn_id: ConnectionId, item_name: &str) -> bool {
         self.state.temporary_schemas[&conn_id]
             .items
             .contains_key(item_name)
     }
 
-    pub fn drop_temp_item_ops(&mut self, conn_id: u32) -> Vec<Op> {
+    pub fn drop_temp_item_ops(&mut self, conn_id: ConnectionId) -> Vec<Op> {
         let ids: Vec<GlobalId> = self.state.temporary_schemas[&conn_id]
             .items
             .values()
@@ -2288,7 +2186,7 @@ impl<S: Append> Catalog<S> {
         self.drop_items_ops(&ids)
     }
 
-    pub fn drop_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
+    pub fn drop_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
         if !self.state.temporary_schemas[&conn_id].items.is_empty() {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
@@ -2368,7 +2266,7 @@ impl<S: Append> Catalog<S> {
     fn temporary_ids(
         &mut self,
         ops: &[Op],
-        temporary_drops: HashSet<(u32, String)>,
+        temporary_drops: HashSet<(ConnectionId, String)>,
     ) -> Result<Vec<GlobalId>, Error> {
         let mut creating = HashSet::with_capacity(ops.len());
         let mut temporary_ids = Vec::with_capacity(ops.len());
@@ -2412,9 +2310,16 @@ impl<S: Append> Catalog<S> {
             None => return Ok(()),
         };
         let user = session.user().to_string();
-        let occurred_at = self.state.config.start_time.timestamp_nanos() as u64
-            + self.state.config.start_instant.elapsed().as_nanos() as u64;
-        let event = VersionedEvent::new(event_type, object_type, event_details, user, occurred_at);
+        let occurred_at = (self.state.config.now)();
+        let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let event = VersionedEvent::new(
+            id,
+            event_type,
+            object_type,
+            event_details,
+            user,
+            occurred_at,
+        );
         builtin_table_updates.push(self.state.pack_audit_log_update(&event)?);
         tx.insert_audit_log_event(event);
         Ok(())
@@ -2425,6 +2330,7 @@ impl<S: Append> Catalog<S> {
             && matches!(
                 item.typ(),
                 SqlCatalogItemType::View
+                    | SqlCatalogItemType::RecordedView
                     | SqlCatalogItemType::Source
                     | SqlCatalogItemType::Sink
                     | SqlCatalogItemType::Index
@@ -2553,6 +2459,7 @@ impl<S: Append> Catalog<S> {
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
                 SqlCatalogItemType::View => ObjectType::View,
+                SqlCatalogItemType::RecordedView => ObjectType::RecordedView,
                 SqlCatalogItemType::Source => ObjectType::Source,
                 SqlCatalogItemType::Sink => ObjectType::Sink,
                 SqlCatalogItemType::Index => ObjectType::Index,
@@ -3315,11 +3222,18 @@ impl<S: Append> Catalog<S> {
                 conn_id: None,
                 depends_on,
             }),
-            Plan::CreateSource(CreateSourcePlan { source, .. }) => CatalogItem::Source(Source {
+            Plan::CreateSource(CreateSourcePlan {
+                source,
+                remote,
+                timeline,
+                ..
+            }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
-                connection: source.connection,
+                source_desc: source.source_desc,
                 desc: source.desc,
+                timeline,
                 depends_on,
+                remote_addr: remote,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
@@ -3332,6 +3246,12 @@ impl<S: Append> Catalog<S> {
                     conn_id: None,
                     depends_on,
                 })
+            }
+            Plan::CreateRecordedView(CreateRecordedViewPlan {
+                recorded_view: _, ..
+            }) => {
+                // TODO(teskje): implement
+                bail!("not yet implemented")
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
@@ -3880,8 +3800,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.func()?)
     }
 
-    fn source_connection(&self) -> Result<&SourceConnection, SqlCatalogError> {
-        Ok(self.source_connection()?)
+    fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
+        Ok(self.source_desc()?)
     }
 
     fn connection(&self) -> Result<&mz_dataflow_types::connections::Connection, SqlCatalogError> {

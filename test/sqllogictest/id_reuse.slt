@@ -94,7 +94,7 @@ SELECT id, name FROM mz_clusters
 2 foo
 
 statement ok
-DROP CLUSTER foo
+DROP CLUSTER foo CASCADE
 
 statement ok
 CREATE CLUSTER bar REPLICAS (r1 (size '1'))

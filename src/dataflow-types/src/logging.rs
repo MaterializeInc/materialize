@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.logging.rs"));
@@ -388,7 +388,7 @@ impl LogVariant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

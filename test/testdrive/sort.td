@@ -9,23 +9,10 @@
 
 $ set schema={
     "type": "record",
-    "name": "envelope",
+    "name": "row",
     "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "type": "record",
-            "name": "row",
-            "fields": [
-              { "name": "quote", "type": "string" },
-              { "name": "val", "type": "long" }
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
+      { "name": "quote", "type": "string" },
+      { "name": "val", "type": "long" }
     ]
   }
 
@@ -34,21 +21,17 @@ $ kafka-create-topic topic=foobar
 > CREATE MATERIALIZED SOURCE foobar FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foobar-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42
-{"before": null, "after": {"row":{"quote": "I have a theory that it's impossible to prove anything, but I can't prove it.", "val": 2079}}}
-{"before": null, "after": {"row":{"quote": "It was a virgin forest, a place where the Hand of Man had never set foot.", "val": 12345}}}
-{"before": null, "after": {"row":{"quote": "If it pours before seven, it has rained by eleven.", "val": 12345}}}
-{"before": null, "after": {"row":{"quote": "All power corrupts, but we need electricity.", "val": 12345}}}
-{"before": null, "after": {"row":{"quote": "I want to read my new poem about pork brains and outer space ...", "val": 6745}}}
-{"before": null, "after": {"row":{"quote": "You are magnetic in your bearing.", "val": 24223}}}
-{"before": null, "after": {"row":{"quote": "Yes, but every time I try to see things your way, I get a headache.", "val": 21243}}}
-{"before": null, "after": {"row":{"quote": "Ring around the collar.", "val": 1735}}}
-{"before": null, "after": {"row":{"quote": "New York is real.  The rest is done with mirrors.", "val": 25040}}}
-
-$ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=43
-{"before": null, "after": null}
+{"quote": "I have a theory that it's impossible to prove anything, but I can't prove it.", "val": 2079}
+{"quote": "It was a virgin forest, a place where the Hand of Man had never set foot.", "val": 12345}
+{"quote": "If it pours before seven, it has rained by eleven.", "val": 12345}
+{"quote": "All power corrupts, but we need electricity.", "val": 12345}
+{"quote": "I want to read my new poem about pork brains and outer space ...", "val": 6745}
+{"quote": "You are magnetic in your bearing.", "val": 24223}
+{"quote": "Yes, but every time I try to see things your way, I get a headache.", "val": 21243}
+{"quote": "Ring around the collar.", "val": 1735}
+{"quote": "New York is real.  The rest is done with mirrors.", "val": 25040}
 
 > SELECT val, quote FROM foobar ORDER BY quote LIMIT 5
 val    quote

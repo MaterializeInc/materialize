@@ -86,37 +86,23 @@ a    b
 1    "a"
 
 $ set schema={
+    "name": "row",
     "type": "record",
-    "name": "envelope",
     "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "id", "type": "string"},
-              {"name": "a", "type": "long"},
-              {"name": "b", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
+      {"name": "id", "type": "string"},
+      {"name": "a", "type": "long"},
+      {"name": "b", "type": "long"}
     ]
   }
 
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"row":{"id": "valid1", "a": 2, "b": 1}}}
+{"id": "valid1", "a": 2, "b": 1}
 
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 > SELECT * FROM t CROSS JOIN data
 1  a  valid1  2  1

@@ -24,7 +24,6 @@ use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
-use mz_persist_client::ShardId;
 use tracing::warn;
 
 use mz_ore::collections::CollectionExt;
@@ -51,6 +50,7 @@ macro_rules! parser_err {
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
+#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
     let tokens = lexer::lex(sql)?;
     Parser::new(sql, tokens).parse_statements()
@@ -1587,6 +1587,10 @@ impl<'a> Parser<'a> {
             self.parse_create_secret()
         } else if self.peek_keyword(CONNECTION) {
             self.parse_create_connection()
+        } else if self.peek_keywords(&[RECORDED, VIEW])
+            || self.peek_keywords(&[OR, REPLACE, RECORDED, VIEW])
+        {
+            self.parse_create_recorded_view()
         } else {
             let index = self.index;
 
@@ -1922,16 +1926,12 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
         let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
-            Keyword::Kafka => {
-                self.expect_keyword(BROKER)?;
-                let broker = self.parse_literal_string()?;
-                let with_options = self.parse_opt_with_options()?;
-                CreateConnection::Kafka {
-                    broker,
-                    with_options,
-                }
+            KAFKA => {
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
+                CreateConnection::Kafka { with_options }
             }
-            Keyword::Confluent => {
+            CONFLUENT => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
                 let with_options = self.parse_opt_with_options()?;
@@ -1947,6 +1947,45 @@ impl<'a> Parser<'a> {
             connection,
             if_not_exists,
         }))
+    }
+
+    fn parse_kafka_connection_options(
+        &mut self,
+    ) -> Result<KafkaConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, SASL, SSL])? {
+            BROKER => KafkaConnectionOptionName::Broker,
+            BROKERS => KafkaConnectionOptionName::Brokers,
+            SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
+                MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
+                PASSWORD => KafkaConnectionOptionName::SaslPassword,
+                USERNAME => KafkaConnectionOptionName::SaslUsername,
+                _ => unreachable!(),
+            },
+            SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+                KEY => {
+                    if self.parse_keyword(PASSWORD) {
+                        KafkaConnectionOptionName::SslKeyPassword
+                    } else {
+                        KafkaConnectionOptionName::SslKey
+                    }
+                }
+                CERTIFICATE => {
+                    if self.parse_keyword(AUTHORITY) {
+                        KafkaConnectionOptionName::SslCertificateAuthority
+                    } else {
+                        KafkaConnectionOptionName::SslCertificate
+                    }
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(KafkaConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -1996,6 +2035,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let remote = if self.parse_keyword(REMOTE) {
+            Some(self.parse_literal_string()?)
+        } else {
+            None
+        };
+
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
@@ -2007,6 +2052,7 @@ impl<'a> Parser<'a> {
             if_not_exists,
             materialized,
             key_constraint,
+            remote,
         }))
     }
 
@@ -2108,7 +2154,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
@@ -2221,7 +2267,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, AVRO, PERSIST])? {
+        match self.expect_one_of_keywords(&[KAFKA, PERSIST])? {
             KAFKA => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
@@ -2257,35 +2303,7 @@ impl<'a> Parser<'a> {
                     consistency,
                 })
             }
-            PERSIST => {
-                // TODO(aljoscha): We should not require (or allow) passing in consensus/blob
-                // configuration on the sink. Instead, we need to pick up the config that was given
-                // to materialized/storaged when starting up.
-                self.expect_keyword(CONSENSUS)?;
-                let consensus_uri = self.parse_literal_string()?;
-
-                self.expect_keyword(BLOB)?;
-                let blob_uri = self.parse_literal_string()?;
-
-                let shard_id = if self.peek_keyword(SHARD) {
-                    let _ = self.expect_keyword(SHARD)?;
-                    self.parse_literal_string()?
-                } else {
-                    // TODO(aljoscha): persist/storage sinks should have a human-readable
-                    // collection name and STORAGE needs to keep track of which shard IDs they map
-                    // to. Also, the lifecycle of collections created by a sink should be tracked
-                    // separate from the sink. And we can expose something like a `mz_collections`
-                    // to allow querying them.
-                    let shard_id = ShardId::new();
-                    format!("{}", shard_id)
-                };
-
-                Ok(CreateSinkConnection::Persist {
-                    consensus_uri,
-                    blob_uri,
-                    shard_id,
-                })
-            }
+            PERSIST => Ok(CreateSinkConnection::Persist),
             _ => unreachable!(),
         }
     }
@@ -2347,18 +2365,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_view_definition(&mut self) -> Result<ViewDefinition<Raw>, ParserError> {
-        // Many dialects support `OR REPLACE` | `OR ALTER` right after `CREATE`, but we don't (yet).
-        // ANSI SQL and Postgres support RECURSIVE here, but we don't support it either.
+        // ANSI SQL and Postgres support RECURSIVE here, but we don't.
         let name = self.parse_object_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        let with_options = self.parse_opt_with_options()?;
+        // Postgres supports WITH options here, but we don't.
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
         Ok(ViewDefinition {
             name,
             columns,
-            with_options,
             query,
         })
     }
@@ -2401,6 +2417,34 @@ impl<'a> Parser<'a> {
             if_exists,
             source,
             targets,
+        }))
+    }
+
+    fn parse_create_recorded_view(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let mut if_exists = if self.parse_keyword(OR) {
+            self.expect_keyword(REPLACE)?;
+            IfExistsBehavior::Replace
+        } else {
+            IfExistsBehavior::Error
+        };
+        self.expect_keywords(&[RECORDED, VIEW])?;
+        if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
+            if_exists = IfExistsBehavior::Skip;
+        }
+
+        let name = self.parse_object_name()?;
+        let columns = self.parse_parenthesized_column_list(Optional)?;
+        let in_cluster = self.parse_optional_in_cluster()?;
+
+        self.expect_keyword(AS)?;
+        let query = self.parse_query()?;
+
+        Ok(Statement::CreateRecordedView(CreateRecordedViewStatement {
+            if_exists,
+            name,
+            columns,
+            in_cluster,
+            query,
         }))
     }
 
@@ -2719,8 +2763,8 @@ impl<'a> Parser<'a> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
         let object_type = match self.expect_one_of_keywords(&[
-            CONNECTION, CLUSTER, DATABASE, INDEX, ROLE, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE,
-            USER, VIEW,
+            CONNECTION, CLUSTER, DATABASE, INDEX, RECORDED, ROLE, SECRET, SCHEMA, SINK, SOURCE,
+            TABLE, TYPE, USER, VIEW,
         ])? {
             DATABASE => {
                 let if_exists = self.parse_if_exists()?;
@@ -2769,16 +2813,13 @@ impl<'a> Parser<'a> {
             TABLE => ObjectType::Table,
             TYPE => ObjectType::Type,
             VIEW => ObjectType::View,
+            RECORDED => {
+                self.expect_keyword(VIEW)?;
+                ObjectType::RecordedView
+            }
             SECRET => ObjectType::Secret,
             CONNECTION => ObjectType::Connection,
-            _ => {
-                return self.expected(
-                    self.peek_pos(),
-                    "DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, \
-                     TABLE, TYPE, USER, VIEW after DROP",
-                    self.peek_token(),
-                );
-            }
+            _ => unreachable!(),
         };
 
         let if_exists = self.parse_if_exists()?;
@@ -3093,16 +3134,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type =
-            match self.expect_one_of_keywords(&[SINK, SOURCE, VIEW, TABLE, INDEX, SECRET])? {
-                SINK => ObjectType::Sink,
-                SOURCE => ObjectType::Source,
-                VIEW => ObjectType::View,
-                TABLE => ObjectType::Table,
-                INDEX => return self.parse_alter_index(),
-                SECRET => return self.parse_alter_secret(),
-                _ => unreachable!(),
-            };
+        let object_type = match self
+            .expect_one_of_keywords(&[SINK, SOURCE, VIEW, RECORDED, TABLE, INDEX, SECRET])?
+        {
+            SINK => ObjectType::Sink,
+            SOURCE => ObjectType::Source,
+            VIEW => ObjectType::View,
+            RECORDED => {
+                self.expect_keyword(VIEW)?;
+                ObjectType::RecordedView
+            }
+            TABLE => ObjectType::Table,
+            INDEX => return self.parse_alter_index(),
+            SECRET => return self.parse_alter_secret(),
+            _ => unreachable!(),
+        };
 
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
@@ -4184,11 +4230,12 @@ impl<'a> Parser<'a> {
             if extended {
                 self.expect_one_of_keywords(&[COLUMNS, OBJECTS, SCHEMAS, TABLES, TYPES])?;
             } else {
-                self.expect_one_of_keywords(&[
+                let kw = self.expect_one_of_keywords(&[
                     COLUMNS,
                     CONNECTIONS,
                     MATERIALIZED,
                     OBJECTS,
+                    RECORDED,
                     ROLES,
                     SCHEMAS,
                     SINKS,
@@ -4197,6 +4244,10 @@ impl<'a> Parser<'a> {
                     TYPES,
                     VIEWS,
                 ])?;
+                if kw == RECORDED {
+                    self.expect_keyword(VIEWS)?;
+                    self.prev_token();
+                }
             }
             self.prev_token();
         }
@@ -4232,6 +4283,7 @@ impl<'a> Parser<'a> {
             TYPES,
             USERS,
             VIEWS,
+            RECORDED,
             SECRETS,
             CONNECTIONS,
         ]) {
@@ -4253,6 +4305,10 @@ impl<'a> Parser<'a> {
                 TABLES => ObjectType::Table,
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
+                RECORDED => {
+                    self.expect_keyword(VIEWS)?;
+                    ObjectType::RecordedView
+                }
                 SECRETS => ObjectType::Secret,
                 CONNECTIONS => ObjectType::Connection,
                 _ => unreachable!(),
@@ -4261,7 +4317,7 @@ impl<'a> Parser<'a> {
             let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
                 Some(kw) => {
                     if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::Sink) {
+                        if matches!(object_type, ObjectType::Sink | ObjectType::RecordedView) {
                             // put `IN` back
                             self.prev_token();
                             (None, self.parse_optional_in_cluster()?)
@@ -4322,6 +4378,12 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
             }))
+        } else if self.parse_keywords(&[CREATE, RECORDED, VIEW]) {
+            Ok(Statement::ShowCreateRecordedView(
+                ShowCreateRecordedViewStatement {
+                    recorded_view_name: self.parse_raw_name()?,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(Statement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_raw_name()?,
@@ -4618,11 +4680,21 @@ impl<'a> Parser<'a> {
         } else {
             InsertSource::Query(self.parse_query()?)
         };
+        let returning = self.parse_returning()?;
         Ok(Statement::Insert(InsertStatement {
             table_name,
             columns,
             source,
+            returning,
         }))
+    }
+
+    fn parse_returning(&mut self) -> Result<Vec<SelectItem<Raw>>, ParserError> {
+        Ok(if self.parse_keyword(RETURNING) {
+            self.parse_comma_separated(Parser::parse_select_item)?
+        } else {
+            Vec::new()
+        })
     }
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4857,6 +4929,98 @@ impl<'a> Parser<'a> {
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain(&mut self) -> Result<Statement<Raw>, ParserError> {
+        if let Some(parse) = self.maybe_parse(Self::parse_explain_new) {
+            Ok(parse)
+        } else {
+            self.parse_explain_old()
+        }
+    }
+
+    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
+    /// has already been consumed.
+    fn parse_explain_new(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let stage = match self.parse_one_of_keywords(&[
+            RAW,
+            DECORRELATED,
+            OPTIMIZED,
+            PHYSICAL,
+            OPTIMIZER,
+            QUERY,
+        ]) {
+            Some(RAW) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::RawPlan
+            }
+            Some(QUERY) => {
+                self.expect_keyword(GRAPH)?;
+                ExplainStageNew::QueryGraph
+            }
+            Some(DECORRELATED) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::DecorrelatedPlan
+            }
+            Some(OPTIMIZED) => {
+                if self.parse_keyword(QUERY) {
+                    self.expect_keyword(GRAPH)?;
+                    ExplainStageNew::OptimizedQueryGraph
+                } else {
+                    self.expect_keyword(PLAN)?;
+                    ExplainStageNew::OptimizedPlan
+                }
+            }
+            Some(PHYSICAL) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::PhysicalPlan
+            }
+            Some(OPTIMIZER) => {
+                self.expect_keyword(TRACE)?;
+                ExplainStageNew::Trace
+            }
+            None => ExplainStageNew::OptimizedPlan,
+            _ => unreachable!(),
+        };
+
+        let config_flags = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let config_flags = self.parse_comma_separated(Self::parse_identifier)?;
+            self.expect_token(&Token::RParen)?;
+            config_flags
+        } else {
+            vec![]
+        };
+
+        // TODO (#13299): Make specifying the format optional upon getting rid
+        // of the old explain syntax
+        self.expect_keyword(AS)?;
+        let format = match self.parse_one_of_keywords(&[TEXT, JSON]) {
+            Some(TEXT) => ExplainFormat::Text,
+            Some(JSON) => ExplainFormat::Json,
+            None => return Err(ParserError::new(self.index, "expected a format")),
+            _ => unreachable!(),
+        };
+
+        self.expect_keyword(FOR)?;
+
+        // VIEW view_name | query
+        let explainee = if self.parse_keyword(VIEW) {
+            Explainee::View(self.parse_raw_name()?)
+        } else {
+            Explainee::Query(self.parse_query()?)
+        };
+
+        Ok(Statement::Explain(ExplainStatement::New(
+            ExplainStatementNew {
+                stage,
+                config_flags,
+                format,
+                explainee,
+            },
+        )))
+    }
+
+    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
+    /// has already been consumed (old code path).
+    fn parse_explain_old(&mut self) -> Result<Statement<Raw>, ParserError> {
         // (TYPED)?
         let typed = self.parse_keyword(TYPED);
         let mut timing = false;
@@ -4893,38 +5057,38 @@ impl<'a> Parser<'a> {
         ]) {
             Some(RAW) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::RawPlan
+                ExplainStageOld::RawPlan
             }
             Some(QUERY) => {
                 self.expect_keywords(&[GRAPH, FOR])?;
-                ExplainStage::QueryGraph
+                ExplainStageOld::QueryGraph
             }
             Some(DECORRELATED) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::DecorrelatedPlan
+                ExplainStageOld::DecorrelatedPlan
             }
             Some(OPTIMIZED) => {
                 if self.parse_keyword(QUERY) {
                     self.expect_keywords(&[GRAPH, FOR])?;
-                    ExplainStage::OptimizedQueryGraph
+                    ExplainStageOld::OptimizedQueryGraph
                 } else {
                     self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::OptimizedPlan
+                    ExplainStageOld::OptimizedPlan
                 }
             }
             Some(PLAN) => {
                 self.expect_keyword(FOR)?;
-                ExplainStage::OptimizedPlan
+                ExplainStageOld::OptimizedPlan
             }
             Some(PHYSICAL) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::PhysicalPlan
+                ExplainStageOld::PhysicalPlan
             }
             Some(TIMESTAMP) => {
                 self.expect_keywords(&[FOR])?;
-                ExplainStage::Timestamp
+                ExplainStageOld::Timestamp
             }
-            None => ExplainStage::OptimizedPlan,
+            None => ExplainStageOld::OptimizedPlan,
             _ => unreachable!(),
         };
 
@@ -4936,11 +5100,13 @@ impl<'a> Parser<'a> {
         };
 
         let options = ExplainOptions { typed, timing };
-        Ok(Statement::Explain(ExplainStatement {
-            stage,
-            explainee,
-            options,
-        }))
+        Ok(Statement::Explain(ExplainStatement::Old(
+            ExplainStatementOld {
+                stage,
+                explainee,
+                options,
+            },
+        )))
     }
 
     /// Parse a `DECLARE` statement, assuming that the `DECLARE` token

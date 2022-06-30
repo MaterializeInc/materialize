@@ -4,7 +4,7 @@ _shtab_scratch_subparsers=('login' 'create' 'mine' 'ssh' 'sftp' 'destroy' 'push'
 
 _shtab_scratch_option_strings=('-h' '--help')
 _shtab_scratch_login_option_strings=('-h' '--help')
-_shtab_scratch_create_option_strings=('-h' '--help' '--subnet-id' '--key-name' '--security-group-id' '--extra-tags' '--instance-profile' '--output-format' '--git-rev' '--ssh' '--max-age-days')
+_shtab_scratch_create_option_strings=('-h' '--help' '--key-name' '--security-group-name' '--extra-tags' '--instance-profile' '--output-format' '--git-rev' '--ssh' '--max-age-days')
 _shtab_scratch_mine_option_strings=('-h' '--help' '--all' '--output-format')
 _shtab_scratch_ssh_option_strings=('-h' '--help')
 _shtab_scratch_sftp_option_strings=('-h' '--help')

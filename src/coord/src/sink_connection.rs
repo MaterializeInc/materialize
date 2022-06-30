@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
+use mz_dataflow_types::PopulateClientConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 
 use mz_dataflow_types::connections::ConnectionContext;
@@ -27,10 +28,10 @@ use crate::error::CoordError;
 pub async fn build(
     builder: SinkConnectionBuilder,
     id: GlobalId,
-    connector_context: ConnectionContext,
+    connection_context: ConnectionContext,
 ) -> Result<SinkConnection, CoordError> {
     match builder {
-        SinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connector_context).await,
+        SinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connection_context).await,
         SinkConnectionBuilder::Persist(p) => build_persist_sink(p, id),
     }
 }
@@ -205,8 +206,16 @@ async fn publish_kafka_schemas(
 async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
     id: GlobalId,
-    connector_context: ConnectionContext,
+    connection_context: ConnectionContext,
 ) -> Result<SinkConnection, CoordError> {
+    // Create Kafka topic
+    let mut config = create_new_client_config(connection_context.librdkafka_log_level);
+    builder.populate_client_config(&mut config, &connection_context.secrets_reader);
+
+    let client: AdminClient<_> = config
+        .create_with_context(MzClientContext)
+        .context("creating admin client failed")?;
+
     let maybe_append_nonce = {
         let reuse_topic = builder.reuse_topic;
         let topic_suffix_nonce = builder.topic_suffix_nonce;
@@ -219,23 +228,6 @@ async fn build_kafka(
         }
     };
     let topic = maybe_append_nonce(&builder.topic_prefix);
-
-    // Create Kafka topic
-    let mut config = create_new_client_config(connector_context.librdkafka_log_level);
-    config.set("bootstrap.servers", &builder.connection.broker.to_string());
-    for (k, v) in builder.connection.options.iter() {
-        // Explicitly reject the statistics interval option here because its not
-        // properly supported for this client.
-        // Explicitly reject isolation.level as it's a consumer-specific
-        // parameter and will generate a benign WARN for admin clients
-        if k != "statistics.interval.ms" && k != "isolation.level" {
-            config.set(k, v.get_string(&connector_context.secrets_reader).await?);
-        }
-    }
-
-    let client: AdminClient<_> = config
-        .create_with_context(MzClientContext)
-        .context("creating admin client failed")?;
 
     register_kafka_topic(
         &client,
@@ -255,7 +247,7 @@ async fn build_kafka(
             ..
         } => {
             let ccsr = csr_connection
-                .connect(&connector_context.secrets_reader)
+                .connect(&connection_context.secrets_reader)
                 .await?;
             let (key_schema_id, value_schema_id) = publish_kafka_schemas(
                 &ccsr,
@@ -300,7 +292,7 @@ async fn build_kafka(
             .context("error registering kafka consistency topic for sink")?;
 
             let ccsr = csr_connection
-                .connect(&connector_context.secrets_reader)
+                .connect(&connection_context.secrets_reader)
                 .await?;
             let (_, consistency_schema_id) = publish_kafka_schemas(
                 &ccsr,
@@ -324,6 +316,7 @@ async fn build_kafka(
 
     Ok(SinkConnection::Kafka(KafkaSinkConnection {
         connection: builder.connection,
+        options: builder.options,
         topic,
         topic_prefix: builder.topic_prefix,
         relation_key_indices: builder.relation_key_indices,
@@ -342,9 +335,7 @@ fn build_persist_sink(
     _id: GlobalId,
 ) -> Result<SinkConnection, CoordError> {
     Ok(SinkConnection::Persist(PersistSinkConnection {
-        consensus_uri: builder.consensus_uri,
-        blob_uri: builder.blob_uri,
-        shard_id: builder.shard_id,
         value_desc: builder.value_desc,
+        storage_metadata: (),
     }))
 }

@@ -17,12 +17,12 @@ use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
+use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
 use mz_dataflow_types::client::{StorageCommand, StorageResponse};
 use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::SourceConnection;
 use mz_ore::now::NowFn;
 
 use mz_repr::{GlobalId, Timestamp};
@@ -110,35 +110,26 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::CreateSources(sources) => {
-                for source in sources {
-                    match &source.desc.connection {
-                        SourceConnection::Local { .. } => {
-                            // TODO(benesch): fix the types here so that we can
-                            // enforce this statically.
-                            unreachable!("local sources are handled entirely by controller");
-                        }
-                        SourceConnection::External { .. } => {
-                            // Initialize shared frontier tracking.
-                            self.storage_state.source_uppers.insert(
-                                source.id,
-                                Rc::new(RefCell::new(Antichain::from_elem(
-                                    mz_repr::Timestamp::minimum(),
-                                ))),
-                            );
+            StorageCommand::IngestSources(ingestions) => {
+                for ingestion in ingestions {
+                    // Initialize shared frontier tracking.
+                    self.storage_state.source_uppers.insert(
+                        ingestion.id,
+                        Rc::new(RefCell::new(Antichain::from_elem(
+                            mz_repr::Timestamp::minimum(),
+                        ))),
+                    );
 
-                            crate::render::build_storage_dataflow(
-                                &mut self.timely_worker,
-                                &mut self.storage_state,
-                                &source.id.to_string(),
-                                source.clone(),
-                            );
-                        }
-                    }
+                    crate::render::build_storage_dataflow(
+                        &mut self.timely_worker,
+                        &mut self.storage_state,
+                        ingestion.id,
+                        ingestion.description,
+                        Antichain::from_elem(Timestamp::minimum()),
+                    );
 
-                    use timely::progress::Timestamp;
                     self.storage_state.reported_frontiers.insert(
-                        source.id,
+                        ingestion.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
                 }

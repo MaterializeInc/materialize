@@ -333,7 +333,7 @@ until
 ErrorResponse
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY delimiter must be a single one-byte character"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY delimiter must be a single one-byte character"}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -350,9 +350,9 @@ ReadyForQuery
 ErrorResponse
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY quote available only in CSV mode"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY quote available only in CSV mode"}]}
 ReadyForQuery {"status":"I"}
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY escape available only in CSV mode"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY escape available only in CSV mode"}]}
 ReadyForQuery {"status":"I"}
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"COPY HEADER available only in CSV mode"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY HEADER available only in CSV mode"}]}
 ReadyForQuery {"status":"I"}

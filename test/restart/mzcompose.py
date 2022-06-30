@@ -48,9 +48,7 @@ def workflow_audit_log(c: Composition) -> None:
     c.sql("CREATE TABLE t (i INT)")
     c.sql("CREATE DEFAULT INDEX ON t")
 
-    # occurred_at is a timestamp with microsecond precesion, so order by something
-    # else also to avoid flakes in case two events share a timestamp.
-    log = c.sql_query("SELECT * FROM mz_audit_events ORDER BY occurred_at, uuid")
+    log = c.sql_query("SELECT * FROM mz_audit_events ORDER BY id")
 
     # Restart mz.
     c.kill("materialized")
@@ -58,9 +56,7 @@ def workflow_audit_log(c: Composition) -> None:
     c.wait_for_materialized()
 
     # Verify the audit log entries are still present and have not changed.
-    restart_log = c.sql_query(
-        "SELECT * FROM mz_audit_events ORDER BY occurred_at, uuid"
-    )
+    restart_log = c.sql_query("SELECT * FROM mz_audit_events ORDER BY id")
     if log != restart_log:
         print("initial audit log:", log)
         print("audit log after restart:", restart_log)

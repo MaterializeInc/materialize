@@ -67,13 +67,13 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::future::Future;
+use std::num::{NonZeroI64, NonZeroUsize};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, DurationRound, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
@@ -85,11 +85,12 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_dataflow_types::client::controller::storage::CollectionDescription;
 use mz_dataflow_types::client::controller::{
     ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent, ReadPolicy,
 };
@@ -100,8 +101,7 @@ use mz_dataflow_types::client::{
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
 use mz_dataflow_types::sources::{
-    ExternalSourceConnection, IngestionDescription, PostgresSourceConnection, SourceConnection,
-    Timeline,
+    IngestionDescription, PostgresSourceConnection, SourceConnection, Timeline,
 };
 use mz_dataflow_types::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
@@ -113,8 +113,8 @@ use mz_expr::{
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
-use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
+use mz_ore::{stack, task};
 use mz_repr::adt::interval::Interval;
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
@@ -122,7 +122,7 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident,
+    CreateIndexStatement, CreateSourceStatement, ExplainStageOld, FetchStatement, Ident,
     IndexOptionName, InsertSource, ObjectType, Query, Raw, RawClusterName, RawObjectName, SetExpr,
     Statement,
 };
@@ -135,13 +135,14 @@ use mz_sql::names::{
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    HirRelationExpr, IndexOption, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
-    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
+    ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
+    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_transform::Optimizer;
@@ -151,7 +152,7 @@ use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
     Connection, SinkConnectionState,
 };
-use crate::client::{Client, Handle};
+use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
@@ -182,6 +183,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     AdvanceLocalInput(AdvanceLocalInput<T>),
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
+    RemovePendingPeeks { conn_id: ConnectionId },
 }
 
 #[derive(Debug)]
@@ -199,6 +201,7 @@ pub struct SendDiffs {
     pub id: GlobalId,
     pub diffs: Result<Vec<(Row, Diff)>, CoordError>,
     pub kind: MutationKind,
+    pub returning: Vec<(Row, NonZeroUsize)>,
 }
 
 #[derive(Derivative)]
@@ -260,7 +263,7 @@ pub struct Config<S> {
 
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
-    conn_id: u32,
+    conn_id: ConnectionId,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -278,11 +281,22 @@ pub enum PeekResponseUnary {
 struct PendingWriteTxn {
     /// List of all write operations within the transaction.
     writes: Vec<WriteOp>,
-    /// The client of the write transaction is waiting for a response from this `sender`.
-    /// A response should only be sent after the write transaction has been made durable or aborted.
-    sender: oneshot::Sender<Option<ExecuteResponse>>,
-    /// Connection ID of the client who initiated the transaction.
-    conn_id: u32,
+    /// Transmitter used to send a response back to the client.
+    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Client response for transaction.
+    response: Result<ExecuteResponse, CoordError>,
+    /// Session of the client who initiated the transaction.
+    session: Session,
+    /// The action to take at the end of the transaction.
+    action: EndTransactionAction,
+    /// Holds the coordinator's write lock.
+    write_lock_guard: Option<OwnedMutexGuard<()>>,
+}
+
+impl PendingWriteTxn {
+    fn has_write_lock(&self) -> bool {
+        self.write_lock_guard.is_some()
+    }
 }
 
 /// Timestamps used by writes in an Append command.
@@ -380,7 +394,9 @@ impl<T: CoordTimestamp> AdvanceTables<T> {
         self.work.extend(ids);
     }
 
-    // Returns the set of tables to advance. Blocks forever if there are none.
+    /// Returns the set of tables to advance. Blocks forever if there are none.
+    ///
+    /// This method is cancel-safe because there are no await points when the set is non-empty.
     async fn recv(&mut self) -> AdvanceLocalInput<T> {
         if self.set.is_empty() {
             futures::future::pending::<()>().await;
@@ -420,6 +436,13 @@ impl<T: CoordTimestamp> AdvanceTables<T> {
     }
 }
 
+/// Soft-state metadata about a compute replica
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplicaMetadata {
+    /// The last time we heard from this replica (possibly rounded)
+    pub last_heartbeat: DateTime<Utc>,
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// A client to a running dataflow cluster.
@@ -450,7 +473,7 @@ pub struct Coordinator<S> {
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
-    active_conns: HashMap<u32, ConnMeta>,
+    active_conns: HashMap<ConnectionId, ConnMeta>,
 
     /// For each identifier, its read policy and any transaction holds on time.
     ///
@@ -464,13 +487,13 @@ pub struct Coordinator<S> {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_reads: HashMap<u32, TxnReads>,
+    txn_reads: HashMap<ConnectionId, TxnReads>,
 
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client
-    client_pending_peeks: HashMap<u32, BTreeMap<Uuid, ComputeInstanceId>>,
+    client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
     /// A map from pending tails to the tail description.
     pending_tails: HashMap<GlobalId, PendingTail>,
 
@@ -491,6 +514,13 @@ pub struct Coordinator<S> {
 
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
+
+    /// Metadata about replicas that doesn't need to be persisted.
+    /// Intended for inclusion in system tables.
+    ///
+    /// `None` is used as a tombstone value for replicas that have been
+    /// dropped and for which no further updates should be recorded.
+    transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 }
 
 /// Metadata about an active connection.
@@ -663,6 +693,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn bootstrap(
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
@@ -704,20 +735,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(source) => {
                     // Re-announce the source description.
-                    let source_description = self
-                        .catalog
-                        .state()
-                        .source_description_for(entry.id())
-                        .unwrap();
-
                     let mut ingestion = IngestionDescription {
-                        id: entry.id(),
-                        desc: source_description,
-                        since: Antichain::from_elem(Timestamp::minimum()),
+                        desc: source.source_desc.clone(),
                         source_imports: BTreeMap::new(),
                         storage_metadata: (),
+                        typ: source.desc.typ().clone(),
                     };
 
                     for id in entry.uses() {
@@ -728,7 +752,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![ingestion])
+                        .create_collections(vec![(
+                            entry.id(),
+                            CollectionDescription {
+                                desc: source.desc.clone(),
+                                ingestion: Some(ingestion),
+                                remote_addr: source.remote_addr.clone(),
+                            },
+                        )])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -737,35 +768,28 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await;
                 }
-                CatalogItem::Table(_) => {
-                    let since_ts = self.get_local_write_ts();
-
-                    // Re-announce the source description.
-                    let source_description = self
-                        .catalog
-                        .state()
-                        .source_description_for(entry.id())
-                        .unwrap();
-
-                    let mut ingestion = IngestionDescription {
-                        id: entry.id(),
-                        desc: source_description,
-                        since: Antichain::from_elem(since_ts),
-                        source_imports: BTreeMap::new(),
-                        storage_metadata: (),
-                    };
-
-                    for id in entry.uses() {
-                        if self.catalog.state().get_entry(id).source().is_some() {
-                            ingestion.source_imports.insert(*id, ());
-                        }
-                    }
-
+                CatalogItem::Table(table) => {
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![ingestion])
+                        .create_collections(vec![(
+                            entry.id(),
+                            CollectionDescription {
+                                desc: table.desc.clone(),
+                                ingestion: None,
+                                remote_addr: None,
+                            },
+                        )])
                         .await
                         .unwrap();
+
+                    let since_ts = self.get_local_write_ts();
+                    let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
+                    self.dataflow_client
+                        .storage_mut()
+                        .set_read_policy(vec![(entry.id(), policy)])
+                        .await
+                        .unwrap();
+
                     self.initialize_storage_read_policies(
                         vec![entry.id()],
                         self.logical_compaction_window_ms,
@@ -790,6 +814,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
+                    // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
                         SinkConnectionState::Pending(builder) => builder,
                         SinkConnectionState::Ready(_) => {
@@ -895,54 +920,43 @@ impl<S: Append + 'static> Coordinator<S> {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        {
-            // An explicit SELECT or INSERT on a table will bump the table's timestamps,
-            // but there are cases where timestamps are not bumped but we expect the closed
-            // timestamps to advance (`AS OF X`, TAILing views over RT sources and
-            // tables). To address these, spawn a task that forces table timestamps to
-            // close on a regular interval. This roughly tracks the behavior of realtime
-            // sources that close off timestamps on an interval.
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let mut interval = tokio::time::interval(self.catalog.config().timestamp_frequency);
-            task::spawn(|| "coordinator_advance_local_inputs", async move {
-                loop {
-                    interval.tick().await;
-                    // If sending fails, the main thread has shutdown.
-                    if internal_cmd_tx.send(Message::AdvanceLocalInputs).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        // Spawn a watcher task that listens for compute service status changes and
-        // reports them to the coordinator.
-        task::spawn(|| "compute_service_watcher", {
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let mut events = self.dataflow_client.watch_compute_services();
-            async move {
-                while let Some(event) = events.next().await {
-                    if internal_cmd_tx
-                        .send(Message::ComputeInstanceStatus(event))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        });
+        // An explicit SELECT or INSERT on a table will bump the table's timestamps,
+        // but there are cases where timestamps are not bumped but we expect the closed
+        // timestamps to advance (`AS OF X`, TAILing views over RT sources and
+        // tables). To address these, spawn a task that forces table timestamps to
+        // close on a regular interval. This roughly tracks the behavior of realtime
+        // sources that close off timestamps on an interval.
+        let mut advance_local_inputs_interval =
+            tokio::time::interval(self.catalog.config().timestamp_frequency);
+        // Watcher that listens for and reports compute service status changes.
+        let mut compute_events = self.dataflow_client.watch_compute_services();
 
         loop {
+            // Before adding a branch to this select loop, please ensure that the branch is
+            // cancellation safe and add a comment explaining why. You can refer here for more
+            // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
             let msg = select! {
                 // Order matters here. We want to process internal commands
                 // before processing external commands.
                 biased;
 
+                // `recv()` on `UnboundedReceiver` is cancel-safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 Some(m) = internal_cmd_rx.recv() => m,
+                // `next()` on any stream is cancel-safe:
+                // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
+                Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
+                // `tick()` on `Interval` is cancel-safe:
+                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                _ = advance_local_inputs_interval.tick() => Message::AdvanceLocalInputs,
+                // See [`mz_dataflow_types::client::controller::Controller::ready`] for notes
+                // on why this is cancel-safe.
                 m = self.dataflow_client.ready() => {
                     let () = m.unwrap();
                     Message::ControllerReady
                 }
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 m = cmd_rx.recv() => match m {
                     None => break,
                     Some(m) => Message::Command(m),
@@ -955,6 +969,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // advance_tables is fully emptied, this allows us to replace an old request
                 // with a new one, avoiding duplication of work, which wouldn't be possible if
                 // we had already sent all AdvanceLocalInput messages on a channel.
+                // See [`AdvanceTables::recv`] for notes on why this is cancel-safe.
                 inputs = self.advance_tables.recv() => {
                     Message::AdvanceLocalInput(inputs)
                 },
@@ -1016,6 +1031,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Message::ComputeInstanceStatus(status) => {
                     self.message_compute_instance_status(status).await
+                }
+                // Processing this message DOES NOT send a response to the client;
+                // in any situation where you use it, you must also have a code
+                // path that responds to the client (e.g. reporting an error).
+                Message::RemovePendingPeeks { conn_id } => {
+                    self.remove_pending_peeks(conn_id).await;
                 }
             }
 
@@ -1141,11 +1162,27 @@ impl<S: Append + 'static> Coordinator<S> {
                     .send(Message::GroupCommit)
                     .expect("sending to internal_cmd_tx cannot fail");
             });
+        } else if self
+            .pending_writes
+            .iter()
+            .any(|pending_write| pending_write.has_write_lock())
+        {
+            // If some transaction already holds the write lock, then we can execute a group
+            // commit.
+            self.group_commit().await;
+        } else if let Ok(_guard) = Arc::clone(&self.write_lock).try_lock_owned() {
+            // If no transaction holds the write lock, then we need to acquire it.
+            self.group_commit().await;
         } else {
-            match Arc::clone(&self.write_lock).try_lock_owned() {
-                Ok(_guard) => self.group_commit().await,
-                Err(_) => self.defer_write(Deferred::GroupCommit),
-            };
+            // If some running transaction already holds the write lock, then one of the
+            // following things will happen:
+            //   1. The transaction will submit a write which will transfer the
+            //      ownership of the lock to group commit and trigger another group
+            //      group commit.
+            //   2. The transaction will complete without submitting a write (abort,
+            //      empty writes, etc) which will drop the lock. The deferred group
+            //      commit will then acquire the lock and execute a group commit.
+            self.defer_write(Deferred::GroupCommit);
         }
     }
 
@@ -1154,6 +1191,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the write.
     async fn group_commit(&mut self) {
+        if self.pending_writes.is_empty() {
+            return;
+        }
+
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
         // any point during this method. We will still commit the write without waiting for `now()`
         // to advance. This is ok because the next batch of writes will trigger the wait loop in
@@ -1163,9 +1204,18 @@ impl<S: Append + 'static> Coordinator<S> {
             timestamp,
             advance_to,
         } = self.get_and_step_local_write_ts();
-        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-        for PendingWriteTxn { writes, .. } in &mut self.pending_writes {
-            let writes = std::mem::take(writes);
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
+            HashMap::with_capacity(self.pending_writes.len());
+        let mut responses = Vec::with_capacity(self.pending_writes.len());
+        for PendingWriteTxn {
+            writes,
+            client_transmitter,
+            response,
+            session,
+            action,
+            write_lock_guard: _,
+        } in self.pending_writes.drain(..)
+        {
             for WriteOp { id, rows } in writes {
                 // If the table that some write was targeting has been deleted while the write was
                 // waiting, then the write will be ignored and we respond to the client that the
@@ -1184,6 +1234,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     appends.entry(id).or_default().extend(updates);
                 }
             }
+            responses.push((client_transmitter, response, session, action));
         }
         let appends = appends
             .into_iter()
@@ -1194,10 +1245,18 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .await
             .unwrap();
-
-        for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
-            let _ = tx.send(None);
+        for (client_transmitter, response, mut session, action) in responses {
+            session.vars_mut().end_transaction(action);
+            client_transmitter.send(response, session);
         }
+    }
+
+    /// Submit a write to be executed during the next group commit.
+    fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
+        self.internal_cmd_tx
+            .send(Message::GroupCommit)
+            .expect("sending to internal_cmd_tx cannot fail");
+        self.pending_writes.push(pending_write_txn);
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1241,6 +1300,42 @@ impl<S: Append + 'static> Coordinator<S> {
                 peek_id: _,
             }) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
+            }
+            ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
+                let replica_status_granularity = chrono::Duration::seconds(60);
+                let when_coarsened = when
+                    .duration_trunc(replica_status_granularity)
+                    .expect("Time coarsening should not fail");
+                let new = ReplicaMetadata {
+                    last_heartbeat: when_coarsened,
+                };
+                let old = match self
+                    .transient_replica_metadata
+                    .insert(replica_id, Some(new.clone()))
+                {
+                    None => None,
+                    // `None` is the tombstone for a removed replica
+                    Some(None) => return,
+                    Some(Some(md)) => Some(md),
+                };
+
+                if old.as_ref() != Some(&new) {
+                    let retraction = old.map(|old| {
+                        self.catalog
+                            .state()
+                            .pack_replica_heartbeat_update(replica_id, old, -1)
+                    });
+                    let insertion = self
+                        .catalog
+                        .state()
+                        .pack_replica_heartbeat_update(replica_id, new, 1);
+                    let updates = if let Some(retraction) = retraction {
+                        vec![retraction, insertion]
+                    } else {
+                        vec![insertion]
+                    };
+                    self.send_builtin_table_updates(updates).await;
+                }
             }
         }
     }
@@ -1359,6 +1454,7 @@ impl<S: Append + 'static> Coordinator<S> {
             id,
             diffs,
             kind,
+            returning,
         }: SendDiffs,
     ) {
         match diffs {
@@ -1370,6 +1466,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             id,
                             updates: diffs,
                             kind,
+                            returning,
                         },
                     ),
                     session,
@@ -1378,6 +1475,33 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => {
                 tx.send(Err(e), session);
             }
+        }
+    }
+
+    /// Remove all pending peeks that were initiated by `conn_id`.
+    async fn remove_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
+        // The peek is present on some specific compute instance.
+        // Allow dataflow to cancel any pending peeks.
+        if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
+            let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
+            for (uuid, compute_instance) in &uuids {
+                inverse.entry(*compute_instance).or_default().insert(*uuid);
+            }
+            for (compute_instance, uuids) in inverse {
+                self.dataflow_client
+                    .compute_mut(compute_instance)
+                    .unwrap()
+                    .cancel_peeks(&uuids)
+                    .await
+                    .unwrap();
+            }
+
+            uuids
+                .iter()
+                .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
+                .collect()
+        } else {
+            Vec::new()
         }
     }
 
@@ -1554,35 +1678,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 let result = self.verify_prepared_statement(&mut session, &name);
                 let _ = tx.send(Response { result, session });
             }
-
-            // Processing this command DOES NOT send a response to the client;
-            // in any situation where you use it, you must also have a code
-            // path that responds to the client (e.g. reporting an error).
-            Command::RemovePendingPeeks { conn_id } => {
-                // The peek is present on some specific compute instance.
-                // Allow dataflow to cancel any pending peeks.
-                if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
-                    let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> =
-                        Default::default();
-                    for (uuid, compute_instance) in &uuids {
-                        inverse.entry(*compute_instance).or_default().insert(*uuid);
-                    }
-                    for (compute_instance, uuids) in inverse {
-                        self.dataflow_client
-                            .compute_mut(compute_instance)
-                            .unwrap()
-                            .cancel_peeks(&uuids)
-                            .await
-                            .unwrap();
-                    }
-                    for (uuid, _) in uuids {
-                        self.pending_peeks.remove(&uuid);
-                    }
-                }
-            }
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
         self.catalog_transact(
             None,
@@ -1807,6 +1906,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::ShowCreateSource(_)
                     | Statement::ShowCreateTable(_)
                     | Statement::ShowCreateView(_)
+                    | Statement::ShowCreateRecordedView(_)
                     | Statement::ShowCreateConnection(_)
                     | Statement::ShowDatabases(_)
                     | Statement::ShowSchemas(_)
@@ -1852,6 +1952,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
                     | Statement::CreateViews(_)
+                    | Statement::CreateRecordedView(_)
                     | Statement::Delete(_)
                     | Statement::DropDatabase(_)
                     | Statement::DropSchema(_)
@@ -1922,7 +2023,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    async fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
+    async fn handle_cancel(&mut self, conn_id: ConnectionId, secret_key: u32) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -1932,14 +2033,17 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // Cancel pending writes. There is at most one pending write per session.
-            if let Some(idx) = self.pending_writes.iter().position(
-                |PendingWriteTxn {
-                     conn_id: txn_conn_id,
-                     ..
-                 }| *txn_conn_id == conn_id,
-            ) {
-                let PendingWriteTxn { sender, .. } = self.pending_writes.remove(idx);
-                let _ = sender.send(Some(ExecuteResponse::Canceled));
+            if let Some(idx) = self
+                .pending_writes
+                .iter()
+                .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
+            {
+                let PendingWriteTxn {
+                    client_transmitter,
+                    session,
+                    ..
+                } = self.pending_writes.remove(idx);
+                let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
             }
 
             // Cancel deferred writes. There is at most one deferred write per session.
@@ -1957,34 +2061,14 @@ impl<S: Append + 'static> Coordinator<S> {
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
-            // The peek is present on some specific compute instance.
-            // Allow dataflow to cancel any pending peeks.
-            if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
-                let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
-                for (uuid, compute_instance) in &uuids {
-                    inverse.entry(*compute_instance).or_default().insert(*uuid);
-                }
-                for (compute_instance, uuids) in inverse {
-                    self.dataflow_client
-                        .compute_mut(compute_instance)
-                        .unwrap()
-                        .cancel_peeks(&uuids)
-                        .await
-                        .unwrap();
-                }
-                for (uuid, _) in uuids {
-                    if let Some(PendingPeek {
-                        sender: rows_tx,
-                        conn_id: _,
-                    }) = self.pending_peeks.remove(&uuid)
-                    {
-                        rows_tx
-                            .send(PeekResponse::Canceled)
-                            .expect("Peek endpoint terminated prematurely");
-                    } else {
-                        warn!("Received a cancel request without a pending peek: {uuid}");
-                    }
-                }
+            for PendingPeek {
+                sender: rows_tx,
+                conn_id: _,
+            } in self.remove_pending_peeks(conn_id).await
+            {
+                rows_tx
+                    .send(PeekResponse::Canceled)
+                    .expect("Peek endpoint terminated prematurely");
             }
         }
     }
@@ -2000,11 +2084,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
         self.active_conns.remove(&session.conn_id());
-        self.internal_cmd_tx
-            .send(Message::Command(Command::RemovePendingPeeks {
-                conn_id: session.conn_id(),
-            }))
-            .expect("sending to internal_cmd_tx cannot fail");
+        self.remove_pending_peeks(session.conn_id()).await;
     }
 
     /// Handle removing in-progress transaction state regardless of the end action
@@ -2154,6 +2234,13 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::CreateViews(plan) => {
                 tx.send(
                     self.sequence_create_views(&mut session, plan, depends_on)
+                        .await,
+                    session,
+                );
+            }
+            Plan::CreateRecordedView(plan) => {
+                tx.send(
+                    self.sequence_create_recorded_view(&session, plan, depends_on)
                         .await,
                     session,
                 );
@@ -2348,20 +2435,16 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
             Plan::Execute(plan) => {
-                let plan_name = plan.name.clone();
                 match self.sequence_execute(&mut session, plan) {
                     Ok(portal_name) => {
-                        let internal_cmd_tx = self.internal_cmd_tx.clone();
-                        task::spawn(|| format!("execute:{plan_name}"), async move {
-                            internal_cmd_tx
-                                .send(Message::Command(Command::Execute {
-                                    portal_name,
-                                    session,
-                                    tx: tx.take(),
-                                    span: tracing::Span::none(),
-                                }))
-                                .expect("sending to internal_cmd_tx cannot fail");
-                        });
+                        self.internal_cmd_tx
+                            .send(Message::Command(Command::Execute {
+                                portal_name,
+                                session,
+                                tx: tx.take(),
+                                span: tracing::Span::none(),
+                            }))
+                            .expect("sending to internal_cmd_tx cannot fail");
                     }
                     Err(err) => tx.send(Err(err), session),
                 };
@@ -2673,24 +2756,23 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Determine the initial validity for the table.
                 let since_ts = self.get_local_write_ts();
 
-                // Announce the creation of the table source.
-                let source_description = self
-                    .catalog
-                    .state()
-                    .source_description_for(table_id)
-                    .unwrap();
-
-                let ingestion = IngestionDescription {
-                    id: table_id,
-                    desc: source_description,
-                    since: Antichain::from_elem(since_ts),
-                    source_imports: BTreeMap::new(),
-                    storage_metadata: (),
-                };
-
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![ingestion])
+                    .create_collections(vec![(
+                        table_id,
+                        CollectionDescription {
+                            desc: table.desc.clone(),
+                            ingestion: None,
+                            remote_addr: None,
+                        },
+                    )])
+                    .await
+                    .unwrap();
+
+                let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
+                self.dataflow_client
+                    .storage_mut()
+                    .set_read_policy(vec![(table_id, policy)])
                     .await
                     .unwrap();
 
@@ -2720,9 +2802,11 @@ impl<S: Append + 'static> Coordinator<S> {
         let source_oid = self.catalog.allocate_oid().await?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
-            connection: plan.source.connection,
+            source_desc: plan.source.source_desc,
             desc: plan.source.desc,
+            timeline: plan.timeline,
             depends_on,
+            remote_addr: plan.remote,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,
@@ -2784,18 +2868,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
 
-                let source_description = self
-                    .catalog
-                    .state()
-                    .source_description_for(source_id)
-                    .unwrap();
-
                 let mut ingestion = IngestionDescription {
-                    id: source_id,
-                    desc: source_description,
-                    since: Antichain::from_elem(Timestamp::minimum()),
+                    desc: source.source_desc.clone(),
                     source_imports: BTreeMap::new(),
                     storage_metadata: (),
+                    typ: source.desc.typ().clone(),
                 };
 
                 for id in self.catalog.state().get_entry(&source_id).uses() {
@@ -2806,7 +2883,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![ingestion])
+                    .create_collections(vec![(
+                        source_id,
+                        CollectionDescription {
+                            desc: source.desc.clone(),
+                            ingestion: Some(ingestion),
+                            remote_addr: source.remote_addr,
+                        },
+                    )])
                     .await
                     .unwrap();
 
@@ -2913,7 +2997,7 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .await;
         match transact_result {
-            Ok(()) => (),
+            Ok(()) => {}
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
@@ -3121,6 +3205,16 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    async fn sequence_create_recorded_view(
+        &mut self,
+        _session: &Session,
+        _plan: CreateRecordedViewPlan,
+        _depends_on: Vec<GlobalId>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        // TODO(teskje): implement
+        Err(CoordError::Unsupported("recorded views"))
+    }
+
     async fn sequence_create_index(
         &mut self,
         session: &Session,
@@ -3244,6 +3338,24 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(ExecuteResponse::DroppedRole)
     }
 
+    async fn drop_replica(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        replica_config: ConcreteComputeInstanceReplicaConfig,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
+            let retraction = self
+                .catalog
+                .state()
+                .pack_replica_heartbeat_update(replica_id, metadata, -1);
+            self.send_builtin_table_updates(vec![retraction]).await;
+        }
+        self.dataflow_client
+            .drop_replica(instance_id, replica_id, replica_config)
+            .await
+    }
+
     async fn sequence_drop_compute_instances(
         &mut self,
         session: &Session,
@@ -3269,8 +3381,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, replica) in replicas {
-                self.dataflow_client
-                    .drop_replica(instance_id, replica_id, replica.config)
+                self.drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3312,8 +3423,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
 
         for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.dataflow_client
-                .drop_replica(compute_id, replica_id, replica.config)
+            self.drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -3332,6 +3442,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
+            ObjectType::RecordedView => ExecuteResponse::DroppedRecordedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
@@ -3418,88 +3529,59 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             action = EndTransactionAction::Rollback;
         }
-        let response = ExecuteResponse::TransactionExited {
+        let response = Ok(ExecuteResponse::TransactionExited {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
-        };
+        });
 
-        // Immediately do tasks that must be serialized in the coordinator.
-        let rx = self
+        let result = self
             .sequence_end_transaction_inner(&mut session, action)
             .await;
 
-        // We can now wait for responses or errors and do any session/transaction
-        // finalization in a separate task.
-        let conn_id = session.conn_id();
-        task::spawn(
-            || format!("sequence_end_transaction:{conn_id}"),
-            async move {
-                let result = match rx {
-                    // If we have more work to do, do it
-                    Ok(fut) => fut.await,
-                    Err(e) => Err(e),
-                };
-
-                if result.is_err() {
-                    action = EndTransactionAction::Rollback;
-                }
-                session.vars_mut().end_transaction(action);
-
-                match result {
-                    Ok(None) => tx.send(Ok(response), session),
-                    Ok(Some(response)) => tx.send(Ok(response), session),
-                    Err(err) => tx.send(Err(err), session),
-                }
-            },
-        );
+        let (response, action) = match result {
+            Ok((Some(writes), _)) if writes.is_empty() => (response, action),
+            Ok((Some(writes), write_lock_guard)) => {
+                self.submit_write(PendingWriteTxn {
+                    writes,
+                    client_transmitter: tx,
+                    response,
+                    session,
+                    action,
+                    write_lock_guard,
+                });
+                return;
+            }
+            Ok((None, _)) => (response, action),
+            Err(err) => (Err(err), EndTransactionAction::Rollback),
+        };
+        session.vars_mut().end_transaction(action);
+        tx.send(response, session);
     }
 
     async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<impl Future<Output = Result<Option<ExecuteResponse>, CoordError>>, CoordError> {
+    ) -> Result<(Option<Vec<WriteOp>>, Option<OwnedMutexGuard<()>>), CoordError> {
         let txn = self.clear_transaction(session).await;
 
-        let mut write_rx = None;
-
         if let EndTransactionAction::Commit = action {
-            if let Some(ops) = txn.into_ops() {
-                match ops {
-                    TransactionOps::Writes(mut writes) => {
-                        for WriteOp { id, .. } in &writes {
-                            // Re-verify this id exists.
-                            let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
-                                CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
-                            })?;
-                        }
-
-                        // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
-                        writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                        let (tx, rx) = oneshot::channel();
-                        write_rx = Some(rx);
-                        if self.pending_writes.is_empty() {
-                            self.internal_cmd_tx
-                                .send(Message::GroupCommit)
-                                .expect("sending to internal_cmd_tx cannot fail");
-                        }
-                        self.pending_writes.push(PendingWriteTxn {
-                            writes,
-                            sender: tx,
-                            conn_id: session.conn_id(),
-                        });
+            if let (Some(ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
+                if let TransactionOps::Writes(mut writes) = ops {
+                    for WriteOp { id, .. } in &writes {
+                        // Re-verify this id exists.
+                        let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
+                            CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
+                        })?;
                     }
-                    _ => {}
+
+                    // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
+                    writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                    return Ok((Some(writes), write_lock_guard));
                 }
             }
         }
-        Ok(async move {
-            if let Some(rx) = write_rx {
-                Ok(rx.await?)
-            } else {
-                Ok(None)
-            }
-        })
+        Ok((None, None))
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
@@ -3511,7 +3593,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         uses_ids: I,
         timeline: &Option<Timeline>,
-        conn_id: u32,
+        conn_id: ConnectionId,
         compute_instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Result<CollectionIdBundle, CoordError>
     where
@@ -4165,12 +4247,31 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ExplainPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        match plan {
+            ExplainPlan::New(plan) => self.sequence_explain_new(session, plan),
+            ExplainPlan::Old(plan) => self.sequence_explain_old(session, plan),
+        }
+    }
+
+    fn sequence_explain_new(
+        &mut self,
+        _session: &Session,
+        _plan: ExplainPlanNew,
+    ) -> Result<ExecuteResponse, CoordError> {
+        unimplemented!() // TODO #13296
+    }
+
+    fn sequence_explain_old(
+        &mut self,
+        session: &Session,
+        plan: ExplainPlanOld,
+    ) -> Result<ExecuteResponse, CoordError> {
         let compute_instance = self
             .catalog
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
-        let ExplainPlan {
+        let ExplainPlanOld {
             raw_plan,
             row_set_finishing,
             stage,
@@ -4223,7 +4324,7 @@ impl<S: Append + 'static> Coordinator<S> {
             };
 
         let mut explanation_string = match stage {
-            ExplainStage::RawPlan => {
+            ExplainStageOld::RawPlan => {
                 let catalog = self.catalog.for_session(session);
                 let mut explanation = mz_sql::plan::Explanation::new(&raw_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
@@ -4234,18 +4335,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 explanation.to_string()
             }
-            ExplainStage::QueryGraph => {
+            ExplainStageOld::QueryGraph => {
                 let catalog = self.catalog.for_session(session);
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 model.as_dot("", &catalog, options.typed)?
             }
-            ExplainStage::OptimizedQueryGraph => {
+            ExplainStageOld::OptimizedQueryGraph => {
                 let catalog = self.catalog.for_session(session);
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 model.optimize();
                 model.as_dot("", &catalog, options.typed)?
             }
-            ExplainStage::DecorrelatedPlan => {
+            ExplainStageOld::DecorrelatedPlan => {
                 let decorrelated_plan = OptimizedMirRelationExpr::declare_optimized(decorrelate(
                     &mut timings,
                     raw_plan,
@@ -4260,7 +4361,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 explanation.to_string()
             }
-            ExplainStage::OptimizedPlan => {
+            ExplainStageOld::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
@@ -4275,7 +4376,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 explanation.to_string()
             }
-            ExplainStage::PhysicalPlan => {
+            ExplainStageOld::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
@@ -4293,7 +4394,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 explanation.to_string()
             }
-            ExplainStage::Timestamp => {
+            ExplainStageOld::Timestamp => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
                 self.validate_timeline(optimized_plan.depends_on())?;
@@ -4459,6 +4560,15 @@ impl<S: Append + 'static> Coordinator<S> {
             id: plan.id,
             rows: plan.updates,
         }]))?;
+        if !plan.returning.is_empty() {
+            let finishing = RowSetFinishing {
+                order_by: Vec::new(),
+                limit: None,
+                offset: 0,
+                project: (0..plan.returning[0].0.iter().count()).collect(),
+            };
+            return Ok(send_immediate_rows(finishing.finish(plan.returning)));
+        }
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
             MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
@@ -4487,7 +4597,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         match optimized_mir.into_inner() {
-            constants @ MirRelationExpr::Constant { .. } => tx.send(
+            constants @ MirRelationExpr::Constant { .. } if plan.returning.is_empty() => tx.send(
                 self.sequence_insert_constant(&mut session, plan.id, constants),
                 session,
             ),
@@ -4536,6 +4646,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     finishing,
                     assignments: HashMap::new(),
                     kind: MutationKind::Insert,
+                    returning: plan.returning,
                 };
 
                 self.sequence_read_then_write(tx, session, read_then_write_plan)
@@ -4576,6 +4687,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     id,
                     updates: rows,
                     kind: MutationKind::Insert,
+                    returning: Vec::new(),
                 };
                 self.sequence_send_diffs(session, diffs_plan)
             }
@@ -4618,6 +4730,7 @@ impl<S: Append + 'static> Coordinator<S> {
             selection,
             assignments,
             finishing,
+            returning,
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
@@ -4656,7 +4769,7 @@ impl<S: Append + 'static> Coordinator<S> {
             use CatalogItemType::*;
             match catalog.try_get_entry(id) {
                 Some(entry) => match entry.item().typ() {
-                    typ @ (Func | View) => {
+                    typ @ (Func | View | RecordedView) => {
                         let valid_id = id.is_user() || matches!(typ, Func);
                         valid_id
                             && (
@@ -4777,15 +4890,56 @@ impl<S: Append + 'static> Coordinator<S> {
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
                             internal_cmd_tx
-                                .send(Message::Command(Command::RemovePendingPeeks {
+                                .send(Message::RemovePendingPeeks {
                                     conn_id: session.conn_id(),
-                                }))
+                                })
                                 .expect("sending to internal_cmd_tx cannot fail");
                             Err(CoordError::StatementTimeout)
                         }
                     }
                 }
                 _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
+            };
+            let mut returning_rows = Vec::new();
+            let mut diff_err: Option<CoordError> = None;
+            if !returning.is_empty() && diffs.is_ok() {
+                let arena = RowArena::new();
+                for (row, diff) in diffs.as_ref().unwrap() {
+                    if diff < &1 {
+                        continue;
+                    }
+                    let mut returning_row = Row::with_capacity(returning.len());
+                    let mut packer = returning_row.packer();
+                    for expr in &returning {
+                        let datums: Vec<_> = row.iter().collect();
+                        match expr.eval(&datums, &arena) {
+                            Ok(datum) => {
+                                packer.push(datum);
+                            }
+                            Err(err) => {
+                                diff_err = Some(err.into());
+                                break;
+                            }
+                        }
+                    }
+                    let diff = NonZeroI64::try_from(*diff).expect("known to be >= 1");
+                    let diff = match NonZeroUsize::try_from(diff) {
+                        Ok(diff) => diff,
+                        Err(err) => {
+                            diff_err = Some(err.into());
+                            break;
+                        }
+                    };
+                    returning_rows.push((returning_row, diff));
+                    if diff_err.is_some() {
+                        break;
+                    }
+                }
+            }
+            let diffs = if let Some(err) = diff_err {
+                Err(err)
+            } else {
+                diffs
             };
             internal_cmd_tx
                 .send(Message::SendDiffs(SendDiffs {
@@ -4794,6 +4948,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     id,
                     diffs,
                     kind,
+                    returning: returning_rows,
                 }))
                 .expect("sending to internal_cmd_tx cannot fail");
         });
@@ -4905,6 +5060,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
@@ -4929,20 +5085,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        if let SourceConnection::External {
-                            connection:
-                                ExternalSourceConnection::Postgres(PostgresSourceConnection {
-                                    conn,
-                                    details,
-                                    ..
-                                }),
-                            ..
-                        } = &source.connection
-                        {
-                            replication_slots_to_drop
-                                .entry(conn.clone())
-                                .or_insert_with(Vec::new)
-                                .push(details.slot.clone());
+                        match &source.source_desc.connection {
+                            SourceConnection::Postgres(PostgresSourceConnection {
+                                conn,
+                                details,
+                                ..
+                            }) => {
+                                replication_slots_to_drop
+                                    .entry(conn.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(details.slot.clone());
+                            }
+                            _ => {}
                         }
                     }
                     CatalogItem::Sink(catalog::Sink {
@@ -5035,6 +5189,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(result)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
         // table writes are not batched in a group commit. This is mostly due to the complexity
@@ -5077,6 +5232,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 .entry(compute_instance)
                 .or_insert(vec![])
                 .push(id);
+
+            // Persist sinks write to storage collections, which need to be
+            // dropped when their sinks are dropped.
+            // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
+            if self.dataflow_client.storage_mut().collection(id).is_ok() {
+                self.dataflow_client
+                    .storage_mut()
+                    .drop_sources(vec![id])
+                    .await
+                    .unwrap();
+            }
         }
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
@@ -5102,7 +5268,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.dataflow_client
                 .compute_mut(compute_instance)
                 .unwrap()
-                .drop_sinks(ids)
+                .drop_indexes(ids)
                 .await
                 .unwrap();
         }
@@ -5285,7 +5451,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let entry = self.catalog.get_entry(&id);
             match entry.item() {
                 CatalogItem::Source(source) => {
-                    timelines.insert(id, source.connection.timeline());
+                    timelines.insert(id, source.timeline.clone());
                 }
                 CatalogItem::Index(index) => {
                     ids.push(index.on);
@@ -5408,6 +5574,10 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let thread = thread::Builder::new()
+        // The Coordinator thread tends to keep a lot of data on its stack. To
+        // prevent a stack overflow we allocate a stack twice as big as the default
+        // stack.
+        .stack_size(2 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
@@ -5433,6 +5603,7 @@ pub async fn serve<S: Append + 'static>(
                 replica_sizes,
                 availability_zones,
                 connection_context,
+                transient_replica_metadata: HashMap::new(),
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -5473,7 +5644,7 @@ fn auto_generate_primary_idx(
     on_name: FullObjectName,
     on_id: GlobalId,
     on_desc: &RelationDesc,
-    conn_id: Option<u32>,
+    conn_id: Option<ConnectionId>,
     depends_on: Vec<GlobalId>,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
@@ -5586,6 +5757,7 @@ pub mod fast_path_peek {
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
+    use crate::client::ConnectionId;
     use crate::coord::{PeekResponseUnary, PendingPeek};
     use crate::CoordError;
     use mz_expr::{EvalError, Id, MirScalarExpr};
@@ -5717,7 +5889,7 @@ pub mod fast_path_peek {
             fast_path: Plan,
             timestamp: mz_repr::Timestamp,
             finishing: mz_expr::RowSetFinishing,
-            conn_id: u32,
+            conn_id: ConnectionId,
             source_arity: usize,
             compute_instance: ComputeInstanceId,
             target_replica: Option<ReplicaId>,

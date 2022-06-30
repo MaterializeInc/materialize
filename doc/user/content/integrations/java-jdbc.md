@@ -61,56 +61,6 @@ public class App {
 
 To establish the connection to Materialize, just as with PostgreSQL, you can call the `getConnection()` method on the `DriverManager` class.
 
-### Materialize Cloud Instance
-
-Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-cloud/) dialog and specify the path to each file in the [connection parameters](hhttps://jdbc.postgresql.org/documentation/head/connect.html#connection-parameters). Replace `MY_INSTANCE_ID` in the connection string property with your Materialize Cloud instance ID.
-
-
-```java
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.util.Properties;
-
-public class App {
-
-    private final String url = "jdbc:postgresql://MY_INSTANCE_ID:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
-
-    /**
-     * Connect to Materialize Cloud
-     *
-     * @return a Connection object
-     */
-    public Connection connect() {
-        Properties props = new Properties();
-        props.setProperty("user", user);
-        props.setProperty("password", password);
-        props.setProperty("ssl", "true");
-        props.setProperty("sslmode", "require");
-        props.setProperty("sslcert", "materialize.crt");
-        props.setProperty("sslkey", "materialize.der.key");
-        props.setProperty("sslrootcert", "ca.crt");
-
-        Connection conn = null;
-        try {
-            conn = DriverManager.getConnection(url, props);
-            System.out.println("Connected to Materialize Cloud successfully!");
-        } catch (SQLException e) {
-            System.out.println(e.getMessage());
-        }
-
-        return conn;
-    }
-
-    public static void main(String[] args) {
-        App app = new App();
-        app.connect();
-    }
-}
-```
-
 ## Stream
 
 To take full advantage of incrementally updated materialized views from a Java application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.

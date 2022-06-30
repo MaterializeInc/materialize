@@ -10,7 +10,7 @@
 //! This file houses a representation of a SQL plan that is parallel to that found in
 //! src/expr/relation/mod.rs, but represents an earlier phase of planning. It's structurally very
 //! similar to that file, with some differences which are noted below. It gets turned into that
-//! representation via a call to decorrelate().
+//! representation via a call to lower().
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -114,6 +114,7 @@ pub enum HirRelationExpr {
     Negate {
         input: Box<HirRelationExpr>,
     },
+    /// Keep rows from a dataflow where the row counts are positive.
     Threshold {
         input: Box<HirRelationExpr>,
     },

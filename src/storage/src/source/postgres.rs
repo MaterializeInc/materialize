@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
@@ -19,7 +18,6 @@ use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
 use timely::scheduling::SyncActivator;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
@@ -29,7 +27,7 @@ use tracing::{error, info, warn};
 
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnection, MzOffset, PostgresSourceConnection,
+    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection, SourceConnection,
 };
 use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
@@ -149,8 +147,8 @@ struct PostgresTaskInfo {
     lsn: PgLsn,
     metrics: PgSourceMetrics,
     source_tables: HashMap<u32, PostgresTableDesc>,
+    row_sender: RowSender,
     sender: Sender<InternalMessage>,
-    activator: SyncActivator,
 }
 
 impl SourceReader for PostgresSourceReader {
@@ -165,20 +163,22 @@ impl SourceReader for PostgresSourceReader {
         _worker_id: usize,
         _worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: ExternalSourceConnection,
+        connection: SourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         _connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
         let connection = match connection {
-            ExternalSourceConnection::Postgres(pg) => pg,
+            SourceConnection::Postgres(pg) => pg,
             _ => {
-                panic!("Postgres is the only legitimate ExternalSourceConnection for PostgresSourceReader")
+                panic!("Postgres is the only legitimate SourceConnection for PostgresSourceReader")
             }
         };
 
-        let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(10_000);
+        // TODO: figure out the best default here; currently this is optimized
+        // for the speed to pass pg-cdc-resumption tests on a local machine.
+        let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(50_000);
 
         let task_info = PostgresTaskInfo {
             source_id: source_id.clone(),
@@ -189,8 +189,8 @@ impl SourceReader for PostgresSourceReader {
             source_tables: HashMap::from_iter(
                 connection.details.tables.iter().map(|t| (t.oid, t.clone())),
             ),
+            row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
             sender: dataflow_tx,
-            activator: consumer_activator,
         };
 
         task::spawn(
@@ -256,8 +256,13 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
         Err(e) => {
             // Drop the send error, as we have no way of communicating back to the
             // source operator if the channel is gone.
-            let _ = task_info.sender.send(InternalMessage::Err(e)).await;
+            let _ = task_info
+                .row_sender
+                .sender
+                .send(InternalMessage::Err(e))
+                .await;
             task_info
+                .row_sender
                 .activator
                 .activate()
                 .expect("postgres reader activation failed");
@@ -272,56 +277,31 @@ async fn postgres_replication_loop_inner(
     let source_id = task_info.source_id.clone();
     // Buffer rows from snapshot to retract and retry, if initial snapshot fails.
     // Postgres sources cannot proceed without a successful snapshot.
-    let mut snapshot_tx = Transaction::new();
-    loop {
-        let file =
-            tokio::fs::File::from_std(tempfile::tempfile().map_err(|e| SourceReaderError {
-                inner: SourceErrorDetails::FileIO(e.to_string()),
-            })?);
-        let mut writer = tokio::io::BufWriter::new(file);
-        match task_info
-            .produce_snapshot(&mut snapshot_tx, &mut writer)
-            .await
-        {
-            Ok(_) => {
-                info!(
-                    "replication snapshot for source {} succeeded",
-                    &task_info.source_id
-                );
-                snapshot_tx
-                    .close(task_info.lsn, &task_info.sender, &task_info.activator)
-                    .await;
-                break;
-            }
-            Err(ReplicationError::Recoverable(e)) => {
-                writer.flush().await.map_err(|e| SourceReaderError {
-                    inner: SourceErrorDetails::Initialization(e.to_string()),
-                })?;
-                warn!(
-                    "replication snapshot for source {} failed, retrying: {}",
-                    &task_info.source_id, e
-                );
-                let reader = BufReader::new(writer.into_inner().into_std().await);
-                let res = PostgresTaskInfo::revert_snapshot(&mut snapshot_tx, reader)
-                    .await
-                    .map_err(|e| SourceReaderError {
-                        inner: SourceErrorDetails::FileIO(e.to_string()),
-                    });
-                snapshot_tx
-                    .close(task_info.lsn, &task_info.sender, &task_info.activator)
-                    .await;
-
-                res?;
-            }
-            Err(ReplicationError::Fatal(e)) => {
-                return Err(SourceReaderError {
-                    inner: SourceErrorDetails::Initialization(e.to_string()),
-                })
-            }
+    match task_info.produce_snapshot().await {
+        Ok(_) => {
+            info!(
+                "replication snapshot for source {} succeeded",
+                &task_info.source_id
+            );
         }
-
-        // TODO(petrosagg): implement exponential back-off
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        Err(ReplicationError::Recoverable(e)) => {
+            // TODO: In the future we probably want to handle this more gracefully,
+            // to avoid stressing out any monitoring tools,
+            // but for now panicking is the easiest way to dump the data in the pipe.
+            // The restarted storaged instance will restart the snapshot fresh, which will
+            // avoid any inconsistencies. Note that if the same lsn is chosen in the
+            // next snapshotting, the remapped timestamp chosen will be the same for
+            // both instances of storaged.
+            panic!(
+                "replication snapshot for source {} failed: {}",
+                &task_info.source_id, e
+            );
+        }
+        Err(ReplicationError::Fatal(e)) => {
+            return Err(SourceReaderError {
+                inner: SourceErrorDetails::Initialization(e.to_string()),
+            })
+        }
     }
 
     loop {
@@ -349,55 +329,77 @@ async fn postgres_replication_loop_inner(
     }
 }
 
-/// A helper struct build and produce transactions
-struct Transaction {
-    rows: Vec<(Row, Diff)>,
+/// A type that makes it easy to correctly send inserts and deletes.
+///
+/// Note: `RowSender::delete/insert` should be called with the same
+/// lsn until `close_lsn` is called, which should be called and awaited
+/// before dropping the `RowSender` or moving onto a new lsn.
+/// Internally, this type uses asserts to uphold the first requirement.
+struct RowSender {
+    sender: Sender<InternalMessage>,
+    activator: SyncActivator,
+    buffered_message: Option<(Row, PgLsn, i64)>,
 }
 
-impl Transaction {
-    pub fn new() -> Self {
-        Transaction { rows: vec![] }
+impl RowSender {
+    /// Create a new `RowSender`.
+    pub fn new(sender: Sender<InternalMessage>, activator: SyncActivator) -> Self {
+        Self {
+            sender,
+            activator,
+            buffered_message: None,
+        }
     }
 
-    /// Record an insertion of a row in the current transaction
-    pub fn insert(&mut self, row: Row) {
-        self.rows.push((row, 1));
+    /// Insert a row at an lsn.
+    pub async fn insert(&mut self, row: Row, lsn: PgLsn) {
+        if let Some((buffered_row, buffered_lsn, buffered_diff)) = self.buffered_message.take() {
+            assert_eq!(buffered_lsn, lsn);
+            self.send_row(buffered_row, buffered_lsn, buffered_diff, false)
+                .await;
+        }
+
+        self.buffered_message = Some((row, lsn, 1));
+    }
+    /// Delete a row at an lsn.
+    pub async fn delete(&mut self, row: Row, lsn: PgLsn) {
+        if let Some((buffered_row, buffered_lsn, buffered_diff)) = self.buffered_message.take() {
+            assert_eq!(buffered_lsn, lsn);
+            self.send_row(buffered_row, buffered_lsn, buffered_diff, false)
+                .await;
+        }
+
+        self.buffered_message = Some((row, lsn, -1));
     }
 
-    /// Record a deletion of a row in the current transaction
-    pub fn delete(&mut self, row: Row) {
-        self.rows.push((row, -1));
+    /// Finalize an lsn, making sure all messages that my be buffered are flushed, and that the
+    /// last message sent is marked as closing the `lsn` (which is the messages `offset` in the
+    /// rest of the source pipeline.
+    pub async fn close_lsn(&mut self, lsn: PgLsn) {
+        if let Some((buffered_row, buffered_lsn, buffered_diff)) = self.buffered_message.take() {
+            assert_eq!(buffered_lsn, lsn);
+            self.send_row(buffered_row, buffered_lsn, buffered_diff, true)
+                .await;
+        }
     }
 
-    /// Finalize a transaction and send it off through the channel
-    ///
-    /// Care must be taken to ALWAYS call this if inserts/deletes have occurred,
-    /// unless you are on an early-exit error path, and the `PostgresSourceReader`
-    /// is shutting down.
-    pub async fn close(
-        &mut self,
-        lsn: PgLsn,
-        sender: &Sender<InternalMessage>,
-        activator: &SyncActivator,
-    ) {
-        let num = self.rows.len();
-        for (i, (row, diff)) in self.rows.drain(..).enumerate() {
-            // a closed receiver means the source has been shutdown
-            // (dropped or the process is dying), so just continue on
-            // without activation
-            if let Ok(_) = sender
-                .send(InternalMessage::Value {
-                    value: row,
-                    lsn,
-                    diff,
-                    end: i == (num - 1),
-                })
-                .await
-            {
-                activator
-                    .activate()
-                    .expect("postgres reader activation failed");
-            }
+    async fn send_row(&self, row: Row, lsn: PgLsn, diff: i64, end: bool) {
+        // a closed receiver means the source has been shutdown
+        // (dropped or the process is dying), so just continue on
+        // without activation
+        if let Ok(_) = self
+            .sender
+            .send(InternalMessage::Value {
+                value: row,
+                lsn,
+                diff,
+                end,
+            })
+            .await
+        {
+            self.activator
+                .activate()
+                .expect("postgres reader activation failed");
         }
     }
 }
@@ -436,11 +438,7 @@ impl PostgresTaskInfo {
     ///
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
-    async fn produce_snapshot<W: AsyncWrite + Unpin>(
-        &mut self,
-        snapshot_tx: &mut Transaction,
-        buffer: &mut W,
-    ) -> Result<(), ReplicationError> {
+    async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
         let client =
             try_recoverable!(mz_postgres_util::connect_replication(&self.connection.conn).await);
 
@@ -530,36 +528,19 @@ impl PostgresTaskInfo {
                     }
                     Ok(())
                 }));
-                snapshot_tx.insert(mz_row.clone());
-                try_fatal!(
-                    buffer
-                        .write_all(&try_fatal!(bincode::serialize(&mz_row)))
-                        .await
-                );
+
+                self.row_sender.insert(mz_row.clone(), self.lsn).await;
             }
 
             self.metrics.tables.inc();
         }
         self.metrics.lsn.set(self.lsn.into());
         client.simple_query("COMMIT;").await?;
-        Ok(())
-    }
 
-    /// Reverts a failed snapshot by deleting any processed rows from the dataflow.
-    async fn revert_snapshot<R: Read + Seek>(
-        snapshot_tx: &mut Transaction,
-        mut reader: R,
-    ) -> Result<(), anyhow::Error> {
-        tokio::task::block_in_place(|| -> Result<(), anyhow::Error> {
-            let len = reader.seek(SeekFrom::Current(0))?;
-            reader.seek(SeekFrom::Start(0))?;
-            let mut reader = reader.take(len);
-            while reader.limit() > 0 {
-                let row = bincode::deserialize_from(&mut reader)?;
-                snapshot_tx.delete(row);
-            }
-            Ok(())
-        })
+        // close the current `row_sender` context after we are sure we are not erroring out.
+        // Otherwise, `revert_snapshot` will close it
+        self.row_sender.close_lsn(self.lsn).await;
+        Ok(())
     }
 
     /// Converts a Tuple received in the replication stream into a Row instance. The logical
@@ -618,6 +599,7 @@ impl PostgresTaskInfo {
         let mut inserts = vec![];
         let mut deletes = vec![];
         let closer = self.sender.clone();
+
         loop {
             // This select is safe because `Sender::closed` is cancel-safe
             // and when `closed` finishes, dropping the `try_next` future is fine,
@@ -730,16 +712,14 @@ impl PostgresTaskInfo {
                                         self.metrics.transactions.inc();
                                         self.lsn = commit.end_lsn().into();
 
-                                        let mut tx = Transaction::new();
-
                                         for row in deletes.drain(..) {
-                                            tx.delete(row);
+                                            self.row_sender.delete(row, self.lsn).await;
                                         }
                                         for row in inserts.drain(..) {
-                                            tx.insert(row);
+                                            self.row_sender.insert(row, self.lsn).await;
                                         }
 
-                                        tx.close(self.lsn, &self.sender, &self.activator).await;
+                                        self.row_sender.close_lsn(self.lsn).await;
                                         self.metrics.lsn.set(self.lsn.into());
                                     }
                                     Relation(relation) => {

@@ -14,7 +14,7 @@ use std::iter::once;
 use bytes::BufMut;
 use futures::future::BoxFuture;
 use itertools::max;
-use mz_repr::proto::{IntoRustIfSome, RustType};
+use mz_proto::{IntoRustIfSome, RustType};
 use prost::{self, Message};
 use uuid::Uuid;
 
@@ -55,6 +55,7 @@ const SCHEMA_ID_ALLOC_KEY: &str = "schema";
 const ROLE_ID_ALLOC_KEY: &str = "role";
 const COMPUTE_ID_ALLOC_KEY: &str = "compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
+pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 
 async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
     // Initial state.
@@ -133,6 +134,12 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                                 IdAllocValue {
                                     next_id: DEFAULT_REPLICA_ID + 1,
                                 },
+                            ),
+                            (
+                                IdAllocKey {
+                                    name: AUDIT_LOG_ID_ALLOC_KEY.into(),
+                                },
+                                IdAllocValue { next_id: 1 },
                             ),
                         ],
                     )
@@ -859,7 +866,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    fn get_and_increment_id(&mut self, key: String) -> Result<u64, Error> {
+    pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, Error> {
         let id = self
             .id_allocator
             .items()

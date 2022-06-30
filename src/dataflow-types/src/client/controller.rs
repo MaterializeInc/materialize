@@ -31,12 +31,14 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use maplit::hashmap;
+use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
+use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 
 use mz_orchestrator::{
@@ -45,7 +47,7 @@ use mz_orchestrator::{
 };
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
-use mz_repr::proto::RustType;
+use mz_proto::RustType;
 
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
@@ -61,6 +63,8 @@ pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 pub use crate::client::controller::compute::{ComputeController, ComputeControllerMut};
 pub use crate::client::controller::storage::{StorageController, StorageControllerState};
 
+use super::ActiveReplicationResponse;
+
 mod compute;
 pub mod storage;
 
@@ -74,6 +78,10 @@ pub struct ControllerConfig {
     pub linger: bool,
     /// The persist location where all storage collections will be written to.
     pub persist_location: PersistLocation,
+    /// A process-global cache of (blob_uri, consensus_uri) ->
+    /// PersistClient.
+    /// This is intentionally shared between workers.
+    pub persist_clients: Arc<Mutex<PersistClientCache>>,
     /// The stash URL for the storage controller.
     pub storage_stash_url: String,
     /// The storaged image to use when starting new storage processes.
@@ -186,7 +194,7 @@ pub struct ComputeInstanceEvent {
 
 enum UnderlyingControllerResponse<T> {
     Storage(StorageResponse<T>),
-    Compute(ComputeInstanceId, ComputeResponse<T>),
+    Compute(ComputeInstanceId, ActiveReplicationResponse<T>),
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -502,7 +510,10 @@ where
                     Ok(Some(ControllerResponse::LinearizedTimestamps(res)))
                 }
             },
-            UnderlyingControllerResponse::Compute(instance, response) => {
+            UnderlyingControllerResponse::Compute(
+                instance,
+                ActiveReplicationResponse::ComputeResponse(response),
+            ) => {
                 match response {
                     ComputeResponse::FrontierUppers(updates) => {
                         self.compute_mut(instance)
@@ -545,6 +556,12 @@ where
                     }
                 }
             }
+            UnderlyingControllerResponse::Compute(
+                _instance,
+                ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when),
+            ) => Ok(Some(ControllerResponse::ComputeReplicaHeartbeat(
+                replica_id, when,
+            ))),
         }
     }
 }
@@ -562,6 +579,7 @@ where
         let storage_controller = crate::client::controller::storage::Controller::new(
             config.storage_stash_url,
             config.persist_location,
+            config.persist_clients,
             config.orchestrator.namespace("storage"),
             config.storaged_image,
         )

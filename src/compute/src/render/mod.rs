@@ -158,13 +158,13 @@ pub fn build_compute_dataflow<A: Allocate>(
             let mut tokens = BTreeMap::new();
 
             // Import declared sources into the rendering context.
-            for (source_id, source) in dataflow.source_imports.iter() {
+            for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
                 // Note: For correctness, we require that sources only emit times advanced by
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
                 let (ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
-                    source.storage_metadata.clone(),
                     Arc::clone(&compute_state.persist_clients),
+                    source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
                 );
 

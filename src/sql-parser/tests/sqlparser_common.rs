@@ -234,7 +234,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
             e02 INT PRIMARY KEY DEFAULT e03 CHECK (e04),
             CHECK (e05)
         ) WITH (e06 = 1);
-        CREATE VIEW f01 (f02) WITH (f03 = 1) AS SELECT * FROM f04;
+        CREATE VIEW f01 (f02) AS SELECT * FROM f03;
         DROP TABLE j01;
         DROP VIEW k01;
         COPY l01 (l02) FROM stdin;
@@ -258,7 +258,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         "c01", "c02", "c03", "c04", "c05",
         "d01", "d02",
         "e01", "e02", "int4", "e03", "e04", "e05", "e06",
-        "f01", "f02", "f03", "f04",
+        "f01", "f02", "f03",
         "j01",
         "k01",
         "l01", "l02",

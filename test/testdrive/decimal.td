@@ -11,49 +11,31 @@
 # pgwire). Operations on decimals are more thoroughly tested in decimal.slt.
 
 $ set schema={
+    "name": "row",
     "type": "record",
-    "name": "envelope",
     "fields": [
       {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {
-                "name": "a",
-                "type": {
-                  "type": "bytes",
-                  "scale": 2,
-                  "precision": 15,
-                  "logicalType": "decimal"
-                }
-              }
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
+        "name": "a",
+        "type": {
+          "type": "bytes",
+          "scale": 2,
+          "precision": 15,
+          "logicalType": "decimal"
+        }
+      }
     ]
   }
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"row":{"a": [7, 2]}}}
-{"before": null, "after": {"row":{"a": [186]}}}
+$ kafka-ingest format=avro topic=data schema=${schema}
+{"a": [7, 2]}
+{"a": [186]}
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"before": null, "after": null}
-
-> CREATE SOURCE data
+> CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW data_view as SELECT * from data
-
-> SELECT * FROM data_view
+> SELECT * FROM data
 17.94
 -0.7

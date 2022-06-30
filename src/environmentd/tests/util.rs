@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
@@ -22,6 +23,7 @@ use postgres::types::{FromSql, Type};
 use postgres::{NoTls, Socket};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
 use tower_http::cors::AllowOrigin;
 
 use mz_dataflow_types::client::controller::ControllerConfig;
@@ -167,6 +169,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         data_dir: data_directory.clone(),
         command_wrapper: vec![],
     }))?;
+    let persist_clients = PersistClientCache::new(&metrics_registry);
+    let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
@@ -180,6 +184,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 blob_uri: format!("file://{}/persist/blob", data_directory.display()),
                 consensus_uri,
             },
+            persist_clients,
             storage_stash_url: storage_postgres_stash,
         },
         secrets_controller: SecretsControllerConfig::LocalFileSystem(

@@ -7,12 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::str::FromStr;
+
 use anyhow::{bail, Context};
+use tokio::task::JoinHandle;
 use tokio_postgres::config::Host;
-use tokio_postgres::{Client, Config, NoTls};
+use tokio_postgres::{Client, Config};
 use url::Url;
 
 use mz_ore::task;
+use mz_postgres_util::make_tls;
 
 /// Constructs a URL from PostgreSQL configuration parameters.
 ///
@@ -45,13 +49,16 @@ pub fn config_url(config: &Config) -> Result<Url, anyhow::Error> {
     Ok(url)
 }
 
-pub async fn postgres_client(url: &String) -> Result<Client, anyhow::Error> {
-    let (client, connection) = tokio_postgres::connect(url, NoTls)
+pub async fn postgres_client(
+    url: &str,
+) -> Result<(Client, JoinHandle<Result<(), tokio_postgres::Error>>), anyhow::Error> {
+    let tls = make_tls(&Config::from_str(url)?)?;
+    let (client, connection) = tokio_postgres::connect(url, tls)
         .await
         .context("connecting to postgres")?;
 
     println!("Connecting to PostgreSQL server at {}...", url);
-    task::spawn(|| "postgres_client_task", connection);
+    let handle = task::spawn(|| "postgres_client_task", connection);
 
-    Ok(client)
+    Ok((client, handle))
 }

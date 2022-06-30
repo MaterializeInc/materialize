@@ -12,12 +12,12 @@
 use proptest::prelude::Strategy;
 use url::Url;
 
-use crate::proto::{RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.url.rs"));
 
 impl RustType<ProtoUrl> for Url {
-    fn into_proto(self: &Self) -> ProtoUrl {
+    fn into_proto(&self) -> ProtoUrl {
         ProtoUrl {
             url: self.to_string(),
         }
@@ -42,7 +42,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]

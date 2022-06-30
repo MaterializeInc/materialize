@@ -13,6 +13,7 @@ mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
+tracing = "0.1.34"
 
 [dev-dependencies]
 anyhow = "1.0.58"

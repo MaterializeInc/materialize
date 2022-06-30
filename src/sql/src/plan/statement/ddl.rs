@@ -14,6 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -21,11 +22,14 @@ use aws_arn::ARN;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_kafka_util::KafkaAddrs;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::connections::{Connection, KafkaConnection};
+use mz_dataflow_types::connections::{
+    Connection, KafkaConnection, SaslConfig, Security, SslConfig, StringOrSecret,
+};
 use mz_dataflow_types::sinks::{
     KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
     PersistSinkConnectionBuilder, SinkConnectionBuilder, SinkEnvelope,
@@ -36,19 +40,19 @@ use mz_dataflow_types::sources::encoding::{
 };
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnection,
-    IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
+    DebeziumSourceProjection, DebeziumTransactionMetadata, IncludedColumnPos,
+    KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
     PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceEnvelope, Timeline,
-    UnplannedSourceEnvelope, UpsertStyle,
+    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
+    Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
-use mz_repr::proto::RustType;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 
@@ -57,20 +61,20 @@ use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
     AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
-    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
-    CreateViewsSourceTarget, CreateViewsStatement, CsrConnection, CsrConnectionAvro,
-    CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
-    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateRecordedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
+    CsrConnection, CsrConnectionAvro, CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
+    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConsistency,
-    KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
-    SourceIncludeMetadataType, Statement, SubscriptPosition, TableConstraint, TableFactor,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition,
-    WithOptionValue,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
+    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
+    QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select,
+    SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, Statement,
+    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedObjectName, Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -83,16 +87,16 @@ use crate::normalize::{self, SqlValueOrSecret};
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::with_options::{OptionalInterval, TryFromValue};
+use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
     CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, ReplicaConfig, Secret, Sink, Source, Table,
-    Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, ReplicaConfig, Secret, Sink,
+    Source, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -309,6 +313,7 @@ pub fn plan_create_source(
         format,
         key_constraint,
         include_metadata,
+        remote,
     } = &stmt;
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
@@ -341,17 +346,35 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
+            let mut options = kafka_util::extract_config(&mut with_options)?;
             let kafka_connection = match &kafka.connection {
-                mz_sql_parser::ast::KafkaConnection::Inline { broker } => KafkaConnection {
-                    broker: broker.parse()?,
-                    options: kafka_util::extract_config(scx.catalog, &mut with_options)?,
-                },
+                mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
+                    options.insert(
+                        "bootstrap.servers".into(),
+                        KafkaAddrs::from_str(broker)?.to_string().into(),
+                    );
+                    KafkaConnection::try_from(&mut options)?
+                }
                 mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
                     let item = scx.get_item_by_resolved_name(&connection)?;
-                    match item.connection()? {
+                    let connection = match item.connection()? {
                         Connection::Kafka(connection) => connection.clone(),
                         _ => bail!("{} is not a kafka connection", item.name()),
+                    };
+
+                    // TODO: Once we remove use of `String`-keyed options, we
+                    // can remove this check because permitted values here will
+                    // simply be a disjoint set of what `CONNECTION`s support.
+                    for k in BTreeMap::<String, StringOrSecret>::from(connection.clone()).keys() {
+                        if options.contains_key(k) {
+                            bail!(
+                                "cannot set option {} for SOURCE using CONNECTION {}",
+                                k,
+                                scx.catalog.resolve_full_name(item.name())
+                            );
+                        }
                     }
+                    connection
                 }
             };
 
@@ -362,10 +385,11 @@ pub fn plan_create_source(
             };
 
             let parse_offset = |s: &str| match s.parse::<i64>() {
-                // we parse an i64 here, because we don't yet support u64's in sql,
-                // but put it into an internal MzOffset that holds a u64
-                // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
-                // is resolved.
+                // we parse an i64 here, because we don't yet support u64's in
+                // sql, but put it into an internal MzOffset that holds a u64
+                // TODO: make this an native u64 when
+                // https://github.com/MaterializeInc/materialize/issues/7629 is
+                // resolved.
                 Ok(n) if n >= 0 => Ok(MzOffset {
                     offset: n.try_into().unwrap(),
                 }),
@@ -397,6 +421,7 @@ pub fn plan_create_source(
 
             let mut connection = KafkaSourceConnection {
                 connection: kafka_connection,
+                options,
                 topic: kafka.topic.clone(),
                 start_offsets,
                 group_id_prefix,
@@ -465,7 +490,7 @@ pub fn plan_create_source(
                 }
             }
 
-            let connection = ExternalSourceConnection::Kafka(connection);
+            let connection = SourceConnection::Kafka(connection);
 
             (connection, encoding)
         }
@@ -489,7 +514,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
-                ExternalSourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
+                SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
             (connection, encoding)
         }
         CreateSourceConnection::S3 {
@@ -519,7 +544,7 @@ pub fn plan_create_source(
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
-            let connection = ExternalSourceConnection::S3(S3SourceConnection {
+            let connection = SourceConnection::S3(S3SourceConnection {
                 key_sources: converted_sources,
                 pattern: pattern
                     .as_ref()
@@ -547,7 +572,7 @@ pub fn plan_create_source(
                 .as_ref()
                 .ok_or_else(|| anyhow!("internal error: Postgres source missing details"))?;
             let details = ProtoPostgresSourceDetails::decode(&*hex::decode(details)?)?;
-            let connection = ExternalSourceConnection::Postgres(PostgresSourceConnection {
+            let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 conn: conn.clone(),
                 publication: publication.clone(),
                 details: PostgresSourceDetails::from_proto(details)?,
@@ -565,7 +590,7 @@ pub fn plan_create_source(
                 CreateSourceFormat::None | CreateSourceFormat::Bare(Format::Text) => (),
                 _ => bail!("CREATE SOURCE ... PUBNUB must specify FORMAT TEXT"),
             }
-            let connection = ExternalSourceConnection::PubNub(PubNubSourceConnection {
+            let connection = SourceConnection::PubNub(PubNubSourceConnection {
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
@@ -591,10 +616,6 @@ pub fn plan_create_source(
         // TODO: fixup key envelope
         mz_sql_parser::ast::Envelope::None => {
             UnplannedSourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
-        }
-        mz_sql_parser::ast::Envelope::DifferentialRow => {
-            assert!(key_envelope.is_none());
-            UnplannedSourceEnvelope::DifferentialRow
         }
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
@@ -870,6 +891,13 @@ pub fn plan_create_source(
         }
     }
 
+    let remote = if let Some(remote) = &remote {
+        scx.require_unsafe_mode("CREATE SOURCE ... REMOTE ...")?;
+        Some(remote.clone())
+    } else {
+        None
+    };
+
     let if_not_exists = *if_not_exists;
     let materialized = *materialized;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
@@ -892,16 +920,14 @@ pub fn plan_create_source(
             _ => Timeline::EpochMilliseconds,
         }
     };
-
     let source = Source {
         create_sql,
-        connection: SourceConnection::External {
+        source_desc: SourceDesc {
             connection: external_connection,
             encoding,
             envelope,
             metadata_columns: metadata_column_types,
             ts_frequency,
-            timeline,
         },
         desc,
     };
@@ -913,6 +939,8 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         materialized,
+        timeline,
+        remote,
     }))
 }
 
@@ -936,6 +964,13 @@ fn typecheck_debezium_dedup(
     value_desc: &RelationDesc,
     tx_metadata: Option<DebeziumTransactionMetadata>,
 ) -> Result<DebeziumDedupProjection, anyhow::Error> {
+    let (op_idx, op_ty) = value_desc
+        .get_by_name(&"op".into())
+        .ok_or_else(|| anyhow!("'op' column missing from debezium input"))?;
+    if op_ty.scalar_type != ScalarType::String {
+        bail!("'op' column must be of type string");
+    };
+
     let (source_idx, source_ty) = value_desc
         .get_by_name(&"source".into())
         .ok_or_else(|| anyhow!("'source' column missing from debezium input"))?;
@@ -1025,39 +1060,22 @@ fn typecheck_debezium_dedup(
             change_lsn,
             event_serial_no,
         }
-    } else if let (sequence, Some(lsn)) = postgres {
+    } else if let (Some(sequence), Some(lsn)) = postgres {
         DebeziumSourceProjection::Postgres { sequence, lsn }
     } else {
         bail!("unknown type of upstream database")
     };
 
-    let (transaction_idx, transaction_ty) = value_desc
+    let (transaction_idx, _transaction_ty) = value_desc
         .get_by_name(&"transaction".into())
         .ok_or_else(|| anyhow!("'transaction' column missing from debezium input"))?;
 
-    let tx_fields = match &transaction_ty.scalar_type {
-        ScalarType::Record { fields, .. } => fields,
-        _ => bail!("'transaction' column must be of type record"),
-    };
-
-    let total_order = tx_fields
-        .iter()
-        .enumerate()
-        .find(|(_, f)| f.0.as_str() == "total_order");
-    let total_order_idx = match total_order {
-        Some((idx, (_, ty))) => match &ty.scalar_type {
-            ScalarType::Int64 => idx,
-            _ => bail!("'total_order' column must be an bigint"),
-        },
-        None => bail!("'total_order' field missing from tx record"),
-    };
-
     Ok(DebeziumDedupProjection {
+        op_idx,
         source_idx,
         snapshot_idx,
         source_projection,
         transaction_idx,
-        total_order_idx,
         tx_metadata,
     })
 }
@@ -1232,6 +1250,7 @@ fn get_encoding_inner(
                 } => {
                     let AvroSchemaOptionExtracted {
                         confluent_wire_format,
+                        ..
                     } = with_options.clone().try_into()?;
 
                     Schema {
@@ -1258,7 +1277,6 @@ fn get_encoding_inner(
                     let mut normalized_options = normalize::options(&ccsr_options)?;
                     let csr_connection = match connection {
                         CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                            scx.catalog,
                             url.parse()?,
                             &mut normalized_options,
                         )?,
@@ -1326,7 +1344,6 @@ fn get_encoding_inner(
                     let mut normalized_options = normalize::options(&ccsr_options)?;
                     let _ = match connection {
                         CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                            scx.catalog,
                             url.parse()?,
                             &mut normalized_options,
                         )?,
@@ -1492,12 +1509,8 @@ pub fn plan_view(
         name,
         columns,
         query,
-        with_options,
     } = def;
 
-    if !with_options.is_empty() {
-        bail_unsupported!("WITH options");
-    }
     let query::PlannedQuery {
         mut expr,
         mut desc,
@@ -1587,14 +1600,9 @@ pub fn plan_create_views(
         targets,
     }: CreateViewsStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let source_connection = scx
-        .get_item_by_resolved_name(&source_name)?
-        .source_connection()?;
-    match source_connection {
-        SourceConnection::External {
-            connection: ExternalSourceConnection::Postgres(PostgresSourceConnection { details, .. }),
-            ..
-        } => {
+    let source_desc = scx.get_item_by_resolved_name(&source_name)?.source_desc()?;
+    match &source_desc.connection {
+        SourceConnection::Postgres(PostgresSourceConnection { details, .. }) => {
             let targets = targets.unwrap_or_else(|| {
                 details
                     .tables
@@ -1722,7 +1730,6 @@ pub fn plan_create_views(
                         .iter()
                         .map(|c| Ident::new(c.name.clone()))
                         .collect(),
-                    with_options: vec![],
                     query,
                 };
                 views.push(plan_view(scx, &mut viewdef, &Params::empty(), temporary)?);
@@ -1733,13 +1740,81 @@ pub fn plan_create_views(
                 materialize: materialized,
             }))
         }
-        SourceConnection::External { connection, .. } => {
-            bail!("cannot generate views from {} sources", connection.name())
-        }
-        SourceConnection::Local { .. } => {
-            bail!("cannot generate views from local sources")
-        }
+        connection @ _ => bail!("cannot generate views from {} sources", connection.name()),
     }
+}
+
+pub fn describe_create_recorded_view(
+    _: &StatementContext,
+    _: CreateRecordedViewStatement<Aug>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_recorded_view(
+    scx: &StatementContext,
+    mut stmt: CreateRecordedViewStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    let compute_instance = match &stmt.in_cluster {
+        None => scx.resolve_compute_instance(None)?.id(),
+        Some(in_cluster) => in_cluster.0,
+    };
+    stmt.in_cluster = Some(ResolvedClusterName(compute_instance));
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateRecordedView(stmt.clone()))?;
+
+    let partial_name = normalize::unresolved_object_name(stmt.name)?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+
+    let query::PlannedQuery {
+        mut expr,
+        desc,
+        finishing,
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+
+    expr.bind_parameters(params)?;
+    expr.finish(finishing);
+    let expr = expr.optimize_and_lower(&scx.into())?;
+
+    let desc =
+        plan_utils::maybe_rename_columns(format!("recorded view {}", name), desc, &stmt.columns)?;
+    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+
+    if let Some(dup) = column_names.iter().duplicates().next() {
+        bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
+    let mut replace = None;
+    let mut if_not_exists = false;
+    match stmt.if_exists {
+        IfExistsBehavior::Replace => {
+            if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
+                if expr.depends_on().contains(&item.id()) {
+                    bail!(
+                        "cannot replace recorded view {0}: depended upon by new {0} definition",
+                        scx.catalog.resolve_full_name(item.name())
+                    );
+                }
+                let cascade = false;
+                replace = plan_drop_item(scx, ObjectType::RecordedView, item, cascade)?;
+            }
+        }
+        IfExistsBehavior::Skip => if_not_exists = true,
+        IfExistsBehavior::Error => (),
+    }
+
+    Ok(Plan::CreateRecordedView(CreateRecordedViewPlan {
+        name,
+        recorded_view: RecordedView {
+            create_sql,
+            expr,
+            column_names,
+            compute_instance,
+        },
+        replace,
+        if_not_exists,
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1772,7 +1847,12 @@ fn kafka_sink_builder(
         None => false,
         Some(_) => bail!("reuse_topic must be a boolean"),
     };
-    let config_options = kafka_util::extract_config(scx.catalog, with_options)?;
+    let mut config_options = kafka_util::extract_config(with_options)?;
+    config_options.insert(
+        "bootstrap.servers".into(),
+        // Normalize broker address
+        KafkaAddrs::from_str(&broker)?.to_string().into(),
+    );
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
         Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
@@ -1809,11 +1889,8 @@ fn kafka_sink_builder(
                 bail!("SEED option does not make sense with sinks");
             }
             let mut normalized_with_options = normalize::options(&with_options)?;
-            let csr_connection = kafka_util::generate_ccsr_connection(
-                scx.catalog,
-                url.parse()?,
-                &mut normalized_with_options,
-            )?;
+            let csr_connection =
+                kafka_util::generate_ccsr_connection(url.parse()?, &mut normalized_with_options)?;
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             let include_transaction =
@@ -1845,7 +1922,6 @@ fn kafka_sink_builder(
     };
 
     let consistency_config = get_kafka_sink_consistency_config(
-        scx,
         &topic_prefix,
         &format,
         reuse_topic,
@@ -1853,12 +1929,10 @@ fn kafka_sink_builder(
         consistency_topic,
     )?;
 
-    let broker_addrs = broker.parse()?;
-
     let transitive_source_dependencies: Vec<_> = if reuse_topic {
         for item in root_dependencies.iter() {
             if item.item_type() == CatalogItemType::Source {
-                if !item.source_connection()?.yields_stable_input() {
+                if !item.source_desc()?.yields_stable_input() {
                     bail!(
                     "reuse_topic requires that sink input dependencies are replayable, {} is not",
                     scx.catalog.resolve_full_name(item.name())
@@ -1931,10 +2005,8 @@ fn kafka_sink_builder(
     let consistency_format = consistency_config.map(|config| config.1);
 
     Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
-        connection: KafkaConnection {
-            broker: broker_addrs,
-            options: config_options,
-        },
+        connection: KafkaConnection::try_from(&mut config_options)?,
+        options: config_options,
         format,
         topic_prefix,
         consistency_topic_prefix: consistency_topic,
@@ -1960,7 +2032,6 @@ fn kafka_sink_builder(
 /// doing things, we support specifying just a topic name (via `consistency_topic`) for backwards
 /// compatibility.
 fn get_kafka_sink_consistency_config(
-    scx: &StatementContext,
     topic_prefix: &str,
     sink_format: &KafkaSinkFormat,
     reuse_topic: bool,
@@ -1984,7 +2055,6 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let csr_connection = kafka_util::generate_ccsr_connection(
-                    scx.catalog,
                     url.parse()?,
                     &mut normalize::options(&with_options)?,
                 )?;
@@ -2052,9 +2122,6 @@ fn get_kafka_sink_consistency_config(
 fn persist_sink_builder(
     format: Option<Format<Aug>>,
     envelope: SinkEnvelope,
-    blob_uri: String,
-    consensus_uri: String,
-    shard_id: String,
     value_desc: RelationDesc,
 ) -> Result<SinkConnectionBuilder, anyhow::Error> {
     if format.is_some() {
@@ -2066,12 +2133,7 @@ fn persist_sink_builder(
     }
 
     Ok(SinkConnectionBuilder::Persist(
-        PersistSinkConnectionBuilder {
-            consensus_uri,
-            blob_uri,
-            shard_id: shard_id.parse().map_err(anyhow::Error::msg)?,
-            value_desc,
-        },
+        PersistSinkConnectionBuilder { value_desc },
     ))
 }
 
@@ -2113,7 +2175,6 @@ pub fn plan_create_sink(
         None if matches!(connection, CreateSinkConnection::Persist { .. }) => {
             SinkEnvelope::DifferentialRow
         }
-        Some(Envelope::DifferentialRow) => unreachable!("not expressable in SQL"),
         // Other sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
         None => SinkEnvelope::Debezium,
         Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain { tx_metadata })) => {
@@ -2233,18 +2294,7 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        CreateSinkConnection::Persist {
-            consensus_uri,
-            blob_uri,
-            shard_id,
-        } => persist_sink_builder(
-            format,
-            envelope,
-            blob_uri,
-            consensus_uri,
-            shard_id,
-            desc.into_owned(),
-        )?,
+        CreateSinkConnection::Persist => persist_sink_builder(format, envelope, desc.into_owned())?,
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
@@ -2362,6 +2412,7 @@ pub fn plan_create_index(
     let on = scx.get_item_by_resolved_name(&on_name)?;
 
     if CatalogItemType::View != on.item_type()
+        && CatalogItemType::RecordedView != on.item_type()
         && CatalogItemType::Source != on.item_type()
         && CatalogItemType::Table != on.item_type()
     {
@@ -2747,6 +2798,7 @@ fn plan_replica_config(
         availability_zone,
         size,
         remote,
+        ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
     if remote.is_some() {
@@ -2849,6 +2901,125 @@ pub fn describe_create_connection(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(
+    KafkaConnectionOption,
+    (Broker, String),
+    (Brokers, Vec<String>),
+    (SslKey, with_options::Secret),
+    (SslKeyPassword, with_options::Secret),
+    (SslCertificate, StringOrSecret),
+    (SslCertificateAuthority, StringOrSecret),
+    (SaslMechanisms, String),
+    (SaslUsername, StringOrSecret),
+    (SaslPassword, with_options::Secret)
+);
+
+impl KafkaConnectionOptionExtracted {
+    pub fn get_brokers(&self) -> Result<Vec<String>, anyhow::Error> {
+        let mut brokers = match (&self.broker, &self.brokers) {
+            (Some(_), Some(_)) => bail!("invalid CONNECTION: cannot set BROKER and BROKERS"),
+            (None, None) => bail!("invalid CONNECTION: must set either BROKER or BROKERS"),
+            (Some(v), None) => vec![v.to_string()],
+            (None, Some(v)) => v.to_vec(),
+        };
+
+        for broker in &mut brokers {
+            // Normalize Kafka addresses
+            *broker = KafkaAddrs::from_str(broker)?.to_string();
+        }
+
+        Ok(brokers)
+    }
+    pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
+        use KafkaConnectionOptionName::*;
+        HashSet::from([
+            SslKey,
+            SslKeyPassword,
+            SslCertificate,
+            SslCertificateAuthority,
+        ])
+    }
+    pub fn sasl_config(&self) -> HashSet<KafkaConnectionOptionName> {
+        use KafkaConnectionOptionName::*;
+        HashSet::from([
+            SaslMechanisms,
+            SaslUsername,
+            SaslPassword,
+            SslCertificateAuthority,
+        ])
+    }
+}
+
+impl From<&KafkaConnectionOptionExtracted> for Option<SslConfig> {
+    fn from(k: &KafkaConnectionOptionExtracted) -> Self {
+        if k.ssl_config().iter().all(|config| k.seen.contains(config)) {
+            Some(SslConfig {
+                key: k.ssl_key.unwrap().into(),
+                key_password: k.ssl_key_password.unwrap().into(),
+                certificate: k.ssl_certificate.clone().unwrap(),
+                certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl From<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
+    fn from(k: &KafkaConnectionOptionExtracted) -> Self {
+        if k.sasl_config().iter().all(|config| k.seen.contains(config)) {
+            Some(SaslConfig {
+                mechanisms: k.sasl_mechanisms.clone().unwrap(),
+                username: k.sasl_username.clone().unwrap(),
+                password: k.sasl_password.unwrap().into(),
+                certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl TryFrom<&KafkaConnectionOptionExtracted> for Option<Security> {
+    type Error = anyhow::Error;
+    fn try_from(value: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        let ssl_config = Option::<SslConfig>::from(value).map(Security::from);
+        let sasl_config = Option::<SaslConfig>::from(value).map(Security::from);
+
+        let mut security_iter = vec![ssl_config, sasl_config].into_iter();
+        let res = match security_iter.find(|v| v.is_some()) {
+            Some(config) => {
+                if security_iter.find(|v| v.is_some()).is_some() {
+                    bail!("invalid CONNECTION: cannot specify multiple security protocols");
+                }
+                config
+            }
+            None => None,
+        };
+
+        if res.is_none()
+            && [value.sasl_config(), value.ssl_config()]
+                .iter()
+                .flatten()
+                .any(|c| value.seen.contains(c))
+        {
+            bail!("invalid CONNECTION: under-specified security configuration");
+        }
+
+        Ok(res)
+    }
+}
+
+impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
+    type Error = anyhow::Error;
+    fn try_from(value: KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(KafkaConnection {
+            brokers: value.get_brokers()?,
+            security: (&value).try_into()?,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -2862,19 +3033,12 @@ pub fn plan_create_connection(
         if_not_exists,
     } = stmt;
     let connection = match connection {
-        CreateConnection::Kafka {
-            broker,
-            with_options,
-        } => {
-            let mut with_options = normalize::options(&with_options)?;
-            Connection::Kafka(KafkaConnection {
-                broker: broker.parse()?,
-                options: kafka_util::extract_config(scx.catalog, &mut with_options)?,
-            })
+        CreateConnection::Kafka { with_options } => {
+            let k = KafkaConnectionOptionExtracted::try_from(with_options)?;
+            Connection::Kafka(KafkaConnection::try_from(k)?)
         }
         CreateConnection::Csr { url, with_options } => {
             let connection = kafka_util::generate_ccsr_connection(
-                scx.catalog,
                 url.parse()?,
                 &mut normalize::options(&with_options)?,
             )?;
@@ -2965,6 +3129,7 @@ pub fn plan_drop_objects(
         ObjectType::Source
         | ObjectType::Table
         | ObjectType::View
+        | ObjectType::RecordedView
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type
@@ -3095,8 +3260,8 @@ pub fn plan_drop_cluster(
         };
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
-                if !(instance.indexes().is_empty() || instance.replica_names().is_empty())
-                    && !cascade
+                if !cascade
+                    && (!instance.indexes().is_empty() || !instance.replica_names().is_empty())
                 {
                     bail!("cannot drop cluster with active indexes, sinks, or replicas");
                 }
@@ -3205,6 +3370,7 @@ pub fn plan_drop_item(
                     | CatalogItemType::Table
                     | CatalogItemType::Source
                     | CatalogItemType::View
+                    | CatalogItemType::RecordedView
                     | CatalogItemType::Sink
                     | CatalogItemType::Type
                     | CatalogItemType::Secret
@@ -3237,6 +3403,7 @@ fn plan_index_options(
 ) -> Result<Vec<crate::plan::IndexOption>, anyhow::Error> {
     let IndexOptionExtracted {
         logical_compaction_window,
+        ..
     }: IndexOptionExtracted = with_opts.try_into()?;
 
     let mut out = Vec::with_capacity(1);

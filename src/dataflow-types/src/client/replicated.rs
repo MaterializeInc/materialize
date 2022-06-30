@@ -24,6 +24,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use chrono::Utc;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -32,7 +33,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
 
-use super::ReplicaId;
+use super::{ActiveReplicationResponse, ReplicaId};
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
 use super::{Peek, PeekResponse};
@@ -120,7 +121,7 @@ pub struct ActiveReplication<T> {
     ///
     /// This is introduced to produce peek cancelation responses eagerly, without awaiting a replica
     /// responding with the response itself, which allows us to compact away the peek in `self.history`.
-    pending_response: VecDeque<ComputeResponse<T>>,
+    pending_response: VecDeque<ActiveReplicationResponse<T>>,
 }
 
 impl<T> Default for ActiveReplication<T> {
@@ -198,7 +199,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ActiveReplication<T>
+impl<T> GenericClient<ComputeCommand<T>, ActiveReplicationResponse<T>> for ActiveReplication<T>
 where
     T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
 {
@@ -234,7 +235,11 @@ where
                             tracing::warn!("did not find pending peek for {}", uuid);
                             OpenTelemetryContext::empty()
                         });
-                    ComputeResponse::PeekResponse(*uuid, PeekResponse::Canceled, otel_ctx)
+                    ActiveReplicationResponse::ComputeResponse(ComputeResponse::PeekResponse(
+                        *uuid,
+                        PeekResponse::Canceled,
+                        otel_ctx,
+                    ))
                 }));
             }
             _ => {}
@@ -290,7 +295,7 @@ where
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<ActiveReplicationResponse<T>>, anyhow::Error> {
         // If we have a pending response, we should send it immediately.
         if let Some(response) = self.pending_response.pop_front() {
             return Ok(Some(response));
@@ -314,6 +319,11 @@ where
 
                 use futures::StreamExt;
                 while let Some((replica_id, message)) = stream.next().await {
+                    self.pending_response
+                        .push_front(ActiveReplicationResponse::ReplicaHeartbeat(
+                            replica_id,
+                            Utc::now(),
+                        ));
                     match message {
                         Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)) => {
                             // If this is the first response, forward it; otherwise do not.
@@ -327,8 +337,8 @@ where
                             // Additionally, we just use the `otel_ctx` from the first worker to
                             // respond.
                             if self.peeks.remove(&uuid).is_some() {
-                                return Ok(Some(ComputeResponse::PeekResponse(
-                                    uuid, response, otel_ctx,
+                                return Ok(Some(ActiveReplicationResponse::ComputeResponse(
+                                    ComputeResponse::PeekResponse(uuid, response, otel_ctx),
                                 )));
                             }
                         }
@@ -354,7 +364,9 @@ where
                                 }
                             }
                             if !list.is_empty() {
-                                return Ok(Some(ComputeResponse::FrontierUppers(list)));
+                                return Ok(Some(ActiveReplicationResponse::ComputeResponse(
+                                    ComputeResponse::FrontierUppers(list),
+                                )));
                             }
                         }
                         Ok(ComputeResponse::TailResponse(id, response)) => {
@@ -386,14 +398,18 @@ where
                                         updates.retain(|(time, _data, _diff)| {
                                             new_lower.less_equal(time)
                                         });
-                                        return Ok(Some(ComputeResponse::TailResponse(
-                                            id,
-                                            TailResponse::Batch(TailBatch {
-                                                lower: new_lower,
-                                                upper: new_upper,
-                                                updates,
-                                            }),
-                                        )));
+                                        return Ok(Some(
+                                            ActiveReplicationResponse::ComputeResponse(
+                                                ComputeResponse::TailResponse(
+                                                    id,
+                                                    TailResponse::Batch(TailBatch {
+                                                        lower: new_lower,
+                                                        upper: new_upper,
+                                                        updates,
+                                                    }),
+                                                ),
+                                            ),
+                                        ));
                                     }
                                 }
                                 TailResponse::DroppedAt(frontier) => {
@@ -402,9 +418,11 @@ where
                                     // to observed responses; if we pre-load the entries in response to commands we can
                                     // clean up the state here.
                                     self.tails.insert(id, Antichain::new());
-                                    return Ok(Some(ComputeResponse::TailResponse(
-                                        id,
-                                        TailResponse::DroppedAt(frontier),
+                                    return Ok(Some(ActiveReplicationResponse::ComputeResponse(
+                                        ComputeResponse::TailResponse(
+                                            id,
+                                            TailResponse::DroppedAt(frontier),
+                                        ),
                                     )));
                                 }
                             }

@@ -795,8 +795,13 @@ If the query returns anything but a single row with a single column containing a
 `boolean` value, testdrive will mark the script as failed and proceed with
 execution of the next script.
 
-This action can be useful to conditionally test things in different versions of
-Materialize, and more!
+This action can be useful to conditionally test if a script is running against
+a version of Materialize that is able to execute the SQL constructs contained therein.
+
+```
+$ skip-if
+SELECT mz_version_num() < 2601;
+```
 
 [confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
 [aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md

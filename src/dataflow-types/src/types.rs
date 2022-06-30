@@ -13,10 +13,11 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::convert::TryFrom;
 use std::num::NonZeroUsize;
 
+use futures::executor::block_on;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Just, Strategy};
@@ -25,16 +26,17 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_repr::proto::any_uuid;
-use mz_repr::proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_proto::any_uuid;
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
 use crate::types::sinks::SinkDesc;
-use crate::types::sources::SourceDesc;
 use crate::Plan;
 
 use proto_dataflow_description::*;
+
+use self::connections::{KafkaConnection, StringOrSecret};
 
 pub mod connections;
 pub mod sinks;
@@ -286,60 +288,36 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 /// This includes a description of the source, but additionally any
 /// context-dependent options like the ability to apply filtering and
 /// projection to the records as they emerge.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceDesc<M> {
-    /// A description of the source to construct.
-    //TODO(petrosagg): COMPUTE doesn't need the full description of the source, only the metadata to
-    // read a storage collection. Remove this field
-    pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
     pub arguments: SourceInstanceArguments,
-    /// Additional metadata used by storage instances to render this source instance and by the
-    /// storage client of a compute instance to read it.
+    /// Additional metadata used by the storage client of a compute instance to read it.
     pub storage_metadata: M,
-}
-
-impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<SourceDesc>(),
-            any::<SourceInstanceArguments>(),
-            any::<CollectionMetadata>(),
-        )
-            .prop_map(
-                |(description, arguments, storage_metadata)| SourceInstanceDesc {
-                    description,
-                    arguments,
-                    storage_metadata,
-                },
-            )
-            .boxed()
-    }
+    /// The relation type of this source
+    pub typ: RelationType,
 }
 
 impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {
     fn into_proto(&self) -> ProtoSourceInstanceDesc {
         ProtoSourceInstanceDesc {
-            description: Some(self.description.into_proto()),
             arguments: Some(self.arguments.into_proto()),
             storage_metadata: Some(self.storage_metadata.into_proto()),
+            typ: Some(self.typ.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoSourceInstanceDesc) -> Result<Self, TryFromProtoError> {
         Ok(SourceInstanceDesc {
-            description: proto
-                .description
-                .into_rust_if_some("ProtoSourceInstanceDesc::description")?,
             arguments: proto
                 .arguments
                 .into_rust_if_some("ProtoSourceInstanceDesc::arguments")?,
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoSourceInstanceDesc::storage_metadata")?,
+            typ: proto
+                .typ
+                .into_rust_if_some("ProtoSourceInstanceDesc::typ")?,
         })
     }
 }
@@ -371,8 +349,8 @@ pub type SourceInstanceId = (uuid::Uuid, mz_repr::GlobalId);
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
-    /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<S>>,
+    /// Sources instantiations made available to the dataflow pair with monotonicity information.
+    pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -384,7 +362,7 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
-    pub sink_exports: BTreeMap<GlobalId, crate::types::sinks::SinkDesc<T>>,
+    pub sink_exports: BTreeMap<GlobalId, crate::types::sinks::SinkDesc<S, T>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
@@ -397,11 +375,11 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub id: uuid::Uuid,
 }
 
-fn any_source_import() -> impl Strategy<Value = (GlobalId, SourceInstanceDesc<CollectionMetadata>)>
-{
+fn any_source_import(
+) -> impl Strategy<Value = (GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool))> {
     (
         any::<GlobalId>(),
-        any::<SourceInstanceDesc<CollectionMetadata>>(),
+        any::<(SourceInstanceDesc<CollectionMetadata>, bool)>(),
     )
 }
 
@@ -421,7 +399,10 @@ proptest::prop_compose! {
         index_imports in proptest::collection::vec(any_dataflow_index(), 1..3),
         objects_to_build in proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
         index_exports in proptest::collection::vec(any_dataflow_index(), 1..3),
-        sink_descs in proptest::collection::vec(any::<(GlobalId, SinkDesc<mz_repr::Timestamp>)>(), 1..3),
+        sink_descs in proptest::collection::vec(
+            any::<(GlobalId, SinkDesc<CollectionMetadata, mz_repr::Timestamp>)>(),
+            1..3,
+        ),
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<u64>(), 1..5),
         debug_name in ".*",
@@ -480,16 +461,19 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(&mut self, id: GlobalId, description: SourceDesc) {
+    pub fn import_source(&mut self, id: GlobalId, typ: RelationType, monotonic: bool) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
         self.source_imports.insert(
             id,
-            SourceInstanceDesc {
-                description,
-                storage_metadata: (),
-                arguments: SourceInstanceArguments { operators: None },
-            },
+            (
+                SourceInstanceDesc {
+                    storage_metadata: (),
+                    arguments: SourceInstanceArguments { operators: None },
+                    typ,
+                },
+                monotonic,
+            ),
         );
     }
 
@@ -519,7 +503,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 
     /// Exports as `id` a sink described by `description`.
-    pub fn export_sink(&mut self, id: GlobalId, description: SinkDesc<T>) {
+    pub fn export_sink(&mut self, id: GlobalId, description: SinkDesc<(), T>) {
         self.sink_exports.insert(id, description);
     }
 
@@ -558,9 +542,9 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, source) in self.source_imports.iter() {
+        for (source_id, (source, _monotonic)) in self.source_imports.iter() {
             if source_id == id {
-                return source.description.desc.arity();
+                return source.typ.arity();
             }
         }
         for (desc, typ) in self.index_imports.values() {
@@ -712,21 +696,30 @@ impl RustType<ProtoDataflowDescription>
     }
 }
 
-impl ProtoMapEntry<GlobalId, SourceInstanceDesc<CollectionMetadata>> for ProtoSourceImport {
-    fn from_rust<'a>(entry: (&'a GlobalId, &'a SourceInstanceDesc<CollectionMetadata>)) -> Self {
+impl ProtoMapEntry<GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)> for ProtoSourceImport {
+    fn from_rust<'a>(
+        entry: (
+            &'a GlobalId,
+            &'a (SourceInstanceDesc<CollectionMetadata>, bool),
+        ),
+    ) -> Self {
         ProtoSourceImport {
             id: Some(entry.0.into_proto()),
-            source_instance_desc: Some(entry.1.into_proto()),
+            source_instance_desc: Some(entry.1 .0.into_proto()),
+            monotonic: entry.1 .1.into_proto(),
         }
     }
 
     fn into_rust(
         self,
-    ) -> Result<(GlobalId, SourceInstanceDesc<CollectionMetadata>), TryFromProtoError> {
+    ) -> Result<(GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoSourceImport::id")?,
-            self.source_instance_desc
-                .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
+            (
+                self.source_instance_desc
+                    .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
+                self.monotonic.into_rust()?,
+            ),
         ))
     }
 }
@@ -754,15 +747,15 @@ impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndex {
     }
 }
 
-impl ProtoMapEntry<GlobalId, SinkDesc> for ProtoSinkExport {
-    fn from_rust<'a>((id, sink_desc): (&'a GlobalId, &'a SinkDesc)) -> Self {
+impl ProtoMapEntry<GlobalId, SinkDesc<CollectionMetadata>> for ProtoSinkExport {
+    fn from_rust<'a>((id, sink_desc): (&'a GlobalId, &'a SinkDesc<CollectionMetadata>)) -> Self {
         ProtoSinkExport {
             id: Some(id.into_proto()),
             sink_desc: Some(sink_desc.into_proto()),
         }
     }
 
-    fn into_rust(self) -> Result<(GlobalId, SinkDesc), TryFromProtoError> {
+    fn into_rust(self) -> Result<(GlobalId, SinkDesc<CollectionMetadata>), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoSinkExport::id")?,
             self.sink_desc
@@ -845,10 +838,60 @@ impl LinearOperator {
     }
 }
 
+/// Propagates appropriate configuration options from `kafka_connection` and
+/// `options` into `config`, ignoring any options identified in
+/// `drop_option_keys`.
+///
+/// Note that this:
+/// - Performs blocking reads when extracting SECRETS.
+/// - Does not ensure that the keys from the Kafka connection and
+///   additional options are disjoint.
+pub fn populate_client_config(
+    kafka_connection: KafkaConnection,
+    options: &BTreeMap<String, StringOrSecret>,
+    drop_option_keys: HashSet<&'static str>,
+    config: &mut rdkafka::ClientConfig,
+    secrets_reader: &mz_secrets::SecretsReader,
+) {
+    let config_options: BTreeMap<String, StringOrSecret> = kafka_connection.into();
+    for (k, v) in options.iter().chain(config_options.iter()) {
+        if !drop_option_keys.contains(k.as_str()) {
+            config.set(
+                k,
+                block_on(v.get_string(&secrets_reader))
+                    .expect("reading kafka secret unexpectedly failed"),
+            );
+        }
+    }
+}
+
+/// Provides cleaner access to the `populate_client_config` implementation for
+/// structs.
+pub trait PopulateClientConfig {
+    fn kafka_connection(&self) -> &KafkaConnection;
+    fn options(&self) -> &BTreeMap<String, StringOrSecret>;
+    fn drop_option_keys() -> HashSet<&'static str> {
+        HashSet::new()
+    }
+    fn populate_client_config(
+        &self,
+        config: &mut rdkafka::ClientConfig,
+        secrets_reader: &mz_secrets::SecretsReader,
+    ) {
+        populate_client_config(
+            self.kafka_connection().clone(),
+            self.options(),
+            Self::drop_option_keys(),
+            config,
+            secrets_reader,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

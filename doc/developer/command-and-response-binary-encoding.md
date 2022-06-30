@@ -270,7 +270,7 @@ use proptest_derive::Arbitrary;
 
 use mz_repr::adt::char::CharLength;
 use mz_repr::chrono::any_naive_date;
-use mz_repr::proto::*;
+use mz_proto::*;
 
 // `$T` is a struct
 #[derive(Arbitrary, Debug, PartialEq, Eq)]
@@ -330,7 +330,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     // snip
 

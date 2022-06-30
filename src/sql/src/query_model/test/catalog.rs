@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::connections::Connection;
-use mz_dataflow_types::sources::SourceConnection;
+use mz_dataflow_types::sources::SourceDesc;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
@@ -103,7 +103,7 @@ impl CatalogItem for TestCatalogItem {
         }
     }
 
-    fn source_connection(&self) -> Result<&SourceConnection, CatalogError> {
+    fn source_desc(&self) -> Result<&SourceDesc, CatalogError> {
         unimplemented!()
     }
 

@@ -123,6 +123,7 @@ pub fn describe(
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
         Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
         Statement::CreateViews(stmt) => ddl::describe_create_views(&scx, stmt)?,
+        Statement::CreateRecordedView(stmt) => ddl::describe_create_recorded_view(&scx, stmt)?,
         Statement::DropClusterReplicas(stmt) => ddl::describe_drop_cluster_replica(&scx, stmt)?,
         Statement::DropClusters(stmt) => ddl::describe_drop_cluster(&scx, stmt)?,
         Statement::DropDatabase(stmt) => ddl::describe_drop_database(&scx, stmt)?,
@@ -138,6 +139,9 @@ pub fn describe(
         Statement::ShowCreateSource(stmt) => show::describe_show_create_source(&scx, stmt)?,
         Statement::ShowCreateTable(stmt) => show::describe_show_create_table(&scx, stmt)?,
         Statement::ShowCreateView(stmt) => show::describe_show_create_view(&scx, stmt)?,
+        Statement::ShowCreateRecordedView(stmt) => {
+            show::describe_show_create_recorded_view(&scx, stmt)?
+        }
         Statement::ShowDatabases(stmt) => show::show_databases(&scx, stmt)?.describe()?,
         Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
         Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
@@ -226,6 +230,7 @@ pub fn plan(
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
         Statement::CreateViews(stmt) => ddl::plan_create_views(scx, stmt),
+        Statement::CreateRecordedView(stmt) => ddl::plan_create_recorded_view(scx, stmt, params),
         Statement::DropClusterReplicas(stmt) => ddl::plan_drop_cluster_replica(scx, stmt),
         Statement::DropClusters(stmt) => ddl::plan_drop_cluster(scx, stmt),
         Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
@@ -250,6 +255,7 @@ pub fn plan(
         Statement::ShowCreateSource(stmt) => show::plan_show_create_source(scx, stmt),
         Statement::ShowCreateTable(stmt) => show::plan_show_create_table(scx, stmt),
         Statement::ShowCreateView(stmt) => show::plan_show_create_view(scx, stmt),
+        Statement::ShowCreateRecordedView(stmt) => show::plan_show_create_recorded_view(scx, stmt),
         Statement::ShowDatabases(stmt) => show::show_databases(scx, stmt)?.plan(),
         Statement::ShowIndexes(stmt) => show::show_indexes(scx, stmt)?.plan(),
         Statement::ShowObjects(stmt) => show::show_objects(scx, stmt)?.plan(),
@@ -301,6 +307,7 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::Table, ObjectType::Table)
             | (CatalogItemType::Sink, ObjectType::Sink)
             | (CatalogItemType::View, ObjectType::View)
+            | (CatalogItemType::RecordedView, ObjectType::RecordedView)
             | (CatalogItemType::Index, ObjectType::Index)
             | (CatalogItemType::Type, ObjectType::Type)
             | (CatalogItemType::Secret, ObjectType::Secret)

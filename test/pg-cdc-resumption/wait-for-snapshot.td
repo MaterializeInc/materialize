@@ -13,5 +13,5 @@
 # during the replication and not during the initial snapshot
 #
 
-> SELECT COUNT(*) FROM t0;
-0
+> SELECT COUNT(*) FROM t1;
+1000000

@@ -23,9 +23,9 @@ use std::fmt;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata,
-    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SelectItem,
+    SourceIncludeMetadata, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -44,6 +44,7 @@ pub enum Statement<T: AstInfo> {
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateViews(CreateViewsStatement<T>),
+    CreateRecordedView(CreateRecordedViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement<T>),
@@ -69,6 +70,7 @@ pub enum Statement<T: AstInfo> {
     ShowIndexes(ShowIndexesStatement<T>),
     ShowColumns(ShowColumnsStatement<T>),
     ShowCreateView(ShowCreateViewStatement<T>),
+    ShowCreateRecordedView(ShowCreateRecordedViewStatement<T>),
     ShowCreateSource(ShowCreateSourceStatement<T>),
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
@@ -105,6 +107,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateViews(stmt) => f.write_node(stmt),
+            Statement::CreateRecordedView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
@@ -130,6 +133,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ShowIndexes(stmt) => f.write_node(stmt),
             Statement::ShowColumns(stmt) => f.write_node(stmt),
             Statement::ShowCreateView(stmt) => f.write_node(stmt),
+            Statement::ShowCreateRecordedView(stmt) => f.write_node(stmt),
             Statement::ShowCreateSource(stmt) => f.write_node(stmt),
             Statement::ShowCreateTable(stmt) => f.write_node(stmt),
             Statement::ShowCreateSink(stmt) => f.write_node(stmt),
@@ -181,6 +185,8 @@ pub struct InsertStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     /// A SQL query that specifies what to insert.
     pub source: InsertSource<T>,
+    /// RETURNING
+    pub returning: Vec<SelectItem<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for InsertStatement<T> {
@@ -194,6 +200,10 @@ impl<T: AstInfo> AstDisplay for InsertStatement<T> {
         }
         f.write_str(" ");
         f.write_node(&self.source);
+        if !self.returning.is_empty() {
+            f.write_str(" RETURNING ");
+            f.write_node(&display::comma_separated(&self.returning));
+        }
     }
 }
 impl_display_t!(InsertStatement);
@@ -458,6 +468,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub materialized: bool,
     pub key_constraint: Option<KeyConstraint>,
+    pub remote: Option<String>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -505,6 +516,12 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
                 f.write_str(" ENVELOPE ");
                 f.write_node(envelope);
             }
+        }
+
+        if let Some(remote) = &self.remote {
+            f.write_str(" REMOTE '");
+            f.write_node(&display::escape_single_quote_string(remote));
+            f.write_str("'");
         }
     }
 }
@@ -572,19 +589,12 @@ pub struct ViewDefinition<T: AstInfo> {
     /// View name
     pub name: UnresolvedObjectName,
     pub columns: Vec<Ident>,
-    pub with_options: Vec<WithOption<T>>,
     pub query: Query<T>,
 }
 
 impl<T: AstInfo> AstDisplay for ViewDefinition<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
-
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
 
         if !self.columns.is_empty() {
             f.write_str(" (");
@@ -688,6 +698,49 @@ impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
     }
 }
 impl_display_t!(CreateViewsStatement);
+
+/// `CREATE RECORDED VIEW`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateRecordedViewStatement<T: AstInfo> {
+    pub if_exists: IfExistsBehavior,
+    pub name: UnresolvedObjectName,
+    pub columns: Vec<Ident>,
+    pub in_cluster: Option<T::ClusterName>,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateRecordedViewStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE");
+        if self.if_exists == IfExistsBehavior::Replace {
+            f.write_str(" OR REPLACE");
+        }
+
+        f.write_str(" RECORDED VIEW");
+
+        if self.if_exists == IfExistsBehavior::Skip {
+            f.write_str(" IF NOT EXISTS");
+        }
+
+        f.write_str(" ");
+        f.write_node(&self.name);
+
+        if !self.columns.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
+
+        f.write_str(" AS ");
+        f.write_node(&self.query);
+    }
+}
+impl_display_t!(CreateRecordedViewStatement);
 
 /// `CREATE TABLE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1481,6 +1534,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         f.write_str(match &self.object_type {
             ObjectType::Table => "TABLES",
             ObjectType::View => "VIEWS",
+            ObjectType::RecordedView => "RECORDED VIEWS",
             ObjectType::Source => "SOURCES",
             ObjectType::Sink => "SINKS",
             ObjectType::Type => "TYPES",
@@ -1579,6 +1633,20 @@ impl<T: AstInfo> AstDisplay for ShowCreateViewStatement<T> {
     }
 }
 impl_display_t!(ShowCreateViewStatement);
+
+/// `SHOW CREATE RECORDED VIEW <name>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateRecordedViewStatement<T: AstInfo> {
+    pub recorded_view_name: T::ObjectName,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateRecordedViewStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW CREATE RECORDED VIEW ");
+        f.write_node(&self.recorded_view_name);
+    }
+}
+impl_display_t!(ShowCreateRecordedViewStatement);
 
 /// `SHOW CREATE SOURCE <source>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1792,15 +1860,56 @@ impl<T: AstInfo> AstDisplay for TailRelation<T> {
 }
 impl_display_t!(TailRelation);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainStatement<T: AstInfo> {
+    New(ExplainStatementNew<T>),
+    Old(ExplainStatementOld<T>),
+}
+
+impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Old(old) => old.fmt(f),
+            Self::New(new) => new.fmt(f),
+        }
+    }
+}
+impl_display_t!(ExplainStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainStatementNew<T: AstInfo> {
+    pub stage: ExplainStageNew,
+    pub config_flags: Vec<Ident>,
+    pub format: ExplainFormat,
+    pub explainee: Explainee<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainStatementNew<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN ");
+        f.write_node(&self.stage);
+        if !self.config_flags.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.config_flags));
+            f.write_str(")");
+        }
+        f.write_str(" AS ");
+        f.write_node(&self.format);
+        f.write_str(" FOR ");
+        f.write_node(&self.explainee);
+    }
+}
+impl_display_t!(ExplainStatementNew);
+
 /// `EXPLAIN ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainStatement<T: AstInfo> {
-    pub stage: ExplainStage,
+pub struct ExplainStatementOld<T: AstInfo> {
+    pub stage: ExplainStageOld,
     pub explainee: Explainee<T>,
     pub options: ExplainOptions,
 }
 
-impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
+impl<T: AstInfo> AstDisplay for ExplainStatementOld<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ");
         if self.options.timing {
@@ -1816,7 +1925,7 @@ impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
         f.write_node(&self.explainee);
     }
 }
-impl_display_t!(ExplainStatement);
+impl_display_t!(ExplainStatementOld);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsertSource<T: AstInfo> {
@@ -1838,6 +1947,7 @@ impl_display_t!(InsertSource);
 pub enum ObjectType {
     Table,
     View,
+    RecordedView,
     Source,
     Sink,
     Index,
@@ -1855,6 +1965,7 @@ impl AstDisplay for ObjectType {
         f.write_str(match self {
             ObjectType::Table => "TABLE",
             ObjectType::View => "VIEW",
+            ObjectType::RecordedView => "RECORDED VIEW",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
             ObjectType::Index => "INDEX",
@@ -2031,7 +2142,7 @@ impl_display_t!(Assignment);
 
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ExplainStage {
+pub enum ExplainStageOld {
     /// The sql::HirRelationExpr after parsing
     RawPlan,
     /// Query Graph
@@ -2048,20 +2159,55 @@ pub enum ExplainStage {
     Timestamp,
 }
 
-impl AstDisplay for ExplainStage {
+impl AstDisplay for ExplainStageOld {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ExplainStage::RawPlan => f.write_str("RAW PLAN"),
-            ExplainStage::OptimizedQueryGraph => f.write_str("OPTIMIZED QUERY GRAPH"),
-            ExplainStage::QueryGraph => f.write_str("QUERY GRAPH"),
-            ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
-            ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
-            ExplainStage::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
-            ExplainStage::Timestamp => f.write_str("TIMESTAMP"),
+            ExplainStageOld::RawPlan => f.write_str("RAW PLAN"),
+            ExplainStageOld::OptimizedQueryGraph => f.write_str("OPTIMIZED QUERY GRAPH"),
+            ExplainStageOld::QueryGraph => f.write_str("QUERY GRAPH"),
+            ExplainStageOld::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
+            ExplainStageOld::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            ExplainStageOld::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
+            ExplainStageOld::Timestamp => f.write_str("TIMESTAMP"),
         }
     }
 }
-impl_display!(ExplainStage);
+impl_display!(ExplainStageOld);
+
+/// Specifies what [Statement::Explain] is actually explaining
+/// The new API
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExplainStageNew {
+    /// The mz_sql::HirRelationExpr after parsing
+    RawPlan,
+    /// Query Graph
+    QueryGraph,
+    /// Optimized Query Graph
+    OptimizedQueryGraph,
+    /// The mz_expr::MirRelationExpr after decorrelation
+    DecorrelatedPlan,
+    /// The mz_expr::MirRelationExpr after optimization
+    OptimizedPlan,
+    /// The mz_dataflow_types::plan::Plan
+    PhysicalPlan,
+    /// The complete trace of the plan through the optimizer
+    Trace,
+}
+
+impl AstDisplay for ExplainStageNew {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ExplainStageNew::RawPlan => f.write_str("RAW PLAN"),
+            ExplainStageNew::OptimizedQueryGraph => f.write_str("OPTIMIZED QUERY GRAPH"),
+            ExplainStageNew::QueryGraph => f.write_str("QUERY GRAPH"),
+            ExplainStageNew::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
+            ExplainStageNew::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            ExplainStageNew::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
+            ExplainStageNew::Trace => f.write_str("OPTIMIZER TRACE"),
+        }
+    }
+}
+impl_display!(ExplainStageNew);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee<T: AstInfo> {
@@ -2087,6 +2233,23 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
     }
 }
 impl_display_t!(Explainee);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainFormat {
+    /// Human readable display format
+    Text,
+    Json,
+}
+
+impl AstDisplay for ExplainFormat {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Text => f.write_str("TEXT"),
+            Self::Json => f.write_str("JSON"),
+        }
+    }
+}
+impl_display!(ExplainFormat);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IfExistsBehavior {

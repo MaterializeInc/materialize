@@ -18,22 +18,22 @@
 )]
 
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_ore::metrics::MetricsRegistry;
-use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
-use mz_persist::location::{BlobMulti, Consensus, ExternalError};
+use mz_persist::cfg::{BlobConfig, ConsensusConfig};
+use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
-use crate::cache::PersistClientCache;
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
@@ -63,7 +63,7 @@ pub use crate::r#impl::metrics::Metrics;
 ///
 /// This structure can be durably written down or transmitted for use by other
 /// processes. This location can contain any number of persist shards.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub struct PersistLocation {
     /// Uri string that identifies the blob store.
     pub blob_uri: String,
@@ -73,24 +73,16 @@ pub struct PersistLocation {
 }
 
 impl PersistLocation {
-    /// TODO: Plumb [PersistClientCache] to the necessary places and remove
-    /// this.
-    pub async fn open(&self) -> Result<PersistClient, ExternalError> {
-        PersistClientCache::new(&MetricsRegistry::new())
-            .open(self.clone())
-            .await
-    }
-
-    /// Opens the associated implementations of [BlobMulti] and [Consensus].
+    /// Opens the associated implementations of [Blob] and [Consensus].
     ///
     /// This is exposed mostly for testing. Persist users likely want
-    /// [Self::open].
+    /// [crate::cache::PersistClientCache::open].
     pub async fn open_locations(
         &self,
         metrics: &Metrics,
     ) -> Result<
         (
-            Arc<dyn BlobMulti + Send + Sync>,
+            Arc<dyn Blob + Send + Sync>,
             Arc<dyn Consensus + Send + Sync>,
         ),
         ExternalError,
@@ -99,7 +91,7 @@ impl PersistLocation {
             "Location::open blob={} consensus={}",
             self.blob_uri, self.consensus_uri,
         );
-        let blob = BlobMultiConfig::try_from(&self.blob_uri).await?;
+        let blob = BlobConfig::try_from(&self.blob_uri).await?;
         let blob =
             retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
         let consensus = ConsensusConfig::try_from(&self.consensus_uri).await?;
@@ -171,6 +163,16 @@ impl ShardId {
     }
 }
 
+impl RustType<String> for ShardId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        ShardId::from_str(&proto).map_err(|_| TryFromProtoError::InvalidShardId(proto))
+    }
+}
+
 /// The tunable knobs for persist.
 #[derive(Debug, Clone)]
 pub struct PersistConfig {
@@ -196,7 +198,7 @@ pub struct PersistConfig {
 //   real issue.
 // - A larger blob_target_size will results in fewer s3 operations, which are
 //   charged per operation. (Hmm, maybe not if we're charged per call in a
-//   multipart op. The S3BlobMulti impl already chunks things at 8MiB.)
+//   multipart op. The S3Blob impl already chunks things at 8MiB.)
 // - A smaller blob_target_size will result in more even memory usage in
 //   readers.
 // - A larger batch_builder_max_outstanding_parts increases throughput (to a
@@ -241,20 +243,20 @@ impl Default for PersistConfig {
 #[derive(Debug, Clone)]
 pub struct PersistClient {
     cfg: PersistConfig,
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
 }
 
 impl PersistClient {
     /// Returns a new client for interfacing with persist shards made durable to
-    /// the given [BlobMulti] and [Consensus].
+    /// the given [Blob] and [Consensus].
     ///
     /// This is exposed mostly for testing. Persist users likely want
-    /// [PersistClientCache::open].
+    /// [crate::cache::PersistClientCache::open].
     pub async fn new(
         cfg: PersistConfig,
-        blob: Arc<dyn BlobMulti + Send + Sync>,
+        blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
     ) -> Result<Self, ExternalError> {
@@ -404,12 +406,16 @@ mod tests {
 
     use futures_task::noop_waker;
     use mz_persist::workload::DataGenerator;
+    use mz_proto::protobuf_roundtrip;
     use timely::progress::Antichain;
     use timely::PartialOrder;
     use tokio::task::JoinHandle;
 
+    use crate::cache::PersistClientCache;
     use crate::r#impl::state::Upper;
     use crate::read::ListenEvent;
+
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -1374,5 +1380,16 @@ mod tests {
         // Read the snapshot and check that it got all the appropriate data.
         let mut snap = snap.await;
         assert_eq!(snap.read_all().await, all_ok(&data[..], 3));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        #[test]
+        fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
+            let actual = protobuf_roundtrip::<_, String>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

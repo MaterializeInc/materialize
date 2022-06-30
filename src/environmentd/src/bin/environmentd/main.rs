@@ -31,8 +31,10 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
+use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use sysinfo::{CpuExt, SystemExt};
+use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
@@ -569,6 +571,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             )
         }
     };
+    let persist_clients = PersistClientCache::new(&metrics_registry);
+    let persist_clients = Arc::new(Mutex::new(persist_clients));
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
         orchestrator,
@@ -587,6 +591,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             },
             consensus_uri: args.persist_consensus_url.to_string(),
         },
+        persist_clients,
         storage_stash_url: args.storage_postgres_stash,
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),

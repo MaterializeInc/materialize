@@ -1144,7 +1144,7 @@ fn test_github_12951() {
         client2
             .batch_execute("BEGIN; DECLARE c CURSOR FOR TAIL (SELECT count(*) FROM t1); FETCH 1 c")
             .unwrap();
-        client1.batch_execute("DROP CLUSTER foo").unwrap();
+        client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
         client2_cancel.cancel_query(postgres::NoTls).unwrap();
         client2
             .batch_execute("ROLLBACK; SET CLUSTER = default")
@@ -1168,7 +1168,7 @@ fn test_github_12951() {
             .unwrap();
         client2.batch_execute("SET CLUSTER = foo").unwrap();
         client2.batch_execute("BEGIN; SELECT * FROM t1").unwrap();
-        client1.batch_execute("DROP CLUSTER foo").unwrap();
+        client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
         client2
             .batch_execute("COMMIT; SET CLUSTER = default")
             .unwrap();
@@ -1202,7 +1202,7 @@ fn test_tail_outlive_cluster() {
     client2
         .batch_execute("BEGIN; DECLARE c CURSOR FOR TAIL (SELECT count(*) FROM t1); FETCH 1 c")
         .unwrap();
-    client1.batch_execute("DROP CLUSTER foo").unwrap();
+    client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
     client1
         .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size '1'))")
         .unwrap();
@@ -1217,6 +1217,58 @@ fn test_tail_outlive_cluster() {
             .get::<_, i64>(0),
         0
     );
+}
+
+#[test]
+fn test_read_then_write_serializability() {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    // Create table with initial value
+    {
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.batch_execute("CREATE TABLE t(f bigint)").unwrap();
+        client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    }
+
+    let num_threads = 3;
+    let num_loops = 3;
+
+    // Start threads to run `INSERT INTO t SELECT * FROM t`. Each statement should double the
+    // number of rows in the table if they're serializable.
+    let mut clients = Vec::new();
+    for _ in 0..num_threads {
+        clients.push(server.connect(postgres::NoTls).unwrap());
+    }
+
+    let handles: Vec<_> = clients
+        .into_iter()
+        .map(|mut client| {
+            std::thread::spawn(move || {
+                for _ in 0..num_loops {
+                    client
+                        .batch_execute("INSERT INTO t SELECT * FROM t")
+                        .unwrap();
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    {
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let count = client
+            .query_one("SELECT count(*) FROM t", &[])
+            .unwrap()
+            .get::<_, i64>(0);
+        assert_eq!(
+            u128::try_from(count).unwrap(),
+            2u128.pow(num_loops * num_threads)
+        );
+    }
 }
 
 #[test]
