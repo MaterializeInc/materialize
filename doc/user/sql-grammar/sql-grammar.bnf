@@ -135,6 +135,7 @@ insert ::=
     'VALUES' ( ('(' (expr) ( ( ',' expr ) )* ')') ( ( ',' ('(' (expr) ( ( ',' expr ) )* ')') )* ) )
     | query
   )
+  ( 'RETURNING' ( '*' | output_expression ( AS? output_name )? ) ( ',' ( '*' | output_expression ( AS? output_name )? ) )* )?
 delete_stmt ::=
   'DELETE FROM' table_name ('AS'? alias)?
   'USING' (from_item) ( ( ',' from_item ) )*
