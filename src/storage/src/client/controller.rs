@@ -32,6 +32,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future;
 use futures::stream::TryStreamExt as _;
 use futures::stream::{FuturesUnordered, StreamExt};
+use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -69,6 +70,10 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage.client.controller.rs"));
 static METADATA_COLLECTION: TypedCollection<GlobalId, CollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
 
+// The UUID here is arbitrary
+pub static STATUS_SHARD_ID: Lazy<ShardId> =
+    Lazy::new(|| "scd58f830-3b0a-4a16-a3f7-525f2bd0a9c2".parse().unwrap());
+
 /// Describes a request to create a source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollectionDescription {
@@ -81,6 +86,9 @@ pub struct CollectionDescription {
     /// If `None`, the controller manages the lifetime of the `storaged`
     /// process.
     pub remote_addr: Option<String>,
+    /// A ShardId to use for this collection instead of letting the controller
+    /// manage it. Used for special system tables like `mz_connector_errors`.
+    pub shard_id: Option<ShardId>,
 }
 
 #[async_trait(?Send)]
@@ -235,6 +243,8 @@ pub struct CollectionMetadata {
     pub remap_shard: ShardId,
     /// The persist shard containing the contents of this storage collection
     pub data_shard: ShardId,
+    /// The persist shard containing the status updates for this storage collection
+    pub status_shard: ShardId,
 }
 
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
@@ -244,6 +254,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             consensus_uri: self.persist_location.consensus_uri.clone(),
             data_shard: self.data_shard.to_string(),
             remap_shard: self.remap_shard.to_string(),
+            status_shard: self.status_shard.to_string(),
         }
     }
 
@@ -259,6 +270,10 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .map_err(TryFromProtoError::InvalidShardId)?,
             data_shard: value
                 .data_shard
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?,
+            status_shard: value
+                .status_shard
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
         })
@@ -467,9 +482,11 @@ where
         for (id, description) in collections {
             let metadata = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
-                data_shard: ShardId::new(),
+                data_shard: description.shard_id.unwrap_or_else(ShardId::new),
                 remap_shard: ShardId::new(),
+                status_shard: *STATUS_SHARD_ID,
             };
+
             let metadata = METADATA_COLLECTION
                 .insert_without_overwrite(&mut self.state.stash, &id, metadata)
                 .await?;

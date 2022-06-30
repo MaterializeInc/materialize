@@ -769,6 +769,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 ingestion: Some(ingestion),
                                 remote_addr: source.remote_addr.clone(),
+                                shard_id: None,
                             },
                         )])
                         .await
@@ -785,6 +786,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: table.desc.clone(),
                                 ingestion: None,
                                 remote_addr: None,
+                                shard_id: None,
                             },
                         )])
                         .await
@@ -829,6 +831,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: rview.desc.clone(),
                                 ingestion: None,
                                 remote_addr: None,
+                                shard_id: None,
                             },
                         )])
                         .await
@@ -2862,6 +2865,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc: table.desc.clone(),
                             ingestion: None,
                             remote_addr: None,
+                            shard_id: None,
                         },
                     )])
                     .await
@@ -2987,6 +2991,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc: source.desc.clone(),
                             ingestion: Some(ingestion),
                             remote_addr: source.remote_addr,
+                            shard_id: None,
                         },
                     )])
                     .await
@@ -3402,6 +3407,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc,
                             ingestion: None,
                             remote_addr: None,
+                            shard_id: None,
                         },
                     )])
                     .await
