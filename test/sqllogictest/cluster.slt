@@ -232,6 +232,12 @@ DROP INDEX v_primary_idx
 statement ok
 DROP INDEX v_primary_idx1
 
+statement ok
+DROP CLUSTER REPLICA bar.r1
+
+statement ok
+DROP CLUSTER REPLICA bar.r2
+
 # Test valid DROPs
 
 statement ok
@@ -261,13 +267,13 @@ statement ok
 CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION GRANULARITY '1s'
 
 statement ok
-DROP CLUSTER foo
+DROP CLUSTER foo CASCADE
 
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION GRANULARITY '1s'
 
 statement ok
-DROP CLUSTER foo
+DROP CLUSTER foo CASCADE
 
 # Test that bad cluster sizes don't cause a crash
 
@@ -308,7 +314,7 @@ SELECT COUNT(name) FROM mz_indexes;
 34
 
 statement ok
-DROP CLUSTER test;
+DROP CLUSTER test CASCADE
 
 query T
 SELECT COUNT(name) FROM mz_indexes;

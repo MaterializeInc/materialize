@@ -131,4 +131,4 @@ SELECT * FROM mz_materializations
 # Clean up.
 
 statement ok
-DROP CLUSTER test
+DROP CLUSTER test CASCADE
