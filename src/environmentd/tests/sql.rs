@@ -1144,7 +1144,7 @@ fn test_github_12951() {
         client2
             .batch_execute("BEGIN; DECLARE c CURSOR FOR TAIL (SELECT count(*) FROM t1); FETCH 1 c")
             .unwrap();
-        client1.batch_execute("DROP CLUSTER foo").unwrap();
+        client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
         client2_cancel.cancel_query(postgres::NoTls).unwrap();
         client2
             .batch_execute("ROLLBACK; SET CLUSTER = default")
@@ -1168,7 +1168,7 @@ fn test_github_12951() {
             .unwrap();
         client2.batch_execute("SET CLUSTER = foo").unwrap();
         client2.batch_execute("BEGIN; SELECT * FROM t1").unwrap();
-        client1.batch_execute("DROP CLUSTER foo").unwrap();
+        client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
         client2
             .batch_execute("COMMIT; SET CLUSTER = default")
             .unwrap();
@@ -1202,7 +1202,7 @@ fn test_tail_outlive_cluster() {
     client2
         .batch_execute("BEGIN; DECLARE c CURSOR FOR TAIL (SELECT count(*) FROM t1); FETCH 1 c")
         .unwrap();
-    client1.batch_execute("DROP CLUSTER foo").unwrap();
+    client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
     client1
         .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size '1'))")
         .unwrap();

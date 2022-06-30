@@ -3260,7 +3260,7 @@ pub fn plan_drop_cluster(
         };
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
-                if !(instance.indexes().is_empty() || instance.replica_names().is_empty())
+                if !(instance.indexes().is_empty() && instance.replica_names().is_empty())
                     && !cascade
                 {
                     bail!("cannot drop cluster with active indexes, sinks, or replicas");
