@@ -37,7 +37,7 @@ impl Action for ConnectAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let client = postgres_client(&self.url).await?;
+        let (client, _) = postgres_client(&self.url).await?;
         state.postgres_clients.insert(self.name.clone(), client);
         Ok(ControlFlow::Continue)
     }
