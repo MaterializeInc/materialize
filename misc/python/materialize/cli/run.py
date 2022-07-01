@@ -91,6 +91,11 @@ def main() -> int:
         help="Only build, don't run",
         action="store_true",
     )
+    parser.add_argument(
+        "--rewrite-results",
+        help="Rewrite results when running sqllogictest",
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -126,6 +131,8 @@ def main() -> int:
             ]
         elif args.program == "sqllogictest":
             command += [f"--postgres-url={args.postgres}"]
+            if args.rewrite_results:
+                command += ["--rewrite-results"]
     elif args.program == "test":
         build_retcode = _build(args)
         if args.build_only:
