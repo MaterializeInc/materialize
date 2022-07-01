@@ -24,7 +24,7 @@ username=$1
 
 for image in environmentd storaged computed; do
     bin/mzimage acquire --arch=x86_64 "$image"
-    docker tag "$(bin/mzimage spec "$image")" "$username/$image"
+    docker tag "$(bin/mzimage spec --arch=x86_64 "$image")" "$username/$image"
     docker push "$username/$image"
 done
 
