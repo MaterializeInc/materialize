@@ -2902,6 +2902,9 @@ impl KafkaConnectionOptionExtracted {
         for broker in &mut brokers {
             // Normalize Kafka addresses
             *broker = KafkaAddrs::from_str(broker)?.to_string();
+            if broker.contains(',') {
+                bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string");
+            }
         }
 
         Ok(brokers)
