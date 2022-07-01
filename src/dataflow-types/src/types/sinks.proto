@@ -31,7 +31,6 @@ message ProtoSinkEnvelope {
     oneof kind {
         google.protobuf.Empty debezium = 1;
         google.protobuf.Empty upsert = 2;
-        google.protobuf.Empty differential_row = 3;
     }
 }
 

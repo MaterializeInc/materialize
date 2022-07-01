@@ -195,7 +195,7 @@ where
             });
             collection
         }
-        Some(SinkEnvelope::DifferentialRow) | None => keyed.map(|(key, value)| (key, Some(value))),
+        None => keyed.map(|(key, value)| (key, Some(value))),
     };
 
     collection

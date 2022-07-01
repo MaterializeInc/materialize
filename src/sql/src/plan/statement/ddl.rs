@@ -32,7 +32,7 @@ use mz_dataflow_types::connections::{
 };
 use mz_dataflow_types::sinks::{
     KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
-    PersistSinkConnectionBuilder, SinkConnectionBuilder, SinkEnvelope,
+    SinkConnectionBuilder, SinkEnvelope,
 };
 use mz_dataflow_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -2119,24 +2119,6 @@ fn get_kafka_sink_consistency_config(
     Ok(result)
 }
 
-fn persist_sink_builder(
-    format: Option<Format<Aug>>,
-    envelope: SinkEnvelope,
-    value_desc: RelationDesc,
-) -> Result<SinkConnectionBuilder, anyhow::Error> {
-    if format.is_some() {
-        bail!("CREATE SINK ... PERSIST cannot specify a format");
-    }
-
-    if envelope != SinkEnvelope::DifferentialRow {
-        bail!("CREATE SINK ... PERSIST does not support specifying an ENVELOPE");
-    }
-
-    Ok(SinkConnectionBuilder::Persist(
-        PersistSinkConnectionBuilder { value_desc },
-    ))
-}
-
 pub fn describe_create_sink(
     scx: &StatementContext,
     _: CreateSinkStatement<Aug>,
@@ -2171,11 +2153,7 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        // The persist sink only works with its own special envelope, so make that the default.
-        None if matches!(connection, CreateSinkConnection::Persist { .. }) => {
-            SinkEnvelope::DifferentialRow
-        }
-        // Other sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
+        // Sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
         None => SinkEnvelope::Debezium,
         Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain { tx_metadata })) => {
             if !tx_metadata.is_empty() {
@@ -2247,7 +2225,6 @@ pub fn plan_create_sink(
                 None
             }
         }
-        CreateSinkConnection::Persist { .. } => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -2294,7 +2271,6 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        CreateSinkConnection::Persist => persist_sink_builder(format, envelope, desc.into_owned())?,
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SINK")?;

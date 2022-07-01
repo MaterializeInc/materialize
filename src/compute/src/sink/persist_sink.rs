@@ -61,10 +61,6 @@ where
         let persist_location = self.storage_metadata.persist_location.clone();
         let shard_id = self.storage_metadata.data_shard;
 
-        // Log the shard ID so we know which shard to read for testing.
-        // TODO(teskje): Remove once we have a built-in way for reading back sinked data.
-        tracing::info!("persist_sink shard ID: {shard_id}");
-
         let operator_name = format!("persist_sink({})", shard_id);
         let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
 
