@@ -438,9 +438,12 @@ where
                 .await
                 .expect("invalid persist usage");
 
-            let collection_state =
-                CollectionState::new(description.clone(), read.since().clone(), metadata);
-
+            let collection_state = CollectionState::new(
+                description.clone(),
+                read.since().clone(),
+                write.upper().clone(),
+                metadata,
+            );
             self.state
                 .persist_handles
                 .insert(id, PersistHandles { read, write });
@@ -908,6 +911,7 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: CollectionDescription,
         since: Antichain<T>,
+        upper: Antichain<T>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -917,7 +921,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            write_frontier: upper.into(),
             collection_metadata: metadata,
         }
     }

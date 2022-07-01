@@ -126,12 +126,13 @@ After a restart the Coordinator must reestablish the global timestamp to some va
 of the previous global timestamp before the restart. This ensures that a read or write after the restart is assigned a
 timestamp greater than or equal to all reads and writes before the restart.
 
-The global timestamp is only increased in response to a write to a user table. Some of those writes are initiated by
-users and contain data. Some of those writes are initiated periodically by a background thread and are empty. Therefore,
-the most recently used global timestamp is equal to the largest timestamp of all writes to user tables.
+A read at timestamp `ts` cannot complete until the `upper` of all objects involved is greater than or equal to `ts`.
+Therefore, at any moment the max of all `upper`s is greater than or equal to the timestamp of all completed reads. A
+write to a user table at timestamp `ts` will increase the upper of that table to some timestamp greater than `ts`.
+Therefore, at any moment the max of all `upper`s is greater than the timestamp of all completed writes to user tables.
 
-Proposal: When Materialize boots up, it initializes the global timestamp to the largest timestamp of all previous writes
-to user tables.
+Proposal: When Materialize boots up, it initializes the global timestamp to a value larger than the largest `upper` of
+all tables and sources. This timestamp is guaranteed to be greater than or equal to the previous global timestamp.
 
 The properties described in this section and the [Global Timestamp](#Global Timestamp) section are sufficient to ensure
 Strict Serializability across restarts.

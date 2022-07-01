@@ -784,8 +784,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    let since_ts = self.get_local_write_ts();
-                    let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
+                    let policy = ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum()));
                     self.dataflow_client
                         .storage_mut()
                         .set_read_policy(vec![(entry.id(), policy)])
@@ -857,6 +856,24 @@ impl<S: Append + 'static> Coordinator<S> {
                 | CatalogItem::Connection(_) => {}
             }
         }
+
+        // Ensure that the global timestamp oracle is at least the max of all previous
+        // write timestamps
+        let mut recovered_timestamp = Timestamp::minimum();
+        for entry in &entries {
+            if let Some(timeline) = entry.item().timeline() {
+                if timeline == Timeline::EpochMilliseconds {
+                    let write_frontier = &self
+                        .dataflow_client
+                        .storage()
+                        .collection(entry.id())
+                        .expect("entry known to exist")
+                        .write_frontier;
+                    recovered_timestamp.join_assign(&write_frontier.frontier()[0]);
+                }
+            }
+        }
+        self.local_fast_forward(recovered_timestamp.step_forward());
 
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);

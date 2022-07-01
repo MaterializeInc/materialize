@@ -1216,6 +1216,21 @@ impl CatalogItem {
             }
         }
     }
+
+    pub fn timeline(&self) -> Option<Timeline> {
+        match self {
+            CatalogItem::Table(table) => Some(table.timeline()),
+            CatalogItem::Source(source) => Some(source.timeline.clone()),
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        }
+    }
 }
 
 impl CatalogEntry {
