@@ -114,12 +114,14 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 
 
 > CREATE CONNECTION csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FOR CONFLUENT SCHEMA REGISTRY
+    URL '${testdrive.schema-registry-url}'
 
 > CREATE MATERIALIZED SOURCE csr_source
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csr_test-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM UPSERT
+    FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csr_test-${testdrive.seed}'
+    FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+    ENVELOPE DEBEZIUM UPSERT
 
 > SELECT * from csr_source
 id creature
@@ -229,7 +231,8 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
 > CREATE CONNECTION proto_csr
-  FOR CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    FOR CONFLUENT SCHEMA REGISTRY
+    URL '${testdrive.schema-registry-url}'
 
 > CREATE MATERIALIZED SOURCE import_connection_csr FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
@@ -241,6 +244,8 @@ importee1  importee2            mz_offset
 (f)        "(\"(1234,5678)\")"  1
 
 # Test invalid connection parameter combinations
+
+## Kafka
 ! CREATE CONNECTION not_a_secret
   FOR KAFKA
     BROKER '',
@@ -291,3 +296,23 @@ contains:cannot specify multiple Kafka broker addresses in one string
   FOR KAFKA
     BROKERS ['kafka:9092, kafka:9093']
 contains:cannot specify multiple Kafka broker addresses in one string
+
+## CSR
+! CREATE CONNECTION missing_url
+    FOR CONFLUENT SCHEMA REGISTRY
+    USERNAME 'foo'
+contains: must specify URL
+
+> CREATE SECRET s AS '...';
+
+! CREATE CONNECTION missing_cert
+    FOR CONFLUENT SCHEMA REGISTRY
+    URL 'http://localhost',
+    SSL KEY = SECRET s
+contains: requires both SSL KEY and SSL CERTIFICATE
+
+! CREATE CONNECTION missing_key
+    FOR CONFLUENT SCHEMA REGISTRY
+     URL 'http://localhost',
+    SSL CERTIFICATE = ''
+contains: requires both SSL KEY and SSL CERTIFICATE

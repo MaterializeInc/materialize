@@ -1933,12 +1933,9 @@ impl<'a> Parser<'a> {
             }
             CONFLUENT => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
-                let registry = self.parse_literal_string()?;
-                let with_options = self.parse_opt_with_options()?;
-                CreateConnection::Csr {
-                    url: registry,
-                    with_options,
-                }
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_csr_connection_options)?;
+                CreateConnection::Csr { with_options }
             }
             _ => unreachable!(),
         };
@@ -1983,6 +1980,32 @@ impl<'a> Parser<'a> {
 
         let _ = self.consume_token(&Token::Eq);
         Ok(KafkaConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
+    fn parse_csr_connection_options(&mut self) -> Result<CsrConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SSL, URL, USERNAME, PASSWORD])? {
+            SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+                KEY => CsrConnectionOptionName::SslKey,
+                CERTIFICATE => {
+                    if self.parse_keyword(AUTHORITY) {
+                        CsrConnectionOptionName::SslCertificateAuthority
+                    } else {
+                        CsrConnectionOptionName::SslCertificate
+                    }
+                }
+                _ => unreachable!(),
+            },
+            URL => CsrConnectionOptionName::Url,
+            USERNAME => CsrConnectionOptionName::Username,
+            PASSWORD => CsrConnectionOptionName::Password,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(CsrConnectionOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })

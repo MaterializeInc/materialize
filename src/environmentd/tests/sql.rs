@@ -170,7 +170,7 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
         let (client, _conn) = server.connect_async(postgres::NoTls).await?;
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION conn FOR CONFLUENT SCHEMA REGISTRY 'http://{}'",
+                "CREATE CONNECTION conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://{}'",
                 schema_registry_server.addr,
             ))
             .await?;
