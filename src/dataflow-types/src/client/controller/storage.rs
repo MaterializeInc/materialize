@@ -59,7 +59,7 @@ use crate::client::{
     StorageCommand, StorageResponse, StoragedRemoteClient,
 };
 use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
-use crate::Update;
+use crate::{DataflowError, Update};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -257,12 +257,16 @@ pub enum StorageError {
     IdentifierMissing(GlobalId),
     /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
     UpdateBeyondUpper(GlobalId),
+    /// The read was at a timestamp before the collection's since
+    ReadBeforeSince(GlobalId),
     /// The expected upper of an append was different than the actual append of the collection
     InvalidUpper(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
     /// An operation failed to read or write state
     IOError(StashError),
+    /// Dataflow was not able to process a request
+    DataflowError(DataflowError),
 }
 
 impl Error for StorageError {
@@ -271,9 +275,11 @@ impl Error for StorageError {
             Self::SourceIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
             Self::UpdateBeyondUpper(_) => None,
+            Self::ReadBeforeSince(_) => None,
             Self::InvalidUpper(_) => None,
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
+            Self::DataflowError(err) => Some(err),
         }
     }
 }
@@ -293,6 +299,9 @@ impl fmt::Display for StorageError {
                     "append batch for {id} contained update at or beyond its upper"
                 )
             }
+            Self::ReadBeforeSince(id) => {
+                write!(f, "read for {id} was at a timestamp before its since")
+            }
             Self::InvalidUpper(id) => {
                 write!(
                     f,
@@ -301,6 +310,7 @@ impl fmt::Display for StorageError {
             }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
+            Self::DataflowError(err) => write!(f, "dataflow failed to process request: {err}"),
         }
     }
 }
@@ -314,6 +324,12 @@ impl From<anyhow::Error> for StorageError {
 impl From<StashError> for StorageError {
     fn from(error: StashError) -> Self {
         Self::IOError(error)
+    }
+}
+
+impl From<DataflowError> for StorageError {
+    fn from(error: DataflowError) -> Self {
+        Self::DataflowError(error)
     }
 }
 
@@ -618,16 +634,13 @@ where
             .read
             .snapshot(as_of)
             .await
-            .expect("cannot read snapshot");
+            .map_err(|_| StorageError::ReadBeforeSince(id))?;
 
         let mut contents = Vec::new();
 
         while let Some(updates) = snapshot.next().await {
             for ((source_data, _pid), _ts, diff) in updates {
-                let row = source_data
-                    .expect("cannot read snapshot")
-                    .0
-                    .expect("cannot read snapshot");
+                let row = source_data.expect("cannot read snapshot").0?;
                 contents.push((row, diff));
             }
         }
