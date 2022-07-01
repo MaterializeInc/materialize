@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::error::Error;
 use std::fmt::Display;
 
 use bytes::BufMut;
@@ -166,6 +167,8 @@ pub enum DataflowError {
     EvalError(EvalError),
     SourceError(SourceError),
 }
+
+impl Error for DataflowError {}
 
 impl RustType<ProtoDataflowError> for DataflowError {
     fn into_proto(&self) -> ProtoDataflowError {

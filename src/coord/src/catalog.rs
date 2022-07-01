@@ -37,7 +37,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
@@ -3340,6 +3340,10 @@ impl<S: Append> Catalog<S> {
             .await
             .expect("cannot fail to allocate system ids");
         BUILTINS::logs().zip(system_ids.into_iter()).collect()
+    }
+
+    pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
+        self.state.pack_item_update(id, diff)
     }
 }
 

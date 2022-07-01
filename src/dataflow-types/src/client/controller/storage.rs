@@ -50,7 +50,7 @@ use mz_persist_client::{
 };
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
@@ -59,7 +59,7 @@ use crate::client::{
     StorageCommand, StorageResponse, StoragedRemoteClient,
 };
 use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
-use crate::Update;
+use crate::{DataflowError, Update};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -119,6 +119,13 @@ pub trait StorageController: Debug + Send {
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError>;
+
+    /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
+    async fn snapshot(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<Vec<(Row, Diff)>, StorageError>;
 
     /// Assigns a read policy to specific identifiers.
     ///
@@ -250,12 +257,16 @@ pub enum StorageError {
     IdentifierMissing(GlobalId),
     /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
     UpdateBeyondUpper(GlobalId),
+    /// The read was at a timestamp before the collection's since
+    ReadBeforeSince(GlobalId),
     /// The expected upper of an append was different than the actual append of the collection
     InvalidUpper(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
     /// An operation failed to read or write state
     IOError(StashError),
+    /// Dataflow was not able to process a request
+    DataflowError(DataflowError),
 }
 
 impl Error for StorageError {
@@ -264,9 +275,11 @@ impl Error for StorageError {
             Self::SourceIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
             Self::UpdateBeyondUpper(_) => None,
+            Self::ReadBeforeSince(_) => None,
             Self::InvalidUpper(_) => None,
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
+            Self::DataflowError(err) => Some(err),
         }
     }
 }
@@ -286,6 +299,9 @@ impl fmt::Display for StorageError {
                     "append batch for {id} contained update at or beyond its upper"
                 )
             }
+            Self::ReadBeforeSince(id) => {
+                write!(f, "read for {id} was at a timestamp before its since")
+            }
             Self::InvalidUpper(id) => {
                 write!(
                     f,
@@ -294,6 +310,7 @@ impl fmt::Display for StorageError {
             }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
+            Self::DataflowError(err) => write!(f, "dataflow failed to process request: {err}"),
         }
     }
 }
@@ -307,6 +324,12 @@ impl From<anyhow::Error> for StorageError {
 impl From<StashError> for StorageError {
     fn from(error: StashError) -> Self {
         Self::IOError(error)
+    }
+}
+
+impl From<DataflowError> for StorageError {
+    fn from(error: DataflowError) -> Self {
+        Self::DataflowError(error)
     }
 }
 
@@ -388,22 +411,18 @@ where
                 remap_shard: ShardId::new(),
             };
             let metadata = match description {
-                // We can't persist the shards for tables until we figure out what ADAPTERs wants
-                // to do with system tables that are assumed to be empty on creation
-                CollectionDescription {
-                    ingestion: None,
-                    ..
-                }
                 // We also can't persist the shards for postgres collections until we wire up
                 // correct start offsets to the SourceReaders
-                | CollectionDescription {
-                    ingestion: Some(IngestionDescription {
-                        desc: SourceDesc {
-                            connection: SourceConnection::Postgres(_),
+                CollectionDescription {
+                    ingestion:
+                        Some(IngestionDescription {
+                            desc:
+                                SourceDesc {
+                                    connection: SourceConnection::Postgres(_),
+                                    ..
+                                },
                             ..
-                        },
-                        ..
-                    }),
+                        }),
                     ..
                 } => metadata,
                 _ => {
@@ -603,6 +622,30 @@ where
         self.update_write_frontiers(&change_batches).await?;
 
         Ok(())
+    }
+
+    async fn snapshot(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<Vec<(Row, Diff)>, StorageError> {
+        let as_of = Antichain::from_elem(as_of);
+        let mut snapshot = self.state.persist_handles[&id]
+            .read
+            .snapshot(as_of)
+            .await
+            .map_err(|_| StorageError::ReadBeforeSince(id))?;
+
+        let mut contents = Vec::new();
+
+        while let Some(updates) = snapshot.next().await {
+            for ((source_data, _pid), _ts, diff) in updates {
+                let row = source_data.expect("cannot read snapshot").0?;
+                contents.push((row, diff));
+            }
+        }
+
+        Ok(contents)
     }
 
     async fn set_read_policy(

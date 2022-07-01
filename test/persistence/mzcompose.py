@@ -89,7 +89,11 @@ def workflow_kafka_sources(
     c.rm_volumes("mzdata", "pgdata")
 
 
-def workflow_user_tables(c: Composition) -> None:
+def workflow_user_tables(
+    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+) -> None:
+    start_deps(c, args_or_parser)
+
     seed = round(time.time())
 
     c.up("materialized")
@@ -100,6 +104,9 @@ def workflow_user_tables(c: Composition) -> None:
         f"--seed={seed}",
         f"user-tables/table-persistence-before-{td_test}.td",
     )
+
+    c.kill("materialized")
+    c.up("materialized")
 
     c.kill("materialized")
     c.up("materialized")
