@@ -28,7 +28,8 @@ use regex::Regex;
 use tracing::{debug, warn};
 
 use mz_dataflow_types::connections::{
-    Connection, KafkaConnection, SaslConfig, Security, SslConfig, StringOrSecret,
+    Connection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, SaslConfig,
+    Security, SslConfig, StringOrSecret,
 };
 use mz_dataflow_types::sinks::{
     KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
@@ -66,8 +67,9 @@ use crate::ast::{
     CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnection, CsrConnectionAvro, CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
-    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    CsrConnection, CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName,
+    CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
+    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
     KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
@@ -2999,6 +3001,49 @@ impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
     }
 }
 
+generate_extracted_config!(
+    CsrConnectionOption,
+    (Url, String),
+    (SslKey, with_options::Secret),
+    (SslCertificate, StringOrSecret),
+    (SslCertificateAuthority, StringOrSecret),
+    (Username, StringOrSecret),
+    (Password, with_options::Secret)
+);
+
+impl TryFrom<CsrConnectionOptionExtracted> for mz_dataflow_types::connections::CsrConnection {
+    type Error = anyhow::Error;
+    fn try_from(ccsr_options: CsrConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        let url = match ccsr_options.url {
+            Some(url) => url.parse()?,
+            None => bail!("invalid CONNECTION: must specify URL"),
+        };
+        let root_certs = match ccsr_options.ssl_certificate_authority {
+            None => vec![],
+            Some(cert) => vec![cert],
+        };
+        let cert = ccsr_options.ssl_certificate;
+        let key = ccsr_options.ssl_key.map(|secret| secret.into());
+        let tls_identity = match (cert, key) {
+            (None, None) => None,
+            (Some(cert), Some(key)) => Some(CsrConnectionTlsIdentity { cert, key }),
+            _ => bail!(
+                "invalid CONNECTION: reading from SSL-auth Confluent Schema Registry requires both SSL KEY and SSL CERTIFICATE"
+            ),
+        };
+        let http_auth = ccsr_options.username.map(|username| CsrConnectionHttpAuth {
+            username,
+            password: ccsr_options.password.map(|secret| secret.into()),
+        });
+        Ok(mz_dataflow_types::connections::CsrConnection {
+            url,
+            root_certs,
+            tls_identity,
+            http_auth,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -3016,11 +3061,9 @@ pub fn plan_create_connection(
             let k = KafkaConnectionOptionExtracted::try_from(with_options)?;
             Connection::Kafka(KafkaConnection::try_from(k)?)
         }
-        CreateConnection::Csr { url, with_options } => {
-            let connection = kafka_util::generate_ccsr_connection(
-                url.parse()?,
-                &mut normalize::options(&with_options)?,
-            )?;
+        CreateConnection::Csr { with_options } => {
+            let c = CsrConnectionOptionExtracted::try_from(with_options)?;
+            let connection = mz_dataflow_types::connections::CsrConnection::try_from(c)?;
             Connection::Csr(connection)
         }
     };
