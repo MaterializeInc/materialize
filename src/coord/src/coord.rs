@@ -5285,24 +5285,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance = HashMap::new();
-        for (compute_instance, id) in sinks {
-            by_compute_instance
-                .entry(compute_instance)
-                .or_insert(vec![])
-                .push(id);
-
-            // Persist sinks write to storage collections, which need to be
-            // dropped when their sinks are dropped.
-            // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
-            if self.dataflow_client.storage_mut().collection(id).is_ok() {
-                self.dataflow_client
-                    .storage_mut()
-                    .drop_sources(vec![id])
-                    .await
-                    .unwrap();
-            }
-        }
+        let by_compute_instance = sinks.into_iter().into_group_map();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
             if let Some(mut compute) = self.dataflow_client.compute_mut(compute_instance) {

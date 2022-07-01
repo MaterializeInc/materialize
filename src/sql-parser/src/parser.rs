@@ -2267,45 +2267,39 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, PERSIST])? {
-            KAFKA => {
-                self.expect_keyword(BROKER)?;
-                let broker = self.parse_literal_string()?;
-                self.expect_keyword(TOPIC)?;
-                let topic = self.parse_literal_string()?;
-                // one token of lookahead:
-                // * `KEY (` means we're parsing a list of columns for the key
-                // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
-                let key = if self.peek_keyword(KEY)
-                    && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
-                {
-                    let _ = self.expect_keyword(KEY);
-                    let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
+        self.expect_keyword(KAFKA)?;
+        self.expect_keyword(BROKER)?;
+        let broker = self.parse_literal_string()?;
+        self.expect_keyword(TOPIC)?;
+        let topic = self.parse_literal_string()?;
+        // one token of lookahead:
+        // * `KEY (` means we're parsing a list of columns for the key
+        // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
+        let key =
+            if self.peek_keyword(KEY) && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT)) {
+                let _ = self.expect_keyword(KEY);
+                let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
 
-                    let not_enforced = if self.peek_keywords(&[NOT, ENFORCED]) {
-                        let _ = self.expect_keywords(&[NOT, ENFORCED])?;
-                        true
-                    } else {
-                        false
-                    };
-                    Some(KafkaSinkKey {
-                        key_columns,
-                        not_enforced,
-                    })
+                let not_enforced = if self.peek_keywords(&[NOT, ENFORCED]) {
+                    let _ = self.expect_keywords(&[NOT, ENFORCED])?;
+                    true
                 } else {
-                    None
+                    false
                 };
-                let consistency = self.parse_kafka_consistency()?;
-                Ok(CreateSinkConnection::Kafka {
-                    broker,
-                    topic,
-                    key,
-                    consistency,
+                Some(KafkaSinkKey {
+                    key_columns,
+                    not_enforced,
                 })
-            }
-            PERSIST => Ok(CreateSinkConnection::Persist),
-            _ => unreachable!(),
-        }
+            } else {
+                None
+            };
+        let consistency = self.parse_kafka_consistency()?;
+        Ok(CreateSinkConnection::Kafka {
+            broker,
+            topic,
+            key,
+            consistency,
+        })
     }
 
     fn parse_kafka_consistency(&mut self) -> Result<Option<KafkaConsistency<Raw>>, ParserError> {

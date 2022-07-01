@@ -760,7 +760,6 @@ pub enum CreateSinkConnection<T: AstInfo> {
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
     },
-    Persist,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
@@ -784,9 +783,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 if let Some(consistency) = consistency.as_ref() {
                     f.write_node(consistency);
                 }
-            }
-            CreateSinkConnection::Persist => {
-                f.write_str("PERSIST");
             }
         }
     }

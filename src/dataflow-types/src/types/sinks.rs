@@ -92,9 +92,6 @@ impl RustType<ProtoSinkDesc> for SinkDesc<CollectionMetadata, mz_repr::Timestamp
 pub enum SinkEnvelope {
     Debezium,
     Upsert,
-    /// An envelope for sinks that directly write differential Rows. This is internal and
-    /// cannot be requested via SQL.
-    DifferentialRow,
 }
 
 impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
@@ -104,7 +101,6 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
             kind: Some(match self {
                 SinkEnvelope::Debezium => Kind::Debezium(()),
                 SinkEnvelope::Upsert => Kind::Upsert(()),
-                SinkEnvelope::DifferentialRow => Kind::DifferentialRow(()),
             }),
         }
     }
@@ -117,7 +113,6 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
         Ok(match kind {
             Kind::Debezium(()) => SinkEnvelope::Debezium,
             Kind::Upsert(()) => SinkEnvelope::Upsert,
-            Kind::DifferentialRow(()) => SinkEnvelope::DifferentialRow,
         })
     }
 }
@@ -468,12 +463,6 @@ pub struct TailSinkConnection {}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkConnectionBuilder {
     Kafka(KafkaSinkConnectionBuilder),
-    Persist(PersistSinkConnectionBuilder),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistSinkConnectionBuilder {
-    pub value_desc: RelationDesc,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

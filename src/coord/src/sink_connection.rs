@@ -16,8 +16,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, Top
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sinks::{
     KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
-    KafkaSinkConsistencyConnection, PersistSinkConnection, PersistSinkConnectionBuilder,
-    PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
+    KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
 };
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
@@ -32,7 +31,6 @@ pub async fn build(
 ) -> Result<SinkConnection, CoordError> {
     match builder {
         SinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connection_context).await,
-        SinkConnectionBuilder::Persist(p) => build_persist_sink(p, id),
     }
 }
 
@@ -327,15 +325,5 @@ async fn build_kafka(
         exactly_once: builder.reuse_topic,
         transitive_source_dependencies: builder.transitive_source_dependencies,
         fuel: builder.fuel,
-    }))
-}
-
-fn build_persist_sink(
-    builder: PersistSinkConnectionBuilder,
-    _id: GlobalId,
-) -> Result<SinkConnection, CoordError> {
-    Ok(SinkConnection::Persist(PersistSinkConnection {
-        value_desc: builder.value_desc,
-        storage_metadata: (),
     }))
 }
