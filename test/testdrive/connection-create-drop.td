@@ -281,3 +281,13 @@ contains:under-specified security configuration
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'PLAIN';
 contains:under-specified security configuration
+
+! CREATE CONNECTION multiple_brokers
+  FOR KAFKA
+    BROKER 'kafka:9092, kafka:9093'
+contains:cannot specify multiple Kafka broker addresses in one string
+
+! CREATE CONNECTION multiple_brokers
+  FOR KAFKA
+    BROKERS ['kafka:9092, kafka:9093']
+contains:cannot specify multiple Kafka broker addresses in one string
