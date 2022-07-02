@@ -23,70 +23,188 @@
 //! exist any longer.
 
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
+use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::time;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::{debug, info, warn};
 
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
-use mz_service::client::GenericClient;
+use mz_service::client::{GenericClient, Reconnect};
 
 use crate::command::{ComputeCommand, Peek, ReplicaId};
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::ComputeClient;
 
-/// Spawns a task that repeatedly sends messages back and forth
-/// between a client and its owner, and return channels to communicate with it.
-///
-/// This can be useful because sending to an `mpsc` is synchronous, eliminating
-/// cancelation-unsafety in some cases.
-///
-/// For this to be useful, `Client::recv` must itself be cancelation-safe.
-pub fn spawn_client_task<
-    C: Send + 'static,
-    R: Send + 'static,
-    Client: GenericClient<C, R> + 'static,
-    Name: AsRef<str>,
-    NameClosure: FnOnce() -> Name,
->(
-    mut client: Client,
-    nc: NameClosure,
-) -> (
-    UnboundedSender<C>,
-    UnboundedReceiver<Result<R, anyhow::Error>>,
-) {
-    let (cmd_tx, mut cmd_rx) = unbounded_channel();
-    let (response_tx, response_rx) = unbounded_channel();
-    mz_ore::task::spawn(nc, async move {
+const INITIAL_CONNECTION_BACKOFF: Duration = Duration::from_millis(1);
+
+/// A task that manages communication with a replica.
+struct ReplicaTask<C, T> {
+    /// The ID of the replica.
+    replica_id: ReplicaId,
+    /// A channel upon which commands intended for the replica are delivered.
+    command_rx: UnboundedReceiver<ComputeCommand<T>>,
+    /// A channel upon which responses are delivered.
+    response_tx: UnboundedSender<Result<ComputeResponse<T>, anyhow::Error>>,
+    /// The underlying client that communicates with the replica.
+    client: C,
+    // When the last reconnection attempt (if any) was made.
+    last_successful_connection: Option<Instant>,
+    /// The current backoff, for preventing crash loops.
+    backoff: Duration,
+}
+
+enum ReplicaTaskState {
+    /// The replica should be (re)connected to.
+    Reconnect,
+    /// Commands should be drained until the next `CreateInstance` command is
+    /// observed.
+    Drain,
+    /// Communication with the replica is live. Commands and responses should
+    /// be forwarded until an error occurs.
+    Pump,
+    /// The caller has asked us to shut down communication with this replica.
+    Done,
+}
+
+impl<C, T> ReplicaTask<C, T>
+where
+    C: ComputeClient<T> + Reconnect + 'static,
+    T: Send + std::fmt::Debug + 'static,
+{
+    fn spawn(
+        id: ReplicaId,
+        client: C,
+    ) -> (
+        UnboundedSender<ComputeCommand<T>>,
+        UnboundedReceiver<Result<ComputeResponse<T>, anyhow::Error>>,
+    ) {
+        let (command_tx, command_rx) = unbounded_channel();
+        let (response_tx, response_rx) = unbounded_channel();
+        let mut task = ReplicaTask {
+            replica_id: id,
+            command_rx,
+            response_tx,
+            client,
+            last_successful_connection: None,
+            backoff: INITIAL_CONNECTION_BACKOFF,
+        };
+        mz_ore::task::spawn(|| format!("active-replication-replica-{id}"), async move {
+            task.run().await
+        });
+        (command_tx, response_rx)
+    }
+
+    async fn run(&mut self) {
+        let mut state = ReplicaTaskState::Reconnect;
         loop {
-            tokio::select! {
-                m = cmd_rx.recv() => {
-                    match m {
-                        Some(c) => {
-                            // Issues should be detected, and
-                            // reconnect attempted, on the `client.recv` path.
-                            let _ = client.send(c).await;
-                        },
-                        None => break,
-                    }
-                },
-                m = client.recv() => {
-                    match m.transpose() {
-                        Some(m) => {
-                            if response_tx.send(m).is_err() {
-                                break;
-                            }
-                        }
-                        None => break,
-                    }
-                }
+            state = match state {
+                ReplicaTaskState::Reconnect => self.step_reconnect().await,
+                ReplicaTaskState::Drain => self.step_drain().await,
+                ReplicaTaskState::Pump => self.step_pump().await,
+                ReplicaTaskState::Done => break,
             }
         }
-    });
-    (cmd_tx, response_rx)
+        debug!("task for replica {} exiting", self.replica_id);
+    }
+
+    async fn step_reconnect(&mut self) -> ReplicaTaskState {
+        if let Some(last_successful_connection) = self.last_successful_connection {
+            // If we were previously up for long enough (60 seconds chosen
+            // arbitrarily), we consider the previous connection to have been
+            // successful and reset the backoff.
+            if Instant::now() - last_successful_connection > Duration::from_secs(60) {
+                self.backoff = INITIAL_CONNECTION_BACKOFF;
+            }
+        }
+        time::sleep(self.backoff).await;
+        // 60 seconds is arbitrarily chosen as a maximum plausible backoff. If
+        // Timely processes aren't realizing their buddies are down within that
+        // time, something is seriously hosed with the network anyway and its
+        // unlikely things will work.
+        self.backoff = (self.backoff * 2).min(Duration::from_secs(60));
+        match self.client.reconnect().await {
+            Ok(()) => {
+                self.last_successful_connection = Some(Instant::now());
+                ReplicaTaskState::Drain
+            }
+            Err(e) => {
+                info!(
+                    "Reconnecting to replica {} failed (retrying in {:?}): {}",
+                    self.replica_id, self.backoff, e
+                );
+                ReplicaTaskState::Reconnect
+            }
+        }
+    }
+
+    async fn step_drain(&mut self) -> ReplicaTaskState {
+        match self.command_rx.recv().await {
+            None => ReplicaTaskState::Done,
+            Some(command) => match command {
+                ComputeCommand::CreateInstance(_) => self.send_command(command).await,
+                // Command intended for the prior incarnation of the replica.
+                // Ignore it.
+                _ => ReplicaTaskState::Drain,
+            },
+        }
+    }
+
+    async fn step_pump(&mut self) -> ReplicaTaskState {
+        select! {
+            // Command from controller to forward to replica.
+            command = self.command_rx.recv() => match command {
+                None => ReplicaTaskState::Done,
+                Some(command) => self.send_command(command).await,
+            },
+            // Response from replica to forward to controller.
+            response = self.client.recv() => {
+                let response = match response.transpose() {
+                    None => {
+                        // In the future, if a replica politely hangs up, we
+                        // might want to take it as a signal that a new
+                        // controller has taken over. For now we just try to
+                        // reconnect.
+                        Err(anyhow!("replica unexpectedly gracefully terminated connection"))
+                    }
+                    Some(response) => response,
+                };
+                self.send_response(response).await
+            }
+        }
+    }
+
+    async fn send_command(&mut self, command: ComputeCommand<T>) -> ReplicaTaskState {
+        match self.client.send(command).await {
+            Ok(()) => ReplicaTaskState::Pump,
+            Err(e) => self.send_response(Err(e)).await,
+        }
+    }
+
+    async fn send_response(
+        &mut self,
+        response: Result<ComputeResponse<T>, anyhow::Error>,
+    ) -> ReplicaTaskState {
+        // We always forward the response verbatim, but if it's an error, we
+        // switch into reconnection mode. The controller will notice the error
+        // and eventually rehydrate the replica.
+        let next_state = match &response {
+            Ok(_) => ReplicaTaskState::Pump,
+            Err(_) => ReplicaTaskState::Reconnect,
+        };
+        if self.response_tx.send(response).is_err() {
+            ReplicaTaskState::Done
+        } else {
+            next_state
+        }
+    }
 }
 
 /// Additional information to store with pening peeks.
@@ -145,7 +263,10 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub fn add_replica<C: ComputeClient<T> + 'static>(&mut self, id: ReplicaId, client: C) {
+    pub fn add_replica<C>(&mut self, id: ReplicaId, client: C)
+    where
+        C: ComputeClient<T> + Reconnect + 'static,
+    {
         for (_, frontiers) in self.uppers.values_mut() {
             frontiers.insert(id, {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
@@ -153,8 +274,7 @@ where
                 frontier
             });
         }
-        let (cmd_tx, resp_rx) =
-            spawn_client_task(client, || "ActiveReplication client message pump");
+        let (cmd_tx, resp_rx) = ReplicaTask::spawn(id, client);
         self.replicas.insert(id, (cmd_tx, resp_rx.into()));
         self.hydrate_replica(id);
     }
@@ -421,8 +541,8 @@ where
                             }
                         }
                     }
-                    Err(_error) => {
-                        tracing::warn!("Rehydrating replica {:?}", replica_id);
+                    Err(e) => {
+                        warn!("Rehydrating replica {}: {}", replica_id, e);
                         drop(stream);
                         self.hydrate_replica(replica_id);
                         break;

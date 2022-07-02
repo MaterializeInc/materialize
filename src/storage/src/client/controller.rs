@@ -25,6 +25,7 @@ use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::BufMut;
@@ -53,6 +54,7 @@ use mz_persist_client::{
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_service::client::Reconnect;
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::errors::DataflowError;
@@ -600,8 +602,11 @@ where
                 // TODO: don't block waiting for a connection. Put a queue in the
                 // middle instead.
                 let mut client: Box<dyn StorageClient<T>> = Box::new({
-                    let mut client = StorageGrpcClient::new(addr);
-                    client.connect().await;
+                    let mut client = StorageGrpcClient::new(addr.clone());
+                    while let Err(e) = client.reconnect().await {
+                        tracing::info!("connecting to storage {addr} failed (retrying in 1s): {e}");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
                     client
                 });
 

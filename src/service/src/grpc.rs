@@ -9,24 +9,23 @@
 
 //! gRPC transport for the [client](crate::client) module.
 
-use std::cmp;
 use std::convert::Infallible;
 use std::fmt;
+use std::marker::PhantomData;
 use std::net::ToSocketAddrs;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, Notify};
-use tokio::time::{self, Instant};
 use tonic::body::BoxBody;
 use tonic::transport::{Body, NamedService, Server};
 use tonic::{Status, Streaming};
 use tower::Service;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 use mz_proto::{ProtoType, RustType};
 
@@ -52,32 +51,30 @@ pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Se
 #[derive(Debug)]
 pub struct GrpcClient<Client, PC, PR> {
     addr: String,
-    state: GrpcTcpConn<Client, PC, PR>,
-    backoff: Duration,
+    state: GrpcConn<PC, PR>,
+    _client: PhantomData<Client>,
 }
 
-/// The connection state of the GrpcClient.
+/// The connection state of a [`GrpcClient`].
 #[derive(Debug)]
-enum GrpcTcpConn<Client, PC, PR> {
-    // Initial, disconnected state
+enum GrpcConn<PC, PR> {
+    /// Disconnected state.
     Disconnected,
-
-    // We have a TCP client connection, but we have to wait for RPC answer for setting up the streams
-    AwaitResponse(Client),
-
-    // Ready to go!
-    Connected((UnboundedSender<PC>, Streaming<PR>)),
-
-    // Unable to connect, wait on next connect
-    Backoff(Instant),
+    /// Connected state.
+    Connected {
+        /// The sender for commands.
+        tx: UnboundedSender<PC>,
+        /// The receiver for responses.
+        rx: Streaming<PR>,
+    },
 }
 
 impl<Client, PC, PR> GrpcClient<Client, PC, PR> {
     pub fn new(addr: String) -> Self {
         GrpcClient {
             addr: format!("http://{}", addr),
-            state: GrpcTcpConn::Disconnected,
-            backoff: Duration::from_millis(10),
+            state: GrpcConn::Disconnected,
+            _client: PhantomData,
         }
     }
 
@@ -90,105 +87,29 @@ impl<Client, PC, PR> GrpcClient<Client, PC, PR> {
     }
 }
 
-impl<Client, PC, PR> GrpcClient<Client, PC, PR>
-where
-    Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR>,
-{
-    // This is and must be cancellation safe
-    pub async fn connect(&mut self) -> () {
-        loop {
-            match &mut self.state {
-                GrpcTcpConn::Disconnected => {
-                    debug!("GrpcClient {}: Attempt to connect", &self.addr);
-                    match Client::connect(self.addr.clone()).await {
-                        Ok(client) => {
-                            self.backoff = Duration::from_millis(10);
-                            self.state = GrpcTcpConn::AwaitResponse(client);
-                        }
-                        Err(e) => {
-                            self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
-                            warn!(
-                                "GrpcClient {}: Connection refused: {}. Backoff {}ms",
-                                &self.addr,
-                                e,
-                                self.backoff.as_millis()
-                            );
-                            self.state = GrpcTcpConn::Backoff(Instant::now() + self.backoff);
-                        }
-                    }
-                }
-                GrpcTcpConn::AwaitResponse(client) => {
-                    // The channel size is a arbitrary, but it should be a
-                    // small bounded channel such that backpressure is applied early.
-                    let (tx, rx) = mpsc::unbounded_channel();
-                    match client.create_stream(rx).await {
-                        Ok(stream) => {
-                            info!("GrpcClient {}: connected", &self.addr);
-                            self.state = GrpcTcpConn::Connected((tx, stream));
-                        }
-                        Err(err) => {
-                            debug!("GrpcClient {}: Connection refused: {}", &self.addr, err);
-                            self.state = GrpcTcpConn::Disconnected;
-                        }
-                    }
-                }
-                GrpcTcpConn::Connected(_) => break,
-                GrpcTcpConn::Backoff(deadline) => {
-                    time::sleep_until(*deadline).await;
-                    self.state = GrpcTcpConn::Disconnected;
-                }
-            }
-        }
-    }
-}
-
 #[async_trait]
 impl<Client, C, R, PC, PR> GenericClient<C, R> for GrpcClient<Client, PC, PR>
 where
     C: RustType<PC> + Send + Sync + 'static,
     R: RustType<PR> + Send + Sync,
     Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR> + Send + fmt::Debug,
-    PC: Send + Sync + fmt::Debug,
+    PC: Send + Sync + fmt::Debug + 'static,
     PR: Send + Sync + fmt::Debug,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-        let sender = if let GrpcTcpConn::Connected((sender, _)) = &self.state {
-            sender
-        } else {
-            return Err(anyhow::anyhow!("Sent into disconnected channel"));
-        };
-        if sender.send(cmd.into_proto()).is_err() {
-            self.state = GrpcTcpConn::Disconnected;
-            Err(anyhow::anyhow!("Sent into disconnected channel"))
-        } else {
+        if let GrpcConn::Connected { tx, .. } = &self.state {
+            tx.send(cmd.into_proto())?;
             Ok(())
+        } else {
+            Err(anyhow!("Connection severed"))
         }
     }
 
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        if let GrpcTcpConn::Connected(channels) = &mut self.state {
-            match channels.1.next().await {
-                Some(Ok(x)) => match x.into_rust() {
-                    Ok(r) => return Ok(Some(r)),
-                    Err(e) => {
-                        error!(
-                            "could not decode protobuf message, terminating connection: {}",
-                            e
-                        );
-                        self.state = GrpcTcpConn::Disconnected;
-                        anyhow::bail!("Connection severed");
-                    }
-                },
-                other => {
-                    match other {
-                        Some(Ok(_)) => unreachable!("handled above"),
-                        None => error!("connection unexpectedly terminated cleanly"),
-                        Some(Err(e)) => error!("connection unexpectedly errored: {}", e),
-                    }
-
-                    self.state = GrpcTcpConn::Disconnected;
-                    anyhow::bail!("Connection severed")
-                }
+        if let GrpcConn::Connected { rx, .. } = &mut self.state {
+            match rx.try_next().await? {
+                None => Ok(None),
+                Some(response) => Ok(Some(response.into_rust()?)),
             }
         } else {
             Err(anyhow::anyhow!("Connection severed"))
@@ -202,14 +123,15 @@ where
     Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR> + Send + Sync,
     PC: Send,
 {
-    fn disconnect(&mut self) {
-        debug!("GrpcClient {}: disconnect called", &self.addr);
-        self.state = GrpcTcpConn::Disconnected;
-    }
-
-    async fn reconnect(&mut self) {
-        debug!("GrpcClient {}: reconnect called", &self.addr);
-        self.connect().await
+    async fn reconnect(&mut self) -> Result<(), anyhow::Error> {
+        debug!("GrpcClient {}: Attempt to connect", &self.addr);
+        self.state = GrpcConn::Disconnected;
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut client = Client::connect(self.addr.clone()).await?;
+        let rx = client.create_stream(rx).await?;
+        self.state = GrpcConn::Connected { tx, rx };
+        info!("GrpcClient {}: connected", &self.addr);
+        Ok(())
     }
 }
 
