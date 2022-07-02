@@ -1,5 +1,5 @@
 ---
-title: "Node.js Cheatsheet"
+title: "Node.js cheatsheet"
 description: "Use Node.js to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/node-js/
@@ -9,15 +9,11 @@ menu:
     name: "Node.js"
 ---
 
-Materialize is **PostgreSQL-compatible**, which means that Node.js applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use the  [`node-postgres` library](https://node-postgres.com/) to connect to Materialize and issue PostgreSQL commands.
+Materialize is **wire-compatible** with PostgreSQL, which means that Node.js applications can use common PostgreSQL clients to interact with Materialize. In this guide, we'll use the  [`node-postgres` library](https://node-postgres.com/) to connect to Materialize and issue SQL commands.
 
 ## Connect
 
-You connect to Materialize the same way you [connect to PostgreSQL with `node-postgres`](https://node-postgres.com/features/connecting).
-
-### Local Instance
-
-You can connect to a local Materialize instance with code that uses the connection URI shorthand (`postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`) to define the URI:
+To [connect](https://node-postgres.com/features/connecting) to a local Materialize instance using `node-postgres`, you can use the connection URI shorthand (`postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`):
 
 ```js
 const { Client } = require('pg');
@@ -33,9 +29,9 @@ main();
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, you can use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query.
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```js
 const { Client } = require('pg');
@@ -56,7 +52,7 @@ async function main() {
 main();
 ```
 
-The [TAIL Output format](/sql/tail/#output) of `res.rows` is an array of view update objects. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
+The [`TAIL` output format](/sql/tail/#output) of `res.rows` is an array of view update objects. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
 
 ```js
 [
@@ -77,7 +73,7 @@ The [TAIL Output format](/sql/tail/#output) of `res.rows` is an array of view up
 ]
 ```
 
-An `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a deletion (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same `mz_timestamp`.
+An `mz_diff` value of `-1` indicates that Materialize is deleting one row with the included values. An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 
 <!--- NOT PUBLISHABLE UNTIL https://github.com/brianc/node-postgres/pull/2573 is merged
 ### Using pg-query-stream
@@ -100,11 +96,11 @@ client.connect((err, client) => {
 
 ## Query
 
-Querying Materialize is identical to querying a traditional PostgreSQL database: Node.js executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+Querying Materialize is identical to querying a PostgreSQL database: Node.js executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
 Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
-Query a view `my_view` with a select statement:
+To query a view `my_view` using a `SELECT` statement:
 
 ```js
 const { Client } = require('pg');
@@ -123,21 +119,21 @@ For more details, see the  [`node-postgres` query](https://node-postgres.com/fea
 
 ## Push data to a source
 
-Materialize processes live streams of data and maintains views in memory, relying on other systems (traditional databases, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system**. Materialize connects to the intermediary system as a "source" and reads streaming updates from that.
+Materialize processes live streams of data and maintains views in memory, relying on external systems (like PostgreSQL, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system**. Materialize connects to the intermediary system as a [source](/sql/create-source/) and reads streaming updates from it.
 
-The table below lists the intermediary systems a Node.js application can use to stream data for Materialize:
+The table below lists the intermediary systems a Node.js application can use to feed data into Materialize:
 
 Intermediary System | Notes
 -------------|-------------
-**Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Materialize Kafka Source](/sql/create-source/json-kafka/) to consume them. Kafka is recommended for scenarios where low-latency and high-throughput are important.
-**PostgreSQL** | Node.js sends data to PostgreSQL, and the [Materialize PostgreSQL source](/sql/create-source/postgres/) receives events from the change feed (the write-ahead log) of the database. Ideal for Node.js apps that already use PostgreSQL and fast-changing relational data.
-**PubNub** | Streams as a service provider PubNub provides a [Node.js SDK](https://www.pubnub.com/docs/sdks/javascript/nodejs) to send data into a stream, [Materialize PubNub source](/sql/create-source/json-pubnub/) subscribes to the stream and consumes data.
+**Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Kafka source](/sql/create-source/json-kafka/) to consume them. This is recommended for scenarios where low-latency and high-throughput are important.
+**PostgreSQL** | Send data from Node.js to PostgreSQL, and create a [PostgreSQL source](/sql/create-source/postgres/) that consumes a replication stream from the database based on its write-ahead log. This is recommended for Node.js apps that already use PostgreSQL and fast-changing transactional data.
+**PubNub** | Send data to a PubNub stream using the [Node.js SDK](https://www.pubnub.com/docs/sdks/javascript/nodejs), and create a [PubNub source](/sql/create-source/json-pubnub/) that subscribes to the stream.
 
 ## Insert data into tables
 
-Most data in Materialize will stream in via a `SOURCE`, but a [`TABLE` in Materialize](/sql/create-table/) can be helpful for supplementary data. For example, use a table to join slower-moving reference or lookup data with a stream.
+Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
 
-**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize.
+**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize:
 
 ```js
 const { Client } = require('pg');
@@ -157,7 +153,7 @@ main();
 
 ## Manage sources, views, and indexes
 
-Typically, you create sources, views, and indexes when deploying Materialize, although it is possible to use a Node.js app to execute common DDL statements.
+Typically, you create sources, views, and indexes when deploying Materialize, but it's also possible to use a Node.js app to execute common DDL statements.
 
 ### Create a source from Node.js
 
@@ -205,4 +201,6 @@ For more information, see [`CREATE VIEW`](/sql/create-view/).
 
 ## Node.js ORMs
 
-Materialize doesn't currently support the full catalog of PostgreSQL system metadata API endpoints, including the system calls that object relational mapping systems (ORMs) like **Prisma**, **Sequelize**, or **TypeORM** use to introspect databases and do extra work behind the scenes. This means that ORM system attempts to interact with Materialize will currently fail. Once [full `pg_catalog` support](https://github.com/MaterializeInc/materialize/issues/2157) is implemented, the features that depend on  `pg_catalog` may work properly.
+ORM frameworks like **Prisma**, **Sequelize**, or **TypeORM** tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if a tool is compatible with PostgreSQL, it’s not guaranteed that the same integration will work out-of-the-box.
+
+The level of support for these tools will improve as we extend the coverage of `pg_catalog` in Materialize {{% gh 2157 %}} and join efforts with each community to make the integrations Just Work™️.
