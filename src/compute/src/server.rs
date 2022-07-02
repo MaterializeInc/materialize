@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
-use mz_persist_client::cache::PersistClientCache;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::execute::execute_from;
@@ -23,10 +22,11 @@ use timely::WorkerConfig;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalComputeClient};
+use mz_dataflow_types::client::{ComputeClient, ComputeCommand, ComputeResponse};
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
 use mz_service::local::LocalClient;
 
 use crate::communication::initialize_networking;
@@ -68,7 +68,7 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Error> {
+pub fn serve(config: Config) -> Result<(Server, Box<dyn ComputeClient>), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -136,11 +136,11 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
         .iter()
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
-    let compute_client = LocalClient::new(compute_response_rxs, command_txs, worker_threads);
+    let client = LocalClient::new_partitioned(compute_response_rxs, command_txs, worker_threads);
     let server = Server {
         _worker_guards: worker_guards,
     };
-    Ok((server, compute_client))
+    Ok((server, Box::new(client)))
 }
 
 /// State maintained for each worker thread.

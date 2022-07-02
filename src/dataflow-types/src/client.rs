@@ -35,8 +35,6 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_service::client::GenericClient;
 use mz_service::grpc::GrpcClient;
-use mz_service::local::LocalClient;
-use mz_service::remote::RemoteClient;
 
 use crate::logging::LoggingConfig;
 use crate::{sources::IngestionDescription, DataflowDescription, PeekResponse, TailResponse};
@@ -877,30 +875,16 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     }
 }
 
-/// A [`LocalClient`] for the storage layer.
-pub type LocalStorageClient = LocalClient<StorageCommand, StorageResponse>;
-
-/// A [`LocalClient`] for the compute layer.
-pub type LocalComputeClient = LocalClient<ComputeCommand, ComputeResponse>;
-
-pub type ComputedRemoteClient<T> = RemoteClient<
-    ComputeCommand<T>,
-    ComputeResponse<T>,
-    GrpcClient<
-        proto_compute_client::ProtoComputeClient<tonic::transport::Channel>,
-        ProtoComputeCommand,
-        ProtoComputeResponse,
-    >,
+pub type ComputeGrpcClient = GrpcClient<
+    proto_compute_client::ProtoComputeClient<tonic::transport::Channel>,
+    ProtoComputeCommand,
+    ProtoComputeResponse,
 >;
 
-pub type StoragedRemoteClient<T> = RemoteClient<
-    StorageCommand<T>,
-    StorageResponse<T>,
-    GrpcClient<
-        proto_storage_client::ProtoStorageClient<tonic::transport::Channel>,
-        ProtoStorageCommand,
-        ProtoStorageResponse,
-    >,
+pub type StorageGrpcClient = GrpcClient<
+    proto_storage_client::ProtoStorageClient<tonic::transport::Channel>,
+    ProtoStorageCommand,
+    ProtoStorageResponse,
 >;
 
 /// A client to a remote dataflow server.
