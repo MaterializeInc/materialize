@@ -304,145 +304,131 @@ where
         if self.replicas.is_empty() {
             // We want to communicate that the result is not ready
             futures::future::pending().await
-        } else {
-            // We may need to iterate, if a replica needs rehydration.
-            let mut clean_recv = false;
-            while !clean_recv {
-                let mut errored_replica = None;
+        }
 
-                // Receive responses from any of the replicas, and take appropriate action.
-                let mut stream: tokio_stream::StreamMap<_, _> = self
-                    .replicas
-                    .iter_mut()
-                    .map(|(id, (_, rx))| (id.clone(), rx))
-                    .collect();
+        // We may need to iterate, if a replica needs rehydration.
+        loop {
+            // Receive responses from any of the replicas, and take appropriate action.
+            let mut stream: tokio_stream::StreamMap<_, _> = self
+                .replicas
+                .iter_mut()
+                .map(|(id, (_, rx))| (id.clone(), rx))
+                .collect();
 
-                use futures::StreamExt;
-                while let Some((replica_id, message)) = stream.next().await {
-                    self.pending_response
-                        .push_front(ActiveReplicationResponse::ReplicaHeartbeat(
-                            replica_id,
-                            Utc::now(),
-                        ));
-                    match message {
-                        Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)) => {
-                            // If this is the first response, forward it; otherwise do not.
-                            // TODO: we could collect the other responses to assert equivalence?
-                            // Trades resources (memory) for reassurances; idk which is best.
-                            //
-                            // NOTE: we use the `otel_ctx` from the response, not the
-                            // pending peek, because we currently want the parent
-                            // to be whatever the compute worker did with this peek.
-                            //
-                            // Additionally, we just use the `otel_ctx` from the first worker to
-                            // respond.
-                            if self.peeks.remove(&uuid).is_some() {
-                                return Ok(Some(ActiveReplicationResponse::ComputeResponse(
-                                    ComputeResponse::PeekResponse(uuid, response, otel_ctx),
-                                )));
-                            }
+            use futures::StreamExt;
+            while let Some((replica_id, message)) = stream.next().await {
+                self.pending_response
+                    .push_front(ActiveReplicationResponse::ReplicaHeartbeat(
+                        replica_id,
+                        Utc::now(),
+                    ));
+                match message {
+                    Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)) => {
+                        // If this is the first response, forward it; otherwise do not.
+                        // TODO: we could collect the other responses to assert equivalence?
+                        // Trades resources (memory) for reassurances; idk which is best.
+                        //
+                        // NOTE: we use the `otel_ctx` from the response, not the
+                        // pending peek, because we currently want the parent
+                        // to be whatever the compute worker did with this peek.
+                        //
+                        // Additionally, we just use the `otel_ctx` from the first worker to
+                        // respond.
+                        if self.peeks.remove(&uuid).is_some() {
+                            return Ok(Some(ActiveReplicationResponse::ComputeResponse(
+                                ComputeResponse::PeekResponse(uuid, response, otel_ctx),
+                            )));
                         }
-                        Ok(ComputeResponse::FrontierUppers(mut list)) => {
-                            for (id, changes) in list.iter_mut() {
-                                if let Some((frontier, frontiers)) = self.uppers.get_mut(id) {
-                                    // Apply changes to replica `replica_id`
-                                    frontiers
-                                        .get_mut(&replica_id)
-                                        .unwrap()
-                                        .update_iter(changes.drain());
-                                    // We can swap `frontier` into `changes, negated, and then use that to repopulate `frontier`.
-                                    // Working
-                                    changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
-                                    frontier.clear();
-                                    for (time1, _neg_one) in changes.iter() {
-                                        for time2 in frontiers[&replica_id].frontier().iter() {
-                                            frontier.insert(time1.join(time2));
-                                        }
-                                    }
-                                    changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
-                                    changes.compact();
-                                }
-                            }
-                            if !list.is_empty() {
-                                return Ok(Some(ActiveReplicationResponse::ComputeResponse(
-                                    ComputeResponse::FrontierUppers(list),
-                                )));
-                            }
-                        }
-                        Ok(ComputeResponse::TailResponse(id, response)) => {
-                            match response {
-                                TailResponse::Batch(TailBatch {
-                                    lower: _,
-                                    upper,
-                                    mut updates,
-                                }) => {
-                                    // It is sufficient to compare `upper` against the last reported frontier for `id`,
-                                    // and if `upper` is not less or equal to that frontier, some progress has happened.
-                                    // If so, we retain only the updates greater or equal to that last reported frontier,
-                                    // and announce a batch from that frontier to its join with `upper`.
-
-                                    // Ensure that we have a recorded frontier ready to go.
-                                    let entry = self
-                                        .tails
-                                        .entry(id)
-                                        .or_insert_with(|| Antichain::from_elem(T::minimum()));
-                                    // If the upper frontier has changed, we have a statement to make.
-                                    // This happens if there is any element of `entry` not greater or
-                                    // equal to some element of `upper`.
-                                    use differential_dataflow::lattice::Lattice;
-                                    let new_upper = entry.join(&upper);
-                                    if &new_upper != entry {
-                                        let new_lower = entry.clone();
-                                        entry.clone_from(&new_upper);
-                                        updates.retain(|(time, _data, _diff)| {
-                                            new_lower.less_equal(time)
-                                        });
-                                        return Ok(Some(
-                                            ActiveReplicationResponse::ComputeResponse(
-                                                ComputeResponse::TailResponse(
-                                                    id,
-                                                    TailResponse::Batch(TailBatch {
-                                                        lower: new_lower,
-                                                        upper: new_upper,
-                                                        updates,
-                                                    }),
-                                                ),
-                                            ),
-                                        ));
+                    }
+                    Ok(ComputeResponse::FrontierUppers(mut list)) => {
+                        for (id, changes) in list.iter_mut() {
+                            if let Some((frontier, frontiers)) = self.uppers.get_mut(id) {
+                                // Apply changes to replica `replica_id`
+                                frontiers
+                                    .get_mut(&replica_id)
+                                    .unwrap()
+                                    .update_iter(changes.drain());
+                                // We can swap `frontier` into `changes, negated, and then use that to repopulate `frontier`.
+                                // Working
+                                changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
+                                frontier.clear();
+                                for (time1, _neg_one) in changes.iter() {
+                                    for time2 in frontiers[&replica_id].frontier().iter() {
+                                        frontier.insert(time1.join(time2));
                                     }
                                 }
-                                TailResponse::DroppedAt(frontier) => {
-                                    // Introduce a new terminal frontier to suppress all future responses.
-                                    // We cannot simply remove the entry, as we currently create new entries in response
-                                    // to observed responses; if we pre-load the entries in response to commands we can
-                                    // clean up the state here.
-                                    self.tails.insert(id, Antichain::new());
+                                changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
+                                changes.compact();
+                            }
+                        }
+                        if !list.is_empty() {
+                            return Ok(Some(ActiveReplicationResponse::ComputeResponse(
+                                ComputeResponse::FrontierUppers(list),
+                            )));
+                        }
+                    }
+                    Ok(ComputeResponse::TailResponse(id, response)) => {
+                        match response {
+                            TailResponse::Batch(TailBatch {
+                                lower: _,
+                                upper,
+                                mut updates,
+                            }) => {
+                                // It is sufficient to compare `upper` against the last reported frontier for `id`,
+                                // and if `upper` is not less or equal to that frontier, some progress has happened.
+                                // If so, we retain only the updates greater or equal to that last reported frontier,
+                                // and announce a batch from that frontier to its join with `upper`.
+
+                                // Ensure that we have a recorded frontier ready to go.
+                                let entry = self
+                                    .tails
+                                    .entry(id)
+                                    .or_insert_with(|| Antichain::from_elem(T::minimum()));
+                                // If the upper frontier has changed, we have a statement to make.
+                                // This happens if there is any element of `entry` not greater or
+                                // equal to some element of `upper`.
+                                use differential_dataflow::lattice::Lattice;
+                                let new_upper = entry.join(&upper);
+                                if &new_upper != entry {
+                                    let new_lower = entry.clone();
+                                    entry.clone_from(&new_upper);
+                                    updates
+                                        .retain(|(time, _data, _diff)| new_lower.less_equal(time));
                                     return Ok(Some(ActiveReplicationResponse::ComputeResponse(
                                         ComputeResponse::TailResponse(
                                             id,
-                                            TailResponse::DroppedAt(frontier),
+                                            TailResponse::Batch(TailBatch {
+                                                lower: new_lower,
+                                                upper: new_upper,
+                                                updates,
+                                            }),
                                         ),
                                     )));
                                 }
                             }
-                        }
-                        Err(_error) => {
-                            errored_replica = Some(replica_id);
-                            break;
+                            TailResponse::DroppedAt(frontier) => {
+                                // Introduce a new terminal frontier to suppress all future responses.
+                                // We cannot simply remove the entry, as we currently create new entries in response
+                                // to observed responses; if we pre-load the entries in response to commands we can
+                                // clean up the state here.
+                                self.tails.insert(id, Antichain::new());
+                                return Ok(Some(ActiveReplicationResponse::ComputeResponse(
+                                    ComputeResponse::TailResponse(
+                                        id,
+                                        TailResponse::DroppedAt(frontier),
+                                    ),
+                                )));
+                            }
                         }
                     }
+                    Err(_error) => {
+                        tracing::warn!("Rehydrating replica {:?}", replica_id);
+                        drop(stream);
+                        self.hydrate_replica(replica_id);
+                        break;
+                    }
                 }
-                drop(stream);
-
-                if let Some(replica_id) = errored_replica {
-                    tracing::warn!("Rehydrating replica {:?}", replica_id);
-                    self.hydrate_replica(replica_id);
-                }
-
-                clean_recv = errored_replica.is_none();
             }
-            // Indicate completion of the communication.
-            Ok(None)
         }
     }
 }
