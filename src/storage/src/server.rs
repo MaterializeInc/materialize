@@ -17,10 +17,11 @@ use mz_persist_client::cache::PersistClientCache;
 use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{LocalClient, LocalStorageClient};
+use mz_dataflow_types::client::LocalStorageClient;
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_service::local::LocalClient;
 
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::{StorageState, Worker};

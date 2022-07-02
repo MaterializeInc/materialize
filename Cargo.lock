@@ -3029,6 +3029,7 @@ dependencies = [
  "mz-pid-file",
  "mz-prof",
  "mz-repr",
+ "mz-service",
  "mz-storage",
  "mz-timely-util",
  "once_cell",
@@ -3141,6 +3142,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-secrets",
+ "mz-service",
  "mz-sql-parser",
  "mz-stash",
  "once_cell",
@@ -3901,6 +3903,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "crossbeam-channel",
+ "futures",
+ "http",
+ "itertools",
+ "mz-ore",
+ "mz-proto",
+ "serde",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "mz-sql"
 version = "0.0.0"
 dependencies = [
@@ -4050,6 +4073,7 @@ dependencies = [
  "mz-pgcopy",
  "mz-postgres-util",
  "mz-repr",
+ "mz-service",
  "mz-timely-util",
  "once_cell",
  "postgres-protocol",
@@ -4086,6 +4110,7 @@ dependencies = [
  "mz-ore",
  "mz-pid-file",
  "mz-prof",
+ "mz-service",
  "mz-storage",
  "once_cell",
  "serde",

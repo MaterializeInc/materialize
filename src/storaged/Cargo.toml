@@ -18,6 +18,7 @@ mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }
+mz-service = { path = "../service" }
 mz-storage = { path = "../storage", features = ["server"] }
 once_cell = "1.0.12"
 serde = "1.0.137"
