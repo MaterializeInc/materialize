@@ -44,6 +44,7 @@ members = [
     "src/secrets",
     "src/secrets-filesystem",
     "src/secrets-kubernetes",
+    "src/service",
     "src/sql-parser",
     "src/sql",
     "src/sqllogictest",

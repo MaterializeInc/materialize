@@ -31,6 +31,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
+mz-service = { path = "../service" }
 mz-storage = { path = "../storage", default-features = false }
 mz-timely-util = { path = "../timely-util" }
 once_cell = "1.12.0"

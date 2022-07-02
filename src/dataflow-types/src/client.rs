@@ -18,19 +18,14 @@
 #![allow(clippy::clone_on_ref_ptr)]
 
 use std::collections::BTreeSet;
-use std::fmt;
-use std::pin::Pin;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::Stream;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
-use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
@@ -38,6 +33,10 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::any_uuid;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use mz_service::client::GenericClient;
+use mz_service::grpc::GrpcClient;
+use mz_service::local::LocalClient;
+use mz_service::remote::RemoteClient;
 
 use crate::logging::LoggingConfig;
 use crate::{sources::IngestionDescription, DataflowDescription, PeekResponse, TailResponse};
@@ -842,44 +841,6 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
     }
 }
 
-/// A client to a running dataflow server.
-#[async_trait]
-pub trait GenericClient<C, R>: fmt::Debug + Send {
-    /// Sends a command to the dataflow server.
-    ///
-    /// The command can error for various reasons.
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error>;
-
-    /// Receives the next response from the dataflow server.
-    ///
-    /// This method blocks until the next response is available, or, if the
-    /// dataflow server has been shut down, returns `None`.
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error>;
-
-    /// Returns an adapter that treats the client as a stream.
-    ///
-    /// The stream produces the responses that would be produced by repeated
-    /// calls to `recv`.
-    fn as_stream<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Stream<Item = Result<R, anyhow::Error>> + Send + 'a>>
-    where
-        R: Send + 'a,
-    {
-        Box::pin(async_stream::stream!({
-            loop {
-                match self.recv().await {
-                    Ok(Some(response)) => yield Ok(response),
-                    Err(error) => yield Err(error),
-                    Ok(None) => {
-                        return;
-                    }
-                }
-            }
-        }))
-    }
-}
-
 /// A client to a storage server.
 pub trait StorageClient<T = mz_repr::Timestamp>:
     GenericClient<StorageCommand<T>, StorageResponse<T>>
@@ -895,19 +856,6 @@ pub trait ComputeClient<T = mz_repr::Timestamp>:
 }
 
 impl<C, T> ComputeClient<T> for C where C: GenericClient<ComputeCommand<T>, ComputeResponse<T>> {}
-
-#[async_trait]
-impl<C, R> GenericClient<C, R> for Box<dyn GenericClient<C, R>>
-where
-    C: Send,
-{
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-        (**self).send(cmd).await
-    }
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        (**self).recv().await
-    }
-}
 
 #[async_trait]
 impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn ComputeClient<T>> {
@@ -929,93 +877,16 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     }
 }
 
-/// A convenience type for compatibility.
-#[derive(Debug)]
-pub struct LocalClient<C, R>
-where
-    (C, R): partitioned::Partitionable<C, R>,
-    C: fmt::Debug,
-    R: fmt::Debug,
-{
-    client: partitioned::Partitioned<process_local::ProcessLocal<C, R>, C, R>,
-}
-
-impl<C, R> LocalClient<C, R>
-where
-    (C, R): partitioned::Partitionable<C, R>,
-    C: fmt::Debug,
-    R: fmt::Debug,
-{
-    pub fn new(
-        feedback_rxs: Vec<tokio::sync::mpsc::UnboundedReceiver<R>>,
-        worker_txs: Vec<crossbeam_channel::Sender<C>>,
-        worker_threads: Vec<std::thread::Thread>,
-    ) -> Self {
-        assert_eq!(feedback_rxs.len(), worker_threads.len());
-        assert_eq!(worker_txs.len(), worker_threads.len());
-        // assemble a list of process-local clients.
-        let mut locals = Vec::with_capacity(worker_txs.len());
-        for ((rx, tx), thread) in feedback_rxs.into_iter().zip(worker_txs).zip(worker_threads) {
-            locals.push(process_local::ProcessLocal::new(rx, tx, thread));
-        }
-        LocalClient {
-            client: partitioned::Partitioned::new(locals),
-        }
-    }
-}
-
-#[async_trait]
-impl<C, R> GenericClient<C, R> for LocalClient<C, R>
-where
-    (C, R): partitioned::Partitionable<C, R>,
-    C: fmt::Debug + Send,
-    R: fmt::Debug + Send,
-{
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-        trace!("SEND dataflow command: {:?}", cmd);
-        self.client.send(cmd).await
-    }
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        let response = self.client.recv().await;
-        trace!("RECV dataflow response: {:?}", response);
-        response
-    }
-}
-
 /// A [`LocalClient`] for the storage layer.
 pub type LocalStorageClient = LocalClient<StorageCommand, StorageResponse>;
 
 /// A [`LocalClient`] for the compute layer.
 pub type LocalComputeClient = LocalClient<ComputeCommand, ComputeResponse>;
 
-/// Trait for clients that can be disconnected and reconnected.
-#[async_trait]
-pub trait Reconnect {
-    fn disconnect(&mut self);
-    async fn reconnect(&mut self);
-}
-
-/// Trait for clients that can connect to an address
-pub trait FromAddr {
-    fn from_addr(addr: String) -> Self;
-}
-
-/// A convenience type for compatibility.
-#[derive(Debug)]
-pub struct RemoteClient<C, R, G>
-where
-    (C, R): partitioned::Partitionable<C, R>,
-    C: fmt::Debug + Send,
-    R: fmt::Debug + Send,
-    G: GenericClient<C, R> + Reconnect + FromAddr,
-{
-    client: partitioned::Partitioned<G, C, R>,
-}
-
 pub type ComputedRemoteClient<T> = RemoteClient<
     ComputeCommand<T>,
     ComputeResponse<T>,
-    grpc::GrpcClient<
+    GrpcClient<
         proto_compute_client::ProtoComputeClient<tonic::transport::Channel>,
         ProtoComputeCommand,
         ProtoComputeResponse,
@@ -1025,592 +896,45 @@ pub type ComputedRemoteClient<T> = RemoteClient<
 pub type StoragedRemoteClient<T> = RemoteClient<
     StorageCommand<T>,
     StorageResponse<T>,
-    grpc::GrpcClient<
+    GrpcClient<
         proto_storage_client::ProtoStorageClient<tonic::transport::Channel>,
         ProtoStorageCommand,
         ProtoStorageResponse,
     >,
 >;
 
-impl<C, R, G> RemoteClient<C, R, G>
-where
-    (C, R): partitioned::Partitionable<C, R>,
-    C: fmt::Debug + Send,
-    R: fmt::Debug + Send,
-    G: GenericClient<C, R> + Reconnect + FromAddr,
-{
-    /// Construct a client backed by multiple tcp connections
-    pub fn new(addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display]) -> Self {
-        let mut remotes = Vec::with_capacity(addrs.len());
-        for addr in addrs.iter() {
-            remotes.push(G::from_addr(addr.to_string()));
-        }
-        Self {
-            client: partitioned::Partitioned::new(remotes),
-        }
-    }
-
-    pub async fn connect(&mut self) {
-        for part in &mut self.client.parts {
-            part.reconnect().await;
-        }
-    }
-}
-
-#[async_trait]
-impl<C, R, G> GenericClient<C, R> for RemoteClient<C, R, G>
-where
-    (C, R): partitioned::Partitionable<C, R>,
-    C: Serialize + fmt::Debug + Unpin + Send,
-    R: DeserializeOwned + fmt::Debug + Unpin + Send,
-    G: GenericClient<C, R> + Reconnect + FromAddr,
-{
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-        trace!("Sending dataflow command: {:?}", cmd);
-        self.client.send(cmd).await
-    }
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        let response = self.client.recv().await;
-        trace!("Receiving dataflow response: {:?}", response);
-        response
-    }
-}
-
-/// A client backed by a process-local timely worker thread.
-pub mod process_local {
-    use std::fmt;
-
-    use async_trait::async_trait;
-
-    use super::{GenericClient, Reconnect};
-
-    /// A client to a dataflow server running in the current process.
-    #[derive(Debug)]
-    pub struct ProcessLocal<C, R> {
-        feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
-        worker_tx: crossbeam_channel::Sender<C>,
-        worker_thread: std::thread::Thread,
-    }
-
-    #[async_trait]
-    impl<C: Send, R: Send> Reconnect for ProcessLocal<C, R> {
-        fn disconnect(&mut self) {
-            panic!("Disconnecting and reconnecting local clients is currently impossible");
-        }
-        async fn reconnect(&mut self) {
-            panic!("Disconnecting and reconnecting local clients is currently impossible");
-        }
-    }
-
-    #[async_trait]
-    impl<C, R> GenericClient<C, R> for ProcessLocal<C, R>
-    where
-        C: fmt::Debug + Send,
-        R: fmt::Debug + Send,
-    {
-        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-            self.worker_tx
-                .send(cmd)
-                .expect("worker command receiver should not drop first");
-            self.worker_thread.unpark();
-            Ok(())
-        }
-
-        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-            Ok(self.feedback_rx.recv().await)
-        }
-    }
-
-    impl<C, R> ProcessLocal<C, R> {
-        /// Create a new instance of [ProcessLocal] from its parts.
-        pub fn new(
-            feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
-            worker_tx: crossbeam_channel::Sender<C>,
-            worker_thread: std::thread::Thread,
-        ) -> Self {
-            Self {
-                feedback_rx,
-                worker_tx,
-                worker_thread,
-            }
-        }
-    }
-
-    // We implement `Drop` so that we can wake each of the workers and have them notice the drop.
-    impl<C, R> Drop for ProcessLocal<C, R> {
-        fn drop(&mut self) {
-            // Drop the worker handle.
-            let (tx, _rx) = crossbeam_channel::unbounded();
-            self.worker_tx = tx;
-            // Unpark the thread once the handle is dropped, so that it can observe the emptiness.
-            self.worker_thread.unpark();
-        }
-    }
-}
-
 /// A client to a remote dataflow server.
 pub mod grpc {
-    use mz_proto::ProtoType;
-    use mz_proto::RustType;
-    use std::cmp;
-    use std::fmt;
-    use std::net::ToSocketAddrs;
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tracing::{debug, error, info, warn};
-
     use async_trait::async_trait;
     use futures::stream::StreamExt;
-    use futures::Stream;
-    use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-    use tokio::sync::Mutex;
-    use tokio::sync::Notify;
-    use tokio::time::{self, Instant};
+    use tokio::sync::mpsc::{self, UnboundedReceiver};
     use tokio_stream::wrappers::UnboundedReceiverStream;
-    use tonic::transport::Server;
-    use tonic::Request;
-    use tonic::Response;
-    use tonic::Streaming;
+    use tonic::transport::Channel;
+    use tonic::{Request, Response, Status, Streaming};
+    use tracing::debug;
 
-    use super::proto_compute_client::ProtoComputeClient;
-    use super::proto_storage_client::ProtoStorageClient;
-    use super::FromAddr;
-    use super::GenericClient;
-    use super::Reconnect;
+    use mz_service::grpc::{BidiProtoClient, GrpcServer, ResponseStream};
 
-    /// A client to a remote dataflow server using gRPC and protobuf based communication.
-    ///
-    /// The client opens a connection using the proto client stubs that are generated by
-    /// tonic from the service definition in `client.proto`. After creation, the client is in
-    /// disconnected state. To connect it, `connect` has to be called. Once the client is
-    /// connected, it will call automatically the only RPC defined in the service description,
-    /// encapsulated by the `BidiProtoClient` trait. This trait bound is not on the `Client`
-    /// type parameter here, but it IS on the impl blocks.
-    /// Bidirectional protobuf RPC sets up two streams that persist after the
-    /// RPC has returned: A Request (Command) stream (for us, backed by a unbounded mpsc queue)
-    /// going from this instance to the server and a response stream coming back
-    /// (represented directly as a Streaming<Response> instance). The recv and send functions
-    /// interact with the two mpsc channels or the streaming instance respectively.
-    #[derive(Debug)]
-    pub struct GrpcClient<Client, PC, PR> {
-        addr: String,
-        state: GrpcTcpConn<Client, PC, PR>,
-        backoff: Duration,
-    }
-
-    /// The connection state of the GrpcClient.
-    #[derive(Debug)]
-    enum GrpcTcpConn<Client, PC, PR> {
-        // Initial, disconnected state
-        Disconnected,
-
-        // We have a TCP client connection, but we have to wait for RPC answer for setting up the streams
-        AwaitResponse(Client),
-
-        // Ready to go!
-        Connected((UnboundedSender<PC>, Streaming<PR>)),
-
-        // Unable to connect, wait on next connect
-        Backoff(Instant),
-    }
-
-    impl<Client, PC, PR> FromAddr for GrpcClient<Client, PC, PR> {
-        fn from_addr(addr: String) -> Self {
-            GrpcClient {
-                addr: format!("http://{}", addr),
-                state: GrpcTcpConn::Disconnected,
-                backoff: Duration::from_millis(10),
-            }
-        }
-    }
-
-    impl<Client, PC, PR> GrpcClient<Client, PC, PR>
-    where
-        Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR>,
-    {
-        // This is and must be cancellation safe
-        pub async fn connect(&mut self) -> () {
-            loop {
-                match &mut self.state {
-                    GrpcTcpConn::Disconnected => {
-                        debug!("GrpcClient {}: Attempt to connect", &self.addr);
-                        match Client::connect(self.addr.clone()).await {
-                            Ok(client) => {
-                                self.backoff = Duration::from_millis(10);
-                                self.state = GrpcTcpConn::AwaitResponse(client);
-                            }
-                            Err(e) => {
-                                self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
-                                warn!(
-                                    "GrpcClient {}: Connection refused: {}. Backoff {}ms",
-                                    &self.addr,
-                                    e,
-                                    self.backoff.as_millis()
-                                );
-                                self.state = GrpcTcpConn::Backoff(Instant::now() + self.backoff);
-                            }
-                        }
-                    }
-                    GrpcTcpConn::AwaitResponse(client) => {
-                        // The channel size is a arbitrary, but it should be a
-                        // small bounded channel such that backpressure is applied early.
-                        let (tx, rx) = mpsc::unbounded_channel();
-                        match client.create_stream(rx).await {
-                            Ok(stream) => {
-                                info!("GrpcClient {}: connected", &self.addr);
-                                self.state = GrpcTcpConn::Connected((tx, stream));
-                            }
-                            Err(err) => {
-                                debug!("GrpcClient {}: Connection refused: {}", &self.addr, err);
-                                self.state = GrpcTcpConn::Disconnected;
-                            }
-                        }
-                    }
-                    GrpcTcpConn::Connected(_) => break,
-                    GrpcTcpConn::Backoff(deadline) => {
-                        time::sleep_until(*deadline).await;
-                        self.state = GrpcTcpConn::Disconnected;
-                    }
-                }
-            }
-        }
-    }
+    use crate::client::proto_compute_client::ProtoComputeClient;
+    use crate::client::proto_compute_server::ProtoCompute;
+    use crate::client::proto_storage_client::ProtoStorageClient;
+    use crate::client::proto_storage_server::ProtoStorage;
+    use crate::client::{
+        ProtoComputeCommand, ProtoComputeResponse, ProtoStorageCommand, ProtoStorageResponse,
+    };
 
     #[async_trait]
-    impl<Client, C, R, PC, PR> GenericClient<C, R> for GrpcClient<Client, PC, PR>
-    where
-        C: RustType<PC> + Send + Sync + 'static,
-        R: RustType<PR> + Send + Sync,
-        Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR> + Send + fmt::Debug,
-        PC: Send + Sync + fmt::Debug,
-        PR: Send + Sync + fmt::Debug,
-    {
-        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-            let sender = if let GrpcTcpConn::Connected((sender, _)) = &self.state {
-                sender
-            } else {
-                return Err(anyhow::anyhow!("Sent into disconnected channel"));
-            };
-            if sender.send(cmd.into_proto()).is_err() {
-                self.state = GrpcTcpConn::Disconnected;
-                Err(anyhow::anyhow!("Sent into disconnected channel"))
-            } else {
-                Ok(())
-            }
-        }
+    impl BidiProtoClient for ProtoComputeClient<Channel> {
+        type ProtoCommand = ProtoComputeCommand;
+        type ProtoResponse = ProtoComputeResponse;
 
-        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-            if let GrpcTcpConn::Connected(channels) = &mut self.state {
-                match channels.1.next().await {
-                    Some(Ok(x)) => match x.into_rust() {
-                        Ok(r) => return Ok(Some(r)),
-                        Err(e) => {
-                            error!(
-                                "could not decode protobuf message, terminating connection: {}",
-                                e
-                            );
-                            self.state = GrpcTcpConn::Disconnected;
-                            anyhow::bail!("Connection severed");
-                        }
-                    },
-                    other => {
-                        match other {
-                            Some(Ok(_)) => unreachable!("handled above"),
-                            None => error!("connection unexpectedly terminated cleanly"),
-                            Some(Err(e)) => error!("connection unexpectedly errored: {}", e),
-                        }
-
-                        self.state = GrpcTcpConn::Disconnected;
-                        anyhow::bail!("Connection severed")
-                    }
-                }
-            } else {
-                Err(anyhow::anyhow!("Connection severed"))
-            }
-        }
-    }
-
-    #[async_trait]
-    impl<
-            Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR> + Send + Sync,
-            PC: Send,
-            PR,
-        > Reconnect for GrpcClient<Client, PC, PR>
-    {
-        fn disconnect(&mut self) {
-            debug!("GrpcClient {}: disconnect called", &self.addr);
-            self.state = GrpcTcpConn::Disconnected;
-        }
-
-        async fn reconnect(&mut self) {
-            debug!("GrpcClient {}: reconnect called", &self.addr);
-            self.connect().await
-        }
-    }
-
-    /// The server side gRPC implementation that will run in computed or storaged.
-    ///
-    /// There are two main tasks involved: The gRPC callback implementations will execute in their own tasks,
-    /// receive commands from the network and send responses to the network. Upon reception of a command,
-    /// the implementation will put it in a mpsc queue, out of which the consumer (running in another
-    /// task) will read it with a recv call. The same goes for the send path: The consumer calls `send` which
-    /// puts the response in a mpsc queue, from which the gRPC stubs will read and send it over the network.
-    ///
-    /// If an error occurs, the consumer receives an error from the recv call. If no client is
-    /// connected recv will block until a client is available. To implement the "waiting for
-    /// client" the queue_change notification is used. recv will check first if a client is connected using
-    /// queue. If queue is None, no client is connected and recv will await on the queue_change notification.
-    /// The server does this vice-versa. Upon connection of a client, it will insert the endpoints
-    /// into queue and trigger the queue_change, which will wake up the waiting clients.
-    ///
-    /// This is the shared datastructure between server and consumer.
-    ///
-    pub struct GrpcShared<PC, PR> {
-        // These are endpoints for the consumer. The other end of these queues is consumed by the
-        // stream implementation. `queue` is None if no client is connected, otherwise the
-        // endpoints are forwarded to the single client. If a client is connecting but a client is
-        // already connected, this mutex is used to block. If the consumer calls send or recv and
-        // queue is None, the consumer will wait on the queue_change notification to proceed only
-        // when a client has connected.
-        queue: Mutex<Option<(Streaming<PC>, UnboundedSender<PR>)>>,
-
-        // If queue changes, the server side will publish a notification here.
-        queue_change: Notify,
-    }
-
-    /// Server side implementation.
-    pub struct GrpcServer<PC, PR> {
-        shared: Arc<GrpcShared<PC, PR>>,
-    }
-
-    /// Consumer side functions such as send and recv. These will not directly interact with the
-    /// network, but put messages in a mpsc queue which will be read and sent to the network in a
-    /// separate server task.
-    pub struct GrpcServerInterface<PC, PR> {
-        shared: Arc<GrpcShared<PC, PR>>,
-    }
-
-    impl<PC: Send + Sync, PR: Send + Sync + fmt::Debug + 'static> GrpcServerInterface<PC, PR> {
-        pub async fn send<R: RustType<PR> + Send + Sync>(
-            &self,
-            resp: R,
-        ) -> Result<(), anyhow::Error> {
-            loop {
-                let res = match self.shared.queue.lock().await.as_ref() {
-                    Some(x) => Some(x.1.send((&resp).into_proto()).map_err(Into::into)),
-
-                    // Other end absent, wait for connection, can't inline queue reset
-                    // here as we are still holding the lock.
-                    None => None,
-                };
-
-                match res {
-                    Some(r) => {
-                        if r.is_err() {
-                            *self.shared.queue.lock().await = None;
-                        }
-                        return r;
-                    }
-                    None => self.shared.queue_change.notified().await,
-                }
-            }
-        }
-
-        // Recv returns an error if a faulty connection is detected (for example when
-        // the other queue endpoint has been dropped).
-        // If there is no current connection, it will await a connection from the coordinator.
-        //
-        // This function is and must be cancellation safe.
-        // If a message is received from the streaming instance and it does not cause an error,
-        // the message will be delivered, as there are no await points on the path.
-        // If there is an error more await point will be passed, however the hope is that in the
-        // error case, the next interaction with the queue will produce another error, such that
-        // the errors are not lost due to cancellation.
-        //
-        // There is no race between the creation of new queue pair, as the Notify will store
-        // internally a permit: If a notifier comes first, and this function calls notified().await,
-        // it will immediately return (and clear the permit).
-        // See https://docs.rs/tokio/0.2.12/tokio/sync/struct.Notify.html
-        pub async fn recv<C: RustType<PC>>(&mut self) -> Result<C, anyhow::Error> {
-            loop {
-                let res = match self.shared.queue.lock().await.as_mut() {
-                    Some(x) => {
-                        let res = match x.0.next().await {
-                            Some(Ok(x)) => x.into_rust().map_err(Into::into),
-                            Some(Err(e)) => {
-                                info!("Connection severed: {}", e);
-                                Err(e.into())
-                            }
-                            None => {
-                                info!("Connection severed: Endpoint gone");
-                                Err(anyhow::anyhow!("Connection severed: Endpoint gone"))
-                            }
-                        };
-                        Some(res)
-                    }
-
-                    // Other end absent, wait for connection
-                    None => {
-                        debug!("recv called while no coordinator connected, waiting for coordinator connection.");
-                        None
-                    }
-                };
-
-                // Don't move queue reset in block above as we are still holding the queue lock
-                // there.
-                match res {
-                    None => {
-                        // No queue
-                        self.shared.queue_change.notified().await;
-                    }
-                    Some(res) => {
-                        if res.is_err() {
-                            *self.shared.queue.lock().await = None;
-                        }
-                        return res;
-                    }
-                }
-            }
-        }
-    }
-
-    type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, tonic::Status>> + Send>>;
-
-    // The following traits and impls are here because of limitations in prost; namely,
-    // it does not provide traits that are generic over the request/response types,
-    // for clients and servers.
-
-    /// The implementations of this trait MUST be identical minus the types.
-    #[tonic::async_trait]
-    impl super::proto_compute_server::ProtoCompute
-        for GrpcServer<super::ProtoComputeCommand, super::ProtoComputeResponse>
-    {
-        type CommandResponseStreamStream = ResponseStream<super::ProtoComputeResponse>;
-
-        async fn command_response_stream(
-            &self,
-            req: Request<Streaming<super::ProtoComputeCommand>>,
-        ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, tonic::Status> {
-            debug!("GrpcServer: remote client connected");
-
-            // Consistent with the ActiveReplication client, we use unbounded channels.
-            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-
-            // Store channels in state
-            *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
-            self.shared.queue_change.notify_waiters();
-
-            let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
-
-            Ok(Response::new(
-                Box::pin(receiver_stream) as Self::CommandResponseStreamStream
-            ))
-        }
-    }
-
-    #[tonic::async_trait]
-    impl super::proto_storage_server::ProtoStorage
-        for GrpcServer<super::ProtoStorageCommand, super::ProtoStorageResponse>
-    {
-        type CommandResponseStreamStream = ResponseStream<super::ProtoStorageResponse>;
-
-        async fn command_response_stream(
-            &self,
-            req: Request<Streaming<super::ProtoStorageCommand>>,
-        ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, tonic::Status> {
-            debug!("GrpcServer: remote client connected");
-
-            // Consistent with the ActiveReplication client, we use unbounded channels.
-            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-
-            // Store channels in state
-            *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
-            self.shared.queue_change.notify_waiters();
-
-            let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
-
-            Ok(Response::new(
-                Box::pin(receiver_stream) as Self::CommandResponseStreamStream
-            ))
-        }
-    }
-
-    /// Creates a running gRPC based server that can receive `PC`
-    /// and sends `PR`. Returns a a tuple of GrpcServerInterface that
-    /// can be used to recv and send from. As well as a shutdown signal, which should
-    /// be used to terminate the mainloop if a message is sent.
-    ///
-    /// The trait bounds here are intimidating, but the `f` parameter is
-    /// _a function that turns a `GrpcServer<ProtoCommandType, ProtoResponseType>`
-    /// into a `tower::Service` that represents a grpc server. This is _always_
-    /// encapsulated by the `ExportedFromTonicServer::new` for a specific protobuf
-    /// `service`.
-    pub fn grpc_server<PC, PR, F, S>(listen_addr: String, f: F) -> GrpcServerInterface<PC, PR>
-    where
-        PC: Send + 'static,
-        PR: Send + 'static,
-        S: tower::Service<
-                http::request::Request<tonic::transport::Body>,
-                Response = http::response::Response<tonic::body::BoxBody>,
-                Error = std::convert::Infallible,
-            > + tonic::transport::NamedService
-            + Clone
-            + Send
-            + 'static,
-        S::Future: Send + 'static,
-        F: FnOnce(GrpcServer<PC, PR>) -> S + Send + 'static,
-    {
-        // The channel size is a arbitrary, but it should be a
-        // small bounded channel such that backpressure is applied early.
-        let shared = Arc::new(GrpcShared {
-            queue: Mutex::new(None),
-            queue_change: Notify::new(),
-        });
-
-        let server = GrpcServer {
-            shared: Arc::clone(&shared),
-        };
-
-        mz_ore::task::spawn(|| "ComputedProtoServer", async move {
-            info!("Starting to listen on {}", listen_addr);
-            Server::builder()
-                .add_service(f(server))
-                .serve(listen_addr.to_socket_addrs().unwrap().next().unwrap())
-                .await
-                .unwrap();
-        });
-
-        GrpcServerInterface { shared }
-    }
-
-    // TODO(guswynn): if prost ever presents the client api as a trait, move to that
-    // instead of this verbose
-    /// Encapsulates the core functionality of a prost client for a bidirectional stream.
-    ///
-    /// The implementations for this trait MUST be identical minus the types
-    #[async_trait::async_trait]
-    pub trait BidiProtoClient {
-        type ProtoCommand;
-        type ProtoResponse;
-        async fn connect(addr: String) -> Result<Self, anyhow::Error>
-        where
-            Self: Sized;
-        async fn create_stream(
-            &mut self,
-            rx: UnboundedReceiver<Self::ProtoCommand>,
-        ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error>;
-    }
-    #[async_trait::async_trait]
-    impl BidiProtoClient for ProtoComputeClient<tonic::transport::Channel> {
-        type ProtoCommand = super::ProtoComputeCommand;
-        type ProtoResponse = super::ProtoComputeResponse;
         async fn connect(addr: String) -> Result<Self, anyhow::Error>
         where
             Self: Sized,
         {
             Ok(ProtoComputeClient::connect(addr).await?)
         }
+
         async fn create_stream(
             &mut self,
             rx: UnboundedReceiver<Self::ProtoCommand>,
@@ -1624,16 +948,19 @@ pub mod grpc {
             }
         }
     }
-    #[async_trait::async_trait]
-    impl BidiProtoClient for ProtoStorageClient<tonic::transport::Channel> {
-        type ProtoCommand = super::ProtoStorageCommand;
-        type ProtoResponse = super::ProtoStorageResponse;
+
+    #[async_trait]
+    impl BidiProtoClient for ProtoStorageClient<Channel> {
+        type ProtoCommand = ProtoStorageCommand;
+        type ProtoResponse = ProtoStorageResponse;
+
         async fn connect(addr: String) -> Result<Self, anyhow::Error>
         where
             Self: Sized,
         {
             Ok(ProtoStorageClient::connect(addr).await?)
         }
+
         async fn create_stream(
             &mut self,
             rx: UnboundedReceiver<Self::ProtoCommand>,
@@ -1648,93 +975,59 @@ pub mod grpc {
         }
     }
 
-    // Convenient re-exports
-    pub use super::proto_compute_server::ProtoComputeServer;
-    pub use super::proto_storage_server::ProtoStorageServer;
+    // The following traits and impls are here because of limitations in prost; namely,
+    // it does not provide traits that are generic over the request/response types,
+    // for clients and servers.
 
-    // Convenience methods for serving a grpc server that is connected to a local client
+    /// The implementations of this trait MUST be identical minus the types.
+    #[async_trait]
+    impl ProtoCompute for GrpcServer<ProtoComputeCommand, ProtoComputeResponse> {
+        type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
 
-    /// Configuration required to configure `serve`.
-    pub struct ServeConfig {
-        /// What address to listen for grpc rpcs on.
-        pub listen_addr: String,
-        /// Whether or not to continue running if the client (the coordinator)
-        /// disconnects.
-        pub linger: bool,
+        async fn command_response_stream(
+            &self,
+            req: Request<Streaming<ProtoComputeCommand>>,
+        ) -> Result<Response<Self::CommandResponseStreamStream>, Status> {
+            debug!("GrpcServer: remote client connected");
+
+            // Consistent with the ActiveReplication client, we use unbounded channels.
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+            // Store channels in state
+            *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
+            self.shared.queue_change.notify_waiters();
+
+            let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
+
+            Ok(Response::new(
+                Box::pin(receiver_stream) as Self::CommandResponseStreamStream
+            ))
+        }
     }
 
-    /// Start a grpc server, and forward commands and responses to the
-    /// _local_ `client`.
-    ///
-    /// The trait bounds here are intimidating, but the `f` parameter is
-    /// _a function that turns a `GrpcServer<ProtoCommandType, ProtoResponseType>`
-    /// into a `tower::Service` that represents a grpc server. This is _always_
-    /// encapsulated by the `ExportedFromTonicServer::new` for a specific protobuf
-    /// `service`.
-    ///
-    /// Some servers (like `ProtoComputeServer`) are re-exported from this module
-    /// for convenience.
-    pub async fn serve<C, R, PC, PR, S, F, G>(
-        config: ServeConfig,
-        mut client: G,
-        f: F,
-    ) -> Result<(), anyhow::Error>
-    where
-        PC: Send + Sync + 'static + fmt::Debug,
-        PR: Send + Sync + 'static + fmt::Debug,
-        C: RustType<PC> + Send + Sync + 'static,
-        R: RustType<PR> + Send + Sync,
-        G: super::GenericClient<C, R>,
-        S: tower::Service<
-                http::request::Request<tonic::transport::Body>,
-                Response = http::response::Response<tonic::body::BoxBody>,
-                Error = std::convert::Infallible,
-            > + tonic::transport::NamedService
-            + Clone
-            + Send
-            + 'static,
-        S::Future: Send + 'static,
-        F: FnOnce(GrpcServer<PC, PR>) -> S + Send + 'static,
-    {
-        let mut grpc_serve = grpc_server(config.listen_addr, f);
+    #[async_trait]
+    impl ProtoStorage for GrpcServer<ProtoStorageCommand, ProtoStorageResponse> {
+        type CommandResponseStreamStream = ResponseStream<ProtoStorageResponse>;
 
-        loop {
-            // This select implies that the .recv functions of the clients must be cancellation safe.
-            loop {
-                tokio::select! {
-                    res = grpc_serve.recv() => {
-                        match res {
-                            Ok(cmd) => client.send(cmd).await.unwrap(),
-                            Err(err) => {
-                                tracing::warn!("Lost connection: {}", err);
-                                break;
-                            }
-                        }
-                    },
-                    res = client.recv() => {
-                        match res.unwrap() {
-                            None => { },
-                            Some(response) => {
-                                match grpc_serve.send(response).await {
-                                    Ok(_) =>  { } ,
-                                    Err(err) => {
-                                        tracing::warn!("Lost connection: {}", err);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    },
-                }
-            }
-            if !config.linger {
-                tracing::info!("coordinator connection gone; terminating");
-                break;
-            }
-            tracing::info!("coordinator connection gone; waiting for reconnect");
+        async fn command_response_stream(
+            &self,
+            req: Request<Streaming<ProtoStorageCommand>>,
+        ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, Status> {
+            debug!("GrpcServer: remote client connected");
+
+            // Consistent with the ActiveReplication client, we use unbounded channels.
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+            // Store channels in state
+            *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
+            self.shared.queue_change.notify_waiters();
+
+            let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
+
+            Ok(Response::new(
+                Box::pin(receiver_stream) as Self::CommandResponseStreamStream
+            ))
         }
-
-        Ok(())
     }
 }
 

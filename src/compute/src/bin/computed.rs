@@ -17,6 +17,7 @@ use once_cell::sync::Lazy;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
+use mz_dataflow_types::client::proto_compute_server::ProtoComputeServer;
 use mz_dataflow_types::client::ComputeClient;
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
@@ -24,8 +25,9 @@ use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-
 use mz_pid_file::PidFile;
+use mz_service::grpc;
+
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
 // comfortably handled by the macOS system allocator. Consider re-evaluating if
@@ -174,21 +176,19 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ),
     };
 
-    let serve_config = mz_dataflow_types::client::grpc::ServeConfig {
-        listen_addr: args.listen_addr,
-        linger: args.linger,
-    };
-
     let (_server, client) = mz_compute::server::serve(config)?;
     let mut client: Box<dyn ComputeClient> = Box::new(client);
     if args.reconcile {
         client = Box::new(ComputeCommandReconcile::new(client))
     }
 
-    mz_dataflow_types::client::grpc::serve(
-        serve_config,
+    mz_service::grpc::serve(
+        grpc::ServeConfig {
+            listen_addr: args.listen_addr,
+            linger: args.linger,
+        },
         client,
-        mz_dataflow_types::client::grpc::ProtoComputeServer::new,
+        ProtoComputeServer::new,
     )
     .await
 }

@@ -23,10 +23,11 @@ use timely::WorkerConfig;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
+use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalComputeClient};
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_service::local::LocalClient;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;

@@ -38,6 +38,7 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-service = { path = "../service" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
 tonic = "0.7.2"

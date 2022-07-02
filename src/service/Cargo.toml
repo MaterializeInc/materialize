@@ -1,0 +1,24 @@
+[package]
+name = "mz-service"
+description = "Common code for services orchestrated by environmentd."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.61.0"
+publish = false
+
+[dependencies]
+anyhow = "1.0.58"
+async-stream = "0.3.3"
+async-trait = "0.1.56"
+crossbeam-channel = "0.5.5"
+futures = "0.3.21"
+http = "0.2.8"
+itertools = "0.10.3"
+mz-proto = { path = "../proto" }
+mz-ore = { path = "../ore" }
+serde = { version = "1.0.137", features = ["derive"] }
+tokio = "1.19.2"
+tokio-stream = "0.1.9"
+tonic = "0.7.2"
+tower = "0.4.13"
+tracing = "0.1.35"
