@@ -49,7 +49,7 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, TailBatch, TailResponse,
 };
-use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
+use mz_compute_client::service::ComputeGrpcClient;
 use mz_orchestrator::{
     CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
     ServicePort,
@@ -289,7 +289,6 @@ where
             ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
                 let client = ComputeGrpcClient::new_partitioned(replicas.into_iter().collect());
-                let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 compute_instance.add_replica(replica_id, client);
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
@@ -362,7 +361,6 @@ where
                     )
                     .await?;
                 let client = ComputeGrpcClient::new_partitioned(service.addresses("controller"));
-                let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance_id)
                     .unwrap()
                     .add_replica(replica_id, client);

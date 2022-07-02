@@ -35,7 +35,7 @@ use uuid::Uuid;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_service::client::GenericClient;
+use mz_service::client::{GenericClient, Reconnect};
 use mz_storage::client::controller::{ReadPolicy, StorageController, StorageError};
 use mz_storage::client::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 
@@ -232,7 +232,10 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub fn add_replica(&mut self, id: ReplicaId, client: Box<dyn ComputeClient<T>>) {
+    pub fn add_replica<C>(&mut self, id: ReplicaId, client: C)
+    where
+        C: ComputeClient<T> + Reconnect + 'static,
+    {
         self.compute.client.add_replica(id, client);
     }
 
