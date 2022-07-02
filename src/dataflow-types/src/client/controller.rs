@@ -31,7 +31,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use maplit::hashmap;
-use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -45,6 +44,7 @@ use mz_orchestrator::{
     CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
     ServicePort,
 };
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
@@ -54,7 +54,7 @@ use crate::client::{
     ConcreteComputeInstanceReplicaConfig, ControllerResponse, ProcessId, ReplicaId, StorageCommand,
     StorageResponse,
 };
-use crate::client::{ComputedRemoteClient, GenericClient};
+use crate::client::{ComputeGrpcClient, GenericClient};
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
 
@@ -251,7 +251,7 @@ where
         match config {
             ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
-                let client = ComputedRemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
+                let client = ComputeGrpcClient::new_partitioned(replicas.into_iter().collect());
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 compute_instance.add_replica(replica_id, client);
             }
@@ -324,7 +324,7 @@ where
                         },
                     )
                     .await?;
-                let client = ComputedRemoteClient::new(&service.addresses("controller"));
+                let client = ComputeGrpcClient::new_partitioned(service.addresses("controller"));
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance_id)
                     .unwrap()

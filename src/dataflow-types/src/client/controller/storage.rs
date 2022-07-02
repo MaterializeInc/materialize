@@ -56,7 +56,7 @@ use mz_stash::{self, StashError, TypedCollection};
 use crate::client::controller::ReadPolicy;
 use crate::client::{
     GenericClient, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse, StorageClient,
-    StorageCommand, StorageResponse, StoragedRemoteClient,
+    StorageCommand, StorageGrpcClient, StorageResponse,
 };
 use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
 use crate::{DataflowError, Update};
@@ -522,8 +522,8 @@ where
 
                 // TODO: don't block waiting for a connection. Put a queue in the
                 // middle instead.
-                let mut client = Box::new({
-                    let mut client = StoragedRemoteClient::new(&[addr]);
+                let mut client: Box<dyn StorageClient<T>> = Box::new({
+                    let mut client = StorageGrpcClient::new(addr);
                     client.connect().await;
                     client
                 });

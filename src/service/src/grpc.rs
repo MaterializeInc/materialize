@@ -30,7 +30,7 @@ use tracing::{debug, error, info, warn};
 
 use mz_proto::{ProtoType, RustType};
 
-use crate::client::{FromAddr, GenericClient, Reconnect};
+use crate::client::{GenericClient, Partitionable, Partitioned, Reconnect};
 
 pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Send>>;
 
@@ -72,13 +72,21 @@ enum GrpcTcpConn<Client, PC, PR> {
     Backoff(Instant),
 }
 
-impl<Client, PC, PR> FromAddr for GrpcClient<Client, PC, PR> {
-    fn from_addr(addr: String) -> Self {
+impl<Client, PC, PR> GrpcClient<Client, PC, PR> {
+    pub fn new(addr: String) -> Self {
         GrpcClient {
             addr: format!("http://{}", addr),
             state: GrpcTcpConn::Disconnected,
             backoff: Duration::from_millis(10),
         }
+    }
+
+    pub fn new_partitioned<C, R>(addrs: Vec<String>) -> Partitioned<Self, C, R>
+    where
+        (C, R): Partitionable<C, R>,
+    {
+        let clients = addrs.into_iter().map(Self::new).collect();
+        Partitioned::new(clients)
     }
 }
 

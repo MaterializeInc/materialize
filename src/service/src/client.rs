@@ -79,11 +79,6 @@ pub trait Reconnect {
     async fn reconnect(&mut self);
 }
 
-/// Trait for clients that can connect to an address
-pub trait FromAddr {
-    fn from_addr(addr: String) -> Self;
-}
-
 #[derive(Debug)]
 struct ReconnectionState {
     /// Why we are trying to reconnect
