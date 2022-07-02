@@ -34,9 +34,10 @@ use timely::progress::ChangeBatch;
 use tracing::warn;
 
 use mz_repr::GlobalId;
+use mz_service::client::GenericClient;
 
 use crate::client::controller::storage::CollectionMetadata;
-use crate::client::{ComputeClient, ComputeCommand, ComputeResponse, GenericClient};
+use crate::client::{ComputeClient, ComputeCommand, ComputeResponse};
 use crate::{DataflowDescription, Plan};
 
 /// Reconcile commands targeted at a COMPUTE instance.

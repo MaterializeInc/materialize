@@ -32,16 +32,18 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
-use crate::client::controller::storage::{StorageController, StorageError};
-use crate::client::replicated::ActiveReplication;
-use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
-use crate::client::{GenericClient, Peek};
-use crate::logging::LoggingConfig;
-use crate::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
-use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
+use mz_service::client::GenericClient;
+
+use crate::client::controller::storage::{StorageController, StorageError};
+use crate::client::replicated::ActiveReplication;
+use crate::client::Peek;
+use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
+use crate::logging::LoggingConfig;
+use crate::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
+use crate::{DataflowDescription, SourceInstanceDesc};
 
 use super::ReadPolicy;
 
