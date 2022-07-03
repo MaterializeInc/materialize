@@ -20,7 +20,7 @@ mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
 pprof = "0.9.1"
-serde = { version = "1.0.137", features = ["derive"] }
+serde = { version = "1.0.138", features = ["derive"] }
 tempfile = "3.2.0"
 tracing = "0.1.35"
 tokio = { version = "1.19.2", features = ["time"] }
