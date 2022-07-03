@@ -56,7 +56,7 @@ tokio-console = ["mz-ore/tokio-console"]
 [dev-dependencies]
 async-trait = "0.1.56"
 axum = "0.5.9"
-clap = { version = "3.2.6", features = ["derive", "env"] }
+clap = { version = "3.2.8", features = ["derive", "env"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
 futures-task = "0.3.21"
 mz-http-util = { path = "../http-util" }
