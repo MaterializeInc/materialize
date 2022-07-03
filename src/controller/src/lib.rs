@@ -38,28 +38,32 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
+use uuid::Uuid;
 
-use mz_compute_client::client::controller::{
-    ComputeController, ComputeControllerMut, ComputeControllerState,
-};
-use mz_compute_client::client::{
-    ActiveReplicationResponse, ComputeClient, ComputeCommand, ComputeGrpcClient, ComputeInstanceId,
-    ComputeResponse, ControllerResponse, ProcessId, ProtoComputeCommand, ProtoComputeResponse,
-    ReplicaId,
+use mz_compute_client::command::{ComputeCommand, ProcessId, ProtoComputeCommand, ReplicaId};
+use mz_compute_client::controller::{
+    ActiveReplicationResponse, ComputeController, ComputeControllerMut, ComputeControllerState,
+    ComputeInstanceId,
 };
 use mz_compute_client::logging::LoggingConfig;
-use mz_compute_client::{TailBatch, TailResponse};
+use mz_compute_client::response::{
+    ComputeResponse, PeekResponse, ProtoComputeResponse, TailBatch, TailResponse,
+};
+use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
     CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
     ServicePort,
 };
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
+use mz_repr::GlobalId;
 use mz_storage::client::controller::StorageController;
 use mz_storage::client::{
-    ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
+    LinearizedTimestampBindingFeedback, ProtoStorageCommand, ProtoStorageResponse, StorageCommand,
+    StorageResponse,
 };
 
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
@@ -205,6 +209,26 @@ pub struct ComputeInstanceEvent {
     pub process_id: ProcessId,
     pub status: ComputeInstanceStatus,
     pub time: DateTime<Utc>,
+}
+
+/// Responses that the controller can provide back to the coordinator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ControllerResponse<T = mz_repr::Timestamp> {
+    /// The worker's response to a specified (by connection id) peek.
+    ///
+    /// Additionally, an `OpenTelemetryContext` to forward trace information
+    /// back into coord. This allows coord traces to be children of work
+    /// done in compute!
+    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    /// The worker's next response to a specified tail.
+    TailResponse(GlobalId, TailResponse<T>),
+    /// Data about timestamp bindings, sent to the coordinator, in service
+    /// of a specific "linearized" read request.
+    // TODO(benesch,gus): update language to avoid the term "linearizability".
+    LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
+    /// Notification that we have received a message from the given compute replica
+    /// at the given time.
+    ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
 enum UnderlyingControllerResponse<T> {

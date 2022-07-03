@@ -35,16 +35,12 @@ use mz_compute_client::plan::reduce::{
 use mz_expr::{AggregateExpr, AggregateFunc};
 use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
-use mz_repr::{Datum, DatumList, Diff, Row, RowArena};
+use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage::client::errors::DataflowError;
 
-use super::context::Arrangement;
-use super::context::CollectionBundle;
-use super::context::Context;
-use super::ArrangementFlavor;
-use mz_repr::DatumVec;
-
-use mz_compute_client::RowSpine;
+use crate::render::context::{Arrangement, CollectionBundle, Context};
+use crate::render::ArrangementFlavor;
+use crate::typedefs::RowSpine;
 
 /// Render a dataflow based on the provided plan.
 ///

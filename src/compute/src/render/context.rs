@@ -28,13 +28,14 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use mz_compute_client::DataflowDescription;
-use mz_compute_client::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
+use mz_compute_client::command::DataflowDescription;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use mz_storage::client::controller::CollectionMetadata;
 use mz_storage::client::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+
+use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
 pub(crate) type Arrangement<S, V> =

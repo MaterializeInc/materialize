@@ -25,7 +25,8 @@ use tracing::{info, trace};
 
 use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_compute_client::client::{ComputeInstanceId, ProcessId, ReplicaId};
+use mz_compute_client::command::{ProcessId, ReplicaId};
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_controller::{ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};

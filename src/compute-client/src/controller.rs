@@ -39,11 +39,21 @@ use mz_service::client::GenericClient;
 use mz_storage::client::controller::{ReadPolicy, StorageController, StorageError};
 use mz_storage::client::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 
-use crate::client::replicated::ActiveReplication;
-use crate::client::Peek;
-use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
+use crate::command::{
+    ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
+};
+use crate::controller::replicated::ActiveReplication;
 use crate::logging::LoggingConfig;
-use crate::{DataflowDescription, SourceInstanceDesc};
+use crate::service::ComputeClient;
+
+// NOTE(benesch): this should be a private implementation detail of the compute
+// controller. It is unfortunate that it leaks out.
+pub use crate::controller::replicated::ActiveReplicationResponse;
+
+mod replicated;
+
+/// An abstraction allowing us to name different compute instances.
+pub type ComputeInstanceId = u64;
 
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
@@ -161,7 +171,7 @@ where
                 );
             }
         }
-        let mut client = crate::client::replicated::ActiveReplication::default();
+        let mut client = ActiveReplication::default();
         client
             .send(ComputeCommand::CreateInstance(InstanceConfig {
                 replica_id: Default::default(),
@@ -189,7 +199,7 @@ where
 
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage(&self) -> &dyn crate::client::controller::StorageController<Timestamp = T> {
+    pub fn storage(&self) -> &dyn StorageController<Timestamp = T> {
         self.storage_controller
     }
 
@@ -217,9 +227,7 @@ where
 
     /// Acquires a mutable handle to a controller for the storage instance.
     #[inline]
-    pub fn storage_mut(
-        &mut self,
-    ) -> &mut dyn crate::client::controller::StorageController<Timestamp = T> {
+    pub fn storage_mut(&mut self) -> &mut dyn StorageController<Timestamp = T> {
         self.storage_controller
     }
 

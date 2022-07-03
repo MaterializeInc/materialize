@@ -20,7 +20,7 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 
-use mz_compute_client::TailResponse;
+use mz_compute_client::response::{TailBatch, TailResponse};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::client::controller::CollectionMetadata;
 use mz_storage::client::sinks::{SinkAsOf, SinkDesc, TailSinkConnection};
@@ -147,7 +147,7 @@ impl TailProtocol {
                 .expect("The tail response buffer is only cleared on drop.");
             buffer.borrow_mut().push((
                 self.sink_id,
-                TailResponse::Batch(mz_compute_client::TailBatch {
+                TailResponse::Batch(TailBatch {
                     lower: self.prev_upper.clone(),
                     upper: upper.clone(),
                     updates: ship,

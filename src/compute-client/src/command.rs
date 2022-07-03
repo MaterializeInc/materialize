@@ -7,239 +7,222 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! The types for the dataflow crate.
-//!
-//! These are extracted into their own crate so that crates that only depend
-//! on the interface of the dataflow crate, and not its implementation, can
-//! avoid the dependency, as the dataflow crate is very slow to compile.
+// Tonic generates code that calls clone on an Arc. Allow this here.
+// TODO: Remove this once tonic does not produce this code anymore.
+#![allow(clippy::clone_on_ref_ptr)]
+
+//! Compute layer commands.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::TryFrom;
-use std::num::NonZeroUsize;
 
-use proptest::prelude::{any, Arbitrary};
+use proptest::prelude::{any, Arbitrary, Just};
 use proptest::prop_oneof;
-use proptest::strategy::{BoxedStrategy, Just, Strategy};
+use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
+use uuid::Uuid;
 
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_proto::any_uuid;
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, RelationType, Row};
+use mz_expr::{
+    CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+};
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_proto::{any_uuid, IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, RelationType, Row};
 use mz_storage::client::controller::CollectionMetadata;
 use mz_storage::client::sinks::SinkDesc;
 use mz_storage::client::transforms::LinearOperator;
+use mz_storage::client::ProtoAllowCompaction;
 
-use crate::Plan;
+use crate::command::proto_dataflow_description::{ProtoIndex, ProtoSinkExport, ProtoSourceImport};
+use crate::logging::LoggingConfig;
+use crate::plan::Plan;
 
-use proto_dataflow_description::*;
+include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_client.types.rs"));
+/// Commands related to the computation and maintenance of views.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ComputeCommand<T = mz_repr::Timestamp> {
+    /// Indicates the creation of an instance, and is the first command for its compute instance.
+    CreateInstance(InstanceConfig),
+    /// Indicates the termination of an instance, and is the last command for its compute instance.
+    DropInstance,
 
-/// The response from a `Peek`.
-///
-/// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
-/// we expect a 1:1 contract between `Peek` and `PeekResponse`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum PeekResponse {
-    Rows(Vec<(Row, NonZeroUsize)>),
-    Error(String),
-    Canceled,
+    /// Create a sequence of dataflows.
+    ///
+    /// Each of the dataflows must contain `as_of` members that are valid
+    /// for each of the referenced arrangements, meaning `AllowCompaction`
+    /// should be held back to those values until the command.
+    /// Subsequent commands may arbitrarily compact the arrangements;
+    /// the dataflow runners are responsible for ensuring that they can
+    /// correctly maintain the dataflows.
+    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>>),
+    /// Enable compaction in compute-managed collections.
+    ///
+    /// Each entry in the vector names a collection and provides a frontier after which
+    /// accumulations must be correct. The workers gain the liberty of compacting
+    /// the corresponding maintained traces up through that frontier.
+    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+
+    /// Peek at an arrangement.
+    Peek(Peek<T>),
+    /// Cancel the peeks associated with the given `uuids`.
+    CancelPeeks {
+        /// The identifiers of the peek requests to cancel.
+        uuids: BTreeSet<Uuid>,
+    },
 }
 
-impl PeekResponse {
-    pub fn unwrap_rows(self) -> Vec<(Row, NonZeroUsize)> {
+impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoComputeCommand {
+        use proto_compute_command::Kind::*;
+        use proto_compute_command::*;
+        ProtoComputeCommand {
+            kind: Some(match self {
+                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
+                ComputeCommand::DropInstance => DropInstance(()),
+                ComputeCommand::CreateDataflows(dataflows) => {
+                    CreateDataflows(ProtoCreateDataflows {
+                        dataflows: dataflows.into_proto(),
+                    })
+                }
+                ComputeCommand::AllowCompaction(collections) => {
+                    AllowCompaction(ProtoAllowCompaction {
+                        collections: collections.into_proto(),
+                    })
+                }
+                ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
+                ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
+                    uuids: uuids.into_proto(),
+                }),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoComputeCommand) -> Result<Self, TryFromProtoError> {
+        use proto_compute_command::Kind::*;
+        use proto_compute_command::*;
+        match proto.kind {
+            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
+            Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
+            Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
+                Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
+            }
+            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
+                Ok(ComputeCommand::AllowCompaction(collections.into_rust()?))
+            }
+            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
+            Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
+                uuids: uuids.into_rust()?,
+            }),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoComputeCommand::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
+            Just(ComputeCommand::DropInstance),
+            proptest::collection::vec(
+                any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>(),
+                1..4
+            )
+            .prop_map(ComputeCommand::CreateDataflows),
+            proptest::collection::vec(
+                (
+                    any::<GlobalId>(),
+                    proptest::collection::vec(any::<u64>(), 1..4)
+                ),
+                1..4
+            )
+            .prop_map(|collections| ComputeCommand::AllowCompaction(
+                collections
+                    .into_iter()
+                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
+                    .collect()
+            )),
+            any::<Peek>().prop_map(ComputeCommand::Peek),
+            proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
+                ComputeCommand::CancelPeeks {
+                    uuids: BTreeSet::from_iter(uuids.into_iter()),
+                }
+            })
+        ]
+        .boxed()
+    }
+}
+
+impl<T> ComputeCommand<T> {
+    /// Indicates which global ids should start and cease frontier tracking.
+    ///
+    /// Identifiers added to `start` will install frontier tracking, and identifiers
+    /// added to `cease` will uninstall frontier tracking.
+    pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
         match self {
-            PeekResponse::Rows(rows) => rows,
-            PeekResponse::Error(_) | PeekResponse::Canceled => {
-                panic!("PeekResponse::unwrap_rows called on {:?}", self)
+            ComputeCommand::CreateDataflows(dataflows) => {
+                for dataflow in dataflows.iter() {
+                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                        start.push(*sink_id)
+                    }
+                    for (index_id, _) in dataflow.index_exports.iter() {
+                        start.push(*index_id);
+                    }
+                }
+            }
+            ComputeCommand::AllowCompaction(frontiers) => {
+                for (id, frontier) in frontiers.iter() {
+                    if frontier.is_empty() {
+                        cease.push(*id);
+                    }
+                }
+            }
+            ComputeCommand::CreateInstance(config) => {
+                if let Some(logging_config) = &config.logging {
+                    start.extend(logging_config.log_identifiers());
+                }
+            }
+            _ => {
+                // Other commands have no known impact on frontier tracking.
             }
         }
     }
 }
 
-impl RustType<ProtoPeekResponse> for PeekResponse {
-    fn into_proto(&self) -> ProtoPeekResponse {
-        use proto_peek_response::Kind::*;
-        use proto_peek_response::*;
-        ProtoPeekResponse {
-            kind: Some(match self {
-                PeekResponse::Rows(rows) => Rows(ProtoRows {
-                    rows: rows
-                        .iter()
-                        .map(|(r, d)| ProtoRow {
-                            row: Some(r.into_proto()),
-                            diff: d.into_proto(),
-                        })
-                        .collect(),
-                }),
-                PeekResponse::Error(err) => proto_peek_response::Kind::Error(err.clone()),
-                PeekResponse::Canceled => Canceled(()),
-            }),
+/// An abstraction allowing us to name different replicas.
+pub type ReplicaId = u64;
+
+/// Identifier of a process within a replica.
+pub type ProcessId = i64;
+
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Configuration sent to new compute instances.
+pub struct InstanceConfig {
+    /// The instance's replica ID.
+    pub replica_id: ReplicaId,
+    /// Optionally, request the installation of logging sources.
+    pub logging: Option<LoggingConfig>,
+}
+
+impl RustType<ProtoInstanceConfig> for InstanceConfig {
+    fn into_proto(&self) -> ProtoInstanceConfig {
+        ProtoInstanceConfig {
+            replica_id: self.replica_id,
+            logging: self.logging.into_proto(),
         }
     }
 
-    fn from_proto(proto: ProtoPeekResponse) -> Result<Self, TryFromProtoError> {
-        use proto_peek_response::Kind::*;
-        match proto.kind {
-            Some(Rows(rows)) => Ok(PeekResponse::Rows(
-                rows.rows
-                    .into_iter()
-                    .map(|row| {
-                        Ok((
-                            row.row.into_rust_if_some("ProtoRow::row")?,
-                            NonZeroUsize::from_proto(row.diff)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-            )),
-            Some(proto_peek_response::Kind::Error(err)) => Ok(PeekResponse::Error(err)),
-            Some(Canceled(())) => Ok(PeekResponse::Canceled),
-            None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind")),
-        }
-    }
-}
-
-impl Arbitrary for PeekResponse {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            proptest::collection::vec(
-                (
-                    any::<Row>(),
-                    (1..usize::MAX).prop_map(|u| NonZeroUsize::try_from(u).unwrap())
-                ),
-                1..11
-            )
-            .prop_map(PeekResponse::Rows),
-            ".*".prop_map(PeekResponse::Error),
-            Just(PeekResponse::Canceled),
-        ]
-        .boxed()
-    }
-}
-
-/// Various responses that can be communicated about the progress of a TAIL command.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub enum TailResponse<T = mz_repr::Timestamp> {
-    /// A batch of updates over a non-empty interval of time.
-    Batch(TailBatch<T>),
-    /// The TAIL dataflow was dropped, leaving updates from this frontier onward unspecified.
-    DroppedAt(Antichain<T>),
-}
-
-impl RustType<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoTailResponse {
-        use proto_tail_response::Kind::*;
-        ProtoTailResponse {
-            kind: Some(match self {
-                TailResponse::Batch(tail_batch) => Batch(tail_batch.into_proto()),
-                TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoTailResponse) -> Result<Self, TryFromProtoError> {
-        use proto_tail_response::Kind::*;
-        match proto.kind {
-            Some(Batch(tail_batch)) => Ok(TailResponse::Batch(tail_batch.into_rust()?)),
-            Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into())),
-            None => Err(TryFromProtoError::missing_field("ProtoTailResponse::kind")),
-        }
-    }
-}
-
-impl Arbitrary for TailResponse<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            any::<TailBatch<mz_repr::Timestamp>>().prop_map(TailResponse::Batch),
-            proptest::collection::vec(any::<u64>(), 1..4)
-                .prop_map(|antichain| TailResponse::DroppedAt(Antichain::from(antichain)))
-        ]
-        .boxed()
-    }
-}
-
-/// A batch of updates for the interval `[lower, upper)`.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TailBatch<T> {
-    /// The lower frontier of the batch of updates.
-    pub lower: Antichain<T>,
-    /// The upper frontier of the batch of updates.
-    pub upper: Antichain<T>,
-    /// All updates greater than `lower` and not greater than `upper`.
-    pub updates: Vec<(T, Row, Diff)>,
-}
-
-impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoTailBatch {
-        use proto_tail_batch::ProtoUpdate;
-        ProtoTailBatch {
-            lower: Some((&self.lower).into()),
-            upper: Some((&self.upper).into()),
-            updates: self
-                .updates
-                .iter()
-                .map(|(t, r, d)| ProtoUpdate {
-                    timestamp: *t,
-                    row: Some(r.into_proto()),
-                    diff: *d,
-                })
-                .collect(),
-        }
-    }
-
-    fn from_proto(proto: ProtoTailBatch) -> Result<Self, TryFromProtoError> {
-        Ok(TailBatch {
-            lower: proto
-                .lower
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::lower"))?,
-            upper: proto
-                .upper
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::upper"))?,
-            updates: proto
-                .updates
-                .into_iter()
-                .map(|update| {
-                    Ok((
-                        update.timestamp,
-                        update.row.into_rust_if_some("ProtoUpdate::row")?,
-                        update.diff,
-                    ))
-                })
-                .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+    fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            replica_id: proto.replica_id,
+            logging: proto.logging.into_rust()?,
         })
-    }
-}
-
-impl Arbitrary for TailBatch<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            proptest::collection::vec(any::<u64>(), 1..4),
-            proptest::collection::vec(any::<u64>(), 1..4),
-            proptest::collection::vec(
-                (any::<mz_repr::Timestamp>(), any::<Row>(), any::<Diff>()),
-                1..4,
-            ),
-        )
-            .prop_map(|(lower, upper, updates)| TailBatch {
-                lower: Antichain::from(lower),
-                upper: Antichain::from(upper),
-                updates,
-            })
-            .boxed()
     }
 }
 
@@ -777,14 +760,106 @@ impl RustType<ProtoIndexDesc> for IndexDesc {
     }
 }
 
+/// Peek at an arrangement.
+///
+/// This request elicits data from the worker, by naming an
+/// arrangement and some actions to apply to the results before
+/// returning them.
+///
+/// The `timestamp` member must be valid for the arrangement that
+/// is referenced by `id`. This means that `AllowCompaction` for
+/// this arrangement should not pass `timestamp` before this command.
+/// Subsequent commands may arbitrarily compact the arrangements;
+/// the dataflow runners are responsible for ensuring that they can
+/// correctly answer the `Peek`.
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Peek<T = mz_repr::Timestamp> {
+    /// The identifier of the arrangement.
+    pub id: GlobalId,
+    /// An optional key that should be used for the arrangement.
+    pub key: Option<Row>,
+    /// The identifier of this peek request.
+    ///
+    /// Used in responses and cancellation requests.
+    #[proptest(strategy = "any_uuid()")]
+    pub uuid: Uuid,
+    /// The logical timestamp at which the arrangement is queried.
+    pub timestamp: T,
+    /// Actions to apply to the result set before returning them.
+    pub finishing: RowSetFinishing,
+    /// Linear operation to apply in-line on each result.
+    pub map_filter_project: mz_expr::SafeMfpPlan,
+    /// Target replica of this peek.
+    ///
+    /// If `Some`, the peek is only handled by the given replica.
+    /// If `None`, the peek is handled by all replicas.
+    pub target_replica: Option<ReplicaId>,
+    /// An `OpenTelemetryContext` to forward trace information along
+    /// to the compute worker to allow associating traces between
+    /// the compute controller and the compute worker.
+    #[proptest(strategy = "empty_otel_ctx()")]
+    pub otel_ctx: OpenTelemetryContext,
+}
+
+impl RustType<ProtoPeek> for Peek {
+    fn into_proto(&self) -> ProtoPeek {
+        ProtoPeek {
+            id: Some(self.id.into_proto()),
+            key: self.key.into_proto(),
+            uuid: Some(self.uuid.into_proto()),
+            timestamp: self.timestamp,
+            finishing: Some(self.finishing.into_proto()),
+            map_filter_project: Some(self.map_filter_project.into_proto()),
+            target_replica: self.target_replica,
+            otel_ctx: self.otel_ctx.clone().into(),
+        }
+    }
+
+    fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: x.id.into_rust_if_some("ProtoPeek::id")?,
+            key: x.key.into_rust()?,
+            uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
+            timestamp: x.timestamp,
+            finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
+            map_filter_project: x
+                .map_filter_project
+                .into_rust_if_some("ProtoPeek::map_filter_project")?,
+            target_replica: x.target_replica,
+            otel_ctx: x.otel_ctx.into(),
+        })
+    }
+}
+
+fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
+    (0..1).prop_map(|_| OpenTelemetryContext::empty())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use proptest::prelude::ProptestConfig;
+    use proptest::proptest;
+
     use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
 
         #[test]
         fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>()) {

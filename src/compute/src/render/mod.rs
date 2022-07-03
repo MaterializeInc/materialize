@@ -112,7 +112,8 @@ use timely::dataflow::Scope;
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_compute_client::*;
+use mz_compute_client::command::{BuildDesc, DataflowDescription, IndexDesc};
+use mz_compute_client::plan::Plan;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{GlobalId, Row};
@@ -141,7 +142,7 @@ mod top_k;
 pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<mz_compute_client::plan::Plan, CollectionMetadata>,
+    dataflow: DataflowDescription<Plan, CollectionMetadata>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -281,7 +282,7 @@ where
     G: Scope,
     G::Timestamp: RenderTimestamp,
 {
-    pub(crate) fn build_object(&mut self, scope: &mut G, object: BuildDesc<plan::Plan>) {
+    pub(crate) fn build_object(&mut self, scope: &mut G, object: BuildDesc<Plan>) {
         // First, transform the relation expression into a render plan.
         let bundle = self.render_plan(object.plan, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
@@ -355,7 +356,7 @@ where
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(
         &mut self,
-        plan: plan::Plan,
+        plan: Plan,
         scope: &mut G,
         worker_index: usize,
     ) -> CollectionBundle<G, Row> {

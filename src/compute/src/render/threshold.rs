@@ -15,18 +15,17 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Consolidate;
-use mz_expr::MirScalarExpr;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use mz_repr::{Diff, Row};
-
-use crate::render::context::CollectionBundle;
-use crate::render::context::{ArrangementFlavor, Context};
 use mz_compute_client::plan::threshold::{
     BasicThresholdPlan, RetractionsThresholdPlan, ThresholdPlan,
 };
-use mz_compute_client::RowSpine;
+use mz_expr::MirScalarExpr;
+use mz_repr::{Diff, Row};
+
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::typedefs::RowSpine;
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<G, T, R, L>(

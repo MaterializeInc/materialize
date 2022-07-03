@@ -7,38 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! The types for the dataflow crate.
-//!
-//! These are extracted into their own crate so that crates that only depend
-//! on the interface of the dataflow crate, and not its implementation, can
-//! avoid the dependency, as the dataflow crate is very slow to compile.
+// This appears to be defective at the moment, with false positives
+// for each variant of the `Command` enum, each of which are documented.
+// #![warn(missing_docs)]
 
-use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+//! The public API for the compute layer.
 
-use mz_repr::{Diff, Row, Timestamp};
-use mz_storage::client::errors::DataflowError;
-
-pub mod client;
+pub mod command;
+pub mod controller;
+pub mod explain;
 pub mod logging;
 pub mod plan;
-pub mod reconciliation;
-
-mod explain;
-mod types;
-
-pub use explain::DataflowGraphFormatter;
-pub use explain::Explanation;
-pub use explain::JsonViewFormatter;
-pub use explain::TimestampExplanation;
-pub use explain::TimestampSource;
-pub use plan::Plan;
-pub use types::*;
-
-pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
-pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
-
-pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
-pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
-pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;
-pub type ErrsHandle = TraceErrHandle<DataflowError, Timestamp, Diff>;
+pub mod response;
+pub mod service;

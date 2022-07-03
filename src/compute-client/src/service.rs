@@ -7,20 +7,114 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Clients whose implementation is partitioned across a set of subclients
-//! (e.g. timely workers).
+// Tonic generates code that calls clone on an Arc. Allow this here.
+// TODO: Remove this once tonic does not produce this code anymore.
+#![allow(clippy::clone_on_ref_ptr)]
+
+//! Compute layer client and server.
 
 use std::collections::HashMap;
 
+use async_trait::async_trait;
+use differential_dataflow::consolidation::consolidate_updates;
+use futures::stream::StreamExt;
 use timely::progress::frontier::MutableAntichain;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tonic::transport::Channel;
+use tonic::{Request, Response, Status, Streaming};
 use tracing::debug;
 use uuid::Uuid;
 
 use mz_repr::{Diff, GlobalId, Row};
-use mz_service::client::{Partitionable, PartitionedState};
+use mz_service::client::{GenericClient, Partitionable, PartitionedState};
+use mz_service::grpc::{BidiProtoClient, GrpcClient, GrpcServer, ResponseStream};
 
-use crate::client::{ComputeCommand, ComputeResponse, PeekResponse};
-use crate::{DataflowDescription, TailResponse};
+use crate::command::{BuildDesc, ComputeCommand, DataflowDescription, ProtoComputeCommand};
+use crate::response::{
+    ComputeResponse, PeekResponse, ProtoComputeResponse, TailBatch, TailResponse,
+};
+use crate::service::proto_compute_client::ProtoComputeClient;
+use crate::service::proto_compute_server::ProtoCompute;
+
+include!(concat!(env!("OUT_DIR"), "/mz_compute_client.service.rs"));
+
+/// A client to a compute server.
+pub trait ComputeClient<T = mz_repr::Timestamp>:
+    GenericClient<ComputeCommand<T>, ComputeResponse<T>>
+{
+}
+
+impl<C, T> ComputeClient<T> for C where C: GenericClient<ComputeCommand<T>, ComputeResponse<T>> {}
+
+#[async_trait]
+impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn ComputeClient<T>> {
+    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+        (**self).send(cmd).await
+    }
+    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        (**self).recv().await
+    }
+}
+
+pub type ComputeGrpcClient =
+    GrpcClient<ProtoComputeClient<Channel>, ProtoComputeCommand, ProtoComputeResponse>;
+
+#[async_trait]
+impl BidiProtoClient for ProtoComputeClient<Channel> {
+    type ProtoCommand = ProtoComputeCommand;
+    type ProtoResponse = ProtoComputeResponse;
+
+    async fn connect(addr: String) -> Result<Self, anyhow::Error>
+    where
+        Self: Sized,
+    {
+        Ok(ProtoComputeClient::connect(addr).await?)
+    }
+
+    async fn create_stream(
+        &mut self,
+        rx: UnboundedReceiver<Self::ProtoCommand>,
+    ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error> {
+        match self
+            .command_response_stream(UnboundedReceiverStream::new(rx))
+            .await
+        {
+            Ok(resp_rx_wrap) => Ok(resp_rx_wrap.into_inner()),
+            Err(err) => Err(err)?,
+        }
+    }
+}
+
+// The following traits and impls are here because of limitations in prost; namely,
+// it does not provide traits that are generic over the request/response types,
+// for clients and servers.
+
+/// The implementations of this trait MUST be identical minus the types.
+#[async_trait]
+impl ProtoCompute for GrpcServer<ProtoComputeCommand, ProtoComputeResponse> {
+    type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
+
+    async fn command_response_stream(
+        &self,
+        req: Request<Streaming<ProtoComputeCommand>>,
+    ) -> Result<Response<Self::CommandResponseStreamStream>, Status> {
+        debug!("GrpcServer: remote client connected");
+
+        // Consistent with the ActiveReplication client, we use unbounded channels.
+        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+        // Store channels in state
+        *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
+        self.shared.queue_change.notify_waiters();
+
+        let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
+
+        Ok(Response::new(
+            Box::pin(receiver_stream) as Self::CommandResponseStreamStream
+        ))
+    }
+}
 
 /// Maintained state for partitioned compute clients.
 ///
@@ -123,7 +217,7 @@ where
                         for (plan, objects_to_build) in
                             build_part.into_iter().zip(builds_parts.iter_mut())
                         {
-                            objects_to_build.push(crate::BuildDesc {
+                            objects_to_build.push(BuildDesc {
                                 id: build_desc.id,
                                 plan,
                             });
@@ -235,8 +329,6 @@ where
                     Some(entry) => entry,
                 };
 
-                use crate::TailBatch;
-                use differential_dataflow::consolidation::consolidate_updates;
                 match response {
                     TailResponse::Batch(TailBatch {
                         lower,

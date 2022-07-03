@@ -9,8 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_compute_client::client::controller::ComputeController;
-use mz_compute_client::client::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
 use mz_expr::MirScalarExpr;
 use mz_repr::GlobalId;
 use mz_stash::Append;

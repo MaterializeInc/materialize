@@ -17,20 +17,19 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
 
-use super::{DifferentialLog, LogVariant};
-use crate::logging::ConsolidateBuffer;
-use mz_compute_client::KeysValsHandle;
-use mz_compute_client::RowSpine;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
+
+use crate::logging::{ConsolidateBuffer, DifferentialLog, LogVariant};
+use crate::typedefs::{KeysValsHandle, RowSpine};
 
 /// Constructs the logging dataflow for differential logs.
 ///
