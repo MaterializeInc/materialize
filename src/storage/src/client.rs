@@ -25,7 +25,7 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::progress::ChangeBatch;
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
@@ -79,28 +79,19 @@ pub type StorageGrpcClient = GrpcClient<
 >;
 
 #[async_trait]
-impl BidiProtoClient for ProtoStorageClient<Channel> {
-    type ProtoCommand = ProtoStorageCommand;
-    type ProtoResponse = ProtoStorageResponse;
-
-    async fn connect(addr: String) -> Result<Self, anyhow::Error>
+impl BidiProtoClient<ProtoStorageCommand, ProtoStorageResponse> for ProtoStorageClient<Channel> {
+    async fn connect(addr: String) -> Result<Self, tonic::transport::Error>
     where
         Self: Sized,
     {
-        Ok(ProtoStorageClient::connect(addr).await?)
+        ProtoStorageClient::connect(addr).await
     }
 
-    async fn create_stream(
+    async fn establish_bidi_stream(
         &mut self,
-        rx: UnboundedReceiver<Self::ProtoCommand>,
-    ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error> {
-        match self
-            .command_response_stream(UnboundedReceiverStream::new(rx))
-            .await
-        {
-            Ok(resp_rx_wrap) => Ok(resp_rx_wrap.into_inner()),
-            Err(err) => Err(err)?,
-        }
+        rx: UnboundedReceiverStream<ProtoStorageCommand>,
+    ) -> Result<Response<Streaming<ProtoStorageResponse>>, Status> {
+        self.command_response_stream(rx).await
     }
 }
 
