@@ -17,6 +17,7 @@ mz-orchestrator = { path = "../orchestrator" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
+mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
@@ -28,3 +29,4 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = "1.19.2"
 tokio-stream = "0.1.9"
 tracing = "0.1.35"
+uuid = { version = "1.1.2" }

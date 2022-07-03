@@ -13,9 +13,7 @@
 #![allow(missing_docs)]
 #![warn(missing_debug_implementations)]
 
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
@@ -31,11 +29,11 @@ use mz_ore::soft_panic_or_log;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 
-use self::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
-use self::reduce::{KeyValPlan, ReducePlan};
-use self::threshold::ThresholdPlan;
-use self::top_k::TopKPlan;
-use crate::DataflowDescription;
+use crate::command::{BuildDesc, DataflowDescription};
+use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::threshold::ThresholdPlan;
+use crate::plan::top_k::TopKPlan;
 
 pub mod join;
 pub mod reduce;
@@ -1477,7 +1475,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 },
             )?;
             arrangements.insert(Id::Global(build.id), keys);
-            objects_to_build.push(crate::BuildDesc { id: build.id, plan });
+            objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
         Ok(DataflowDescription {

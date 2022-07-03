@@ -24,10 +24,6 @@ fn main() {
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
-        .type_attribute(
-            ".mz_compute_client.postgres_source",
-            "#[derive(Eq, serde::Serialize, serde::Deserialize)]",
-        )
         .compile(
             &[
                 "storage/src/client.proto",

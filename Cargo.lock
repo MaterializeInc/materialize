@@ -3006,6 +3006,7 @@ name = "mz-compute"
 version = "0.26.1-dev"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "clap",
  "crossbeam-channel",
@@ -3089,6 +3090,7 @@ dependencies = [
  "maplit",
  "mz-compute-client",
  "mz-orchestrator",
+ "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
  "mz-proto",
@@ -3103,6 +3105,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "uuid 1.1.2",
 ]
 
 [[package]]

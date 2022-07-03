@@ -33,12 +33,13 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::ChangeBatch;
 use tracing::warn;
 
+use mz_compute_client::command::{ComputeCommand, DataflowDescription};
+use mz_compute_client::plan::Plan;
+use mz_compute_client::response::ComputeResponse;
+use mz_compute_client::service::ComputeClient;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 use mz_storage::client::controller::CollectionMetadata;
-
-use crate::client::{ComputeClient, ComputeCommand, ComputeResponse};
-use crate::{DataflowDescription, Plan};
 
 /// Reconcile commands targeted at a COMPUTE instance.
 ///

@@ -7,19 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+syntax = "proto3";
 
-//! Materialize's compute layer.
+import "compute-client/src/command.proto";
+import "compute-client/src/response.proto";
 
-pub(crate) mod arrangement;
-pub mod communication;
-pub mod compute_state;
-pub(crate) mod logging;
-pub mod reconciliation;
-pub(crate) mod render;
-pub mod server;
-pub(crate) mod sink;
-mod typedefs;
+package mz_compute_client.service;
 
-pub use arrangement::manager::{TraceManager, TraceMetrics};
-pub use sink::SinkBaseMetrics;
+service ProtoCompute {
+    rpc CommandResponseStream (stream command.ProtoComputeCommand) returns (stream response.ProtoComputeResponse);
+}

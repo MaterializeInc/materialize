@@ -29,6 +29,7 @@ use mz_timely_util::operator::CollectionExt;
 use crate::render::context::{
     Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
 };
+use crate::typedefs::RowSpine;
 
 /// Different forms the streamed data might take.
 enum JoinedFlavor<G, T>
@@ -201,7 +202,6 @@ where
             });
 
             errors.push(errs);
-            use mz_compute_client::RowSpine;
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }

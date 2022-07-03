@@ -24,14 +24,13 @@ use timely::logging::WorkerIdentifier;
 use tracing::error;
 use uuid::Uuid;
 
-use mz_compute_client::KeysValsHandle;
-use mz_compute_client::RowSpine;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
-use super::{LogVariant, MaterializedLog};
+use crate::logging::{LogVariant, MaterializedLog};
+use crate::typedefs::{KeysValsHandle, RowSpine};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;

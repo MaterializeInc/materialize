@@ -14,9 +14,8 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
-use mz_compute_client::client::controller::ComputeController;
-use mz_compute_client::client::ComputeInstanceId;
-use mz_compute_client::{BuildDesc, DataflowDesc, IndexDesc};
+use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc};
+use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -200,7 +199,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
         }
-        let mut index_description = mz_compute_client::IndexDesc {
+        let mut index_description = mz_compute_client::command::IndexDesc {
             on_id: index.on,
             key: index.keys.clone(),
         };

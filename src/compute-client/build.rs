@@ -25,20 +25,17 @@ fn main() {
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
         .extern_path(".mz_storage", "::mz_storage")
-        .type_attribute(
-            ".mz_compute_client.postgres_source",
-            "#[derive(Eq, serde::Serialize, serde::Deserialize)]",
-        )
         .compile(
             &[
-                "compute-client/src/client.proto",
+                "compute-client/src/command.proto",
                 "compute-client/src/logging.proto",
                 "compute-client/src/plan.proto",
                 "compute-client/src/plan/join.proto",
                 "compute-client/src/plan/reduce.proto",
                 "compute-client/src/plan/threshold.proto",
                 "compute-client/src/plan/top_k.proto",
-                "compute-client/src/types.proto",
+                "compute-client/src/response.proto",
+                "compute-client/src/service.proto",
             ],
             &[".."],
         )

@@ -9,10 +9,11 @@
 
 //! Implementations around supporting the TAIL protocol with the dataflow layer
 
-use mz_compute_client::TailResponse;
+use tokio::sync::mpsc;
+
+use mz_compute_client::response::{TailBatch, TailResponse};
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row};
-use tokio::sync::mpsc;
 
 use crate::coord::PeekResponseUnary;
 
@@ -51,7 +52,7 @@ impl PendingTail {
     pub(crate) fn process_response(&mut self, response: TailResponse) -> bool {
         let mut row_buf = Row::default();
         match response {
-            TailResponse::Batch(mz_compute_client::TailBatch {
+            TailResponse::Batch(TailBatch {
                 lower: _,
                 upper,
                 updates: mut rows,
