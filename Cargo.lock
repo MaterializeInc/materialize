@@ -3099,15 +3099,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-dataflow-bin"
-version = "0.0.0"
-dependencies = [
- "clap",
- "mz-ore",
- "timely",
-]
-
-[[package]]
 name = "mz-dataflow-types"
 version = "0.0.0"
 dependencies = [

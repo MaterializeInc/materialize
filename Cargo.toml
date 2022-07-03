@@ -8,7 +8,6 @@ members = [
     "src/ccsr",
     "src/compute",
     "src/coord",
-    "src/dataflow-bin",
     "src/dataflow-types",
     "src/frontegg-auth",
     "src/expr-test-util",
