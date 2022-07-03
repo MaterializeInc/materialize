@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.58"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.2.6", features = ["derive"] }
+clap = { version = "3.2.8", features = ["derive"] }
 hex = "0.4.3"
 mz-ore = { path = "../../src/ore", features = ["task"] }
 mz-test-util = { path = "../../test/test-util" }

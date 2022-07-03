@@ -11,7 +11,7 @@ anyhow = "1.0.58"
 aws-config = { version = "0.14.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 bytes = "1.1.0"
-clap = { version = "3.2.6", features = ["derive"] }
+clap = { version = "3.2.8", features = ["derive"] }
 futures = "0.3.21"
 mz-kinesis-util = { path = "../../src/kinesis-util" }
 mz-ore = { path = "../../src/ore", features = ["task"] }
