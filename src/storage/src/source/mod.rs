@@ -83,8 +83,6 @@ pub use postgres::PostgresSourceReader;
 pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage.source.rs"));
-
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
 
