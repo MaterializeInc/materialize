@@ -13,7 +13,6 @@ syntax = "proto3";
 
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
-import "expr/src/scalar.proto";
 import "google/protobuf/empty.proto";
 
 package mz_dataflow_types.plan.reduce;

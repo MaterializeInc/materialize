@@ -16,7 +16,6 @@
 
 use mz_dataflow_types::client::controller::ComputeController;
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::sinks::SinkDesc;
 use mz_dataflow_types::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_expr::visit::Visit;
 use mz_expr::{
@@ -28,6 +27,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_stash::Append;
+use mz_storage::client::sinks::SinkDesc;
 
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};

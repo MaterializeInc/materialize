@@ -35,8 +35,8 @@ use tracing::warn;
 
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
+use mz_storage::client::controller::CollectionMetadata;
 
-use crate::client::controller::storage::CollectionMetadata;
 use crate::client::{ComputeClient, ComputeCommand, ComputeResponse};
 use crate::{DataflowDescription, Plan};
 

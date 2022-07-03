@@ -50,11 +50,6 @@ use tokio::time::MissedTickBehavior;
 use tracing::error;
 
 use mz_avro::types::Value;
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{MzOffset, SourceConnection};
-use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -63,6 +58,11 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
+use crate::client::connections::ConnectionContext;
+use crate::client::controller::CollectionMetadata;
+use crate::client::errors::{DecodeError, SourceError, SourceErrorDetails};
+use crate::client::sources::encoding::SourceDataEncoding;
+use crate::client::sources::{MzOffset, SourceConnection};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockOperator;
 use crate::source::util::source;

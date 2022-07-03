@@ -20,12 +20,10 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 
-use mz_dataflow_types::{
-    client::controller::storage::CollectionMetadata,
-    sinks::{SinkAsOf, SinkDesc, TailSinkConnection},
-    TailResponse,
-};
+use mz_dataflow_types::TailResponse;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::sinks::{SinkAsOf, SinkDesc, TailSinkConnection};
 
 use crate::render::sinks::SinkRender;
 

@@ -19,11 +19,11 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
-use crate::connections::CsrConnection;
+use crate::client::connections::CsrConnection;
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_dataflow_types.types.sources.encoding.rs"
+    "/mz_storage.client.sources.encoding.rs"
 ));
 
 pub enum SourceDataEncodingInner {

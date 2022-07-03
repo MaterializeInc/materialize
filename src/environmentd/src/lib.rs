@@ -31,7 +31,6 @@ use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::{ClusterReplicaSizeMap, ControllerConfig};
-use mz_dataflow_types::connections::ConnectionContext;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -39,6 +38,7 @@ use mz_ore::task;
 use mz_secrets::SecretsController;
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
+use mz_storage::client::connections::ConnectionContext;
 use tracing::error;
 
 use crate::tcp_connection::ConnectionHandler;

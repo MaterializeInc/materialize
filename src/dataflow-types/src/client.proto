@@ -11,10 +11,9 @@ syntax = "proto3";
 
 import "dataflow-types/src/logging.proto";
 import "dataflow-types/src/types.proto";
-import "dataflow-types/src/types/sources.proto";
+import "storage/src/client.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
-import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 import "proto/src/proto.proto";
@@ -25,42 +24,6 @@ package mz_dataflow_types.client;
 
 service ProtoCompute {
     rpc CommandResponseStream (stream ProtoComputeCommand) returns (stream ProtoComputeResponse);
-}
-
-service ProtoStorage {
-    rpc CommandResponseStream (stream ProtoStorageCommand) returns (stream ProtoStorageResponse);
-}
-
-message ProtoCompaction {
-    mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_persist.gen.persist.ProtoU64Antichain frontier = 2;
-}
-
-message ProtoAllowCompaction {
-    repeated ProtoCompaction collections = 1;
-}
-
-message ProtoIngestSourceCommand {
-    mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_dataflow_types.types.sources.ProtoIngestionDescription description = 2;
-}
-
-message ProtoIngestSources {
-    repeated ProtoIngestSourceCommand ingestions = 1;
-}
-
-message ProtoFrontierUppersKind {
-    repeated ProtoTrace traces = 1;
-}
-
-message ProtoTrace {
-    mz_repr.global_id.ProtoGlobalId id = 1;
-    repeated ProtoUpdate updates = 2;
-}
-
-message ProtoUpdate {
-    uint64 timestamp = 1;
-    int64 diff = 2;
 }
 
 message ProtoInstanceConfig {
@@ -92,7 +55,7 @@ message ProtoComputeCommand {
         ProtoInstanceConfig create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
-        ProtoAllowCompaction allow_compaction = 4;
+        mz_storage.client.ProtoAllowCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
     }
@@ -111,26 +74,8 @@ message ProtoComputeResponse {
     }
 
     oneof kind {
-        ProtoFrontierUppersKind frontier_uppers = 1;
+        mz_storage.client.ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoPeekResponseKind peek_response = 2;
         ProtoTailResponseKind tail_response = 3;
-    }
-}
-
-message ProtoStorageCommand {
-    oneof kind {
-        ProtoIngestSources ingest_sources = 1;
-        ProtoAllowCompaction allow_compaction = 2;
-    }
-}
-
-message ProtoStorageResponse {
-    message ProtoLinearizedTimestampBindingFeedback {
-        uint64 timestamp = 1;
-        mz_proto.ProtoU128 peek_id = 3;
-    }
-    oneof kind {
-        ProtoFrontierUppersKind frontier_uppers = 1;
-        ProtoLinearizedTimestampBindingFeedback linearized_timestamps = 2;
     }
 }

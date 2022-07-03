@@ -40,7 +40,6 @@ use url::Url;
 use uuid::Uuid;
 
 use mz_dataflow_types::client::controller::ControllerConfig;
-use mz_dataflow_types::connections::ConnectionContext;
 use mz_environmentd::{SecretsControllerConfig, TlsConfig, TlsMode};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator::Orchestrator;
@@ -55,6 +54,7 @@ use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistLocation;
+use mz_storage::client::connections::ConnectionContext;
 
 mod sys;
 

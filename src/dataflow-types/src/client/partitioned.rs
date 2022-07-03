@@ -11,7 +11,6 @@
 //! (e.g. timely workers).
 
 use std::collections::HashMap;
-use std::iter;
 
 use timely::progress::frontier::MutableAntichain;
 use tracing::debug;
@@ -20,110 +19,8 @@ use uuid::Uuid;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{Partitionable, PartitionedState};
 
-use crate::client::{
-    ComputeCommand, ComputeResponse, PeekResponse, StorageCommand, StorageResponse,
-};
+use crate::client::{ComputeCommand, ComputeResponse, PeekResponse};
 use crate::{DataflowDescription, TailResponse};
-
-/// Maintained state for partitioned storage clients.
-///
-/// This helper type unifies the responses of multiple partitioned
-/// workers in order to present as a single worker.
-#[derive(Debug)]
-pub struct PartitionedStorageState<T> {
-    /// Number of partitions the state machine represents.
-    parts: usize,
-    /// Upper frontiers for sources.
-    uppers: HashMap<GlobalId, MutableAntichain<T>>,
-}
-
-impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
-    for (StorageCommand<T>, StorageResponse<T>)
-where
-    T: timely::progress::Timestamp,
-{
-    type PartitionedState = PartitionedStorageState<T>;
-
-    fn new(parts: usize) -> PartitionedStorageState<T> {
-        PartitionedStorageState {
-            parts,
-            uppers: HashMap::new(),
-        }
-    }
-}
-
-impl<T> PartitionedStorageState<T>
-where
-    T: timely::progress::Timestamp,
-{
-    fn observe_command(&mut self, command: &StorageCommand<T>) {
-        match command {
-            StorageCommand::IngestSources(ingestions) => {
-                for ingestion in ingestions {
-                    let mut frontier = MutableAntichain::new();
-                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let previous = self.uppers.insert(ingestion.id, frontier);
-                    assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", ingestion.id, command);
-                }
-            }
-            _ => {
-                // Other commands have no known impact on frontier tracking.
-            }
-        }
-    }
-}
-
-impl<T> PartitionedState<StorageCommand<T>, StorageResponse<T>> for PartitionedStorageState<T>
-where
-    T: timely::progress::Timestamp,
-{
-    fn split_command(&mut self, command: StorageCommand<T>) -> Vec<StorageCommand<T>> {
-        self.observe_command(&command);
-
-        vec![command; self.parts]
-    }
-
-    fn absorb_response(
-        &mut self,
-        _shard_id: usize,
-        response: StorageResponse<T>,
-    ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
-        match response {
-            // Avoid multiple retractions of minimum time, to present as updates from one worker.
-            StorageResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
-                    if let Some(frontier) = self.uppers.get_mut(id) {
-                        let iter = frontier.update_iter(changes.drain());
-                        changes.extend(iter);
-                    } else {
-                        changes.clear();
-                    }
-                }
-                // The following block implements a `list.retain()` of non-empty change batches.
-                // This is more verbose than `list.retain()` because that method cannot mutate
-                // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-                let mut cursor = 0;
-                while let Some((_id, changes)) = list.get_mut(cursor) {
-                    if changes.is_empty() {
-                        list.swap_remove(cursor);
-                    } else {
-                        cursor += 1;
-                    }
-                }
-
-                if list.is_empty() {
-                    None
-                } else {
-                    Some(Ok(StorageResponse::FrontierUppers(list)))
-                }
-            }
-            // TODO(guswynn): is this the correct implementation?
-            StorageResponse::LinearizedTimestamps(feedback) => {
-                Some(Ok(StorageResponse::LinearizedTimestamps(feedback)))
-            }
-        }
-    }
-}
 
 /// Maintained state for partitioned compute clients.
 ///

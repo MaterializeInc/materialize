@@ -11,7 +11,7 @@
 
 syntax = "proto3";
 
-package mz_dataflow_types.client.controller.storage;
+package mz_storage.client.controller;
 
 message ProtoCollectionMetadata {
     string blob_uri = 1;

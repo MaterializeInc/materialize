@@ -34,15 +34,12 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType}
 
 pub mod encoding;
 
-use crate::client::controller::storage::CollectionMetadata;
-use crate::connections::aws::AwsConfig;
-use crate::connections::{KafkaConnection, StringOrSecret};
-use crate::DataflowError;
+use crate::client::connections::aws::AwsConfig;
+use crate::client::connections::{KafkaConnection, StringOrSecret};
+use crate::client::controller::CollectionMetadata;
+use crate::client::errors::DataflowError;
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_dataflow_types.types.sources.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.client.sources.rs"));
 
 /// A description of a source ingestion
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -85,13 +82,7 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
                 .source_imports
                 .into_iter()
                 .map(
-                    |psmi| -> Result<
-                        (
-                            GlobalId,
-                            crate::client::controller::storage::CollectionMetadata,
-                        ),
-                        TryFromProtoError,
-                    > {
+                    |psmi| -> Result<(GlobalId, CollectionMetadata), TryFromProtoError> {
                         let id = psmi.id.into_rust_if_some("ProtoSourceMetadataImport::id")?;
                         let meta = psmi
                             .storage_metadata

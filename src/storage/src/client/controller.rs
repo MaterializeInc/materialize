@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::BufMut;
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future;
 use futures::stream::TryStreamExt as _;
@@ -36,7 +37,7 @@ use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::MutableAntichain;
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
@@ -53,18 +54,14 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_stash::{self, StashError, TypedCollection};
 
-use crate::client::controller::ReadPolicy;
+use crate::client::errors::DataflowError;
+use crate::client::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
 use crate::client::{
     GenericClient, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse, StorageClient,
-    StorageCommand, StorageGrpcClient, StorageResponse,
+    StorageCommand, StorageGrpcClient, StorageResponse, Update,
 };
-use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
-use crate::{DataflowError, Update};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_dataflow_types.client.controller.storage.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.client.controller.rs"));
 
 static METADATA_COLLECTION: TypedCollection<GlobalId, CollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
@@ -160,6 +157,70 @@ pub trait StorageController: Debug + Send {
     ) -> Result<(), anyhow::Error>;
 
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
+}
+
+/// Compaction policies for collections maintained by `Controller`.
+///
+/// NOTE(benesch): this might want to live somewhere besides the storage crate,
+/// because it is fundamental to both storage and compute.
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
+pub enum ReadPolicy<T> {
+    /// Maintain the collection as valid from this frontier onward.
+    ValidFrom(Antichain<T>),
+    /// Maintain the collection as valid from a function of the write frontier.
+    ///
+    /// This function will only be re-evaluated when the write frontier changes.
+    /// If the intended behavior is to change in response to external signals,
+    /// consider using the `ValidFrom` variant to manually pilot compaction.
+    ///
+    /// The `Arc` makes the function cloneable.
+    LagWriteFrontier(
+        #[derivative(Debug = "ignore")] Arc<dyn Fn(AntichainRef<T>) -> Antichain<T> + Send + Sync>,
+    ),
+    /// Allows one to express multiple read policies, taking the least of
+    /// the resulting frontiers.
+    Multiple(Vec<ReadPolicy<T>>),
+}
+
+impl ReadPolicy<mz_repr::Timestamp> {
+    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to a multiple of that amount.
+    ///
+    /// The rounding down is done to reduce the number of changes the capability undergoes, with the thinking
+    /// being that if you are ok with `lag`, then getting something between `lag` and `2 x lag` should be ok.
+    pub fn lag_writes_by(lag: mz_repr::Timestamp) -> Self {
+        Self::LagWriteFrontier(Arc::new(move |upper| {
+            if upper.is_empty() {
+                Antichain::from_elem(Timestamp::minimum())
+            } else {
+                // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
+                let mut time = upper[0];
+                if lag != 0 {
+                    time = time.saturating_sub(lag);
+                    time = time.saturating_sub(time % lag);
+                }
+                Antichain::from_elem(time)
+            }
+        }))
+    }
+}
+
+impl<T: Timestamp> ReadPolicy<T> {
+    pub fn frontier(&self, write_frontier: AntichainRef<T>) -> Antichain<T> {
+        match self {
+            ReadPolicy::ValidFrom(frontier) => frontier.clone(),
+            ReadPolicy::LagWriteFrontier(logic) => logic(write_frontier),
+            ReadPolicy::Multiple(policies) => {
+                let mut frontier = Antichain::new();
+                for policy in policies.iter() {
+                    for time in policy.frontier(write_frontier).iter() {
+                        frontier.insert(time.clone());
+                    }
+                }
+                frontier
+            }
+        }
+    }
 }
 
 /// Metadata required by a storage instance to read a storage collection
@@ -873,7 +934,7 @@ where
 #[derive(Debug)]
 pub struct CollectionState<T> {
     /// Description with which the collection was created
-    pub(super) description: CollectionDescription,
+    pub description: CollectionDescription,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -920,5 +981,17 @@ impl<T: Timestamp> CollectionState<T> {
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             collection_metadata: metadata,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lag_writes_by_zero() {
+        let policy = ReadPolicy::lag_writes_by(0);
+        let write_frontier = Antichain::from_elem(5);
+        assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
     }
 }

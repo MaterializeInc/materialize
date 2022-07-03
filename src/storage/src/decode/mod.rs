@@ -35,10 +35,6 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
-use mz_dataflow_types::sources::{IncludedColumnSource, MzOffset};
-use mz_dataflow_types::{DecodeError, LinearOperator};
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_repr::Datum;
 use mz_repr::{Diff, Row, Timestamp};
@@ -46,10 +42,16 @@ use tracing::error;
 
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
+use self::metrics::DecodeMetrics;
 use self::protobuf::ProtobufDecoderState;
+use crate::client::connections::ConnectionContext;
+use crate::client::errors::DecodeError;
+use crate::client::sources::encoding::{
+    AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
+};
+use crate::client::sources::{IncludedColumnSource, MzOffset};
+use crate::client::transforms::LinearOperator;
 use crate::source::{DecodeResult, SourceOutput};
-use metrics::DecodeMetrics;
-use mz_dataflow_types::sources::encoding::DataEncodingInner;
 
 mod avro;
 mod csv;

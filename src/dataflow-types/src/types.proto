@@ -11,16 +11,16 @@
 
 syntax = "proto3";
 
-import "dataflow-types/src/client/controller/storage.proto";
 import "dataflow-types/src/plan.proto";
-import "dataflow-types/src/types/sinks.proto";
-import "dataflow-types/src/types/sources.proto";
 import "expr/src/scalar.proto";
 import "persist/src/persist.proto";
-import "repr/src/global_id.proto";
 import "proto/src/proto.proto";
+import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
+import "storage/src/client/controller.proto";
+import "storage/src/client/sinks.proto";
+import "storage/src/client/transforms.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -33,7 +33,7 @@ message ProtoDataflowDescription {
         bool monotonic = 3;
     }
 
-    message ProtoIndex{
+    message ProtoIndex {
         mz_repr.global_id.ProtoGlobalId id = 1;
         ProtoIndexDesc index_desc = 2;
         mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
@@ -41,7 +41,7 @@ message ProtoDataflowDescription {
 
     message ProtoSinkExport {
         mz_repr.global_id.ProtoGlobalId id = 1;
-        mz_dataflow_types.types.sinks.ProtoSinkDesc sink_desc = 2;
+        mz_storage.client.sinks.ProtoSinkDesc sink_desc = 2;
     }
 
     repeated ProtoSourceImport source_imports = 1;
@@ -66,17 +66,12 @@ message ProtoBuildDesc {
 
 message ProtoSourceInstanceDesc {
     ProtoSourceInstanceArguments arguments = 1;
-    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 2;
+    mz_storage.client.controller.ProtoCollectionMetadata storage_metadata = 2;
     mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
 }
 
 message ProtoSourceInstanceArguments {
-    optional ProtoLinearOperator operators = 1;
-}
-
-message ProtoLinearOperator {
-    repeated mz_expr.scalar.ProtoMirScalarExpr predicates = 1;
-    repeated uint64 projection = 2;
+    optional mz_storage.client.transforms.ProtoLinearOperator operators = 1;
 }
 
 message ProtoPeekResponse {

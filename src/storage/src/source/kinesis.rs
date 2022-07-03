@@ -21,15 +21,15 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use mz_dataflow_types::connections::aws::AwsExternalIdPrefix;
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{KinesisSourceConnection, MzOffset, SourceConnection};
-use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 
+use crate::client::connections::aws::AwsExternalIdPrefix;
+use crate::client::connections::ConnectionContext;
+use crate::client::errors::SourceErrorDetails;
+use crate::client::sources::encoding::SourceDataEncoding;
+use crate::client::sources::{KinesisSourceConnection, MzOffset, SourceConnection};
 use crate::source::metrics::KinesisMetrics;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,

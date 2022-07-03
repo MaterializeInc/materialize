@@ -43,13 +43,6 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 use mz_avro::types::Value;
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sinks::{
-    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
-    SinkEnvelope,
-};
-use mz_dataflow_types::PopulateClientConfig;
 use mz_interchange::avro::{
     self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
 };
@@ -62,6 +55,12 @@ use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, Gau
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_storage::client::connections::{ConnectionContext, PopulateClientConfig};
+use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::sinks::{
+    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
+    SinkEnvelope,
+};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 

@@ -36,16 +36,14 @@ use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_service::client::GenericClient;
+use mz_storage::client::controller::{ReadPolicy, StorageController, StorageError};
+use mz_storage::client::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 
-use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
 use crate::client::Peek;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
 use crate::logging::LoggingConfig;
-use crate::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 use crate::{DataflowDescription, SourceInstanceDesc};
-
-use super::ReadPolicy;
 
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]

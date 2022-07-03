@@ -9,9 +9,10 @@
 
 use futures::executor::block_on;
 
-use mz_dataflow_types::DecodeError;
 use mz_interchange::avro::Decoder;
 use mz_repr::Row;
+
+use crate::client::errors::DecodeError;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {

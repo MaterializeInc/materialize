@@ -15,19 +15,19 @@ use std::str::FromStr;
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
 use differential_dataflow::{Collection, Hashable};
-use mz_dataflow_types::sources::{DebeziumTransactionMetadata, MzOffset};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use tracing::{debug, error, info, warn};
 
-use mz_dataflow_types::{
-    sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
-    DataflowError, DecodeError,
-};
 use mz_expr::EvalError;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
+use crate::client::errors::{DataflowError, DecodeError};
+use crate::client::sources::{
+    DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection,
+    DebeziumTransactionMetadata, MzOffset,
+};
 use crate::source::DecodeResult;
 
 pub(crate) fn render<G: Scope>(
@@ -36,7 +36,7 @@ pub(crate) fn render<G: Scope>(
     debug_name: String,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
+    Stream<G, (DataflowError, Timestamp, Diff)>,
 )
 where
     G: ScopeParent<Timestamp = Timestamp>,
@@ -133,7 +133,7 @@ pub(crate) fn render_tx<G: Scope>(
     debug_name: String,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
+    Stream<G, (DataflowError, Timestamp, Diff)>,
 )
 where
     G: ScopeParent<Timestamp = Timestamp>,

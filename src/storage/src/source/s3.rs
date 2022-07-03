@@ -47,21 +47,20 @@ use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, trace, warn};
 
-use mz_dataflow_types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{Compression, MzOffset, S3KeySource, SourceConnection};
 use mz_expr::PartitionId;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::GlobalId;
 
+use self::metrics::{BucketMetrics, ScanBucketMetrics};
+use self::notifications::{Event, EventType, TestEvent};
+use crate::client::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use crate::client::connections::ConnectionContext;
+use crate::client::sources::encoding::SourceDataEncoding;
+use crate::client::sources::{Compression, MzOffset, S3KeySource, SourceConnection};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
-
-use self::metrics::{BucketMetrics, ScanBucketMetrics};
-use self::notifications::{Event, EventType, TestEvent};
 
 use super::metrics::SourceBaseMetrics;
 

@@ -14,7 +14,6 @@ use mz_dataflow_types::client::controller::ComputeInstanceStatus;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
-use mz_dataflow_types::sinks::KafkaSinkConnection;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -24,6 +23,7 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_storage::client::sinks::KafkaSinkConnection;
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
@@ -306,8 +306,8 @@ impl CatalogState {
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
                 Datum::String(match connection.connection {
-                    mz_dataflow_types::connections::Connection::Kafka { .. } => "kafka",
-                    mz_dataflow_types::connections::Connection::Csr { .. } => {
+                    mz_storage::client::connections::Connection::Kafka { .. } => "kafka",
+                    mz_storage::client::connections::Connection::Csr { .. } => {
                         "confluent-schema-registry"
                     }
                 }),

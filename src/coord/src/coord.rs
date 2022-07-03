@@ -91,22 +91,13 @@ use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::controller::storage::CollectionDescription;
 use mz_dataflow_types::client::controller::{
-    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent, ReadPolicy,
+    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent,
 };
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
-    LinearizedTimestampBindingFeedback, ReplicaId,
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse, ReplicaId,
 };
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
-use mz_dataflow_types::sources::{
-    IngestionDescription, PostgresSourceConnection, SourceConnection, Timeline,
-};
-use mz_dataflow_types::{
-    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
-};
+use mz_dataflow_types::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -147,6 +138,13 @@ use mz_sql::plan::{
     StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
+use mz_storage::client::connections::ConnectionContext;
+use mz_storage::client::controller::{CollectionDescription, ReadPolicy};
+use mz_storage::client::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
+use mz_storage::client::sources::{
+    IngestionDescription, PostgresSourceConnection, SourceConnection, Timeline,
+};
+use mz_storage::client::{LinearizedTimestampBindingFeedback, Update};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -2197,7 +2195,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(session, ops, |txn| {
                 let mut builder = txn.dataflow_builder(compute_instance);
                 let from_entry = builder.catalog.get_entry(&sink.from);
-                let sink_description = mz_dataflow_types::sinks::SinkDesc {
+                let sink_description = mz_storage::client::sinks::SinkDesc {
                     from: sink.from,
                     from_desc: from_entry
                         .desc(
@@ -3019,7 +3017,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .build_sink_dataflow(
                         "dummy".into(),
                         id,
-                        mz_dataflow_types::sinks::SinkDesc {
+                        mz_storage::client::sinks::SinkDesc {
                             from: sink.from,
                             from_desc: from_entry
                                 .desc(

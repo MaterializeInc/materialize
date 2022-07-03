@@ -9,12 +9,12 @@
 
 syntax = "proto3";
 
-import "dataflow-types/src/errors.proto";
 import "kafka-util/src/addr.proto";
 import "repr/src/global_id.proto";
 import "repr/src/url.proto";
+import "storage/src/client/errors.proto";
 
-package mz_dataflow_types.types.connections;
+package mz_storage.client.connections;
 
 message ProtoStringOrSecret {
     oneof kind {
