@@ -25,7 +25,7 @@ use crate::command::{
     StartupResponse,
 };
 use crate::coord::PeekResponseUnary;
-use crate::error::CoordError;
+use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
 /// An abstraction allowing us to name different connections.
@@ -89,16 +89,19 @@ impl Client {
     }
 
     /// Allocates a client for an incoming connection.
-    pub fn new_conn(&self) -> Result<ConnClient, CoordError> {
+    pub fn new_conn(&self) -> Result<ConnClient, AdapterError> {
         Ok(ConnClient {
-            conn_id: self.id_alloc.alloc().ok_or(CoordError::IdExhaustionError)?,
+            conn_id: self
+                .id_alloc
+                .alloc()
+                .ok_or(AdapterError::IdExhaustionError)?,
             inner: self.clone(),
         })
     }
 
     /// Executes SQL statements, as if by [`SessionClient::simple_execute`], as
     /// a system user.
-    pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, CoordError> {
+    pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, AdapterError> {
         let conn_client = self.new_conn()?;
         let session = Session::new(conn_client.conn_id(), "mz_system".into());
         let (mut session_client, _) = conn_client.startup(session, false).await?;
@@ -111,7 +114,7 @@ impl Client {
     /// # Panics
     ///
     /// Panics if `stmt` parses to more than one SQL statement.
-    pub async fn system_execute_one(&self, stmt: &str) -> Result<SimpleResult, CoordError> {
+    pub async fn system_execute_one(&self, stmt: &str) -> Result<SimpleResult, AdapterError> {
         let response = self.system_execute(stmt).await?;
         Ok(response.results.into_element())
     }
@@ -148,7 +151,7 @@ impl ConnClient {
         self,
         session: Session,
         create_user_if_not_exists: bool,
-    ) -> Result<(SessionClient, StartupResponse), CoordError> {
+    ) -> Result<(SessionClient, StartupResponse), AdapterError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a canceled message on it if a
@@ -252,7 +255,7 @@ impl SessionClient {
     pub async fn get_prepared_statement(
         &mut self,
         name: &str,
-    ) -> Result<&PreparedStatement, CoordError> {
+    ) -> Result<&PreparedStatement, AdapterError> {
         self.send(|tx, session| Command::VerifyPreparedStatement {
             name: name.to_string(),
             session,
@@ -274,7 +277,7 @@ impl SessionClient {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::Describe {
             name,
             stmt,
@@ -291,7 +294,7 @@ impl SessionClient {
         name: String,
         stmt: Statement<Raw>,
         param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::Declare {
             name,
             stmt,
@@ -304,7 +307,7 @@ impl SessionClient {
 
     /// Executes a previously-bound portal.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
+    pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, AdapterError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
             session,
@@ -319,7 +322,7 @@ impl SessionClient {
     /// - `Some(1)`: Started
     /// - `Some(n > 1)`: InTransactionImplicit
     /// - `Some(0)`: no change
-    pub async fn start_transaction(&mut self, implicit: Option<usize>) -> Result<(), CoordError> {
+    pub async fn start_transaction(&mut self, implicit: Option<usize>) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::StartTransaction {
             implicit,
             session,
@@ -337,7 +340,7 @@ impl SessionClient {
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         self.send(|tx, session| Command::Commit {
             action,
             session,
@@ -354,7 +357,7 @@ impl SessionClient {
     }
 
     /// Dumps the catalog to a JSON string.
-    pub async fn dump_catalog(&mut self) -> Result<String, CoordError> {
+    pub async fn dump_catalog(&mut self) -> Result<String, AdapterError> {
         self.send(|tx, session| Command::DumpCatalog { session, tx })
             .await
     }
@@ -369,7 +372,7 @@ impl SessionClient {
         id: GlobalId,
         columns: Vec<usize>,
         rows: Vec<Row>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         self.send(|tx, session| Command::CopyRows {
             id,
             columns,
@@ -392,7 +395,7 @@ impl SessionClient {
     pub async fn simple_execute(
         &mut self,
         stmts: &str,
-    ) -> Result<SimpleExecuteResponse, CoordError> {
+    ) -> Result<SimpleExecuteResponse, AdapterError> {
         // Convert most floats to a JSON Number. JSON Numbers don't support NaN or
         // Infinity, so those will still be rendered as strings.
         fn float_to_json(f: f64) -> serde_json::Value {
@@ -438,7 +441,8 @@ impl SessionClient {
             }
         }
 
-        let stmts = mz_sql::parse::parse(&stmts).map_err(|e| CoordError::Unstructured(e.into()))?;
+        let stmts =
+            mz_sql::parse::parse(&stmts).map_err(|e| AdapterError::Unstructured(e.into()))?;
         let num_stmts = stmts.len();
         const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
@@ -579,7 +583,7 @@ impl SessionClient {
         self.session.as_mut().unwrap()
     }
 
-    async fn send<T, F>(&mut self, f: F) -> Result<T, CoordError>
+    async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
     {

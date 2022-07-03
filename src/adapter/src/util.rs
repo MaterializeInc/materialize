@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 
 use crate::command::{Command, Response};
 use crate::coord::Message;
-use crate::error::CoordError;
+use crate::error::AdapterError;
 use crate::session::Session;
 
 /// Handles responding to clients.
@@ -35,7 +35,7 @@ impl<T> ClientTransmitter<T> {
 
     /// Transmits `result` to the client, returning ownership of the session
     /// `session` as well.
-    pub fn send(mut self, result: Result<T, CoordError>, session: Session) {
+    pub fn send(mut self, result: Result<T, AdapterError>, session: Session) {
         // If we were not able to send a message, we must clean up the session
         // ourselves. Return it to the caller for disposal.
         if let Err(res) = self.tx.take().unwrap().send(Response { result, session }) {

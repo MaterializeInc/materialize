@@ -25,7 +25,7 @@ use mz_sql::plan::ExecuteTimeout;
 
 use crate::client::ConnectionId;
 use crate::coord::PeekResponseUnary;
-use crate::error::CoordError;
+use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 
 #[derive(Debug)]
@@ -103,7 +103,7 @@ pub enum Command {
 
 #[derive(Debug)]
 pub struct Response<T> {
-    pub result: Result<T, CoordError>,
+    pub result: Result<T, AdapterError>,
     pub session: Session,
 }
 

@@ -31,7 +31,7 @@ use mz_storage::client::sinks::SinkDesc;
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::CoordError;
+use crate::AdapterError;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a, T> {
@@ -93,7 +93,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         &mut self,
         id: &GlobalId,
         dataflow: &mut DataflowDesc,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         maybe_grow(|| {
             // Avoid importing the item redundantly.
             if dataflow.is_imported(id) {
@@ -168,7 +168,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         for get_id in view.depends_on() {
             self.import_into_dataflow(&get_id, dataflow)?;
         }
@@ -177,7 +177,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     }
 
     /// Builds a dataflow description for the index with the specified ID.
-    pub fn build_index_dataflow(&mut self, id: GlobalId) -> Result<DataflowDesc, CoordError> {
+    pub fn build_index_dataflow(&mut self, id: GlobalId) -> Result<DataflowDesc, AdapterError> {
         let index_entry = self.catalog.get_entry(&id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
@@ -224,7 +224,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         name: String,
         id: GlobalId,
         sink_description: SinkDesc,
-    ) -> Result<DataflowDesc, CoordError> {
+    ) -> Result<DataflowDesc, AdapterError> {
         let mut dataflow = DataflowDesc::new(name);
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
         Ok(dataflow)
@@ -237,7 +237,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         dataflow: &mut DataflowDesc,
         id: GlobalId,
         sink_description: SinkDesc,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
@@ -259,7 +259,7 @@ pub fn prep_relation_expr(
     catalog: &CatalogState,
     expr: &mut OptimizedMirRelationExpr,
     style: ExprPrepStyle,
-) -> Result<(), CoordError> {
+) -> Result<(), AdapterError> {
     match style {
         ExprPrepStyle::Index => {
             expr.0.try_visit_mut_post(&mut |e| {
@@ -292,7 +292,7 @@ pub fn prep_scalar_expr(
     state: &CatalogState,
     expr: &mut MirScalarExpr,
     style: ExprPrepStyle,
-) -> Result<(), CoordError> {
+) -> Result<(), AdapterError> {
     match style {
         // Evaluate each unmaterializable function and replace the
         // invocation with the result.
@@ -324,8 +324,8 @@ pub fn prep_scalar_expr(
             });
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
-                    ExprPrepStyle::Index => CoordError::UnmaterializableFunction(f),
-                    ExprPrepStyle::AsOf => CoordError::UncallableFunction {
+                    ExprPrepStyle::Index => AdapterError::UnmaterializableFunction(f),
+                    ExprPrepStyle::AsOf => AdapterError::UncallableFunction {
                         func: f,
                         context: "AS OF",
                     },
@@ -343,7 +343,7 @@ fn eval_unmaterializable_func(
     f: &UnmaterializableFunc,
     logical_time: Option<u64>,
     session: &Session,
-) -> Result<MirScalarExpr, CoordError> {
+) -> Result<MirScalarExpr, AdapterError> {
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
         row.packer()

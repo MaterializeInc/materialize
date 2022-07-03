@@ -163,7 +163,7 @@ use crate::command::{
 };
 use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::error::CoordError;
+use crate::error::AdapterError;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -204,7 +204,7 @@ pub struct SendDiffs {
     #[derivative(Debug = "ignore")]
     tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
-    pub diffs: Result<Vec<(Row, Diff)>, CoordError>,
+    pub diffs: Result<Vec<(Row, Diff)>, AdapterError>,
     pub kind: MutationKind,
     pub returning: Vec<(Row, NonZeroUsize)>,
 }
@@ -215,7 +215,7 @@ pub struct CreateSourceStatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<CreateSourceStatement<Aug>, CoordError>,
+    pub result: Result<CreateSourceStatement<Aug>, AdapterError>,
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
@@ -246,7 +246,7 @@ pub struct SinkConnectionReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
-    pub result: Result<SinkConnection, CoordError>,
+    pub result: Result<SinkConnection, AdapterError>,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -289,7 +289,7 @@ struct PendingWriteTxn {
     /// Transmitter used to send a response back to the client.
     client_transmitter: ClientTransmitter<ExecuteResponse>,
     /// Client response for transaction.
-    response: Result<ExecuteResponse, CoordError>,
+    response: Result<ExecuteResponse, AdapterError>,
     /// Session of the client who initiated the transaction.
     session: Session,
     /// The action to take at the end of the transaction.
@@ -323,7 +323,7 @@ fn concretize_replica_config(
     config: ReplicaConfig,
     replica_sizes: &ClusterReplicaSizeMap,
     availability_zones: &[String],
-) -> Result<ConcreteComputeInstanceReplicaConfig, CoordError> {
+) -> Result<ConcreteComputeInstanceReplicaConfig, AdapterError> {
     let config = match config {
         ReplicaConfig::Remote { replicas } => {
             ConcreteComputeInstanceReplicaConfig::Remote { replicas }
@@ -343,7 +343,7 @@ fn concretize_replica_config(
                     )| (*scale, *cpu_limit),
                 );
                 let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                CoordError::InvalidClusterReplicaSize {
+                AdapterError::InvalidClusterReplicaSize {
                     size: size.clone(),
                     expected,
                 }
@@ -351,7 +351,7 @@ fn concretize_replica_config(
 
             if let Some(az) = &availability_zone {
                 if !availability_zones.contains(az) {
-                    return Err(CoordError::InvalidClusterReplicaAz {
+                    return Err(AdapterError::InvalidClusterReplicaAz {
                         az: az.to_string(),
                         expected: availability_zones.to_vec(),
                     });
@@ -702,7 +702,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn bootstrap(
         &mut self,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
                 .create_instance(instance.id, instance.logging.clone())
@@ -1579,7 +1579,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 {
                     if !create_user_if_not_exists {
                         let _ = tx.send(Response {
-                            result: Err(CoordError::UnknownLoginRole(session.user().into())),
+                            result: Err(AdapterError::UnknownLoginRole(session.user().into())),
                             session,
                         });
                         return;
@@ -1743,7 +1743,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
-    ) -> Result<mz_sql::plan::Plan, CoordError> {
+    ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
         let plan =
             mz_sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
@@ -1756,7 +1756,7 @@ impl<S: Append + 'static> Coordinator<S> {
         name: String,
         stmt: Statement<Raw>,
         param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
@@ -1777,7 +1777,7 @@ impl<S: Append + 'static> Coordinator<S> {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         let desc = self.describe(session, stmt.clone(), param_types)?;
         session.set_prepared_statement(
             name,
@@ -1791,7 +1791,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
-    ) -> Result<StatementDesc, CoordError> {
+    ) -> Result<StatementDesc, AdapterError> {
         if let Some(stmt) = stmt {
             describe(&self.catalog, stmt, &param_types, session)
         } else {
@@ -1804,10 +1804,10 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         session: &mut Session,
         name: &str,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         let ps = match session.get_prepared_statement_unverified(&name) {
             Some(ps) => ps,
-            None => return Err(CoordError::UnknownPreparedStatement(name.to_string())),
+            None => return Err(AdapterError::UnknownPreparedStatement(name.to_string())),
         };
         if let Some(revision) =
             self.verify_statement_revision(session, ps.sql(), ps.desc(), ps.catalog_revision)?
@@ -1822,10 +1822,10 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Verify a portal is still valid.
-    fn verify_portal(&self, session: &mut Session, name: &str) -> Result<(), CoordError> {
+    fn verify_portal(&self, session: &mut Session, name: &str) -> Result<(), AdapterError> {
         let portal = match session.get_portal_unverified(&name) {
             Some(portal) => portal,
-            None => return Err(CoordError::UnknownCursor(name.to_string())),
+            None => return Err(AdapterError::UnknownCursor(name.to_string())),
         };
         if let Some(revision) = self.verify_statement_revision(
             &session,
@@ -1847,7 +1847,7 @@ impl<S: Append + 'static> Coordinator<S> {
         stmt: Option<&Statement<Raw>>,
         desc: &StatementDesc,
         catalog_revision: u64,
-    ) -> Result<Option<u64>, CoordError> {
+    ) -> Result<Option<u64>, AdapterError> {
         let current_revision = self.catalog.transient_revision();
         if catalog_revision != current_revision {
             let current_desc = self.describe(
@@ -1856,7 +1856,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 desc.param_types.iter().map(|ty| Some(ty.clone())).collect(),
             )?;
             if &current_desc != desc {
-                Err(CoordError::ChangedPlan)
+                Err(AdapterError::ChangedPlan)
             } else {
                 Ok(Some(current_revision))
             }
@@ -1912,7 +1912,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     // immediately closed. Users don't know this detail, so this error helps them
                     // understand what's going wrong. Postgres does this too.
                     return tx.send(
-                        Err(CoordError::OperationRequiresTransaction(
+                        Err(AdapterError::OperationRequiresTransaction(
                             "DECLARE CURSOR".into(),
                         )),
                         session,
@@ -2009,7 +2009,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::Insert(_)
                     | Statement::Update(_) => {
                         return tx.send(
-                            Err(CoordError::OperationProhibitsTransaction(stmt.to_string())),
+                            Err(AdapterError::OperationProhibitsTransaction(
+                                stmt.to_string(),
+                            )),
                             session,
                         )
                     }
@@ -2165,7 +2167,7 @@ impl<S: Append + 'static> Coordinator<S> {
         connection: SinkConnection,
         compute_instance: ComputeInstanceId,
         session: Option<&Session>,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
         let entry = self.catalog.get_entry(&id);
         let name = entry.name().clone();
@@ -2428,7 +2430,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.drop_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
-                    Err(CoordError::OperationProhibitsTransaction(
+                    Err(AdapterError::OperationProhibitsTransaction(
                         "DISCARD ALL".into(),
                     ))
                 };
@@ -2459,7 +2461,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 if session.remove_portal(&plan.name) {
                     tx.send(Ok(ExecuteResponse::ClosedCursor), session);
                 } else {
-                    tx.send(Err(CoordError::UnknownCursor(plan.name)), session);
+                    tx.send(Err(AdapterError::UnknownCursor(plan.name)), session);
                 }
             }
             Plan::Prepare(plan) => {
@@ -2467,7 +2469,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     .get_prepared_statement_unverified(&plan.name)
                     .is_some()
                 {
-                    tx.send(Err(CoordError::PreparedStatementExists(plan.name)), session);
+                    tx.send(
+                        Err(AdapterError::PreparedStatementExists(plan.name)),
+                        session,
+                    );
                 } else {
                     session.set_prepared_statement(
                         plan.name,
@@ -2500,7 +2505,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     if session.remove_prepared_statement(&name) {
                         tx.send(Ok(ExecuteResponse::Deallocate { all: false }), session);
                     } else {
-                        tx.send(Err(CoordError::UnknownPreparedStatement(name)), session);
+                        tx.send(Err(AdapterError::UnknownPreparedStatement(name)), session);
                     }
                 }
                 None => {
@@ -2520,7 +2525,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         plan: ExecutePlan,
-    ) -> Result<String, CoordError> {
+    ) -> Result<String, AdapterError> {
         // Verify the stmt is still valid.
         self.verify_prepared_statement(session, &plan.name)?;
         let ps = session
@@ -2536,7 +2541,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateConnectionPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
         let ops = vec![catalog::Op::CreateItem {
@@ -2550,7 +2555,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection { existed: false }),
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
@@ -2562,7 +2567,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateDatabasePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let db_oid = self.catalog.allocate_oid().await?;
         let schema_oid = self.catalog.allocate_oid().await?;
         let ops = vec![catalog::Op::CreateDatabase {
@@ -2572,7 +2577,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
@@ -2584,7 +2589,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateSchemaPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
@@ -2596,7 +2601,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await
         {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
@@ -2608,7 +2613,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateRolePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateRole {
             name: plan.name,
@@ -2627,7 +2632,7 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
             replicas,
         }: CreateComputeInstancePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let introspection_sources = if config.is_some() {
             self.catalog.allocate_introspection_source_indexes().await
         } else {
@@ -2680,7 +2685,7 @@ impl<S: Append + 'static> Coordinator<S> {
             of_cluster,
             config,
         }: CreateComputeInstanceReplicaPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let logical_size = match &config {
             ReplicaConfig::Managed { size, .. } => Some(size.clone()),
             ReplicaConfig::Remote { .. } => None,
@@ -2710,7 +2715,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateSecretPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let CreateSecretPlan {
             name,
             mut secret,
@@ -2742,7 +2747,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret { existed: false }),
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
@@ -2770,7 +2775,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateTablePlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let CreateTablePlan {
             name,
             table,
@@ -2829,7 +2834,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -2842,7 +2847,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         plan: CreateSourcePlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
         let source_oid = self.catalog.allocate_oid().await?;
@@ -2950,7 +2955,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -3014,37 +3019,43 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let transact_result = self
-            .catalog_transact(Some(&session), vec![op], |txn| -> Result<(), CoordError> {
-                let from_entry = txn.catalog.get_entry(&sink.from);
-                // Insert a dummy dataflow to trigger validation before we try to actually create
-                // the external sink resources (e.g. Kafka Topics)
-                txn.dataflow_builder(sink.compute_instance)
-                    .build_sink_dataflow(
-                        "dummy".into(),
-                        id,
-                        mz_storage::client::sinks::SinkDesc {
-                            from: sink.from,
-                            from_desc: from_entry
-                                .desc(
-                                    &txn.catalog
-                                        .resolve_full_name(from_entry.name(), from_entry.conn_id()),
-                                )
-                                .unwrap()
-                                .into_owned(),
-                            connection: SinkConnection::Tail(TailSinkConnection {}),
-                            envelope: Some(sink.envelope),
-                            as_of: SinkAsOf {
-                                frontier: Antichain::new(),
-                                strict: false,
+            .catalog_transact(
+                Some(&session),
+                vec![op],
+                |txn| -> Result<(), AdapterError> {
+                    let from_entry = txn.catalog.get_entry(&sink.from);
+                    // Insert a dummy dataflow to trigger validation before we try to actually create
+                    // the external sink resources (e.g. Kafka Topics)
+                    txn.dataflow_builder(sink.compute_instance)
+                        .build_sink_dataflow(
+                            "dummy".into(),
+                            id,
+                            mz_storage::client::sinks::SinkDesc {
+                                from: sink.from,
+                                from_desc: from_entry
+                                    .desc(
+                                        &txn.catalog.resolve_full_name(
+                                            from_entry.name(),
+                                            from_entry.conn_id(),
+                                        ),
+                                    )
+                                    .unwrap()
+                                    .into_owned(),
+                                connection: SinkConnection::Tail(TailSinkConnection {}),
+                                envelope: Some(sink.envelope),
+                                as_of: SinkAsOf {
+                                    frontier: Antichain::new(),
+                                    strict: false,
+                                },
                             },
-                        },
-                    )
-                    .map(|_ok| ())
-            })
+                        )
+                        .map(|_ok| ())
+                },
+            )
             .await;
         match transact_result {
             Ok(()) => {}
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if if_not_exists => {
@@ -3088,7 +3099,7 @@ impl<S: Append + 'static> Coordinator<S> {
         replace: Option<GlobalId>,
         materialize: bool,
         depends_on: Vec<GlobalId>,
-    ) -> Result<(Vec<catalog::Op>, Option<(GlobalId, ComputeInstanceId)>), CoordError> {
+    ) -> Result<(Vec<catalog::Op>, Option<(GlobalId, ComputeInstanceId)>), AdapterError> {
         self.validate_timeline(view.expr.depends_on())?;
 
         let mut ops = vec![];
@@ -3161,7 +3172,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateViewPlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let if_not_exists = plan.if_not_exists;
         let (ops, index) = self
             .generate_view_ops(
@@ -3193,7 +3204,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
@@ -3206,7 +3217,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         plan: CreateViewsPlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
         let mut indexes = vec![];
 
@@ -3256,9 +3267,9 @@ impl<S: Append + 'static> Coordinator<S> {
         _session: &Session,
         _plan: CreateRecordedViewPlan,
         _depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         // TODO(teskje): implement
-        Err(CoordError::Unsupported("recorded views"))
+        Err(AdapterError::Unsupported("recorded views"))
     }
 
     async fn sequence_create_index(
@@ -3266,7 +3277,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateIndexPlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let CreateIndexPlan {
             name,
             index,
@@ -3308,7 +3319,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
-            Err(CoordError::Catalog(catalog::Error {
+            Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
@@ -3321,7 +3332,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateTypePlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
             details: CatalogTypeDetails {
@@ -3351,7 +3362,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: DropDatabasePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_database_ops(plan.id);
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
@@ -3362,7 +3373,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: DropSchemaPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_schema_ops(plan.id);
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
@@ -3373,7 +3384,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: DropRolesPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let ops = plan
             .names
             .into_iter()
@@ -3406,7 +3417,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: DropComputeInstancesPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::new();
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
         for name in plan.names {
@@ -3444,7 +3455,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         DropComputeInstanceReplicaPlan { names }: DropComputeInstanceReplicaPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         if names.is_empty() {
             return Ok(ExecuteResponse::DroppedComputeInstanceReplicas);
         }
@@ -3481,7 +3492,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: DropItemsPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
@@ -3505,7 +3516,7 @@ impl<S: Append + 'static> Coordinator<S> {
     fn sequence_show_all_variables(
         &mut self,
         session: &Session,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         Ok(send_immediate_rows(
             session
                 .vars()
@@ -3526,7 +3537,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         session: &Session,
         plan: ShowVariablePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let variable = session.vars().get(&plan.name)?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
@@ -3536,7 +3547,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         session: &mut Session,
         plan: SetVariablePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         use mz_sql::ast::{SetVariableValue, Value};
 
         let vars = session.vars_mut();
@@ -3555,7 +3566,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         session: &mut Session,
         plan: ResetVariablePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         session.vars_mut().reset(&plan.name, false)?;
         Ok(ExecuteResponse::SetVariable {
             name: plan.name,
@@ -3608,7 +3619,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<(Option<Vec<WriteOp>>, Option<OwnedMutexGuard<()>>), CoordError> {
+    ) -> Result<(Option<Vec<WriteOp>>, Option<OwnedMutexGuard<()>>), AdapterError> {
         let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
@@ -3617,7 +3628,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     for WriteOp { id, .. } in &writes {
                         // Re-verify this id exists.
                         let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
-                            CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
+                            AdapterError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
                         })?;
                     }
 
@@ -3641,7 +3652,7 @@ impl<S: Append + 'static> Coordinator<S> {
         timeline: &Option<Timeline>,
         conn_id: ConnectionId,
         compute_instance: ComputeInstanceId,
-    ) -> Result<CollectionIdBundle, CoordError>
+    ) -> Result<CollectionIdBundle, AdapterError>
     where
         I: IntoIterator<Item = &'a GlobalId>,
     {
@@ -3718,13 +3729,13 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         plan: PeekPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         fn check_no_invalid_log_reads<S: Append>(
             catalog: &Catalog<S>,
             compute_instance: &ComputeInstance,
             source_ids: &BTreeSet<GlobalId>,
             target_replica: &mut Option<ReplicaId>,
-        ) -> Result<(), CoordError> {
+        ) -> Result<(), AdapterError> {
             let log_names = source_ids
                 .iter()
                 .flat_map(|id| catalog.log_dependencies(*id))
@@ -3739,7 +3750,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // up for log sources. This check ensures that we don't try to read
             // from the raw sources, which is not supported.
             if compute_instance.logging.is_none() {
-                return Err(CoordError::IntrospectionDisabled { log_names });
+                return Err(AdapterError::IntrospectionDisabled { log_names });
             }
 
             // Reading from log sources on replicated compute instances is only
@@ -3750,7 +3761,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 if num_replicas == 1 {
                     *target_replica = compute_instance.replicas_by_id.keys().next().copied();
                 } else {
-                    return Err(CoordError::UntargetedLogRead { log_names });
+                    return Err(AdapterError::UntargetedLogRead { log_names });
                 }
             }
             Ok(())
@@ -3774,7 +3785,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .replica_id_by_name
                     .get(name)
                     .copied()
-                    .ok_or(CoordError::UnknownClusterReplica {
+                    .ok_or(AdapterError::UnknownClusterReplica {
                         cluster_name: compute_instance.name.clone(),
                         replica_name: name.to_string(),
                     })
@@ -3782,7 +3793,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .transpose()?;
 
         if compute_instance.replicas_by_id.is_empty() {
-            return Err(CoordError::NoClusterReplicasAvailable(
+            return Err(AdapterError::NoClusterReplicasAvailable(
                 compute_instance.name.clone(),
             ));
         }
@@ -3890,7 +3901,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Sort so error messages are deterministic.
                 names.sort();
                 outside.sort();
-                return Err(CoordError::RelationOutsideTimeDomain {
+                return Err(AdapterError::RelationOutsideTimeDomain {
                     relations: outside,
                     names,
                 });
@@ -3995,7 +4006,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         plan: TailPlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let TailPlan {
             from,
             with_snapshot,
@@ -4027,7 +4038,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let timestamp =
                 coord.determine_timestamp(session, &id_bundle, when, compute_instance)?;
 
-            Ok::<_, CoordError>(SinkDesc {
+            Ok::<_, AdapterError>(SinkDesc {
                 from,
                 from_desc,
                 connection: SinkConnection::Tail(TailSinkConnection::default()),
@@ -4164,7 +4175,7 @@ impl<S: Append + 'static> Coordinator<S> {
         id_bundle: &CollectionIdBundle,
         when: QueryWhen,
         compute_instance: ComputeInstanceId,
-    ) -> Result<Timestamp, CoordError> {
+    ) -> Result<Timestamp, AdapterError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -4292,7 +4303,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: ExplainPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         match plan {
             ExplainPlan::New(plan) => self.sequence_explain_new(session, plan),
             ExplainPlan::Old(plan) => self.sequence_explain_old(session, plan),
@@ -4303,7 +4314,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         _session: &Session,
         _plan: ExplainPlanNew,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         unimplemented!() // TODO #13296
     }
 
@@ -4311,7 +4322,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: ExplainPlanOld,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let compute_instance = self
             .catalog
             .resolve_compute_instance(session.vars().cluster())?
@@ -4336,7 +4347,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let decorrelate = |timings: &mut Timings,
                            raw_plan: HirRelationExpr|
-         -> Result<MirRelationExpr, CoordError> {
+         -> Result<MirRelationExpr, AdapterError> {
             let start = Instant::now();
             let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
                 qgm_optimizations: session.vars().qgm_optimizations(),
@@ -4349,7 +4360,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |timings: &mut Timings,
              coord: &mut Self,
              decorrelated_plan: MirRelationExpr|
-             -> Result<DataflowDescription<OptimizedMirRelationExpr>, CoordError> {
+             -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
@@ -4563,7 +4574,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         mut plan: SendDiffsPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let affected_rows = {
             let mut affected_rows = Diff::from(0);
             let mut all_positive_diffs = true;
@@ -4655,7 +4666,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .arity(),
                     None => {
                         tx.send(
-                            Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                            Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
                                 plan.id.to_string(),
                             ))),
                             session,
@@ -4666,7 +4677,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 if selection.contains_temporal() {
                     tx.send(
-                        Err(CoordError::Unsupported(
+                        Err(AdapterError::Unsupported(
                             "calls to mz_logical_timestamp in write statements",
                         )),
                         session,
@@ -4701,7 +4712,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         id: GlobalId,
         constants: MirRelationExpr,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match self.catalog.try_get_entry(&id) {
             Some(table) => table.desc(
@@ -4710,7 +4721,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .resolve_full_name(table.name(), Some(session.conn_id())),
             )?,
             None => {
-                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                return Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
                     id.to_string(),
                 )))
             }
@@ -4745,7 +4756,7 @@ impl<S: Append + 'static> Coordinator<S> {
         id: GlobalId,
         columns: Vec<usize>,
         rows: Vec<Row>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog.for_session(session);
         let values = mz_sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
         let values = self.view_optimizer.optimize(values.lower())?;
@@ -4786,7 +4797,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .into_owned(),
             None => {
                 tx.send(
-                    Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                    Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
                         id.to_string(),
                     ))),
                     session,
@@ -4835,7 +4846,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         for id in selection.depends_on() {
             if !validate_read_dependencies(&self.catalog, &id) {
-                tx.send(Err(CoordError::InvalidTableMutationSelection), session);
+                tx.send(Err(AdapterError::InvalidTableMutationSelection), session);
                 return;
             }
         }
@@ -4883,7 +4894,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     match tokio::time::timeout(timeout_dur, batch).await {
                         Ok(res) => match res {
                             PeekResponseUnary::Rows(rows) => {
-                                |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
+                                |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, AdapterError> {
                                     // Use 2x row len incase there's some assignments.
                                     let mut diffs = Vec::with_capacity(rows.len() * 2);
                                     let mut datum_vec = mz_repr::DatumVec::new();
@@ -4899,7 +4910,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                                 let updated = match expr.eval(&datums, &arena) {
                                                     Ok(updated) => updated,
                                                     Err(e) => {
-                                                        return Err(CoordError::Unstructured(
+                                                        return Err(AdapterError::Unstructured(
                                                             anyhow!(e),
                                                         ))
                                                     }
@@ -4927,10 +4938,10 @@ impl<S: Append + 'static> Coordinator<S> {
                                 }(rows)
                             }
                             PeekResponseUnary::Canceled => {
-                                Err(CoordError::Unstructured(anyhow!("execution canceled")))
+                                Err(AdapterError::Unstructured(anyhow!("execution canceled")))
                             }
                             PeekResponseUnary::Error(e) => {
-                                Err(CoordError::Unstructured(anyhow!(e)))
+                                Err(AdapterError::Unstructured(anyhow!(e)))
                             }
                         },
                         Err(_) => {
@@ -4942,14 +4953,14 @@ impl<S: Append + 'static> Coordinator<S> {
                                     conn_id: session.conn_id(),
                                 })
                                 .expect("sending to internal_cmd_tx cannot fail");
-                            Err(CoordError::StatementTimeout)
+                            Err(AdapterError::StatementTimeout)
                         }
                     }
                 }
-                _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
+                _ => Err(AdapterError::Unstructured(anyhow!("expected SendingRows"))),
             };
             let mut returning_rows = Vec::new();
-            let mut diff_err: Option<CoordError> = None;
+            let mut diff_err: Option<AdapterError> = None;
             if !returning.is_empty() && diffs.is_ok() {
                 let arena = RowArena::new();
                 for (row, diff) in diffs.as_ref().unwrap() {
@@ -5006,7 +5017,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: AlterItemRenamePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::RenameItem {
             id: plan.id,
             current_full_name: plan.current_full_name,
@@ -5024,7 +5035,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_alter_index_set_options(
         &mut self,
         plan: AlterIndexSetOptionsPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         self.set_index_options(plan.id, plan.options).await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
@@ -5032,7 +5043,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_alter_index_reset_options(
         &mut self,
         plan: AlterIndexResetOptionsPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let mut options = Vec::with_capacity(plan.options.len());
         for o in plan.options {
             options.push(match o {
@@ -5051,7 +5062,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: AlterSecretPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let AlterSecretPlan { id, mut secret_as } = plan;
 
         let payload = self.extract_secret(session, &mut secret_as)?;
@@ -5070,7 +5081,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         mut secret_as: &mut MirScalarExpr,
-    ) -> Result<Vec<u8>, CoordError> {
+    ) -> Result<Vec<u8>, AdapterError> {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
             self.catalog.state(),
@@ -5114,9 +5125,9 @@ impl<S: Append + 'static> Coordinator<S> {
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
         f: F,
-    ) -> Result<R, CoordError>
+    ) -> Result<R, AdapterError>
     where
-        F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, CoordError>,
+        F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, AdapterError>,
     {
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
@@ -5318,7 +5329,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         id: GlobalId,
         options: Vec<IndexOption>,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         let needs = self
             .read_capability
             .get_mut(&id)
@@ -5458,7 +5469,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("Dataflow planning failed; unrecoverable error")
     }
 
-    fn allocate_transient_id(&mut self) -> Result<GlobalId, CoordError> {
+    fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
         let id = self.transient_id_counter;
         if id == u64::max_value() {
             coord_bail!("id counter overflows i64");
@@ -5472,7 +5483,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
     /// cdcv2 and realtime data).
-    fn validate_timeline<I>(&self, ids: I) -> Result<Option<Timeline>, CoordError>
+    fn validate_timeline<I>(&self, ids: I) -> Result<Option<Timeline>, AdapterError>
     where
         I: IntoIterator<Item = GlobalId>,
     {
@@ -5527,7 +5538,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // transaction counter number because those counters are unrelated to the
         // other.
         if timelines.len() > 1 {
-            return Err(CoordError::Unsupported(
+            return Err(AdapterError::Unsupported(
                 "multiple timelines within one dataflow",
             ));
         }
@@ -5589,7 +5600,7 @@ pub async fn serve<S: Append + 'static>(
         availability_zones,
         connection_context,
     }: Config<S>,
-) -> Result<(Handle, Client), CoordError> {
+) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
@@ -5759,7 +5770,7 @@ pub fn describe<S: Append>(
     stmt: Statement<Raw>,
     param_types: &[Option<ScalarType>],
     session: &Session,
-) -> Result<StatementDesc, CoordError> {
+) -> Result<StatementDesc, AdapterError> {
     match stmt {
         // FETCH's description depends on the current session, which describe_statement
         // doesn't (and shouldn't?) have access to, so intercept it here.
@@ -5771,7 +5782,7 @@ pub fn describe<S: Append>(
                 .map(|p| p.desc.clone())
             {
                 Some(desc) => Ok(desc),
-                None => Err(CoordError::UnknownCursor(name.to_string())),
+                None => Err(AdapterError::UnknownCursor(name.to_string())),
             }
         }
         _ => {
@@ -5806,7 +5817,7 @@ pub mod fast_path_peek {
 
     use crate::client::ConnectionId;
     use crate::coord::{PeekResponseUnary, PendingPeek};
-    use crate::CoordError;
+    use crate::AdapterError;
 
     #[derive(Debug)]
     pub struct PeekDataflowPlan<T> {
@@ -5840,7 +5851,7 @@ pub mod fast_path_peek {
         index_key: Vec<MirScalarExpr>,
         index_permutation: HashMap<usize, usize>,
         index_thinned_arity: usize,
-    ) -> Result<Plan, CoordError> {
+    ) -> Result<Plan, AdapterError> {
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
 
@@ -5887,11 +5898,11 @@ pub mod fast_path_peek {
                                 .clone()
                                 .into_plan()
                                 .map_err(|e| {
-                                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(e))
+                                    crate::error::AdapterError::Unstructured(::anyhow::anyhow!(e))
                                 })?
                                 .into_nontemporal()
                                 .map_err(|_e| {
-                                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                                    crate::error::AdapterError::Unstructured(::anyhow::anyhow!(
                                         "OneShot plan has temporal constraints"
                                     ))
                                 })?;
@@ -5938,7 +5949,7 @@ pub mod fast_path_peek {
             source_arity: usize,
             compute_instance: ComputeInstanceId,
             target_replica: Option<ReplicaId>,
-        ) -> Result<crate::ExecuteResponse, CoordError> {
+        ) -> Result<crate::ExecuteResponse, AdapterError> {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
             if let Plan::Constant(rows) = fast_path {
                 let mut rows = match rows {
@@ -6018,10 +6029,12 @@ pub mod fast_path_peek {
                         .permute(index_permutation, index_key.len() + index_thinned_arity);
                     let map_filter_project = map_filter_project
                         .into_plan()
-                        .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
+                        .map_err(|e| {
+                            crate::error::AdapterError::Unstructured(::anyhow::anyhow!(e))
+                        })?
                         .into_nontemporal()
                         .map_err(|_e| {
-                            crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                            crate::error::AdapterError::Unstructured(::anyhow::anyhow!(
                                 "OneShot plan has temporal constraints"
                             ))
                         })?;

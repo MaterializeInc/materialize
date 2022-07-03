@@ -28,7 +28,7 @@
 // TODO(benesch): delete this once we use structured errors everywhere.
 macro_rules! coord_bail {
     ($($e:expr),*) => {
-        return Err(crate::error::CoordError::Unstructured(::anyhow::anyhow!($($e),*)))
+        return Err(crate::error::AdapterError::Unstructured(::anyhow::anyhow!($($e),*)))
     }
 }
 
@@ -46,4 +46,4 @@ pub mod session;
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{Canceled, ExecuteResponse, RowsFuture, StartupMessage, StartupResponse};
 pub use crate::coord::{serve, Config, PeekResponseUnary};
-pub use crate::error::CoordError;
+pub use crate::error::AdapterError;

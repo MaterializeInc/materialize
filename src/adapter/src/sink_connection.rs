@@ -21,13 +21,13 @@ use mz_storage::client::sinks::{
     KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
 };
 
-use crate::error::CoordError;
+use crate::error::AdapterError;
 
 pub async fn build(
     builder: SinkConnectionBuilder,
     id: GlobalId,
     connection_context: ConnectionContext,
-) -> Result<SinkConnection, CoordError> {
+) -> Result<SinkConnection, AdapterError> {
     match builder {
         SinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connection_context).await,
     }
@@ -40,7 +40,7 @@ async fn register_kafka_topic(
     mut replication_factor: i32,
     succeed_if_exists: bool,
     retention: KafkaSinkConnectionRetention,
-) -> Result<(), CoordError> {
+) -> Result<(), AdapterError> {
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
@@ -173,7 +173,7 @@ async fn publish_kafka_schemas(
     key_schema_type: Option<mz_ccsr::SchemaType>,
     value_schema: &str,
     value_schema_type: mz_ccsr::SchemaType,
-) -> Result<(Option<i32>, i32), CoordError> {
+) -> Result<(Option<i32>, i32), AdapterError> {
     let value_schema_id = ccsr
         .publish_schema(
             &format!("{}-value", topic),
@@ -186,7 +186,7 @@ async fn publish_kafka_schemas(
 
     let key_schema_id = if let Some(key_schema) = key_schema {
         let key_schema_type = key_schema_type.ok_or_else(|| {
-            CoordError::Unstructured(anyhow!("expected schema type for key schema"))
+            AdapterError::Unstructured(anyhow!("expected schema type for key schema"))
         })?;
         Some(
             ccsr.publish_schema(&format!("{}-key", topic), key_schema, key_schema_type, &[])
@@ -204,7 +204,7 @@ async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
     id: GlobalId,
     connection_context: ConnectionContext,
-) -> Result<SinkConnection, CoordError> {
+) -> Result<SinkConnection, AdapterError> {
     // Create Kafka topic
     let mut config = create_new_client_config(connection_context.librdkafka_log_level);
     builder.populate_client_config(&mut config, &connection_context.secrets_reader);

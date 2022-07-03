@@ -213,8 +213,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let sql_local_addr = sql_listener.local_addr()?;
     let http_local_addr = http_listener.local_addr()?;
 
-    // Load the coordinator catalog from disk.
-    let coord_storage = mz_coord::catalog::storage::Connection::open(stash).await?;
+    // Load the adapter catalog from disk.
+    let adapter_storage = mz_adapter::catalog::storage::Connection::open(stash).await?;
 
     // Initialize secrets controller.
     let secrets_controller = match config.secrets_controller {
@@ -249,12 +249,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     };
 
-    // Initialize dataflow controller.
-    let dataflow_controller = mz_controller::Controller::new(config.controller).await;
-    // Initialize coordinator.
-    let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
-        dataflow_client: dataflow_controller,
-        storage: coord_storage,
+    // Initialize controller.
+    let controller = mz_controller::Controller::new(config.controller).await;
+    // Initialize adapter.
+    let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
+        dataflow_client: controller,
+        storage: adapter_storage,
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,
         unsafe_mode: config.unsafe_mode,
@@ -299,7 +299,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     task::spawn(|| "pgwire_server", {
         let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
-            coord_client: coord_client.clone(),
+            adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
         });
 
@@ -319,7 +319,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         task::spawn(|| "internal_pgwire_server", {
             let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 tls: None,
-                coord_client: coord_client.clone(),
+                adapter_client: adapter_client.clone(),
                 frontegg: None,
             });
             let mut incoming = TcpListenerStream::new(internal_sql_listener);
@@ -338,7 +338,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             let http_server = http::Server::new(http::Config {
                 tls: http_tls,
                 frontegg: config.frontegg,
-                coord_client,
+                adapter_client,
                 allowed_origin: config.cors_allowed_origin,
             });
             let mut incoming = TcpListenerStream::new(http_listener);
@@ -356,7 +356,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         _internal_sql_drain_trigger: internal_sql_drain_trigger,
         _http_drain_trigger: http_drain_trigger,
         _sql_drain_trigger: sql_drain_trigger,
-        _coord_handle: coord_handle,
+        _adapter_handle: adapter_handle,
     })
 }
 
@@ -370,7 +370,7 @@ pub struct Server {
     _internal_sql_drain_trigger: oneshot::Sender<()>,
     _http_drain_trigger: oneshot::Sender<()>,
     _sql_drain_trigger: oneshot::Sender<()>,
-    _coord_handle: mz_coord::Handle,
+    _adapter_handle: mz_adapter::Handle,
 }
 
 impl Server {

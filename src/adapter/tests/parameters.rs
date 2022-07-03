@@ -9,7 +9,7 @@
 
 use std::error::Error;
 
-use mz_coord::catalog::Catalog;
+use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_repr::ScalarType;
