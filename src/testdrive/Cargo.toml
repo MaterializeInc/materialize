@@ -13,7 +13,7 @@ async-trait = "0.1.56"
 atty = "0.2.0"
 aws-config = { version = "0.14.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-s3 = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-s3 = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-sqs = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-sts = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-smithy-http = "0.44.0"
