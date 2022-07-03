@@ -38,6 +38,19 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
 > CREATE SECRET password_csr AS 'sekurity'
 
+# Ensure connections track their dependencies
+> CREATE CONNECTION kafka_ssl
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    SSL KEY = SECRET ssl_key_kafka,
+    SSL KEY PASSWORD = SECRET ssl_key_password_kafka,
+    SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
+
+! DROP SECRET ssl_key_kafka;
+contains: cannot drop
+
+# Ensure non-secrets cannot be used as secrets
 > CREATE TABLE not_a_secret (a int);
 
 ! CREATE MATERIALIZED SOURCE data
@@ -174,15 +187,6 @@ contains:self signed certificate in certificate chain
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 contains:missing SSL KEY (ssl.key.pem)
-
-# Ensure that connectors work with SSL basic_auth
-> CREATE CONNECTION kafka_ssl
-  FOR KAFKA
-    BROKER 'kafka:9092',
-    SSL KEY = SECRET ssl_key_kafka,
-    SSL KEY PASSWORD = SECRET ssl_key_password_kafka,
-    SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
-    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
 
 > CREATE MATERIALIZED SOURCE kafka_connector_source
   FROM KAFKA CONNECTION kafka_ssl

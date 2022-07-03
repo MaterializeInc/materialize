@@ -2266,7 +2266,8 @@ impl<S: Append + 'static> Coordinator<S> {
         match plan {
             Plan::CreateConnection(plan) => {
                 tx.send(
-                    self.sequence_create_connection(&session, plan).await,
+                    self.sequence_create_connection(&session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
@@ -2574,6 +2575,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateConnectionPlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
@@ -2584,6 +2586,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
                 connection: plan.connection.connection,
+                depends_on,
             }),
         }];
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
