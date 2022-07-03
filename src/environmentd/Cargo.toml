@@ -60,7 +60,7 @@ rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features =
 reqwest = { version = "0.11.11", features = ["json"] }
 rlimit = "0.8.3"
 serde = { version = "1.0.137", features = ["derive"] }
-serde_json = "1.0.81"
+serde_json = "1.0.82"
 shell-words = "1.1.0"
 sysctl = "0.4.4"
 sysinfo = "0.24.5"
@@ -103,7 +103,7 @@ predicates = "2.1.1"
 rand = "0.8.5"
 regex = "1.5.6"
 reqwest = { version = "0.11.11", features = ["blocking"] }
-serde_json = "1.0.81"
+serde_json = "1.0.82"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4"] }
 
 [build-dependencies]

@@ -28,7 +28,7 @@ mz-repr = { path = "../repr" }
 ordered-float = { version = "3.0.0", features = ["serde"] }
 prost = "0.10.3"
 prost-reflect = "0.8.1"
-serde_json = "1.0.81"
+serde_json = "1.0.82"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tracing = "0.1.35"
 uuid = { version = "1.1.2", features = ["serde"] }
