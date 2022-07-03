@@ -38,7 +38,7 @@ prost = "0.10.3"
 regex = "1.5.6"
 ryu = "1.0.10"
 serde = { version = "1.0.137", features = ["derive"] }
-serde_json = { version = "1.0.81", features = ["arbitrary_precision"] }
+serde_json = { version = "1.0.82", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.8.1", features = ["serde", "union"] }
 url = { version = "2.2.2", features = ["serde"] }

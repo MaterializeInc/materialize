@@ -62,7 +62,7 @@ pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.5.6" }
 serde = { version = "1.0.137", features = ["derive"] }
-serde_json = { version = "1.0.81" }
+serde_json = { version = "1.0.82" }
 tempfile = { version = "3.2.0" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
