@@ -12,7 +12,6 @@ axum = "0.5.9"
 clap = { version = "3.2.6", features = ["derive", "env"] }
 futures = "0.3.21"
 mz-build-info = { path = "../build-info" }
-mz-dataflow-types = { path = "../dataflow-types" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }

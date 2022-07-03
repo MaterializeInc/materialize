@@ -26,19 +26,19 @@ fn main() {
         .extern_path(".mz_repr.url", "::mz_repr::url")
         .extern_path(".mz_storage", "::mz_storage")
         .type_attribute(
-            ".mz_dataflow_types.postgres_source",
+            ".mz_compute_client.postgres_source",
             "#[derive(Eq, serde::Serialize, serde::Deserialize)]",
         )
         .compile(
             &[
-                "dataflow-types/src/client.proto",
-                "dataflow-types/src/logging.proto",
-                "dataflow-types/src/plan.proto",
-                "dataflow-types/src/plan/join.proto",
-                "dataflow-types/src/plan/reduce.proto",
-                "dataflow-types/src/plan/threshold.proto",
-                "dataflow-types/src/plan/top_k.proto",
-                "dataflow-types/src/types.proto",
+                "compute-client/src/client.proto",
+                "compute-client/src/logging.proto",
+                "compute-client/src/plan.proto",
+                "compute-client/src/plan/join.proto",
+                "compute-client/src/plan/reduce.proto",
+                "compute-client/src/plan/threshold.proto",
+                "compute-client/src/plan/top_k.proto",
+                "compute-client/src/types.proto",
             ],
             &[".."],
         )

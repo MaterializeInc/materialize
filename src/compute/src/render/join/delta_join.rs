@@ -17,8 +17,8 @@ use std::collections::HashSet;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
-use mz_dataflow_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
-use mz_dataflow_types::plan::join::JoinClosure;
+use mz_compute_client::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
+use mz_compute_client::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
 use mz_repr::{DatumVec, Diff, Row, RowArena};
 use mz_storage::client::errors::DataflowError;

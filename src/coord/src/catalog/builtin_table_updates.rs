@@ -10,10 +10,8 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
-use mz_dataflow_types::client::controller::ComputeInstanceStatus;
-use mz_dataflow_types::client::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
-};
+use mz_compute_client::client::{ComputeInstanceId, ProcessId, ReplicaId};
+use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaConfig};
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;

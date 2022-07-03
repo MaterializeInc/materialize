@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use mz_expr::ColumnOrder;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.top_k.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.top_k.rs"));
 
 /// A plan encapsulating different variants to compute a TopK operation.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

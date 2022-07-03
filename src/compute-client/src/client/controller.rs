@@ -47,28 +47,28 @@ use crate::{DataflowDescription, SourceInstanceDesc};
 
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
-pub(super) struct ComputeControllerState<T> {
-    pub(super) client: ActiveReplication<T>,
+pub struct ComputeControllerState<T> {
+    pub client: ActiveReplication<T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
-    pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
+    pub collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
-    pub(super) peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
+    pub peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
 }
 
 /// An immutable controller for a compute instance.
 #[derive(Debug, Copy, Clone)]
 pub struct ComputeController<'a, T> {
-    pub(super) instance: ComputeInstanceId,
-    pub(super) compute: &'a ComputeControllerState<T>,
-    pub(super) storage_controller: &'a dyn StorageController<Timestamp = T>,
+    pub instance: ComputeInstanceId,
+    pub compute: &'a ComputeControllerState<T>,
+    pub storage_controller: &'a dyn StorageController<Timestamp = T>,
 }
 
 /// A mutable controller for a compute instance.
 #[derive(Debug)]
 pub struct ComputeControllerMut<'a, T> {
-    pub(super) instance: ComputeInstanceId,
-    pub(super) compute: &'a mut ComputeControllerState<T>,
-    pub(super) storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+    pub instance: ComputeInstanceId,
+    pub compute: &'a mut ComputeControllerState<T>,
+    pub storage_controller: &'a mut dyn StorageController<Timestamp = T>,
 }
 
 /// Errors arising from compute commands.
@@ -147,7 +147,7 @@ impl<T> ComputeControllerState<T>
 where
     T: Timestamp + Lattice,
 {
-    pub(super) async fn new(logging: &Option<LoggingConfig>) -> Result<Self, anyhow::Error> {
+    pub async fn new(logging: &Option<LoggingConfig>) -> Result<Self, anyhow::Error> {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -570,7 +570,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     /// Acquire a mutable reference to the collection state, should it exist.
-    pub(super) fn collection_mut(
+    pub fn collection_mut(
         &mut self,
         id: GlobalId,
     ) -> Result<&mut CollectionState<T>, ComputeError> {
@@ -581,7 +581,7 @@ where
     }
 
     /// Accept write frontier updates from the compute layer.
-    pub(super) async fn update_write_frontiers(
+    pub async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, ChangeBatch<T>)],
     ) -> Result<(), ComputeError> {
@@ -635,7 +635,7 @@ where
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
-    pub(super) async fn update_read_capabilities(
+    pub async fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
     ) -> Result<(), ComputeError> {
@@ -701,7 +701,7 @@ where
         Ok(())
     }
     /// Removes a registered peek, unblocking compaction that might have waited on it.
-    pub(super) async fn remove_peeks(
+    pub async fn remove_peeks(
         &mut self,
         peek_ids: impl IntoIterator<Item = uuid::Uuid>,
     ) -> Result<(), ComputeError> {

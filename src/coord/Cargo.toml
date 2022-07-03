@@ -21,7 +21,8 @@ once_cell = "1.12.0"
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
-mz-dataflow-types = { path = "../dataflow-types" }
+mz-compute-client = { path = "../compute-client" }
+mz-controller = { path = "../controller" }
 mz-expr = { path = "../expr" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }

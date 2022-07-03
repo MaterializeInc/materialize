@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 
-include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.logging.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 
 /// Logging configuration.
 #[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -80,7 +80,7 @@ use super::AvailableCollections;
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_dataflow_types.plan.reduce.rs"
+    "/mz_compute_client.plan.reduce.rs"
 ));
 
 /// This enum represents the three potential types of aggregations.

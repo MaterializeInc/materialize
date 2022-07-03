@@ -13,7 +13,7 @@ syntax = "proto3";
 
 import "expr/src/scalar.proto";
 
-package mz_dataflow_types.plan.threshold;
+package mz_compute_client.plan.threshold;
 
 message ProtoThresholdPlan {
    oneof kind {

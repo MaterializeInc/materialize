@@ -112,7 +112,7 @@ use timely::dataflow::Scope;
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_dataflow_types::*;
+use mz_compute_client::*;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{GlobalId, Row};
@@ -141,7 +141,7 @@ mod top_k;
 pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<mz_dataflow_types::plan::Plan, CollectionMetadata>,
+    dataflow: DataflowDescription<mz_compute_client::plan::Plan, CollectionMetadata>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -405,7 +405,7 @@ where
                     .lookup_id(id)
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
                 match plan {
-                    mz_dataflow_types::plan::GetPlan::PassArrangements => {
+                    mz_compute_client::plan::GetPlan::PassArrangements => {
                         // Assert that each of `keys` are present in `collection`.
                         assert!(keys
                             .arranged
@@ -418,11 +418,11 @@ where
                         });
                         collection
                     }
-                    mz_dataflow_types::plan::GetPlan::Arrangement(key, row, mfp) => {
+                    mz_compute_client::plan::GetPlan::Arrangement(key, row, mfp) => {
                         let (oks, errs) = collection.as_collection_core(mfp, Some((key, row)));
                         CollectionBundle::from_collections(oks, errs)
                     }
-                    mz_dataflow_types::plan::GetPlan::Collection(mfp) => {
+                    mz_compute_client::plan::GetPlan::Collection(mfp) => {
                         let (oks, errs) = collection.as_collection_core(mfp, None);
                         CollectionBundle::from_collections(oks, errs)
                     }
@@ -468,10 +468,10 @@ where
                     .map(|input| self.render_plan(input, scope, worker_index))
                     .collect();
                 match plan {
-                    mz_dataflow_types::plan::join::JoinPlan::Linear(linear_plan) => {
+                    mz_compute_client::plan::join::JoinPlan::Linear(linear_plan) => {
                         self.render_join(inputs, linear_plan, scope)
                     }
-                    mz_dataflow_types::plan::join::JoinPlan::Delta(delta_plan) => {
+                    mz_compute_client::plan::join::JoinPlan::Delta(delta_plan) => {
                         self.render_delta_join(inputs, delta_plan, scope)
                     }
                 }

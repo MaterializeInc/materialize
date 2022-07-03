@@ -26,9 +26,9 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, InstanceConfig, Peek, ReplicaId};
-use mz_dataflow_types::logging::LoggingConfig;
-use mz_dataflow_types::{DataflowDescription, PeekResponse, Plan, TailResponse};
+use mz_compute_client::client::{ComputeCommand, ComputeResponse, InstanceConfig, Peek, ReplicaId};
+use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::{DataflowDescription, PeekResponse, Plan, TailResponse};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::client::connections::ConnectionContext;
@@ -644,7 +644,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 /// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
 /// as each `PendingPeek` is meant to be dropped after it's responded to.
 pub struct PendingPeek {
-    peek: mz_dataflow_types::client::Peek,
+    peek: mz_compute_client::client::Peek,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
     /// The `tracing::Span` tracking this peek's operation

@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 itertools = "0.10.3"
-mz-dataflow-types = { path = "../dataflow-types" }
+mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }

@@ -25,11 +25,9 @@ use tracing::{info, trace};
 
 use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::client::controller::ComputeInstanceEvent;
-use mz_dataflow_types::client::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
-};
-use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_compute_client::client::{ComputeInstanceId, ProcessId, ReplicaId};
+use mz_compute_client::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_controller::{ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;

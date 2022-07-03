@@ -15,7 +15,7 @@ import "expr/src/linear.proto";
 import "expr/src/relation.proto";
 import "google/protobuf/empty.proto";
 
-package mz_dataflow_types.plan.reduce;
+package mz_compute_client.plan.reduce;
 
 message ProtoReducePlan {
     oneof kind {
