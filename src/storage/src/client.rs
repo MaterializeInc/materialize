@@ -18,18 +18,15 @@ use std::collections::HashMap;
 use std::iter;
 
 use async_trait::async_trait;
-use futures::stream::StreamExt;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::progress::ChangeBatch;
-use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::debug;
 use uuid::Uuid;
 
 use mz_proto::any_uuid;
@@ -96,27 +93,17 @@ impl BidiProtoClient<ProtoStorageCommand, ProtoStorageResponse> for ProtoStorage
 }
 
 #[async_trait]
-impl ProtoStorage for GrpcServer<ProtoStorageCommand, ProtoStorageResponse> {
+impl<G> ProtoStorage for GrpcServer<G>
+where
+    G: StorageClient + 'static,
+{
     type CommandResponseStreamStream = ResponseStream<ProtoStorageResponse>;
 
     async fn command_response_stream(
         &self,
-        req: Request<Streaming<ProtoStorageCommand>>,
+        request: Request<Streaming<ProtoStorageCommand>>,
     ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, Status> {
-        debug!("GrpcServer: remote client connected");
-
-        // Consistent with the ActiveReplication client, we use unbounded channels.
-        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-
-        // Store channels in state
-        *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
-        self.shared.queue_change.notify_waiters();
-
-        let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
-
-        Ok(Response::new(
-            Box::pin(receiver_stream) as Self::CommandResponseStreamStream
-        ))
+        self.forward_bidi_stream(request).await
     }
 }
 

@@ -197,6 +197,8 @@ fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
 // Test that dataflow uninstalls cancelled peeks.
 #[test]
 fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
     let config = util::Config::default();
     let server = util::start_server(config)?;
 

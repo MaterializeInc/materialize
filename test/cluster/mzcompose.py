@@ -43,12 +43,12 @@ SERVICES = [
     ),
     Computed(
         name="computed_3",
-        options="--workers 2 --process 0 computed_3:2102 computed_4:2102 --linger --reconcile",
+        options="--workers 2 --process 0 computed_3:2102 computed_4:2102",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_4",
-        options="--workers 2 --process 1 computed_3:2102 computed_4:2102 --linger --reconcile",
+        options="--workers 2 --process 1 computed_3:2102 computed_4:2102",
         ports=[2100, 2102],
     ),
     Materialized(),

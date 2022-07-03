@@ -9,7 +9,6 @@
 
 //! gRPC transport for the [client](crate::client) module.
 
-use std::convert::Infallible;
 use std::fmt;
 use std::marker::PhantomData;
 use std::net::ToSocketAddrs;
@@ -17,16 +16,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use async_stream::stream;
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
+use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{oneshot, Mutex};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::body::BoxBody;
 use tonic::transport::{Body, NamedService, Server};
-use tonic::{Response, Status, Streaming};
+use tonic::{Request, Response, Status, Streaming};
 use tower::Service;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use mz_proto::{ProtoType, RustType};
 
@@ -139,181 +140,6 @@ where
     }
 }
 
-/// The server side gRPC implementation that will run in the service process.
-///
-/// There are two main tasks involved: The gRPC callback implementations will
-/// execute in their own tasks, receive commands from the network and send
-/// responses to the network. Upon reception of a command, the implementation
-/// will put it in a mpsc queue, out of which the consumer (running in another
-/// task) will read it with a recv call. The same goes for the send path: The
-/// consumer calls `send` which puts the response in a mpsc queue, from which
-/// the gRPC stubs will read and send it over the network.
-///
-/// If an error occurs, the consumer receives an error from the recv call. If no
-/// client is connected recv will block until a client is available. To
-/// implement the "waiting for client" the queue_change notification is used.
-/// recv will check first if a client is connected using queue. If queue is
-/// None, no client is connected and recv will await on the queue_change
-/// notification. The server does this vice-versa. Upon connection of a client,
-/// it will insert the endpoints into queue and trigger the queue_change, which
-/// will wake up the waiting clients.
-///
-/// This is the shared datastructure between server and consumer.
-///
-pub struct GrpcShared<PC, PR> {
-    // These are endpoints for the consumer. The other end of these queues is
-    // consumed by the stream implementation. `queue` is None if no client is
-    // connected, otherwise the endpoints are forwarded to the single client. If
-    // a client is connecting but a client is already connected, this mutex is
-    // used to block. If the consumer calls send or recv and queue is None, the
-    // consumer will wait on the queue_change notification to proceed only when
-    // a client has connected.
-    pub queue: Mutex<Option<(Streaming<PC>, UnboundedSender<PR>)>>,
-
-    // If queue changes, the server side will publish a notification here.
-    pub queue_change: Notify,
-}
-
-/// Server side implementation.
-pub struct GrpcServer<PC, PR> {
-    pub shared: Arc<GrpcShared<PC, PR>>,
-}
-
-/// Consumer side functions such as send and recv. These will not directly
-/// interact with the network, but put messages in a mpsc queue which will be
-/// read and sent to the network in a separate server task.
-pub struct GrpcServerInterface<PC, PR> {
-    shared: Arc<GrpcShared<PC, PR>>,
-}
-
-impl<PC: Send + Sync, PR: Send + Sync + fmt::Debug + 'static> GrpcServerInterface<PC, PR> {
-    pub async fn send<R: RustType<PR> + Send + Sync>(&self, resp: R) -> Result<(), anyhow::Error> {
-        loop {
-            let res = match self.shared.queue.lock().await.as_ref() {
-                Some(x) => Some(x.1.send((&resp).into_proto()).map_err(Into::into)),
-
-                // Other end absent, wait for connection, can't inline queue reset
-                // here as we are still holding the lock.
-                None => None,
-            };
-
-            match res {
-                Some(r) => {
-                    if r.is_err() {
-                        *self.shared.queue.lock().await = None;
-                    }
-                    return r;
-                }
-                None => self.shared.queue_change.notified().await,
-            }
-        }
-    }
-
-    // Recv returns an error if a faulty connection is detected (for example when
-    // the other queue endpoint has been dropped).
-    // If there is no current connection, it will await a connection from the coordinator.
-    //
-    // This function is and must be cancellation safe.
-    // If a message is received from the streaming instance and it does not cause an error,
-    // the message will be delivered, as there are no await points on the path.
-    // If there is an error more await point will be passed, however the hope is that in the
-    // error case, the next interaction with the queue will produce another error, such that
-    // the errors are not lost due to cancellation.
-    //
-    // There is no race between the creation of new queue pair, as the Notify will store
-    // internally a permit: If a notifier comes first, and this function calls notified().await,
-    // it will immediately return (and clear the permit).
-    // See https://docs.rs/tokio/0.2.12/tokio/sync/struct.Notify.html
-    pub async fn recv<C: RustType<PC>>(&mut self) -> Result<C, anyhow::Error> {
-        loop {
-            let res = match self.shared.queue.lock().await.as_mut() {
-                Some(x) => {
-                    let res = match x.0.next().await {
-                        Some(Ok(x)) => x.into_rust().map_err(Into::into),
-                        Some(Err(e)) => {
-                            info!("Connection severed: {}", e);
-                            Err(e.into())
-                        }
-                        None => {
-                            info!("Connection severed: Endpoint gone");
-                            Err(anyhow::anyhow!("Connection severed: Endpoint gone"))
-                        }
-                    };
-                    Some(res)
-                }
-
-                // Other end absent, wait for connection
-                None => {
-                    debug!("recv called while no coordinator connected, waiting for coordinator connection.");
-                    None
-                }
-            };
-
-            // Don't move queue reset in block above as we are still holding the queue lock
-            // there.
-            match res {
-                None => {
-                    // No queue
-                    self.shared.queue_change.notified().await;
-                }
-                Some(res) => {
-                    if res.is_err() {
-                        *self.shared.queue.lock().await = None;
-                    }
-                    return res;
-                }
-            }
-        }
-    }
-}
-
-/// Creates a gRPC server that can receive `PC` and sends `PR`. Returns a tuple
-/// of GrpcServerInterface that can be used to recv and send from. As well as a
-/// shutdown signal, which should be used to terminate the mainloop if a message
-/// is sent.
-///
-/// The trait bounds here are intimidating, but the `f` parameter is a function
-/// that turns a `GrpcServer<ProtoCommandType, ProtoResponseType>` into a
-/// [`Service`] that represents a gRPC server. This is _always_ encapsulated by
-/// the `ExportedFromTonicServer::new` for a specific protobuf service.
-pub fn grpc_server<PC, PR, F, S>(listen_addr: String, f: F) -> GrpcServerInterface<PC, PR>
-where
-    PC: Send + 'static,
-    PR: Send + 'static,
-    S: tower::Service<
-            http::request::Request<Body>,
-            Response = http::response::Response<BoxBody>,
-            Error = Infallible,
-        > + NamedService
-        + Clone
-        + Send
-        + 'static,
-    S::Future: Send + 'static,
-    F: FnOnce(GrpcServer<PC, PR>) -> S + Send + 'static,
-{
-    // The channel size is a arbitrary, but it should be a
-    // small bounded channel such that backpressure is applied early.
-    let shared = Arc::new(GrpcShared {
-        queue: Mutex::new(None),
-        queue_change: Notify::new(),
-    });
-
-    let server = GrpcServer {
-        shared: Arc::clone(&shared),
-    };
-
-    mz_ore::task::spawn(|| S::NAME, async move {
-        info!("Starting to listen on {}", listen_addr);
-        Server::builder()
-            .add_service(f(server))
-            .serve(listen_addr.to_socket_addrs().unwrap().next().unwrap())
-            .await
-            .unwrap();
-    });
-
-    GrpcServerInterface { shared }
-}
-
 /// Encapsulates the core functionality of a tonic gRPC client for a service
 /// that exposes a single bidirectional RPC stream.
 ///
@@ -333,79 +159,134 @@ pub trait BidiProtoClient<PC, PR> {
     ) -> Result<Response<Streaming<PR>>, Status>;
 }
 
-/// Configuration required for [`serve`].
-pub struct ServeConfig {
-    /// The network address to bind.
-    pub listen_addr: String,
-    /// Whether or not to continue running if the client disconnects.
-    pub linger: bool,
+/// A gRPC server that stitches a gRPC service with a single bidirectional
+/// stream to a [`GenericClient`].
+///
+/// It is the counterpart of [`GrpcClient`].
+///
+/// To use, implement the tonic-generated `ProtoService` trait for this type.
+/// The implementation of the bidirectional stream method should call
+/// [`GrpcServer::forward_bidi_stream`] to stitch the bidirectional stream to
+/// the client underlying this server.
+pub struct GrpcServer<G> {
+    state: Arc<GrpcServerState<G>>,
 }
 
-/// Start a gRPC server that forwards commands and responses to `client`.
-///
-/// The trait bounds here are intimidating, but the `f` parameter is a function
-/// that turns a `GrpcServer<ProtoCommandType, ProtoResponseType>` into a
-/// [`Service`] that represents a gRPC server. This is _always_ encapsulated by
-/// the `ExportedFromTonicServer::new` for a specific protobuf service.
-pub async fn serve<C, R, PC, PR, S, F, G>(
-    config: ServeConfig,
-    mut client: G,
-    f: F,
-) -> Result<(), anyhow::Error>
-where
-    PC: Send + Sync + 'static + fmt::Debug,
-    PR: Send + Sync + 'static + fmt::Debug,
-    C: RustType<PC> + Send + Sync + 'static,
-    R: RustType<PR> + Send + Sync,
-    G: GenericClient<C, R>,
-    S: Service<
-            http::Request<Body>,
-            Response = http::Response<BoxBody>,
-            Error = std::convert::Infallible,
-        > + NamedService
-        + Clone
-        + Send
-        + 'static,
-    S::Future: Send + 'static,
-    F: FnOnce(GrpcServer<PC, PR>) -> S + Send + 'static,
-{
-    let mut grpc_serve = grpc_server(config.listen_addr, f);
+struct GrpcServerState<G> {
+    cancel_tx: Mutex<oneshot::Sender<()>>,
+    client: Mutex<G>,
+}
 
-    loop {
-        // This select implies that the .recv functions of the clients must be cancellation safe.
-        loop {
-            tokio::select! {
-                res = grpc_serve.recv() => {
-                    match res {
-                        Ok(cmd) => client.send(cmd).await.unwrap(),
-                        Err(err) => {
-                            tracing::warn!("Lost connection: {}", err);
-                            break;
-                        }
-                    }
-                },
-                res = client.recv() => {
-                    match res.unwrap() {
-                        None => {},
-                        Some(response) => {
-                            match grpc_serve.send(response).await {
-                                Ok(_) => {},
-                                Err(err) => {
-                                    tracing::warn!("Lost connection: {}", err);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                },
-            }
-        }
-        if !config.linger {
-            tracing::info!("client gRPC connection gone; terminating");
-            break;
-        }
-        tracing::info!("client gRPC connection gone; waiting for reconnect");
+impl<G> GrpcServer<G>
+where
+    G: Send + 'static,
+{
+    /// Starts the server, listening for gRPC connections on `listen_addr` and
+    /// communicating with the provided `client`.
+    ///
+    /// The trait bounds on `f` are intimidating, but it is a function that
+    /// turns a `GrpcServer<ProtoCommandType, ProtoResponseType>` into a
+    /// [`Service`] that represents a gRPC server. This is always encapsulated
+    /// by the tonic-generated `ProtoServer::new` method for a specific Protobuf
+    /// service.
+    pub async fn serve<S, F>(listen_addr: String, client: G, f: F) -> Result<(), anyhow::Error>
+    where
+        S: Service<
+                http::Request<Body>,
+                Response = http::Response<BoxBody>,
+                Error = std::convert::Infallible,
+            > + NamedService
+            + Clone
+            + Send
+            + 'static,
+        S::Future: Send + 'static,
+        F: FnOnce(Self) -> S + Send + 'static,
+    {
+        let (cancel_tx, _cancel_rx) = oneshot::channel();
+        let state = GrpcServerState {
+            cancel_tx: Mutex::new(cancel_tx),
+            client: Mutex::new(client),
+        };
+        let server = Self {
+            state: Arc::new(state),
+        };
+
+        info!("Starting to listen on {}", listen_addr);
+        Server::builder()
+            .add_service(f(server))
+            .serve(listen_addr.to_socket_addrs()?.next().unwrap())
+            .await?;
+        Ok(())
     }
 
-    Ok(())
+    /// Handles a bidirectional stream request by forwarding commands to and
+    /// responses from the server's underlying client.
+    ///
+    /// Call this method from the implementation of the tonic-generated
+    /// `ProtoService`.
+    pub async fn forward_bidi_stream<C, R, PC, PR>(
+        &self,
+        request: Request<Streaming<PC>>,
+    ) -> Result<Response<ResponseStream<PR>>, Status>
+    where
+        G: GenericClient<C, R> + 'static,
+        C: RustType<PC> + Send + Sync + 'static + fmt::Debug,
+        R: RustType<PR> + Send + Sync + 'static + fmt::Debug,
+        PC: fmt::Debug + Send + Sync + 'static,
+        PR: fmt::Debug + Send + Sync + 'static,
+    {
+        info!("GrpcServer: remote client connected");
+
+        // Install our cancellation token. This may drop an existing
+        // cancellation token. We're allowed to run until someone else drops our
+        // cancellation token.
+        //
+        // TODO(benesch): rather than blindly dropping the existing cancellation
+        // token, we should check epochs, and only drop the existing connection
+        // if it is at a lower epoch.
+        // See: https://github.com/MaterializeInc/materialize/issues/13377
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
+        *self.state.cancel_tx.lock().await = cancel_tx;
+
+        // Forward commands and responses to `client` until canceled.
+        let mut request = request.into_inner();
+        let state = Arc::clone(&self.state);
+        let response = stream! {
+            let mut client = state.client.lock().await;
+            loop {
+                select! {
+                    command = request.next() => {
+                        let command = match command {
+                            None => break,
+                            Some(Ok(command)) => command,
+                            Some(Err(e)) => {
+                                error!("error handling client: {e}");
+                                break;
+                            }
+                        };
+                        let command = match command.into_rust() {
+                            Ok(command) => command,
+                            Err(e) => {
+                                error!("error converting command to protobuf: {}", e);
+                                break;
+                            }
+                        };
+                        if let Err(e) = client.send(command).await {
+                            yield Err(Status::unknown(e.to_string()));
+                        }
+                    }
+                    response = client.recv() => {
+                        match response {
+                            Ok(Some(response)) => yield Ok(response.into_proto()),
+                            Ok(None) => break,
+                            Err(e) => yield Err(Status::unknown(e.to_string())),
+                        }
+                    }
+                    _ = &mut cancel_rx => break,
+                }
+            }
+            info!("GrpcServer: remote client disconnected");
+        };
+        Ok(Response::new(Box::pin(response) as ResponseStream<PR>))
+    }
 }
