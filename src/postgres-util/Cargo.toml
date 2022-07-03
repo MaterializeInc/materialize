@@ -14,7 +14,7 @@ openssl = { version = "0.10.40", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 prost = "0.10.3"
-serde = { version = "1.0.137", features = ["derive"] }
+serde = { version = "1.0.138", features = ["derive"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 
 [build-dependencies]

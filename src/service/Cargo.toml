@@ -16,7 +16,7 @@ http = "0.2.8"
 itertools = "0.10.3"
 mz-proto = { path = "../proto" }
 mz-ore = { path = "../ore" }
-serde = { version = "1.0.137", features = ["derive"] }
+serde = { version = "1.0.138", features = ["derive"] }
 tokio = "1.19.2"
 tokio-stream = "0.1.9"
 tonic = "0.7.2"
