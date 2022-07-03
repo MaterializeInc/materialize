@@ -20,14 +20,12 @@ use timely::progress::frontier::Antichain;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
 
-use crate::client::controller::storage::CollectionMetadata;
-use crate::connections::{CsrConnection, KafkaConnection, StringOrSecret};
-use crate::PopulateClientConfig;
+use crate::client::connections::{
+    CsrConnection, KafkaConnection, PopulateClientConfig, StringOrSecret,
+};
+use crate::client::controller::CollectionMetadata;
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_dataflow_types.types.sinks.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.client.sinks.rs"));
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -491,10 +489,10 @@ pub struct KafkaSinkConnectionBuilder {
 }
 
 impl PopulateClientConfig for KafkaSinkConnectionBuilder {
-    fn kafka_connection(&self) -> &crate::connections::KafkaConnection {
+    fn kafka_connection(&self) -> &KafkaConnection {
         &self.connection
     }
-    fn options(&self) -> &BTreeMap<String, crate::connections::StringOrSecret> {
+    fn options(&self) -> &BTreeMap<String, StringOrSecret> {
         &self.options
     }
     fn drop_option_keys() -> HashSet<&'static str> {

@@ -11,11 +11,11 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "dataflow-types/src/types/connections.proto";
 import "repr/src/adt/regex.proto";
 import "repr/src/relation_and_scalar.proto";
+import "storage/src/client/connections.proto";
 
-package mz_dataflow_types.types.sources.encoding;
+package mz_storage.client.sources.encoding;
 
 message ProtoSourceDataEncoding {
     message ProtoKeyValue {
@@ -49,7 +49,7 @@ message ProtoDataEncoding {
 
 message ProtoAvroEncoding {
     string schema = 1;
-    mz_dataflow_types.types.connections.ProtoCsrConnection csr_connection = 2;
+    mz_storage.client.connections.ProtoCsrConnection csr_connection = 2;
     bool confluent_wire_format = 3;
 }
 

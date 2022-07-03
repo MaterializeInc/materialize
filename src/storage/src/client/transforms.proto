@@ -7,16 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+syntax = "proto3";
 
-//! Materialize's storage layer.
+import "expr/src/scalar.proto";
 
-pub mod client;
-pub mod decode;
-pub mod render;
-pub(crate) mod server;
-pub mod source;
-pub mod storage_state;
+package mz_storage.client.transforms;
 
-pub use decode::metrics::DecodeMetrics;
-pub use server::{serve, Config, Server};
+message ProtoLinearOperator {
+    repeated mz_expr.scalar.ProtoMirScalarExpr predicates = 1;
+    repeated uint64 projection = 2;
+}

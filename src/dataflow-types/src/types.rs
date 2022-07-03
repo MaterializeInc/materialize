@@ -13,11 +13,10 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
 use std::num::NonZeroUsize;
 
-use futures::executor::block_on;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Just, Strategy};
@@ -29,18 +28,13 @@ use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelati
 use mz_proto::any_uuid;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
+use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::sinks::SinkDesc;
+use mz_storage::client::transforms::LinearOperator;
 
-use crate::client::controller::storage::CollectionMetadata;
-use crate::types::sinks::SinkDesc;
 use crate::Plan;
 
 use proto_dataflow_description::*;
-
-use self::connections::{KafkaConnection, StringOrSecret};
-
-pub mod connections;
-pub mod sinks;
-pub mod sources;
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.rs"));
 
@@ -249,14 +243,6 @@ impl Arbitrary for TailBatch<mz_repr::Timestamp> {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-/// A batch of updates to be fed to a local input
-pub struct Update<T = mz_repr::Timestamp> {
-    pub row: Row,
-    pub timestamp: T,
-    pub diff: Diff,
-}
-
 /// A commonly used name for dataflows contain MIR expressions.
 pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 
@@ -326,7 +312,7 @@ impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata
 #[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments {
     /// Optional linear operators that can be applied record-by-record.
-    pub operators: Option<crate::LinearOperator>,
+    pub operators: Option<LinearOperator>,
 }
 
 impl RustType<ProtoSourceInstanceArguments> for SourceInstanceArguments {
@@ -362,7 +348,7 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
-    pub sink_exports: BTreeMap<GlobalId, crate::types::sinks::SinkDesc<S, T>>,
+    pub sink_exports: BTreeMap<GlobalId, SinkDesc<S, T>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
@@ -788,103 +774,6 @@ impl RustType<ProtoIndexDesc> for IndexDesc {
             on_id: proto.on_id.into_rust_if_some("ProtoIndexDesc::on_id")?,
             key: proto.key.into_rust()?,
         })
-    }
-}
-
-// TODO: change contract to ensure that the operator is always applied to
-// streams of rows
-/// In-place restrictions that can be made to rows.
-///
-/// These fields indicate *optional* information that may applied to
-/// streams of rows. Any row that does not satisfy all predicates may
-/// be discarded, and any column not listed in the projection may be
-/// replaced by a default value.
-///
-/// The intended order of operations is that the predicates are first
-/// applied, and columns not in projection can then be overwritten with
-/// default values. This allows the projection to avoid capturing columns
-/// used by the predicates but not otherwise required.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
-pub struct LinearOperator {
-    /// Rows that do not pass all predicates may be discarded.
-    #[proptest(strategy = "proptest::collection::vec(any::<MirScalarExpr>(), 0..2)")]
-    pub predicates: Vec<MirScalarExpr>,
-    /// Columns not present in `projection` may be replaced with
-    /// default values.
-    pub projection: Vec<usize>,
-}
-
-impl RustType<ProtoLinearOperator> for LinearOperator {
-    fn into_proto(&self) -> ProtoLinearOperator {
-        ProtoLinearOperator {
-            predicates: self.predicates.into_proto(),
-            projection: self.projection.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoLinearOperator) -> Result<Self, TryFromProtoError> {
-        Ok(LinearOperator {
-            predicates: proto.predicates.into_rust()?,
-            projection: proto.projection.into_rust()?,
-        })
-    }
-}
-
-impl LinearOperator {
-    /// Reports whether this linear operator is trivial when applied to an
-    /// input of the specified arity.
-    pub fn is_trivial(&self, arity: usize) -> bool {
-        self.predicates.is_empty() && self.projection.iter().copied().eq(0..arity)
-    }
-}
-
-/// Propagates appropriate configuration options from `kafka_connection` and
-/// `options` into `config`, ignoring any options identified in
-/// `drop_option_keys`.
-///
-/// Note that this:
-/// - Performs blocking reads when extracting SECRETS.
-/// - Does not ensure that the keys from the Kafka connection and
-///   additional options are disjoint.
-pub fn populate_client_config(
-    kafka_connection: KafkaConnection,
-    options: &BTreeMap<String, StringOrSecret>,
-    drop_option_keys: HashSet<&'static str>,
-    config: &mut rdkafka::ClientConfig,
-    secrets_reader: &mz_secrets::SecretsReader,
-) {
-    let config_options: BTreeMap<String, StringOrSecret> = kafka_connection.into();
-    for (k, v) in options.iter().chain(config_options.iter()) {
-        if !drop_option_keys.contains(k.as_str()) {
-            config.set(
-                k,
-                block_on(v.get_string(&secrets_reader))
-                    .expect("reading kafka secret unexpectedly failed"),
-            );
-        }
-    }
-}
-
-/// Provides cleaner access to the `populate_client_config` implementation for
-/// structs.
-pub trait PopulateClientConfig {
-    fn kafka_connection(&self) -> &KafkaConnection;
-    fn options(&self) -> &BTreeMap<String, StringOrSecret>;
-    fn drop_option_keys() -> HashSet<&'static str> {
-        HashSet::new()
-    }
-    fn populate_client_config(
-        &self,
-        config: &mut rdkafka::ClientConfig,
-        secrets_reader: &mz_secrets::SecretsReader,
-    ) {
-        populate_client_config(
-            self.kafka_connection().clone(),
-            self.options(),
-            Self::drop_option_keys(),
-            config,
-            secrets_reader,
-        )
     }
 }
 

@@ -29,7 +29,7 @@ use mz_expr::{
 };
 use mz_ore::soft_panic_or_log;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row};
 
 use self::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use self::reduce::{KeyValPlan, ReducePlan};
@@ -1725,42 +1725,6 @@ impl<T> CollectionPlan for Plan<T> {
             }
         }
     }
-}
-
-/// Helper method to convert linear operators to MapFilterProject instances.
-///
-/// This method produces a `MapFilterProject` instance that first applies any predicates,
-/// and then introduces `Datum::Dummy` literals in columns that are not demanded.
-/// The `RelationType` is required so that we can fill in the correct type of `Datum::Dummy`.
-pub fn linear_to_mfp(
-    linear: crate::LinearOperator,
-    typ: &mz_repr::RelationType,
-) -> MapFilterProject {
-    let crate::types::LinearOperator {
-        predicates,
-        projection,
-    } = linear;
-
-    let arity = typ.arity();
-    let mut dummies = Vec::new();
-    let mut demand_projection = Vec::new();
-    for (column, typ) in typ.column_types.iter().enumerate() {
-        if projection.contains(&column) {
-            demand_projection.push(column);
-        } else {
-            demand_projection.push(arity + dummies.len());
-            dummies.push(MirScalarExpr::literal_ok(
-                Datum::Dummy,
-                typ.scalar_type.clone(),
-            ));
-        }
-    }
-
-    // First filter, then introduce and reposition `Datum::Dummy` values.
-    MapFilterProject::new(arity)
-        .filter(predicates)
-        .map(dummies)
-        .project(demand_projection)
 }
 
 #[cfg(test)]

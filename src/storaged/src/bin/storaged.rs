@@ -17,15 +17,15 @@ use once_cell::sync::Lazy;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::proto_storage_server::ProtoStorageServer;
-use mz_dataflow_types::client::StorageClient;
-use mz_dataflow_types::connections::ConnectionContext;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
 use mz_service::grpc;
+use mz_storage::client::connections::ConnectionContext;
+use mz_storage::client::proto_storage_server::ProtoStorageServer;
+use mz_storage::client::StorageClient;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are

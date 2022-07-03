@@ -30,8 +30,6 @@ use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use mz_dataflow_types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::{SourceDesc, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -57,6 +55,8 @@ use mz_sql::plan::{
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
+use mz_storage::client::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::client::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 use uuid::Uuid;
 
@@ -1041,7 +1041,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_dataflow_types::connections::Connection,
+    pub connection: mz_storage::client::connections::Connection,
 }
 
 impl CatalogItem {
@@ -1268,7 +1268,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_dataflow_types::sources::SourceDesc`] associated with
+    /// Returns the [`mz_storage::client::sources::SourceDesc`] associated with
     /// this `CatalogEntry`.
     pub fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
         self.item.source_desc(self.name())
@@ -3808,7 +3808,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.source_desc()?)
     }
 
-    fn connection(&self) -> Result<&mz_dataflow_types::connections::Connection, SqlCatalogError> {
+    fn connection(&self) -> Result<&mz_storage::client::connections::Connection, SqlCatalogError> {
         Ok(&self.connection()?.connection)
     }
 

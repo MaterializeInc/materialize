@@ -112,11 +112,12 @@ use timely::dataflow::Scope;
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::*;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{GlobalId, Row};
+use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::errors::DataflowError;
 use mz_storage::source::persist_source;
 
 use crate::arrangement::manager::TraceBundle;

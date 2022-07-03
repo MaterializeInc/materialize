@@ -9,11 +9,12 @@
 
 //! Connection types.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail};
+use futures::executor::block_on;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -27,13 +28,13 @@ use mz_repr::GlobalId;
 use mz_secrets::{SecretsReader, SecretsReaderConfig};
 use mz_sql_parser::ast::KafkaConnectionOptionName;
 
-use crate::types::connections::aws::AwsExternalIdPrefix;
+use crate::client::connections::aws::AwsExternalIdPrefix;
 
 pub mod aws;
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_dataflow_types.types.connections.rs"
+    "/mz_storage.client.connections.rs"
 ));
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -562,5 +563,55 @@ impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
                 .into_rust_if_some("ProtoCsrConnectionHttpAuth::username")?,
             password: proto.password.into_rust()?,
         })
+    }
+}
+
+/// Propagates appropriate configuration options from `kafka_connection` and
+/// `options` into `config`, ignoring any options identified in
+/// `drop_option_keys`.
+///
+/// Note that this:
+/// - Performs blocking reads when extracting SECRETS.
+/// - Does not ensure that the keys from the Kafka connection and
+///   additional options are disjoint.
+pub fn populate_client_config(
+    kafka_connection: KafkaConnection,
+    options: &BTreeMap<String, StringOrSecret>,
+    drop_option_keys: HashSet<&'static str>,
+    config: &mut rdkafka::ClientConfig,
+    secrets_reader: &mz_secrets::SecretsReader,
+) {
+    let config_options: BTreeMap<String, StringOrSecret> = kafka_connection.into();
+    for (k, v) in options.iter().chain(config_options.iter()) {
+        if !drop_option_keys.contains(k.as_str()) {
+            config.set(
+                k,
+                block_on(v.get_string(&secrets_reader))
+                    .expect("reading kafka secret unexpectedly failed"),
+            );
+        }
+    }
+}
+
+/// Provides cleaner access to the `populate_client_config` implementation for
+/// structs.
+pub trait PopulateClientConfig {
+    fn kafka_connection(&self) -> &KafkaConnection;
+    fn options(&self) -> &BTreeMap<String, StringOrSecret>;
+    fn drop_option_keys() -> HashSet<&'static str> {
+        HashSet::new()
+    }
+    fn populate_client_config(
+        &self,
+        config: &mut rdkafka::ClientConfig,
+        secrets_reader: &mz_secrets::SecretsReader,
+    ) {
+        populate_client_config(
+            self.kafka_connection().clone(),
+            self.options(),
+            Self::drop_option_keys(),
+            config,
+            secrets_reader,
+        )
     }
 }

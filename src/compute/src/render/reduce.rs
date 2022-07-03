@@ -11,6 +11,7 @@
 //!
 //! Consult [ReducePlan] documentation for details.
 
+use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
@@ -27,18 +28,15 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 use tracing::error;
 
-use mz_dataflow_types::DataflowError;
-
 use mz_dataflow_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
 };
-
-use dec::OrderedDecimal;
 use mz_expr::{AggregateExpr, AggregateFunc};
 use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, Diff, Row, RowArena};
+use mz_storage::client::errors::DataflowError;
 
 use super::context::Arrangement;
 use super::context::CollectionBundle;

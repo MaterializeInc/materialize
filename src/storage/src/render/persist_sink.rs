@@ -13,6 +13,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
@@ -20,13 +22,11 @@ use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::sources::SourceData;
-use mz_dataflow_types::DataflowError;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::operators_async_ext::OperatorBuilderExt;
-
 use crate::storage_state::StorageState;
+
+use crate::client::controller::CollectionMetadata;
+use crate::client::errors::DataflowError;
+use crate::client::sources::SourceData;
 
 pub fn render<G>(
     scope: &mut G,

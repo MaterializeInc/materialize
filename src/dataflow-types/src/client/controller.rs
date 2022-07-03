@@ -27,7 +27,6 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use maplit::hashmap;
@@ -35,7 +34,6 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
-use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
@@ -48,11 +46,14 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
+use mz_storage::client::controller::StorageController;
+use mz_storage::client::{
+    ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
+};
 
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
-    ConcreteComputeInstanceReplicaConfig, ControllerResponse, ProcessId, ReplicaId, StorageCommand,
-    StorageResponse,
+    ConcreteComputeInstanceReplicaConfig, ControllerResponse, ProcessId, ReplicaId,
 };
 use crate::client::{ComputeGrpcClient, GenericClient};
 use crate::logging::LoggingConfig;
@@ -61,12 +62,10 @@ use crate::{TailBatch, TailResponse};
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 
 pub use crate::client::controller::compute::{ComputeController, ComputeControllerMut};
-pub use crate::client::controller::storage::{StorageController, StorageControllerState};
 
 use super::ActiveReplicationResponse;
 
 mod compute;
-pub mod storage;
 
 /// Configures a controller.
 #[derive(Debug, Clone)]
@@ -571,12 +570,12 @@ where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
-    StorageCommand<T>: RustType<super::ProtoStorageCommand>,
-    StorageResponse<T>: RustType<super::ProtoStorageResponse>,
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig) -> Self {
-        let storage_controller = crate::client::controller::storage::Controller::new(
+        let storage_controller = mz_storage::client::controller::Controller::new(
             config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
@@ -592,78 +591,5 @@ where
             compute: BTreeMap::default(),
             stashed_response: None,
         }
-    }
-}
-
-/// Compaction policies for collections maintained by `Controller`.
-#[derive(Clone, Derivative)]
-#[derivative(Debug)]
-pub enum ReadPolicy<T> {
-    /// Maintain the collection as valid from this frontier onward.
-    ValidFrom(Antichain<T>),
-    /// Maintain the collection as valid from a function of the write frontier.
-    ///
-    /// This function will only be re-evaluated when the write frontier changes.
-    /// If the intended behavior is to change in response to external signals,
-    /// consider using the `ValidFrom` variant to manually pilot compaction.
-    ///
-    /// The `Arc` makes the function cloneable.
-    LagWriteFrontier(
-        #[derivative(Debug = "ignore")] Arc<dyn Fn(AntichainRef<T>) -> Antichain<T> + Send + Sync>,
-    ),
-    /// Allows one to express multiple read policies, taking the least of
-    /// the resulting frontiers.
-    Multiple(Vec<ReadPolicy<T>>),
-}
-
-impl ReadPolicy<mz_repr::Timestamp> {
-    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to a multiple of that amount.
-    ///
-    /// The rounding down is done to reduce the number of changes the capability undergoes, with the thinking
-    /// being that if you are ok with `lag`, then getting something between `lag` and `2 x lag` should be ok.
-    pub fn lag_writes_by(lag: mz_repr::Timestamp) -> Self {
-        Self::LagWriteFrontier(Arc::new(move |upper| {
-            if upper.is_empty() {
-                Antichain::from_elem(Timestamp::minimum())
-            } else {
-                // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
-                let mut time = upper[0];
-                if lag != 0 {
-                    time = time.saturating_sub(lag);
-                    time = time.saturating_sub(time % lag);
-                }
-                Antichain::from_elem(time)
-            }
-        }))
-    }
-}
-
-impl<T: Timestamp> ReadPolicy<T> {
-    pub fn frontier(&self, write_frontier: AntichainRef<T>) -> Antichain<T> {
-        match self {
-            ReadPolicy::ValidFrom(frontier) => frontier.clone(),
-            ReadPolicy::LagWriteFrontier(logic) => logic(write_frontier),
-            ReadPolicy::Multiple(policies) => {
-                let mut frontier = Antichain::new();
-                for policy in policies.iter() {
-                    for time in policy.frontier(write_frontier).iter() {
-                        frontier.insert(time.clone());
-                    }
-                }
-                frontier
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lag_writes_by_zero() {
-        let policy = ReadPolicy::lag_writes_by(0);
-        let write_frontier = Antichain::from_elem(5);
-        assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
     }
 }

@@ -11,13 +11,13 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "dataflow-types/src/client/controller/storage.proto";
-import "dataflow-types/src/types/connections.proto";
 import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
+import "storage/src/client/controller.proto";
+import "storage/src/client/connections.proto";
 
-package mz_dataflow_types.types.sinks;
+package mz_storage.client.sinks;
 
 message ProtoSinkDesc {
     mz_repr.global_id.ProtoGlobalId from = 1;
@@ -62,7 +62,7 @@ message ProtoKafkaSinkConnection {
         repeated uint64 relation_key_indices = 1;
     }
 
-    mz_dataflow_types.types.connections.ProtoKafkaConnection connection = 1;
+    mz_storage.client.connections.ProtoKafkaConnection connection = 1;
     string topic = 2;
     string topic_prefix = 3;
     optional ProtoKeyDescAndIndices key_desc_and_indices = 4;
@@ -73,7 +73,7 @@ message ProtoKafkaSinkConnection {
     bool exactly_once = 9;
     repeated mz_repr.global_id.ProtoGlobalId transitive_source_dependencies = 10;
     uint64 fuel = 11;
-    map<string, mz_dataflow_types.types.connections.ProtoStringOrSecret> options = 12;
+    map<string, mz_storage.client.connections.ProtoStringOrSecret> options = 12;
 }
 
 message ProtoPublishedSchemaInfo {
@@ -83,5 +83,5 @@ message ProtoPublishedSchemaInfo {
 
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
-    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 2;
+    mz_storage.client.controller.ProtoCollectionMetadata storage_metadata = 2;
 }

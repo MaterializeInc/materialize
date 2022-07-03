@@ -8,98 +8,80 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-async-compression = { version = "0.3.14", features = ["tokio", "gzip"], optional = true }
+async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
 async-trait = "0.1.56"
-aws-sdk-kinesis = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
-aws-sdk-s3 = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
-aws-sdk-sqs = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
-bincode = { version = "1.3.3", optional = true }
-chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
-crossbeam-channel = { version = "0.5.5", optional = true }
-csv-core = { version = "0.1.10", optional = true }
+aws-config = { version = "0.14.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-s3 = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sqs = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-smithy-http = "0.44.0"
+aws-types = { version = "0.14.0", features = ["hardcoded-credentials"] }
+bincode = { version = "1.3.3" }
+bytes = "1.1.0"
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+crossbeam-channel = { version = "0.5.5" }
+csv-core = { version = "0.1.10" }
+derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
 futures-executor = "0.3.21"
 futures-util = "0.3.19"
-globset = { version = "0.4.9", optional = true }
-itertools = { version = "0.10.3", optional = true }
-mz-avro = { path = "../avro", features = ["snappy"], optional = true }
-mz-ccsr = { path = "../ccsr", optional = true }
-mz-dataflow-types = { path = "../dataflow-types" }
+globset = { version = "0.4.9", features = ["serde1"] }
+http = "0.2.8"
+http-serde = "1.1.0"
+itertools = { version = "0.10.3" }
+mz-avro = { path = "../avro", features = ["snappy"] }
+mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
-mz-interchange = { path = "../interchange", optional = true }
-mz-kafka-util = { path = "../kafka-util", optional = true }
-mz-kinesis-util = { path = "../kinesis-util", optional = true }
-mz-ore = { path = "../ore", features = ["task"] }
-mz-persist = { path = "../persist", optional = true }
-mz-persist-client = { path = "../persist-client", optional = true }
-mz-persist-types = { path = "../persist-types", optional = true }
-mz-pgcopy = { path = "../pgcopy", optional = true }
-mz-postgres-util = { path = "../postgres-util", optional = true }
+mz-interchange = { path = "../interchange" }
+mz-kafka-util = { path = "../kafka-util" }
+mz-kinesis-util = { path = "../kinesis-util" }
+mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-orchestrator = { path = "../orchestrator" }
+mz-persist = { path = "../persist" }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
+mz-pgcopy = { path = "../pgcopy" }
+mz-postgres-util = { path = "../postgres-util" }
+mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
+mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
+mz-stash = { path = "../stash" }
+# TODO(benesch): this crate should not depend on the SQL parser.
+mz-sql-parser = { path = "../sql-parser" }
 mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.12.0", optional = true }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
-prometheus = { version = "0.13.1", default-features = false, optional = true }
-prost = { version = "0.10.3", optional = true }
-pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false, optional = true }
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"], optional = true }
-regex = { version = "1.5.6", optional = true }
+once_cell = { version = "1.12.0" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+prometheus = { version = "0.13.1", default-features = false }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
+prost = { version = "0.10.3" }
+pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+regex = { version = "1.5.6" }
 serde = { version = "1.0.137", features = ["derive"] }
-serde_json = { version = "1.0.81", optional = true }
-tempfile = { version = "3.2.0", optional = true }
+serde_json = { version = "1.0.81" }
+tempfile = { version = "3.2.0" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-stream = "0.1.9"
 tokio-util = { version = "0.7.3", features = ["io"] }
+tonic = "0.7.2"
 tracing = "0.1.35"
-thiserror = { version = "1.0.31", optional = true }
+tracing-subscriber = "0.3.11"
+thiserror = { version = "1.0.31" }
+url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
-[features]
-server = [
-    "async-compression",
-    "aws-sdk-kinesis",
-    "aws-sdk-s3",
-    "aws-sdk-sqs",
-    "bincode",
-    "chrono",
-    "crossbeam-channel",
-    "csv-core",
-    "globset",
-    "once_cell",
-    "itertools",
-    "mz-avro",
-    "mz-ccsr",
-    "mz-interchange",
-    "mz-kafka-util",
-    "mz-kinesis-util",
-    "mz-persist",
-    "mz-persist-client",
-    "mz-persist-types",
-    "mz-pgcopy",
-    "mz-postgres-util",
-    "once_cell",
-    "postgres-protocol",
-    "prometheus",
-    "prost",
-    "pubnub-hyper",
-    "rdkafka",
-    "regex",
-    "serde_json",
-    "tempfile",
-    "tokio-postgres",
-    "thiserror"
-]
+[build-dependencies]
+tonic-build = "0.7"
 
 [dev-dependencies]
 itertools = "0.10.3"
 tokio = { version = "1.19.2", features = ["test-util"] }
-
-[build-dependencies]
-prost-build = { version = "0.10.3", features = ["vendored"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

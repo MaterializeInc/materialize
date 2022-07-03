@@ -14,12 +14,14 @@
 //! pushdown can be applied across views once we understand the context
 //! in which the views will be executed.
 
-use mz_dataflow_types::{DataflowDesc, LinearOperator};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+use mz_dataflow_types::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr};
 use mz_ore::id_gen::IdGen;
 use mz_repr::GlobalId;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use mz_storage::client::transforms::LinearOperator;
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 

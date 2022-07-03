@@ -13,13 +13,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Utilities for working with Timely.
+//! Utilities for working with Timely progress tracking.
 
-#![warn(missing_docs)]
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::Strategy;
+use timely::progress::ChangeBatch;
 
-pub mod activator;
-pub mod event;
-pub mod operator;
-pub mod operators_async_ext;
-pub mod progress;
-pub mod replay;
+/// An out-of-crate [`Arbitrary`] implementation for [`ChangeBatch`].
+pub fn any_change_batch<T>() -> impl Strategy<Value = ChangeBatch<T>>
+where
+    T: Arbitrary + Ord,
+{
+    proptest::collection::vec((any::<T>(), any::<i64>()), 1..11).prop_map(|changes| {
+        let mut batch = ChangeBatch::new();
+        batch.extend(changes.into_iter());
+        batch
+    })
+}

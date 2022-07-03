@@ -23,11 +23,11 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use mz_dataflow_types::client::{ComputeClient, ComputeCommand, ComputeResponse};
-use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_service::local::LocalClient;
+use mz_storage::client::connections::ConnectionContext;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;

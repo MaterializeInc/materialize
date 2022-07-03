@@ -23,12 +23,12 @@ use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::connections::Connection;
-use mz_dataflow_types::sources::SourceDesc;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
+use mz_storage::client::connections::Connection;
+use mz_storage::client::sources::SourceDesc;
 use uuid::Uuid;
 
 use crate::func::Func;

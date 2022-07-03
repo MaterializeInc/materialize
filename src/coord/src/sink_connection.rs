@@ -10,17 +10,16 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
-use mz_dataflow_types::PopulateClientConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sinks::{
-    KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
-    KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
-};
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
+use mz_storage::client::connections::{ConnectionContext, PopulateClientConfig};
+use mz_storage::client::sinks::{
+    KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
+    KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
+};
 
 use crate::error::CoordError;
 
@@ -238,7 +237,7 @@ async fn build_kafka(
     .await
     .context("error registering kafka topic for sink")?;
     let published_schema_info = match builder.format {
-        mz_dataflow_types::sinks::KafkaSinkFormat::Avro {
+        mz_storage::client::sinks::KafkaSinkFormat::Avro {
             key_schema,
             value_schema,
             csr_connection,
@@ -262,11 +261,11 @@ async fn build_kafka(
                 value_schema_id,
             })
         }
-        mz_dataflow_types::sinks::KafkaSinkFormat::Json => None,
+        mz_storage::client::sinks::KafkaSinkFormat::Json => None,
     };
 
     let consistency = match builder.consistency_format {
-        Some(mz_dataflow_types::sinks::KafkaSinkFormat::Avro {
+        Some(mz_storage::client::sinks::KafkaSinkFormat::Avro {
             value_schema,
             csr_connection,
             ..

@@ -27,26 +27,6 @@ use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::connections::{
-    Connection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, SaslConfig,
-    Security, SslConfig, StringOrSecret,
-};
-use mz_dataflow_types::sinks::{
-    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
-    SinkConnectionBuilder, SinkEnvelope,
-};
-use mz_dataflow_types::sources::encoding::{
-    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
-    ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
-};
-use mz_dataflow_types::sources::{
-    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, IncludedColumnPos,
-    KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
-    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
-    Timeline, UnplannedSourceEnvelope, UpsertStyle,
-};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
@@ -56,6 +36,26 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_storage::client::connections::{
+    Connection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, SaslConfig,
+    Security, SslConfig, StringOrSecret,
+};
+use mz_storage::client::sinks::{
+    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
+    SinkConnectionBuilder, SinkEnvelope,
+};
+use mz_storage::client::sources::encoding::{
+    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
+    ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
+};
+use mz_storage::client::sources::{
+    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
+    DebeziumSourceProjection, DebeziumTransactionMetadata, IncludedColumnPos,
+    KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
+    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
+    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
+    Timeline, UnplannedSourceEnvelope, UpsertStyle,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -530,12 +530,12 @@ pub fn plan_create_source(
             for ks in key_sources {
                 let dtks = match ks {
                     mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        mz_dataflow_types::sources::S3KeySource::Scan {
+                        mz_storage::client::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
                     mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        mz_dataflow_types::sources::S3KeySource::SqsNotifications {
+                        mz_storage::client::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -559,8 +559,8 @@ pub fn plan_create_source(
                     .transpose()?,
                 aws,
                 compression: match compression {
-                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
-                    Compression::None => mz_dataflow_types::sources::Compression::None,
+                    Compression::Gzip => mz_storage::client::sources::Compression::Gzip,
+                    Compression::None => mz_storage::client::sources::Compression::None,
                 },
             });
             (connection, encoding)
@@ -1226,7 +1226,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_dataflow_types::connections::CsrConnection>,
+    pub csr_connection: Option<mz_storage::client::connections::CsrConnection>,
     pub confluent_wire_format: bool,
 }
 
@@ -3011,7 +3011,7 @@ generate_extracted_config!(
     (Password, with_options::Secret)
 );
 
-impl TryFrom<CsrConnectionOptionExtracted> for mz_dataflow_types::connections::CsrConnection {
+impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::CsrConnection {
     type Error = anyhow::Error;
     fn try_from(ccsr_options: CsrConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let url = match ccsr_options.url {
@@ -3035,7 +3035,7 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_dataflow_types::connections::C
             username,
             password: ccsr_options.password.map(|secret| secret.into()),
         });
-        Ok(mz_dataflow_types::connections::CsrConnection {
+        Ok(mz_storage::client::connections::CsrConnection {
             url,
             root_certs,
             tls_identity,
@@ -3063,7 +3063,7 @@ pub fn plan_create_connection(
         }
         CreateConnection::Csr { with_options } => {
             let c = CsrConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_dataflow_types::connections::CsrConnection::try_from(c)?;
+            let connection = mz_storage::client::connections::CsrConnection::try_from(c)?;
             Connection::Csr(connection)
         }
     };

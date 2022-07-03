@@ -35,6 +35,7 @@ mz-secrets = { path = "../secrets"}
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
+mz-storage = { path = "../storage"}
 mz-transform = { path = "../transform" }
 prost = "0.10.3"
 rand = "0.8.5"

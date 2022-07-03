@@ -13,16 +13,20 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
+use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+
+use mz_repr::{Diff, Row, Timestamp};
+use mz_storage::client::errors::DataflowError;
+
 pub mod client;
 pub mod logging;
 pub mod plan;
 pub mod reconciliation;
 
-mod errors;
 mod explain;
 mod types;
 
-pub use errors::*;
 pub use explain::DataflowGraphFormatter;
 pub use explain::Explanation;
 pub use explain::JsonViewFormatter;
@@ -30,11 +34,6 @@ pub use explain::TimestampExplanation;
 pub use explain::TimestampSource;
 pub use plan::Plan;
 pub use types::*;
-
-use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
-
-use mz_repr::{Diff, Row, Timestamp};
 
 pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;

@@ -12,7 +12,7 @@ syntax = "proto3";
 import "expr/src/scalar.proto";
 import "repr/src/global_id.proto";
 
-package mz_dataflow_types.errors;
+package mz_storage.client.errors;
 
 message ProtoDecodeError {
     oneof kind {

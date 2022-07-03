@@ -13,20 +13,18 @@
 
 #![allow(clippy::op_ref)]
 use std::collections::HashSet;
+
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 
 use mz_dataflow_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_dataflow_types::plan::join::JoinClosure;
-use mz_dataflow_types::DataflowError;
-
 use mz_expr::MirScalarExpr;
-use mz_repr::{Diff, Row, RowArena};
-use timely::progress::Antichain;
-
-use super::super::context::{ArrangementFlavor, Context};
-use crate::render::context::CollectionBundle;
-use mz_repr::DatumVec;
+use mz_repr::{DatumVec, Diff, Row, RowArena};
+use mz_storage::client::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 
 impl<G> Context<G, Row>
 where

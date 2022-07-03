@@ -23,13 +23,13 @@ use timely::progress::Antichain;
 use tokio::sync::Mutex;
 use tracing::trace;
 
-use mz_dataflow_types::{
-    client::controller::storage::CollectionMetadata, sources::SourceData, DataflowError,
-};
 use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
 use mz_repr::{Diff, Row, Timestamp};
 
+use crate::client::controller::CollectionMetadata;
+use crate::client::errors::DataflowError;
+use crate::client::sources::SourceData;
 use crate::source::{SourceStatus, YIELD_INTERVAL};
 
 /// Creates a new source that reads from a persist shard.

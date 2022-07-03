@@ -30,6 +30,7 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-storage = { path = "../storage" }
 paste = "1.0"
 protobuf-native = "0.2.1"
 prost = "0.10.3"

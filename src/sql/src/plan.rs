@@ -34,12 +34,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::sinks::{SinkConnectionBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::{SourceDesc, Timeline};
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
+use mz_storage::client::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::client::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
     ExplainOptions, ExplainStageOld, Expr, FetchDirection, IndexOptionName, NoticeSeverity,
@@ -487,7 +487,7 @@ pub struct Source {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_dataflow_types::connections::Connection,
+    pub connection: mz_storage::client::connections::Connection,
 }
 
 #[derive(Clone, Debug)]
