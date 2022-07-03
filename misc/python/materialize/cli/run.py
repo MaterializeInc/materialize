@@ -15,6 +15,8 @@ import os
 import shutil
 import sys
 
+import psutil
+
 from materialize import ROOT, spawn, ui
 from materialize.ui import UIError
 
@@ -112,6 +114,17 @@ def main() -> int:
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
+            for proc in psutil.process_iter():
+                if proc.name() in ["storaged", "computed"]:
+                    if args.reset:
+                        print(
+                            f"Killing orphaned {proc.name()} process (PID {proc.pid})"
+                        )
+                        proc.kill()
+                    else:
+                        ui.warn(
+                            f"Existing {proc.name()} process (PID {proc.pid}) will be reused"
+                        )
             if args.reset:
                 print("Removing mzdata directory...")
                 shutil.rmtree("mzdata", ignore_errors=True)

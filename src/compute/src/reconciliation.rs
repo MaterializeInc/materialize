@@ -72,14 +72,14 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
-        if let Some(response) = self.responses.pop_front() {
-            Ok(Some(response))
-        } else {
-            let response = self.client.recv().await;
-            if let Ok(Some(response)) = response {
-                self.absorb_response(response)
+        loop {
+            if let Some(response) = self.responses.pop_front() {
+                return Ok(Some(response));
             }
-            Ok(self.responses.pop_front())
+            match self.client.recv().await? {
+                None => return Ok(None),
+                Some(response) => self.absorb_response(response),
+            }
         }
     }
 }

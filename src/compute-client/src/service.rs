@@ -17,9 +17,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
-use futures::stream::StreamExt;
 use timely::progress::frontier::MutableAntichain;
-use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
@@ -77,33 +75,18 @@ impl BidiProtoClient<ProtoComputeCommand, ProtoComputeResponse> for ProtoCompute
     }
 }
 
-// The following traits and impls are here because of limitations in prost; namely,
-// it does not provide traits that are generic over the request/response types,
-// for clients and servers.
-
-/// The implementations of this trait MUST be identical minus the types.
 #[async_trait]
-impl ProtoCompute for GrpcServer<ProtoComputeCommand, ProtoComputeResponse> {
+impl<G> ProtoCompute for GrpcServer<G>
+where
+    G: ComputeClient + 'static,
+{
     type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
 
     async fn command_response_stream(
         &self,
-        req: Request<Streaming<ProtoComputeCommand>>,
-    ) -> Result<Response<Self::CommandResponseStreamStream>, Status> {
-        debug!("GrpcServer: remote client connected");
-
-        // Consistent with the ActiveReplication client, we use unbounded channels.
-        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-
-        // Store channels in state
-        *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
-        self.shared.queue_change.notify_waiters();
-
-        let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
-
-        Ok(Response::new(
-            Box::pin(receiver_stream) as Self::CommandResponseStreamStream
-        ))
+        request: Request<Streaming<ProtoComputeCommand>>,
+    ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, Status> {
+        self.forward_bidi_stream(request).await
     }
 }
 
