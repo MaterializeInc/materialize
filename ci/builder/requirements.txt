@@ -4,7 +4,7 @@
 # dependencies (e.g., psycopg2) tend to be troublesome unless they ship binary
 # wheels for a wide variety of platforms, including M1 Macs.
 
-black==22.3.0
+black==22.6.0
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.24.22
 boto3==1.24.22
 click==8.1.3
