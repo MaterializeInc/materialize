@@ -42,7 +42,7 @@ pub mod reduce;
 pub mod threshold;
 pub mod top_k;
 
-include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.rs"));
 
 // This function exists purely to convert the HashMap into a BTreeMap,
 // so that the value will be stable, for the benefit of tests

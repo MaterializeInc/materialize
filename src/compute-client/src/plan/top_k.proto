@@ -13,7 +13,7 @@ syntax = "proto3";
 
 import "expr/src/relation.proto";
 
-package mz_dataflow_types.plan.top_k;
+package mz_compute_client.plan.top_k;
 
 message ProtoTopKPlan {
     oneof kind {

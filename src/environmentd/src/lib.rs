@@ -30,7 +30,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::controller::{ClusterReplicaSizeMap, ControllerConfig};
+use mz_controller::{ClusterReplicaSizeMap, ControllerConfig};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -250,7 +250,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     };
 
     // Initialize dataflow controller.
-    let dataflow_controller = mz_dataflow_types::client::Controller::new(config.controller).await;
+    let dataflow_controller = mz_controller::Controller::new(config.controller).await;
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
         dataflow_client: dataflow_controller,

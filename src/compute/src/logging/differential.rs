@@ -26,8 +26,8 @@ use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
 use crate::logging::ConsolidateBuffer;
-use mz_dataflow_types::KeysValsHandle;
-use mz_dataflow_types::RowSpine;
+use mz_compute_client::KeysValsHandle;
+use mz_compute_client::RowSpine;
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
@@ -44,7 +44,7 @@ use mz_timely_util::replay::MzReplay;
 /// the original rows.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    config: &mz_dataflow_types::logging::LoggingConfig,
+    config: &mz_compute_client::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {

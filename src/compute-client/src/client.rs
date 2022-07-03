@@ -28,28 +28,34 @@ use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use uuid::Uuid;
 
+use futures::stream::StreamExt;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::any_uuid;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_service::client::GenericClient;
-use mz_service::grpc::GrpcClient;
+use mz_service::grpc::{BidiProtoClient, GrpcClient, GrpcServer, ResponseStream};
 use mz_storage::client::controller::CollectionMetadata;
 use mz_storage::client::{LinearizedTimestampBindingFeedback, ProtoAllowCompaction};
 use mz_timely_util::progress::any_change_batch;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tonic::transport::Channel;
+use tonic::{Request, Response, Status, Streaming};
+use tracing::debug;
 
-use crate::client::controller::ClusterReplicaSizeConfig;
+use crate::client::proto_compute_client::ProtoComputeClient;
+use crate::client::proto_compute_server::ProtoCompute;
 use crate::logging::LoggingConfig;
 use crate::{DataflowDescription, PeekResponse, TailResponse};
 
 pub mod controller;
-pub use controller::Controller;
 
 pub mod partitioned;
 pub mod replicated;
 
-include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.client.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_client.client.rs"));
 
 /// An abstraction allowing us to name different compute instances.
 pub type ComputeInstanceId = u64;
@@ -59,25 +65,6 @@ pub type ReplicaId = u64;
 
 /// Identifier of a process within a replica.
 pub type ProcessId = i64;
-
-/// Replica configuration
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConcreteComputeInstanceReplicaConfig {
-    /// Out-of-process replica
-    Remote {
-        /// A map from replica name to hostnames.
-        replicas: BTreeSet<String>,
-    },
-    /// A remote but managed replica
-    Managed {
-        /// The size configuration of the replica.
-        size_config: ClusterReplicaSizeConfig,
-        /// A readable name for the replica size.
-        size_name: String,
-        /// The replica's availability zone, if `Some`.
-        availability_zone: Option<String>,
-    },
-}
 
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Configuration sent to new compute instances.
@@ -608,82 +595,62 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     }
 }
 
-pub type ComputeGrpcClient = GrpcClient<
-    proto_compute_client::ProtoComputeClient<tonic::transport::Channel>,
-    ProtoComputeCommand,
-    ProtoComputeResponse,
->;
+pub type ComputeGrpcClient =
+    GrpcClient<ProtoComputeClient<Channel>, ProtoComputeCommand, ProtoComputeResponse>;
 
-/// A client to a remote dataflow server.
-pub mod grpc {
-    use async_trait::async_trait;
-    use futures::stream::StreamExt;
-    use tokio::sync::mpsc::{self, UnboundedReceiver};
-    use tokio_stream::wrappers::UnboundedReceiverStream;
-    use tonic::transport::Channel;
-    use tonic::{Request, Response, Status, Streaming};
-    use tracing::debug;
+#[async_trait]
+impl BidiProtoClient for ProtoComputeClient<Channel> {
+    type ProtoCommand = ProtoComputeCommand;
+    type ProtoResponse = ProtoComputeResponse;
 
-    use mz_service::grpc::{BidiProtoClient, GrpcServer, ResponseStream};
-
-    use crate::client::proto_compute_client::ProtoComputeClient;
-    use crate::client::proto_compute_server::ProtoCompute;
-    use crate::client::{ProtoComputeCommand, ProtoComputeResponse};
-
-    #[async_trait]
-    impl BidiProtoClient for ProtoComputeClient<Channel> {
-        type ProtoCommand = ProtoComputeCommand;
-        type ProtoResponse = ProtoComputeResponse;
-
-        async fn connect(addr: String) -> Result<Self, anyhow::Error>
-        where
-            Self: Sized,
-        {
-            Ok(ProtoComputeClient::connect(addr).await?)
-        }
-
-        async fn create_stream(
-            &mut self,
-            rx: UnboundedReceiver<Self::ProtoCommand>,
-        ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error> {
-            match self
-                .command_response_stream(UnboundedReceiverStream::new(rx))
-                .await
-            {
-                Ok(resp_rx_wrap) => Ok(resp_rx_wrap.into_inner()),
-                Err(err) => Err(err)?,
-            }
-        }
+    async fn connect(addr: String) -> Result<Self, anyhow::Error>
+    where
+        Self: Sized,
+    {
+        Ok(ProtoComputeClient::connect(addr).await?)
     }
 
-    // The following traits and impls are here because of limitations in prost; namely,
-    // it does not provide traits that are generic over the request/response types,
-    // for clients and servers.
-
-    /// The implementations of this trait MUST be identical minus the types.
-    #[async_trait]
-    impl ProtoCompute for GrpcServer<ProtoComputeCommand, ProtoComputeResponse> {
-        type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
-
-        async fn command_response_stream(
-            &self,
-            req: Request<Streaming<ProtoComputeCommand>>,
-        ) -> Result<Response<Self::CommandResponseStreamStream>, Status> {
-            debug!("GrpcServer: remote client connected");
-
-            // Consistent with the ActiveReplication client, we use unbounded channels.
-            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-
-            // Store channels in state
-            *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
-            self.shared.queue_change.notify_waiters();
-
-            let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
-
-            Ok(Response::new(
-                Box::pin(receiver_stream) as Self::CommandResponseStreamStream
-            ))
+    async fn create_stream(
+        &mut self,
+        rx: UnboundedReceiver<Self::ProtoCommand>,
+    ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error> {
+        match self
+            .command_response_stream(UnboundedReceiverStream::new(rx))
+            .await
+        {
+            Ok(resp_rx_wrap) => Ok(resp_rx_wrap.into_inner()),
+            Err(err) => Err(err)?,
         }
+    }
+}
+
+// The following traits and impls are here because of limitations in prost; namely,
+// it does not provide traits that are generic over the request/response types,
+// for clients and servers.
+
+/// The implementations of this trait MUST be identical minus the types.
+#[async_trait]
+impl ProtoCompute for GrpcServer<ProtoComputeCommand, ProtoComputeResponse> {
+    type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
+
+    async fn command_response_stream(
+        &self,
+        req: Request<Streaming<ProtoComputeCommand>>,
+    ) -> Result<Response<Self::CommandResponseStreamStream>, Status> {
+        debug!("GrpcServer: remote client connected");
+
+        // Consistent with the ActiveReplication client, we use unbounded channels.
+        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+        // Store channels in state
+        *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
+        self.shared.queue_change.notify_waiters();
+
+        let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
+
+        Ok(Response::new(
+            Box::pin(receiver_stream) as Self::CommandResponseStreamStream
+        ))
     }
 }
 

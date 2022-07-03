@@ -26,7 +26,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tower_http::cors::AllowOrigin;
 
-use mz_dataflow_types::client::controller::ControllerConfig;
+use mz_controller::ControllerConfig;
 use mz_environmentd::{SecretsControllerConfig, TlsMode};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};

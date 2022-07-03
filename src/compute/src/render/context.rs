@@ -21,15 +21,15 @@ use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
-use mz_dataflow_types::plan::AvailableCollections;
+use mz_compute_client::plan::AvailableCollections;
 use timely::communication::message::RefOrMut;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use mz_dataflow_types::DataflowDescription;
-use mz_dataflow_types::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
+use mz_compute_client::DataflowDescription;
+use mz_compute_client::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use mz_storage::client::controller::CollectionMetadata;

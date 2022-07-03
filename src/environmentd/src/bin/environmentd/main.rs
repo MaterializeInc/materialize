@@ -39,7 +39,7 @@ use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
-use mz_dataflow_types::client::controller::ControllerConfig;
+use mz_controller::ControllerConfig;
 use mz_environmentd::{SecretsControllerConfig, TlsConfig, TlsMode};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator::Orchestrator;

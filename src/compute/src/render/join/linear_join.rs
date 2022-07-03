@@ -20,8 +20,8 @@ use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use mz_dataflow_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
-use mz_dataflow_types::plan::join::JoinClosure;
+use mz_compute_client::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
+use mz_compute_client::plan::join::JoinClosure;
 use mz_repr::{DatumVec, Diff, Row, RowArena};
 use mz_storage::client::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -201,7 +201,7 @@ where
             });
 
             errors.push(errs);
-            use mz_dataflow_types::RowSpine;
+            use mz_compute_client::RowSpine;
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }

@@ -28,7 +28,7 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 use tracing::error;
 
-use mz_dataflow_types::plan::reduce::{
+use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
 };
@@ -44,7 +44,7 @@ use super::context::Context;
 use super::ArrangementFlavor;
 use mz_repr::DatumVec;
 
-use mz_dataflow_types::RowSpine;
+use mz_compute_client::RowSpine;
 
 /// Render a dataflow based on the provided plan.
 ///
@@ -216,7 +216,7 @@ where
             let demand_map_len = demand_map.len();
             key_plan.permute(demand_map.clone(), demand_map_len);
             val_plan.permute(demand_map, demand_map_len);
-            let skips = mz_dataflow_types::plan::reduce::convert_indexes_to_skips(demand);
+            let skips = mz_compute_client::plan::reduce::convert_indexes_to_skips(demand);
             move |row_parts, time, diff| {
                 let temp_storage = RowArena::new();
 

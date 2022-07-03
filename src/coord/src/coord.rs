@@ -91,13 +91,12 @@ use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::controller::{
+use mz_compute_client::client::{ComputeInstanceId, ControllerResponse, ReplicaId};
+use mz_compute_client::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse};
+use mz_controller::{
     ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent,
+    ConcreteComputeInstanceReplicaConfig,
 };
-use mz_dataflow_types::client::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse, ReplicaId,
-};
-use mz_dataflow_types::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -247,7 +246,7 @@ pub struct SinkConnectionReady {
 
 /// Configures a coordinator.
 pub struct Config<S> {
-    pub dataflow_client: mz_dataflow_types::client::Controller,
+    pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection<S>,
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
@@ -310,7 +309,7 @@ pub struct WriteTimestamp {
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
-    dataflow_client: &'a mz_dataflow_types::client::Controller<T>,
+    dataflow_client: &'a mz_controller::Controller<T>,
     catalog: &'a CatalogState,
 }
 
@@ -452,7 +451,7 @@ pub struct Coordinator<S> {
     ///   COMPUTE replicas is non-blocking.
     /// - Insufficient isolation from STORAGE. The ADAPTER cannot tolerate
     ///   failure of STORAGE services.
-    dataflow_client: mz_dataflow_types::client::Controller,
+    dataflow_client: mz_controller::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog<S>,
@@ -670,7 +669,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn initialize_compute_read_policies(
         &mut self,
         ids: Vec<GlobalId>,
-        instance: mz_dataflow_types::client::ComputeInstanceId,
+        instance: mz_compute_client::client::ComputeInstanceId,
         compaction_window_ms: Option<Timestamp>,
     ) {
         let mut policy_updates = Vec::new();
@@ -990,7 +989,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_local_inputs_interval.tick() => Message::AdvanceLocalInputs,
-                // See [`mz_dataflow_types::client::controller::Controller::ready`] for notes
+                // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
                 m = self.dataflow_client.ready() => {
                     let () = m.unwrap();
@@ -3635,7 +3634,7 @@ impl<S: Append + 'static> Coordinator<S> {
         uses_ids: I,
         timeline: &Option<Timeline>,
         conn_id: ConnectionId,
-        compute_instance: mz_dataflow_types::client::ComputeInstanceId,
+        compute_instance: mz_compute_client::client::ComputeInstanceId,
     ) -> Result<CollectionIdBundle, CoordError>
     where
         I: IntoIterator<Item = &'a GlobalId>,
@@ -4086,7 +4085,7 @@ impl<S: Append + 'static> Coordinator<S> {
     fn least_valid_read(
         &self,
         id_bundle: &CollectionIdBundle,
-        instance: mz_dataflow_types::client::ComputeInstanceId,
+        instance: mz_compute_client::client::ComputeInstanceId,
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::from_elem(Timestamp::minimum());
         {
@@ -4111,7 +4110,7 @@ impl<S: Append + 'static> Coordinator<S> {
     fn least_valid_write(
         &self,
         id_bundle: &CollectionIdBundle,
-        instance: mz_dataflow_types::client::ComputeInstanceId,
+        instance: mz_compute_client::client::ComputeInstanceId,
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::new();
         {
@@ -4394,9 +4393,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 )?);
                 let catalog = self.catalog.for_session(session);
                 let formatter =
-                    mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
+                    mz_compute_client::DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
-                    mz_dataflow_types::Explanation::new(&decorrelated_plan, &catalog, &formatter);
+                    mz_compute_client::Explanation::new(&decorrelated_plan, &catalog, &formatter);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -4408,8 +4407,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
                 let formatter =
-                    mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
-                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
+                    mz_compute_client::DataflowGraphFormatter::new(&catalog, options.typed);
+                let mut explanation = mz_compute_client::Explanation::new_from_dataflow(
                     &dataflow, &catalog, &formatter,
                 );
                 if let Some(row_set_finishing) = row_set_finishing {
@@ -4422,13 +4421,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.validate_timeline(decorrelated_plan.depends_on())?;
                 let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let dataflow_plan =
-                    mz_dataflow_types::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                    mz_compute_client::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
                         .expect("Dataflow planning failed; unrecoverable error");
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
+                let mut explanation = mz_compute_client::Explanation::new_from_dataflow(
                     &dataflow_plan,
                     &catalog,
-                    &mz_dataflow_types::JsonViewFormatter {},
+                    &mz_compute_client::JsonViewFormatter {},
                 );
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
@@ -4481,7 +4480,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     .to_string()
                             })
                             .unwrap_or_else(|| id.to_string());
-                        sources.push(mz_dataflow_types::TimestampSource {
+                        sources.push(mz_compute_client::TimestampSource {
                             name: format!("{name} ({id}, storage)"),
                             read_frontier: state.implied_capability.elements().to_vec(),
                             write_frontier: state
@@ -4507,7 +4506,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     .to_string()
                             })
                             .unwrap_or_else(|| id.to_string());
-                        sources.push(mz_dataflow_types::TimestampSource {
+                        sources.push(mz_compute_client::TimestampSource {
                             name: format!("{name} ({id}, compute)"),
                             read_frontier: state.implied_capability.elements().to_vec(),
                             write_frontier: state
@@ -4519,7 +4518,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         });
                     }
                 }
-                let explanation = mz_dataflow_types::TimestampExplanation {
+                let explanation = mz_compute_client::TimestampExplanation {
                     timestamp,
                     since,
                     upper,
@@ -5413,7 +5412,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         mut dataflow: DataflowDesc,
         compute_instance: ComputeInstanceId,
-    ) -> mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan> {
+    ) -> mz_compute_client::DataflowDescription<mz_compute_client::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
@@ -5454,7 +5453,7 @@ impl<S: Append + 'static> Coordinator<S> {
             dataflow.set_as_of(since);
         }
 
-        mz_dataflow_types::Plan::finalize_dataflow(dataflow)
+        mz_compute_client::Plan::finalize_dataflow(dataflow)
             .expect("Dataflow planning failed; unrecoverable error")
     }
 
@@ -5792,7 +5791,7 @@ pub fn describe<S: Append>(
 /// This module determines if a dataflow can be short-cut, by returning constant values
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
-    use mz_dataflow_types::client::{ComputeInstanceId, ReplicaId};
+    use mz_compute_client::client::{ComputeInstanceId, ReplicaId};
     use mz_stash::Append;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
@@ -5805,7 +5804,7 @@ pub mod fast_path_peek {
 
     #[derive(Debug)]
     pub struct PeekDataflowPlan<T> {
-        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan<T>, (), T>,
+        desc: mz_compute_client::DataflowDescription<mz_compute_client::Plan<T>, (), T>,
         id: GlobalId,
         key: Vec<MirScalarExpr>,
         permutation: HashMap<usize, usize>,
@@ -5829,7 +5828,7 @@ pub mod fast_path_peek {
     /// we can avoid building a dataflow (and either just return the results, or peek
     /// out of the arrangement, respectively).
     pub fn create_plan(
-        dataflow_plan: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan>,
+        dataflow_plan: mz_compute_client::DataflowDescription<mz_compute_client::Plan>,
         view_id: GlobalId,
         index_id: GlobalId,
         index_key: Vec<MirScalarExpr>,
@@ -5846,13 +5845,13 @@ pub mod fast_path_peek {
         {
             match &dataflow_plan.objects_to_build[0].plan {
                 // In the case of a constant, we can return the result now.
-                mz_dataflow_types::Plan::Constant { rows } => {
+                mz_compute_client::Plan::Constant { rows } => {
                     return Ok(Plan::Constant(rows.clone()));
                 }
                 // In the case of a bare `Get`, we may be able to directly index an arrangement.
-                mz_dataflow_types::Plan::Get { id, keys, plan } => {
+                mz_compute_client::Plan::Get { id, keys, plan } => {
                     match plan {
-                        mz_dataflow_types::plan::GetPlan::PassArrangements => {
+                        mz_compute_client::plan::GetPlan::PassArrangements => {
                             // An arrangement may or may not exist. If not, nothing to be done.
                             if let Some((key, permute, thinning)) = keys.arbitrary_arrangement() {
                                 // Just grab any arrangement, but be sure to de-permute the results.
@@ -5875,7 +5874,7 @@ pub mod fast_path_peek {
                                 }
                             }
                         }
-                        mz_dataflow_types::plan::GetPlan::Arrangement(key, val, mfp) => {
+                        mz_compute_client::plan::GetPlan::Arrangement(key, val, mfp) => {
                             // Convert `mfp` to an executable, non-temporal plan.
                             // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
                             let map_filter_project = mfp
@@ -5903,7 +5902,7 @@ pub mod fast_path_peek {
                                 }
                             }
                         }
-                        mz_dataflow_types::plan::GetPlan::Collection(_) => {
+                        mz_compute_client::plan::GetPlan::Collection(_) => {
                             // No arrangement, so nothing to be done here.
                         }
                     }
@@ -6078,7 +6077,7 @@ pub mod fast_path_peek {
 
             use futures::FutureExt;
             use futures::StreamExt;
-            use mz_dataflow_types::PeekResponse;
+            use mz_compute_client::PeekResponse;
 
             // Prepare the receiver to return as a response.
             let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
@@ -6126,7 +6125,7 @@ pub mod fast_path_peek {
 /// queries. However, nothing is specific to transactions here.
 pub mod read_holds {
 
-    use mz_dataflow_types::client::ComputeInstanceId;
+    use mz_compute_client::client::ComputeInstanceId;
 
     use crate::coord::id_bundle::CollectionIdBundle;
 
@@ -6280,7 +6279,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let _: () = self
             .ship_dataflows(vec![df.clone()], compute_instance)
             .await;
-        let _: DataflowDescription<mz_dataflow_types::plan::Plan> =
+        let _: DataflowDescription<mz_compute_client::plan::Plan> =
             self.finalize_dataflow(df, compute_instance);
     }
 }

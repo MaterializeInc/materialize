@@ -21,7 +21,7 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -30,6 +30,7 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use maplit::hashmap;
+use mz_service::client::GenericClient;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,16 @@ use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 
+use mz_compute_client::client::controller::{
+    ComputeController, ComputeControllerMut, ComputeControllerState,
+};
+use mz_compute_client::client::{
+    ActiveReplicationResponse, ComputeClient, ComputeCommand, ComputeGrpcClient, ComputeInstanceId,
+    ComputeResponse, ControllerResponse, ProcessId, ProtoComputeCommand, ProtoComputeResponse,
+    ReplicaId,
+};
+use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::{TailBatch, TailResponse};
 use mz_orchestrator::{
     CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
     ServicePort,
@@ -51,21 +62,7 @@ use mz_storage::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 
-use crate::client::{
-    ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
-    ConcreteComputeInstanceReplicaConfig, ControllerResponse, ProcessId, ReplicaId,
-};
-use crate::client::{ComputeGrpcClient, GenericClient};
-use crate::logging::LoggingConfig;
-use crate::{TailBatch, TailResponse};
-
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
-
-pub use crate::client::controller::compute::{ComputeController, ComputeControllerMut};
-
-use super::ActiveReplicationResponse;
-
-mod compute;
 
 /// Configures a controller.
 #[derive(Debug, Clone)]
@@ -159,6 +156,25 @@ impl Default for ClusterReplicaSizeMap {
     }
 }
 
+/// Replica configuration
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ConcreteComputeInstanceReplicaConfig {
+    /// Out-of-process replica
+    Remote {
+        /// A map from replica name to hostnames.
+        replicas: BTreeSet<String>,
+    },
+    /// A remote but managed replica
+    Managed {
+        /// The size configuration of the replica.
+        size_config: ClusterReplicaSizeConfig,
+        /// A readable name for the replica size.
+        size_name: String,
+        /// The replica's availability zone, if `Some`.
+        availability_zone: Option<String>,
+    },
+}
+
 /// Deterministically generates replica names based on inputs.
 fn generate_replica_service_name(instance_id: ComputeInstanceId, replica_id: ReplicaId) -> String {
     format!("cluster-{instance_id}-replica-{replica_id}")
@@ -206,15 +222,15 @@ pub struct Controller<T = mz_repr::Timestamp> {
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
-    compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
+    compute: BTreeMap<ComputeInstanceId, ComputeControllerState<T>>,
     stashed_response: Option<UnderlyingControllerResponse<T>>,
 }
 
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + Codec64 + Copy + Unpin,
-    ComputeCommand<T>: RustType<super::ProtoComputeCommand>,
-    ComputeResponse<T>: RustType<super::ProtoComputeResponse>,
+    ComputeCommand<T>: RustType<ProtoComputeCommand>,
+    ComputeResponse<T>: RustType<ProtoComputeResponse>,
 {
     pub async fn create_instance(
         &mut self,
@@ -222,10 +238,8 @@ where
         logging: Option<LoggingConfig>,
     ) -> Result<(), anyhow::Error> {
         // Insert a new compute instance controller.
-        self.compute.insert(
-            instance,
-            compute::ComputeControllerState::new(&logging).await?,
-        );
+        self.compute
+            .insert(instance, ComputeControllerState::new(&logging).await?);
 
         Ok(())
     }

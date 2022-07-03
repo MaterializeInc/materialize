@@ -24,8 +24,8 @@ use timely::logging::WorkerIdentifier;
 use tracing::error;
 use uuid::Uuid;
 
-use mz_dataflow_types::KeysValsHandle;
-use mz_dataflow_types::RowSpine;
+use mz_compute_client::KeysValsHandle;
+use mz_compute_client::RowSpine;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
@@ -86,7 +86,7 @@ impl Peek {
 /// the original rows.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    config: &mz_dataflow_types::logging::LoggingConfig,
+    config: &mz_compute_client::logging::LoggingConfig,
     compute: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {

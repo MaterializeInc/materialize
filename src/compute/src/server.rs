@@ -22,7 +22,7 @@ use timely::WorkerConfig;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use mz_dataflow_types::client::{ComputeClient, ComputeCommand, ComputeResponse};
+use mz_compute_client::client::{ComputeClient, ComputeCommand, ComputeResponse};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;

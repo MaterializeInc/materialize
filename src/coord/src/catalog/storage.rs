@@ -19,9 +19,8 @@ use prost::{self, Message};
 use uuid::Uuid;
 
 use mz_audit_log::VersionedEvent;
-use mz_dataflow_types::client::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
-};
+use mz_compute_client::client::{ComputeInstanceId, ReplicaId};
+use mz_controller::ConcreteComputeInstanceReplicaConfig;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::Codec;

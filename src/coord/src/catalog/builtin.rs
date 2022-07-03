@@ -28,7 +28,7 @@ use differential_dataflow::Hashable;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
+use mz_compute_client::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
 

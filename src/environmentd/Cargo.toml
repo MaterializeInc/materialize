@@ -32,7 +32,7 @@ libc = "0.2.126"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
-mz-dataflow-types = { path = "../dataflow-types" }
+mz-controller = { path = "../controller" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator = { path = "../orchestrator" }

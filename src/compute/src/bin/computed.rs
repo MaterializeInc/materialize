@@ -17,9 +17,9 @@ use once_cell::sync::Lazy;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::proto_compute_server::ProtoComputeServer;
-use mz_dataflow_types::client::ComputeClient;
-use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
+use mz_compute_client::client::proto_compute_server::ProtoComputeServer;
+use mz_compute_client::client::ComputeClient;
+use mz_compute_client::reconciliation::command::ComputeCommandReconcile;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;

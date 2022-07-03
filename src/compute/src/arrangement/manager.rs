@@ -21,7 +21,7 @@ use mz_ore::metrics::{
 };
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use mz_dataflow_types::{ErrsHandle, KeysValsHandle};
+use mz_compute_client::{ErrsHandle, KeysValsHandle};
 use mz_repr::{GlobalId, Timestamp};
 
 use prometheus::core::{AtomicF64, AtomicU64};

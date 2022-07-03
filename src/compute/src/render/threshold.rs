@@ -23,10 +23,10 @@ use mz_repr::{Diff, Row};
 
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
-use mz_dataflow_types::plan::threshold::{
+use mz_compute_client::plan::threshold::{
     BasicThresholdPlan, RetractionsThresholdPlan, ThresholdPlan,
 };
-use mz_dataflow_types::RowSpine;
+use mz_compute_client::RowSpine;
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<G, T, R, L>(

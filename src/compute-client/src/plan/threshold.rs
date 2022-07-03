@@ -39,7 +39,7 @@ use super::AvailableCollections;
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_dataflow_types.plan.threshold.rs"
+    "/mz_compute_client.plan.threshold.rs"
 ));
 
 /// A plan describing how to compute a threshold operation.

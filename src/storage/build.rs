@@ -25,7 +25,7 @@ fn main() {
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
         .type_attribute(
-            ".mz_dataflow_types.postgres_source",
+            ".mz_compute_client.postgres_source",
             "#[derive(Eq, serde::Serialize, serde::Deserialize)]",
         )
         .compile(

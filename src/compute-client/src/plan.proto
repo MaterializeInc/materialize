@@ -11,10 +11,10 @@
 
 syntax = "proto3";
 
-import "dataflow-types/src/plan/join.proto";
-import "dataflow-types/src/plan/reduce.proto";
-import "dataflow-types/src/plan/threshold.proto";
-import "dataflow-types/src/plan/top_k.proto";
+import "compute-client/src/plan/join.proto";
+import "compute-client/src/plan/reduce.proto";
+import "compute-client/src/plan/threshold.proto";
+import "compute-client/src/plan/top_k.proto";
 import "expr/src/id.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
@@ -22,11 +22,11 @@ import "expr/src/scalar.proto";
 import "repr/src/row.proto";
 import "google/protobuf/empty.proto";
 
-package mz_dataflow_types.plan;
+package mz_compute_client.plan;
 
 message ProtoAvailableCollections {
     bool raw = 1;
-    repeated mz_dataflow_types.plan.threshold.ProtoArrangement arranged = 2;
+    repeated mz_compute_client.plan.threshold.ProtoArrangement arranged = 2;
 }
 
 message ProtoGetPlan {
@@ -98,24 +98,24 @@ message ProtoPlan {
 
    message ProtoPlanJoin {
         repeated ProtoPlan inputs = 1;
-        mz_dataflow_types.plan.join.ProtoJoinPlan plan = 2;
+        mz_compute_client.plan.join.ProtoJoinPlan plan = 2;
    }
 
    message ProtoPlanReduce {
         ProtoPlan input = 1;
-        mz_dataflow_types.plan.reduce.ProtoKeyValPlan key_val_plan = 2;
-        mz_dataflow_types.plan.reduce.ProtoReducePlan plan = 3;
+        mz_compute_client.plan.reduce.ProtoKeyValPlan key_val_plan = 2;
+        mz_compute_client.plan.reduce.ProtoReducePlan plan = 3;
         ProtoPlanInputKey input_key = 4;
    }
 
    message ProtoPlanTopK {
         ProtoPlan input = 1;
-        mz_dataflow_types.plan.top_k.ProtoTopKPlan top_k_plan = 2;
+        mz_compute_client.plan.top_k.ProtoTopKPlan top_k_plan = 2;
    }
 
    message ProtoPlanThreshold {
         ProtoPlan input = 1;
-        mz_dataflow_types.plan.threshold.ProtoThresholdPlan threshold_plan = 2;
+        mz_compute_client.plan.threshold.ProtoThresholdPlan threshold_plan = 2;
    }
 
    message ProtoPlanUnion {

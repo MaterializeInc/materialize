@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::client::ComputeInstanceId;
+use mz_compute_client::client::ComputeInstanceId;
 use mz_expr::LocalId;
 use mz_ore::str::StrExt;
 use mz_repr::GlobalId;

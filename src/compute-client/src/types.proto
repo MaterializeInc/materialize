@@ -11,7 +11,7 @@
 
 syntax = "proto3";
 
-import "dataflow-types/src/plan.proto";
+import "compute-client/src/plan.proto";
 import "expr/src/scalar.proto";
 import "persist/src/persist.proto";
 import "proto/src/proto.proto";
@@ -24,7 +24,7 @@ import "storage/src/client/transforms.proto";
 
 import "google/protobuf/empty.proto";
 
-package mz_dataflow_types.types;
+package mz_compute_client.types;
 
 message ProtoDataflowDescription {
     message ProtoSourceImport {
@@ -61,7 +61,7 @@ message ProtoIndexDesc {
 
 message ProtoBuildDesc {
     mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_dataflow_types.plan.ProtoPlan plan = 2;
+    mz_compute_client.plan.ProtoPlan plan = 2;
 }
 
 message ProtoSourceInstanceDesc {

@@ -36,7 +36,7 @@ use crate::Plan;
 
 use proto_dataflow_description::*;
 
-include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_client.types.rs"));
 
 /// The response from a `Peek`.
 ///

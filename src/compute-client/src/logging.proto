@@ -13,7 +13,7 @@ import "google/protobuf/empty.proto";
 import "repr/src/global_id.proto";
 import "proto/src/proto.proto";
 
-package mz_dataflow_types.logging;
+package mz_compute_client.logging;
 
 message ProtoActiveLog {
     ProtoLogVariant key = 1;

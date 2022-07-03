@@ -20,9 +20,9 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
-use mz_dataflow_types::logging::LoggingConfig;
-use mz_dataflow_types::KeysValsHandle;
-use mz_dataflow_types::RowSpine;
+use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::KeysValsHandle;
+use mz_compute_client::RowSpine;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 
