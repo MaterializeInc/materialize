@@ -25,11 +25,11 @@ use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
 
-use mz_coord::session::{
+use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
     TransactionStatus,
 };
-use mz_coord::{ExecuteResponse, PeekResponseUnary, RowsFuture};
+use mz_adapter::{ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -70,8 +70,8 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
     pub tls_mode: Option<TlsMode>,
-    /// A client for the coordinator.
-    pub coord_client: mz_coord::ConnClient,
+    /// A client for the adapter.
+    pub adapter_client: mz_adapter::ConnClient,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
     /// The protocol version that the client provided in the startup message.
@@ -94,7 +94,7 @@ pub struct RunParams<'a, A> {
 pub async fn run<'a, A>(
     RunParams {
         tls_mode,
-        coord_client,
+        adapter_client,
         conn,
         version,
         mut params,
@@ -198,18 +198,18 @@ where
         let _ = session.vars_mut().set(&name, &value, local);
     }
 
-    // Register session with coordinator.
-    let (mut coord_client, startup) = match coord_client.startup(session, frontegg.is_some()).await
-    {
-        Ok(startup) => startup,
-        Err(e) => {
-            return conn
-                .send(ErrorResponse::from_coord(Severity::Fatal, e))
-                .await
-        }
-    };
+    // Register session with adapter.
+    let (mut adapter_client, startup) =
+        match adapter_client.startup(session, frontegg.is_some()).await {
+            Ok(startup) => startup,
+            Err(e) => {
+                return conn
+                    .send(ErrorResponse::from_adapter(Severity::Fatal, e))
+                    .await
+            }
+        };
 
-    let session = coord_client.session();
+    let session = adapter_client.session();
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in session.vars().notify_set() {
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
@@ -227,7 +227,7 @@ where
 
     let machine = StateMachine {
         conn,
-        coord_client: &mut coord_client,
+        adapter_client: &mut adapter_client,
     };
 
     select! {
@@ -250,7 +250,7 @@ enum State {
 
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
-    coord_client: &'a mut mz_coord::SessionClient,
+    adapter_client: &'a mut mz_adapter::SessionClient,
 }
 
 impl<'a, A> StateMachine<'a, A>
@@ -278,7 +278,7 @@ where
     async fn advance_ready(&mut self) -> Result<State, io::Error> {
         let message = self.conn.recv().await?;
 
-        self.coord_client.reset_canceled();
+        self.adapter_client.reset_canceled();
 
         // NOTE(guswynn): we could consider adding spans to all message types. Currently
         // only a few message types seem useful.
@@ -367,17 +367,17 @@ where
         let param_types = vec![];
         const EMPTY_PORTAL: &str = "";
         if let Err(e) = self
-            .coord_client
+            .adapter_client
             .declare(EMPTY_PORTAL.to_string(), stmt, param_types)
             .await
         {
             return self
-                .error(ErrorResponse::from_coord(Severity::Error, e))
+                .error(ErrorResponse::from_adapter(Severity::Error, e))
                 .await;
         }
 
         let stmt_desc = self
-            .coord_client
+            .adapter_client
             .session()
             .get_portal_unverified(EMPTY_PORTAL)
             .map(|portal| portal.desc.clone())
@@ -402,7 +402,7 @@ where
             }
         }
 
-        let result = match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
+        let result = match self.adapter_client.execute(EMPTY_PORTAL.to_string()).await {
             Ok(response) => {
                 self.send_execute_response(
                     response,
@@ -416,13 +416,13 @@ where
                 .await
             }
             Err(e) => {
-                self.error(ErrorResponse::from_coord(Severity::Error, e))
+                self.error(ErrorResponse::from_adapter(Severity::Error, e))
                     .await
             }
         };
 
         // Destroy the portal.
-        self.coord_client.session().remove_portal(EMPTY_PORTAL);
+        self.adapter_client.session().remove_portal(EMPTY_PORTAL);
 
         result
     }
@@ -430,7 +430,7 @@ where
     async fn start_transaction(&mut self, stmts: Option<usize>) {
         // start_transaction can't error (but assert that just in case it changes in
         // the future.
-        let res = self.coord_client.start_transaction(stmts).await;
+        let res = self.adapter_client.start_transaction(stmts).await;
         assert!(res.is_ok());
     }
 
@@ -475,7 +475,7 @@ where
 
         // Implicit transactions are closed at the end of a Query message.
         {
-            if self.coord_client.session().transaction().is_implicit() {
+            if self.adapter_client.session().transaction().is_implicit() {
                 self.commit_transaction().await?;
             }
         }
@@ -541,7 +541,7 @@ where
             return self.aborted_txn_error().await;
         }
         match self
-            .coord_client
+            .adapter_client
             .describe(name, maybe_stmt, param_types)
             .await
         {
@@ -550,7 +550,7 @@ where
                 Ok(State::Ready)
             }
             Err(e) => {
-                self.error(ErrorResponse::from_coord(Severity::Error, e))
+                self.error(ErrorResponse::from_adapter(Severity::Error, e))
                     .await
             }
         }
@@ -568,9 +568,9 @@ where
 
     /// End a transaction and report to the user if an error occurred.
     async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
-        let resp = self.coord_client.end_transaction(action).await;
+        let resp = self.adapter_client.end_transaction(action).await;
         if let Err(err) = resp {
-            self.send(BackendMessage::ErrorResponse(ErrorResponse::from_coord(
+            self.send(BackendMessage::ErrorResponse(ErrorResponse::from_adapter(
                 Severity::Error,
                 err,
             )))
@@ -592,14 +592,14 @@ where
 
         let aborted_txn = self.is_aborted_txn();
         let stmt = match self
-            .coord_client
+            .adapter_client
             .get_prepared_statement(&statement_name)
             .await
         {
             Ok(stmt) => stmt,
             Err(err) => {
                 return self
-                    .error(ErrorResponse::from_coord(Severity::Error, err))
+                    .error(ErrorResponse::from_adapter(Severity::Error, err))
                     .await
             }
         };
@@ -690,7 +690,7 @@ where
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
         let stmt = stmt.sql().cloned();
-        if let Err(err) = self.coord_client.session().set_portal(
+        if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
             stmt,
@@ -699,7 +699,7 @@ where
             revision,
         ) {
             return self
-                .error(ErrorResponse::from_coord(Severity::Error, err))
+                .error(ErrorResponse::from_adapter(Severity::Error, err))
                 .await;
         }
 
@@ -720,7 +720,7 @@ where
 
             // Check if the portal has been started and can be continued.
             let portal = match self
-                .coord_client
+                .adapter_client
                 .session()
                 .get_portal_unverified_mut(&portal_name)
             {
@@ -751,7 +751,7 @@ where
                     // Postgres).
                     self.start_transaction(Some(1)).await;
 
-                    match self.coord_client.execute(portal_name.clone()).await {
+                    match self.adapter_client.execute(portal_name.clone()).await {
                         Ok(response) => {
                             self.send_execute_response(
                                 response,
@@ -765,7 +765,7 @@ where
                             .await
                         }
                         Err(e) => {
-                            self.error(ErrorResponse::from_coord(Severity::Error, e))
+                            self.error(ErrorResponse::from_adapter(Severity::Error, e))
                                 .await
                         }
                     }
@@ -813,15 +813,15 @@ where
         // Start a transaction if we aren't in one.
         self.start_transaction(Some(1)).await;
 
-        let stmt = match self.coord_client.get_prepared_statement(&name).await {
+        let stmt = match self.adapter_client.get_prepared_statement(&name).await {
             Ok(stmt) => stmt,
             Err(err) => {
                 return self
-                    .error(ErrorResponse::from_coord(Severity::Error, err))
+                    .error(ErrorResponse::from_adapter(Severity::Error, err))
                     .await
             }
         };
-        // Cloning to avoid a mutable borrow issue because `send` also uses `coord_client`
+        // Cloning to avoid a mutable borrow issue because `send` also uses `adapter_client`
         let parameter_desc = BackendMessage::ParameterDescription(
             stmt.desc()
                 .param_types
@@ -842,7 +842,7 @@ where
         // Start a transaction if we aren't in one.
         self.start_transaction(Some(1)).await;
 
-        let session = self.coord_client.session();
+        let session = self.adapter_client.session();
         let row_desc = session
             .get_portal_unverified(name)
             .map(|portal| describe_rows(&portal.desc, &portal.result_formats));
@@ -862,20 +862,22 @@ where
     }
 
     async fn close_statement(&mut self, name: String) -> Result<State, io::Error> {
-        self.coord_client.session().remove_prepared_statement(&name);
+        self.adapter_client
+            .session()
+            .remove_prepared_statement(&name);
         self.send(BackendMessage::CloseComplete).await?;
         Ok(State::Ready)
     }
 
     async fn close_portal(&mut self, name: String) -> Result<State, io::Error> {
-        self.coord_client.session().remove_portal(&name);
+        self.adapter_client.session().remove_portal(&name);
         self.send(BackendMessage::CloseComplete).await?;
         Ok(State::Ready)
     }
 
     fn complete_portal(&mut self, name: &str) {
         let portal = self
-            .coord_client
+            .adapter_client
             .session()
             .get_portal_unverified_mut(name)
             .expect("portal should exist");
@@ -960,7 +962,7 @@ where
         match message {
             BackendMessage::ErrorResponse(ref err) => {
                 let minimum_client_severity =
-                    self.coord_client.session().vars().client_min_messages();
+                    self.adapter_client.session().vars().client_min_messages();
                 if err
                     .severity
                     .should_output_to_client(minimum_client_severity)
@@ -986,14 +988,14 @@ where
 
     async fn sync(&mut self) -> Result<State, io::Error> {
         // Close the current transaction if we are in an implicit transaction.
-        if self.coord_client.session().transaction().is_implicit() {
+        if self.adapter_client.session().transaction().is_implicit() {
             self.commit_transaction().await?;
         }
         return self.ready().await;
     }
 
     async fn ready(&mut self) -> Result<State, io::Error> {
-        let txn_state = self.coord_client.session().transaction().into();
+        let txn_state = self.adapter_client.session().transaction().into();
         self.send(BackendMessage::ReadyForQuery(txn_state)).await?;
         self.flush().await
     }
@@ -1017,7 +1019,7 @@ where
                 }
             }
         };
-        // Do not include self.coord_client.canceled() here because cancel messages
+        // Do not include self.adapter_client.canceled() here because cancel messages
         // will propagate through the PeekResponse. select is safe to use because if
         // close finishes, rows is canceled, which is the intended behavior.
         tokio::select! {
@@ -1191,7 +1193,7 @@ where
                 // can't hold `var` across an await point.
                 let qn = name.to_string();
                 let msg = if let Some(var) = self
-                    .coord_client
+                    .adapter_client
                     .session()
                     .vars_mut()
                     .notify_set()
@@ -1235,7 +1237,7 @@ where
                         SqlState::WARNING,
                         "streaming TAIL rows directly requires a client that does not buffer output",
                     );
-                    if self.coord_client.session().vars().application_name() == "psql" {
+                    if self.adapter_client.session().vars().application_name() == "psql" {
                         msg.hint =
                             Some("Wrap your TAIL statement in `COPY (TAIL ...) TO STDOUT`.".into())
                     }
@@ -1340,7 +1342,7 @@ where
             &portal_name
         };
         let result_formats = self
-            .coord_client
+            .adapter_client
             .session()
             .get_portal_unverified(result_format_portal_name)
             .expect("valid fetch portal name for send rows")
@@ -1376,7 +1378,7 @@ where
         loop {
             // Fetch next batch of rows, waiting for a possible requested timeout or
             // cancellation.
-            let batch = if self.coord_client.canceled().now_or_never().is_some() {
+            let batch = if self.adapter_client.canceled().now_or_never().is_some() {
                 FetchResult::Canceled
             } else if rows.current.is_some() {
                 FetchResult::Rows(rows.current.take())
@@ -1385,7 +1387,7 @@ where
             } else {
                 tokio::select! {
                     _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
-                    _ = self.coord_client.canceled() => FetchResult::Canceled,
+                    _ = self.adapter_client.canceled() => FetchResult::Canceled,
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
@@ -1475,7 +1477,7 @@ where
         }
 
         let portal = self
-            .coord_client
+            .adapter_client
             .session()
             .get_portal_unverified_mut(&portal_name)
             .expect("valid portal name for send rows");
@@ -1485,7 +1487,7 @@ where
         portal.state = PortalState::InProgress(Some(rows));
 
         let fetch_portal = fetch_portal_name.map(|name| {
-            self.coord_client
+            self.adapter_client
                 .session()
                 .get_portal_unverified_mut(&name)
                 .expect("valid fetch portal")
@@ -1568,7 +1570,7 @@ where
                             .await;
                     }
                 },
-                _ = self.coord_client.canceled() => {
+                _ = self.adapter_client.canceled() => {
                     return self
                         .error(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
@@ -1688,9 +1690,9 @@ where
 
             let count = rows.len();
 
-            if let Err(e) = self.coord_client.insert_rows(id, columns, rows).await {
+            if let Err(e) = self.adapter_client.insert_rows(id, columns, rows).await {
                 return self
-                    .error(ErrorResponse::from_coord(Severity::Error, e))
+                    .error(ErrorResponse::from_adapter(Severity::Error, e))
                     .await;
             }
 
@@ -1705,13 +1707,13 @@ where
         assert!(err.severity.is_error());
         debug!(
             "cid={} error code={} message={}",
-            self.coord_client.session().conn_id(),
+            self.adapter_client.session().conn_id(),
             err.code.code(),
             err.message
         );
         let is_fatal = err.severity.is_fatal();
         self.send(BackendMessage::ErrorResponse(err)).await?;
-        let txn = self.coord_client.session().transaction();
+        let txn = self.adapter_client.session().transaction();
         match txn {
             // Error can be called from describe and parse and so might not be in an active
             // transaction.
@@ -1726,7 +1728,7 @@ where
             }
             // Explicit transactions move to failed.
             TransactionStatus::InTransaction(_) => {
-                self.coord_client.fail_transaction();
+                self.adapter_client.fail_transaction();
             }
         };
         if is_fatal {
@@ -1747,7 +1749,7 @@ where
 
     fn is_aborted_txn(&mut self) -> bool {
         matches!(
-            self.coord_client.session().transaction(),
+            self.adapter_client.session().transaction(),
             TransactionStatus::Failed(_)
         )
     }

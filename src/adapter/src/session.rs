@@ -28,7 +28,7 @@ use mz_sql::plan::{Params, PlanContext, StatementDesc};
 
 use crate::client::ConnectionId;
 use crate::coord::{CoordTimestamp, PeekResponseUnary};
-use crate::error::CoordError;
+use crate::error::AdapterError;
 
 mod vars;
 
@@ -176,7 +176,7 @@ impl<T: CoordTimestamp> Session<T> {
 
     /// Adds operations to the current transaction. An error is produced if they
     /// cannot be merged (i.e., a read cannot be merged to an insert).
-    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), CoordError> {
+    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
         match &mut self.transaction {
             TransactionStatus::Started(Transaction { ops, access, .. })
             | TransactionStatus::InTransaction(Transaction { ops, access, .. })
@@ -186,7 +186,7 @@ impl<T: CoordTimestamp> Session<T> {
                         if matches!(access, Some(TransactionAccessMode::ReadOnly))
                             && matches!(add_ops, TransactionOps::Writes(_))
                         {
-                            return Err(CoordError::ReadOnlyTransaction);
+                            return Err(AdapterError::ReadOnlyTransaction);
                         }
                         *ops = add_ops;
                     }
@@ -194,9 +194,9 @@ impl<T: CoordTimestamp> Session<T> {
                         TransactionOps::Peeks(add_ts) => {
                             assert_eq!(*txn_ts, add_ts);
                         }
-                        _ => return Err(CoordError::ReadOnlyTransaction),
+                        _ => return Err(AdapterError::ReadOnlyTransaction),
                     },
-                    TransactionOps::Tail => return Err(CoordError::TailOnlyTransaction),
+                    TransactionOps::Tail => return Err(AdapterError::TailOnlyTransaction),
                     TransactionOps::Writes(txn_writes) => match add_ops {
                         TransactionOps::Writes(mut add_writes) => {
                             // We should have already checked the access above, but make sure we don't miss
@@ -211,11 +211,11 @@ impl<T: CoordTimestamp> Session<T> {
                                 .len()
                                 > 1
                             {
-                                return Err(CoordError::MultiTableWriteTransaction);
+                                return Err(AdapterError::MultiTableWriteTransaction);
                             }
                         }
                         _ => {
-                            return Err(CoordError::WriteOnlyTransaction);
+                            return Err(AdapterError::WriteOnlyTransaction);
                         }
                     },
                 }
@@ -319,10 +319,10 @@ impl<T: CoordTimestamp> Session<T> {
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<mz_pgrepr::Format>,
         catalog_revision: u64,
-    ) -> Result<(), CoordError> {
+    ) -> Result<(), AdapterError> {
         // The empty portal can be silently replaced.
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
-            return Err(CoordError::DuplicateCursor(portal_name));
+            return Err(AdapterError::DuplicateCursor(portal_name));
         }
         self.portals.insert(
             portal_name,
@@ -370,7 +370,7 @@ impl<T: CoordTimestamp> Session<T> {
         parameters: Params,
         result_formats: Vec<Format>,
         catalog_revision: u64,
-    ) -> Result<String, CoordError> {
+    ) -> Result<String, AdapterError> {
         // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
 
         for i in 0usize.. {

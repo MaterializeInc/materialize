@@ -122,21 +122,20 @@ fn test_no_block() -> Result<(), anyhow::Error> {
             });
 
             // Wait for Materialize to contact the schema registry, which
-            // indicates the coordinator is processing the CREATE SOURCE
-            // command. It will be unable to complete the query until we
-            // respond.
+            // indicates the adapter is processing the CREATE SOURCE command. It
+            // will be unable to complete the query until we respond.
             info!("test_no_block: accepting fake schema registry connection");
             let response_tx = schema_registry_server.accept().await;
 
-            // Verify that the coordinator can still process other requests from other
-            // sessions.
+            // Verify that the adapter can still process other requests from
+            // other sessions.
             info!("test_no_block: connecting to server again");
             let (client, _conn) = server.connect_async(postgres::NoTls).await?;
             info!("test_no_block: executing query");
             let answer: i32 = client.query_one("SELECT 1 + 1", &[]).await?.get(0);
             assert_eq!(answer, 2);
 
-            // Return an error to the coordinator, so that we can shutdown cleanly.
+            // Return an error to the adapter, so that we can shutdown cleanly.
             info!("test_no_block: writing fake schema registry error");
             response_tx
                 .send(StatusCode::SERVICE_UNAVAILABLE.into_response())
@@ -192,7 +191,7 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
         });
 
         // Wait for Materialize to contact the schema registry, which indicates
-        // the coordinator is processing the CREATE SOURCE command. It will be
+        // the adapter is processing the CREATE SOURCE command. It will be
         // unable to complete the query until we respond.
         info!("test_drop_connection_race: accepting fake schema registry connection");
         let response_tx = schema_registry_server.accept().await;

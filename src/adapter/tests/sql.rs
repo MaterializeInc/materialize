@@ -20,8 +20,8 @@
 
 use std::sync::Arc;
 
-use mz_coord::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
-use mz_coord::session::{Session, DEFAULT_DATABASE_NAME};
+use mz_adapter::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
+use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};

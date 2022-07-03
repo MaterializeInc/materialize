@@ -64,7 +64,7 @@ use crate::catalog::builtin::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
-use crate::CoordError;
+use crate::AdapterError;
 
 mod builtin_table_updates;
 mod config;
@@ -2360,9 +2360,9 @@ impl<S: Append> Catalog<S> {
         session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
-    ) -> Result<(Vec<BuiltinTableUpdate>, T), CoordError>
+    ) -> Result<(Vec<BuiltinTableUpdate>, T), AdapterError>
     where
-        F: FnOnce(&CatalogState) -> Result<T, CoordError>,
+        F: FnOnce(&CatalogState) -> Result<T, AdapterError>,
     {
         trace!("transact: {:?}", ops);
 
@@ -2494,14 +2494,14 @@ impl<S: Append> Catalog<S> {
                     oid,
                 } => {
                     if is_reserved_name(&schema_name) {
-                        return Err(CoordError::Catalog(Error::new(
+                        return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedSchemaName(schema_name),
                         )));
                     }
                     let database_id = match database_id {
                         ResolvedDatabaseSpecifier::Id(id) => id,
                         ResolvedDatabaseSpecifier::Ambient => {
-                            return Err(CoordError::Catalog(Error::new(
+                            return Err(AdapterError::Catalog(Error::new(
                                 ErrorKind::ReadOnlySystemSchema(schema_name),
                             )));
                         }
@@ -2515,7 +2515,7 @@ impl<S: Append> Catalog<S> {
                 }
                 Op::CreateRole { name, oid } => {
                     if is_reserved_name(&name) {
-                        return Err(CoordError::Catalog(Error::new(
+                        return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
                         )));
                     }
@@ -2531,7 +2531,7 @@ impl<S: Append> Catalog<S> {
                     introspection_sources,
                 } => {
                     if is_reserved_name(&name) {
-                        return Err(CoordError::Catalog(Error::new(
+                        return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
@@ -2558,7 +2558,7 @@ impl<S: Append> Catalog<S> {
                     logical_size,
                 } => {
                     if is_reserved_name(&name) {
-                        return Err(CoordError::Catalog(Error::new(
+                        return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
@@ -2596,7 +2596,7 @@ impl<S: Append> Catalog<S> {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                             || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
                         {
-                            return Err(CoordError::Catalog(Error::new(
+                            return Err(AdapterError::Catalog(Error::new(
                                 ErrorKind::InvalidTemporarySchema,
                             )));
                         }
@@ -2608,14 +2608,14 @@ impl<S: Append> Catalog<S> {
                             })
                         {
                             let temp_item = self.get_entry(temp_id);
-                            return Err(CoordError::Catalog(Error::new(
+                            return Err(AdapterError::Catalog(Error::new(
                                 ErrorKind::InvalidTemporaryDependency(
                                     temp_item.name().item.clone(),
                                 ),
                             )));
                         }
                         if let ResolvedDatabaseSpecifier::Ambient = name.qualifiers.database_spec {
-                            return Err(CoordError::Catalog(Error::new(
+                            return Err(AdapterError::Catalog(Error::new(
                                 ErrorKind::ReadOnlySystemSchema(name.to_string()),
                             )));
                         }
@@ -2753,7 +2753,7 @@ impl<S: Append> Catalog<S> {
 
                     let entry = self.get_entry(&id);
                     if let CatalogItem::Type(_) = entry.item() {
-                        return Err(CoordError::Catalog(Error::new(ErrorKind::TypeRename(
+                        return Err(AdapterError::Catalog(Error::new(ErrorKind::TypeRename(
                             current_full_name.to_string(),
                         ))));
                     }

@@ -27,7 +27,7 @@ use crate::session::Var;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
-pub enum CoordError {
+pub enum AdapterError {
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
@@ -145,13 +145,13 @@ pub enum CoordError {
     MultiTableWriteTransaction,
 }
 
-impl CoordError {
+impl AdapterError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
-            CoordError::Catalog(c) => c.detail(),
-            CoordError::Eval(e) => e.detail(),
-            CoordError::RelationOutsideTimeDomain { relations, names } => Some(format!(
+            AdapterError::Catalog(c) => c.detail(),
+            AdapterError::Eval(e) => e.detail(),
+            AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
                 "The following relations in the query are outside the transaction's time domain:\n{}\n{}",
                 relations
                     .iter()
@@ -170,13 +170,13 @@ impl CoordError {
                     ),
                 }
             )),
-            CoordError::SafeModeViolation(_) => Some(
+            AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
                     .into(),
             ),
-            CoordError::IntrospectionDisabled { log_names }
-            | CoordError::UntargetedLogRead { log_names } => Some(format!(
+            AdapterError::IntrospectionDisabled { log_names }
+            | AdapterError::UntargetedLogRead { log_names } => Some(format!(
                 "The query references the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
@@ -187,13 +187,13 @@ impl CoordError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
-            CoordError::Catalog(c) => c.hint(),
-            CoordError::ConstrainedParameter {
+            AdapterError::Catalog(c) => c.hint(),
+            AdapterError::ConstrainedParameter {
                 valid_values: Some(valid_values),
                 ..
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
-            CoordError::Eval(e) => e.hint(),
-            CoordError::UnknownLoginRole(_) => {
+            AdapterError::Eval(e) => e.hint(),
+            AdapterError::UnknownLoginRole(_) => {
                 // TODO(benesch): this will be a bad hint when people are used
                 // to creating roles in Materialize, since they might drop the
                 // default "materialize" role. Remove it in a few months
@@ -203,21 +203,21 @@ impl CoordError {
                 // because that leaks information to unauthenticated clients.)
                 Some("Try connecting as the \"materialize\" user.".into())
             }
-            CoordError::InvalidClusterReplicaAz { expected, az: _ } => {
+            AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
                     "No availability zones configured; do not specify AVAILABILITY ZONE".into()
                 } else {
                     format!("Valid availability zones are: {}", expected.join(", "))
                 })
             }
-            CoordError::InvalidClusterReplicaSize { expected, size: _ } => Some(format!(
+            AdapterError::InvalidClusterReplicaSize { expected, size: _ } => Some(format!(
                 "Valid cluster replica sizes are: {}",
                 expected.join(", ")
             )),
-            CoordError::NoClusterReplicasAvailable(_) => {
+            AdapterError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
-            CoordError::UntargetedLogRead { .. } => Some(
+            AdapterError::UntargetedLogRead { .. } => Some(
                 "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \
                  active cluster. Note that subsequent `SELECT` queries will only be answered by \
                  the selected replica, which might reduce availability. To undo the replica \
@@ -229,12 +229,12 @@ impl CoordError {
     }
 }
 
-impl fmt::Display for CoordError {
+impl fmt::Display for AdapterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CoordError::ChangedPlan => f.write_str("cached plan must not change result type"),
-            CoordError::Catalog(e) => e.fmt(f),
-            CoordError::ConstrainedParameter {
+            AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
+            AdapterError::Catalog(e) => e.fmt(f),
+            AdapterError::ConstrainedParameter {
                 parameter, value, ..
             } => write!(
                 f,
@@ -242,29 +242,29 @@ impl fmt::Display for CoordError {
                 parameter.name().quoted(),
                 value.quoted()
             ),
-            CoordError::DuplicateCursor(name) => {
+            AdapterError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())
             }
-            CoordError::Eval(e) => e.fmt(f),
-            CoordError::FixedValueParameter(p) => write!(
+            AdapterError::Eval(e) => e.fmt(f),
+            AdapterError::FixedValueParameter(p) => write!(
                 f,
                 "parameter {} can only be set to {}",
                 p.name().quoted(),
                 p.value().quoted()
             ),
-            CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
-            CoordError::Internal(e) => write!(f, "internal error: {}", e),
-            CoordError::IntrospectionDisabled { .. } => write!(
+            AdapterError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
+            AdapterError::Internal(e) => write!(f, "internal error: {}", e),
+            AdapterError::IntrospectionDisabled { .. } => write!(
                 f,
                 "cannot read log sources on cluster with disabled introspection"
             ),
-            CoordError::InvalidParameterType(p) => write!(
+            AdapterError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",
                 p.name().quoted(),
                 p.type_name().quoted()
             ),
-            CoordError::InvalidParameterValue {
+            AdapterError::InvalidParameterValue {
                 parameter,
                 value,
                 reason,
@@ -275,167 +275,167 @@ impl fmt::Display for CoordError {
                 value.quoted(),
                 reason,
             ),
-            CoordError::InvalidClusterReplicaAz { az, expected: _ } => {
+            AdapterError::InvalidClusterReplicaAz { az, expected: _ } => {
                 write!(f, "unknown cluster replica availability zone {az}",)
             }
-            CoordError::InvalidClusterReplicaSize { size, expected: _ } => {
+            AdapterError::InvalidClusterReplicaSize { size, expected: _ } => {
                 write!(f, "unknown cluster replica size {size}",)
             }
-            CoordError::InvalidTableMutationSelection => {
+            AdapterError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")
             }
-            CoordError::ConstraintViolation(not_null_violation) => {
+            AdapterError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
-            CoordError::NoClusterReplicasAvailable(cluster) => {
+            AdapterError::NoClusterReplicasAvailable(cluster) => {
                 write!(
                     f,
                     "CLUSTER {} has no replicas available to service request",
                     cluster.quoted()
                 )
             }
-            CoordError::OperationProhibitsTransaction(op) => {
+            AdapterError::OperationProhibitsTransaction(op) => {
                 write!(f, "{} cannot be run inside a transaction block", op)
             }
-            CoordError::OperationRequiresTransaction(op) => {
+            AdapterError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
-            CoordError::PlanError(e) => e.fmt(f),
-            CoordError::PreparedStatementExists(name) => {
+            AdapterError::PlanError(e) => e.fmt(f),
+            AdapterError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
-            CoordError::QGM(e) => e.fmt(f),
-            CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
-            CoordError::ReadOnlyParameter(p) => {
+            AdapterError::QGM(e) => e.fmt(f),
+            AdapterError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
+            AdapterError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
             }
-            CoordError::StatementTimeout => {
+            AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")
             }
-            CoordError::RecursionLimit(e) => e.fmt(f),
-            CoordError::RelationOutsideTimeDomain { .. } => {
+            AdapterError::RecursionLimit(e) => e.fmt(f),
+            AdapterError::RelationOutsideTimeDomain { .. } => {
                 write!(
                     f,
                     "Transactions can only reference objects in the same timedomain. \
                      See https://materialize.com/docs/sql/begin/#same-timedomain-error",
                 )
             }
-            CoordError::SafeModeViolation(feature) => {
+            AdapterError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }
-            CoordError::SqlCatalog(e) => e.fmt(f),
-            CoordError::TailOnlyTransaction => {
+            AdapterError::SqlCatalog(e) => e.fmt(f),
+            AdapterError::TailOnlyTransaction => {
                 f.write_str("TAIL in transactions must be the only read statement")
             }
-            CoordError::Transform(e) => e.fmt(f),
-            CoordError::UncallableFunction { func, context } => {
+            AdapterError::Transform(e) => e.fmt(f),
+            AdapterError::UncallableFunction { func, context } => {
                 write!(f, "cannot call {} in {}", func, context)
             }
-            CoordError::UnknownCursor(name) => {
+            AdapterError::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
-            CoordError::UnknownLoginRole(name) => {
+            AdapterError::UnknownLoginRole(name) => {
                 write!(f, "role {} does not exist", name.quoted())
             }
-            CoordError::UnknownParameter(name) => {
+            AdapterError::UnknownParameter(name) => {
                 write!(f, "unrecognized configuration parameter {}", name.quoted())
             }
-            CoordError::UnmaterializableFunction(func) => {
+            AdapterError::UnmaterializableFunction(func) => {
                 write!(f, "cannot materialize call to {}", func)
             }
-            CoordError::Unsupported(features) => write!(f, "{} are not supported", features),
-            CoordError::Unstructured(e) => write!(f, "{:#}", e),
-            CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
-            CoordError::UnknownPreparedStatement(name) => {
+            AdapterError::Unsupported(features) => write!(f, "{} are not supported", features),
+            AdapterError::Unstructured(e) => write!(f, "{:#}", e),
+            AdapterError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
+            AdapterError::UnknownPreparedStatement(name) => {
                 write!(f, "prepared statement {} does not exist", name.quoted())
             }
-            CoordError::UnknownClusterReplica {
+            AdapterError::UnknownClusterReplica {
                 cluster_name,
                 replica_name,
             } => write!(
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
             ),
-            CoordError::UntargetedLogRead { .. } => {
+            AdapterError::UntargetedLogRead { .. } => {
                 f.write_str("log source reads must target a replica")
             }
-            CoordError::MultiTableWriteTransaction => {
+            AdapterError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
             }
         }
     }
 }
 
-impl From<anyhow::Error> for CoordError {
-    fn from(e: anyhow::Error) -> CoordError {
-        CoordError::Unstructured(e)
+impl From<anyhow::Error> for AdapterError {
+    fn from(e: anyhow::Error) -> AdapterError {
+        AdapterError::Unstructured(e)
     }
 }
 
-impl From<TryFromIntError> for CoordError {
-    fn from(e: TryFromIntError) -> CoordError {
-        CoordError::Unstructured(e.into())
+impl From<TryFromIntError> for AdapterError {
+    fn from(e: TryFromIntError) -> AdapterError {
+        AdapterError::Unstructured(e.into())
     }
 }
 
-impl From<TryFromDecimalError> for CoordError {
-    fn from(e: TryFromDecimalError) -> CoordError {
-        CoordError::Unstructured(e.into())
+impl From<TryFromDecimalError> for AdapterError {
+    fn from(e: TryFromDecimalError) -> AdapterError {
+        AdapterError::Unstructured(e.into())
     }
 }
 
-impl From<catalog::Error> for CoordError {
-    fn from(e: catalog::Error) -> CoordError {
-        CoordError::Catalog(e)
+impl From<catalog::Error> for AdapterError {
+    fn from(e: catalog::Error) -> AdapterError {
+        AdapterError::Catalog(e)
     }
 }
 
-impl From<EvalError> for CoordError {
-    fn from(e: EvalError) -> CoordError {
-        CoordError::Eval(e)
+impl From<EvalError> for AdapterError {
+    fn from(e: EvalError) -> AdapterError {
+        AdapterError::Eval(e)
     }
 }
 
-impl From<mz_sql::catalog::CatalogError> for CoordError {
-    fn from(e: mz_sql::catalog::CatalogError) -> CoordError {
-        CoordError::SqlCatalog(e)
+impl From<mz_sql::catalog::CatalogError> for AdapterError {
+    fn from(e: mz_sql::catalog::CatalogError) -> AdapterError {
+        AdapterError::SqlCatalog(e)
     }
 }
 
-impl From<PlanError> for CoordError {
-    fn from(e: PlanError) -> CoordError {
-        CoordError::PlanError(e)
+impl From<PlanError> for AdapterError {
+    fn from(e: PlanError) -> AdapterError {
+        AdapterError::PlanError(e)
     }
 }
 
-impl From<QGMError> for CoordError {
-    fn from(e: QGMError) -> CoordError {
-        CoordError::QGM(e)
+impl From<QGMError> for AdapterError {
+    fn from(e: QGMError) -> AdapterError {
+        AdapterError::QGM(e)
     }
 }
 
-impl From<TransformError> for CoordError {
-    fn from(e: TransformError) -> CoordError {
-        CoordError::Transform(e)
+impl From<TransformError> for AdapterError {
+    fn from(e: TransformError) -> AdapterError {
+        AdapterError::Transform(e)
     }
 }
 
-impl From<NotNullViolation> for CoordError {
-    fn from(e: NotNullViolation) -> CoordError {
-        CoordError::ConstraintViolation(e)
+impl From<NotNullViolation> for AdapterError {
+    fn from(e: NotNullViolation) -> AdapterError {
+        AdapterError::ConstraintViolation(e)
     }
 }
 
-impl From<RecursionLimitError> for CoordError {
-    fn from(e: RecursionLimitError) -> CoordError {
-        CoordError::RecursionLimit(e)
+impl From<RecursionLimitError> for AdapterError {
+    fn from(e: RecursionLimitError) -> AdapterError {
+        AdapterError::RecursionLimit(e)
     }
 }
 
-impl From<oneshot::error::RecvError> for CoordError {
-    fn from(e: oneshot::error::RecvError) -> CoordError {
-        CoordError::Unstructured(e.into())
+impl From<oneshot::error::RecvError> for AdapterError {
+    fn from(e: oneshot::error::RecvError) -> AdapterError {
+        AdapterError::Unstructured(e.into())
     }
 }
 
-impl Error for CoordError {}
+impl Error for AdapterError {}

@@ -18,7 +18,7 @@ use uncased::UncasedStr;
 use mz_ore::cast;
 use mz_sql::DEFAULT_SCHEMA;
 
-use crate::error::CoordError;
+use crate::error::AdapterError;
 use crate::session::EndTransactionAction;
 
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
@@ -301,7 +301,7 @@ impl Vars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
-    pub fn get(&self, name: &str) -> Result<&dyn Var, CoordError> {
+    pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
         if name == APPLICATION_NAME.name {
             Ok(&self.application_name)
         } else if name == CLIENT_ENCODING.name {
@@ -343,7 +343,7 @@ impl Vars {
         } else if name == TRANSACTION_ISOLATION.name {
             Ok(&self.transaction_isolation)
         } else {
-            Err(CoordError::UnknownParameter(name.into()))
+            Err(AdapterError::UnknownParameter(name.into()))
         }
     }
 
@@ -359,14 +359,14 @@ impl Vars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, value: &str, local: bool) -> Result<(), CoordError> {
+    pub fn set(&mut self, name: &str, value: &str, local: bool) -> Result<(), AdapterError> {
         if name == APPLICATION_NAME.name {
             self.application_name.set(value, local)
         } else if name == CLIENT_ENCODING.name {
             // Unfortunately, some orm's like Prisma set NAMES to UTF8, thats the only
             // value we support, so we let is through
             if UncasedStr::new(value) != CLIENT_ENCODING.value {
-                return Err(CoordError::FixedValueParameter(&CLIENT_ENCODING));
+                return Err(AdapterError::FixedValueParameter(&CLIENT_ENCODING));
             } else {
                 Ok(())
             }
@@ -374,7 +374,7 @@ impl Vars {
             if let Ok(_) = ClientSeverity::parse(value) {
                 self.client_min_messages.set(value, local)
             } else {
-                return Err(CoordError::ConstrainedParameter {
+                return Err(AdapterError::ConstrainedParameter {
                     parameter: &CLIENT_MIN_MESSAGES,
                     value: value.into(),
                     valid_values: Some(ClientSeverity::valid_values()),
@@ -390,7 +390,7 @@ impl Vars {
             for value in value.split(',') {
                 let value = UncasedStr::new(value.trim());
                 if value != "ISO" && value != "MDY" {
-                    return Err(CoordError::FixedValueParameter(&DATE_STYLE));
+                    return Err(AdapterError::FixedValueParameter(&DATE_STYLE));
                 }
             }
             Ok(())
@@ -403,21 +403,22 @@ impl Vars {
                     continue;
                 }
                 let mut splits = cfg.splitn(2, '=');
-                let failpoint = splits
-                    .next()
-                    .ok_or_else(|| CoordError::InvalidParameterValue {
-                        parameter: &FAILPOINTS,
-                        value: value.into(),
-                        reason: "missing failpoint name".into(),
-                    })?;
+                let failpoint =
+                    splits
+                        .next()
+                        .ok_or_else(|| AdapterError::InvalidParameterValue {
+                            parameter: &FAILPOINTS,
+                            value: value.into(),
+                            reason: "missing failpoint name".into(),
+                        })?;
                 let action = splits
                     .next()
-                    .ok_or_else(|| CoordError::InvalidParameterValue {
+                    .ok_or_else(|| AdapterError::InvalidParameterValue {
                         parameter: &FAILPOINTS,
                         value: value.into(),
                         reason: "missing failpoint action".into(),
                     })?;
-                fail::cfg(failpoint, action).map_err(|e| CoordError::InvalidParameterValue {
+                fail::cfg(failpoint, action).map_err(|e| AdapterError::InvalidParameterValue {
                     parameter: &FAILPOINTS,
                     value: value.into(),
                     reason: e,
@@ -425,11 +426,11 @@ impl Vars {
             }
             Ok(())
         } else if name == INTEGER_DATETIMES.name {
-            Err(CoordError::ReadOnlyParameter(&INTEGER_DATETIMES))
+            Err(AdapterError::ReadOnlyParameter(&INTEGER_DATETIMES))
         } else if name == INTERVAL_STYLE.name {
             // Only `postgres` is supported right now
             if UncasedStr::new(value) != INTERVAL_STYLE.value {
-                return Err(CoordError::FixedValueParameter(&INTERVAL_STYLE));
+                return Err(AdapterError::FixedValueParameter(&INTERVAL_STYLE));
             } else {
                 Ok(())
             }
@@ -438,18 +439,18 @@ impl Vars {
         } else if name == SEARCH_PATH.name {
             self.search_path.set(value, local)
         } else if name == SERVER_VERSION.name {
-            Err(CoordError::ReadOnlyParameter(&SERVER_VERSION))
+            Err(AdapterError::ReadOnlyParameter(&SERVER_VERSION))
         } else if name == SERVER_VERSION_NUM.name {
-            Err(CoordError::ReadOnlyParameter(&SERVER_VERSION_NUM))
+            Err(AdapterError::ReadOnlyParameter(&SERVER_VERSION_NUM))
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.set(value, local)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             match bool::parse(value) {
                 Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
-                Ok(_) => Err(CoordError::FixedValueParameter(
+                Ok(_) => Err(AdapterError::FixedValueParameter(
                     &STANDARD_CONFORMING_STRINGS,
                 )),
-                Err(()) => Err(CoordError::InvalidParameterType(
+                Err(()) => Err(AdapterError::InvalidParameterType(
                     &STANDARD_CONFORMING_STRINGS,
                 )),
             }
@@ -459,16 +460,16 @@ impl Vars {
             if let Ok(_) = TimeZone::parse(value) {
                 self.timezone.set(value, local)
             } else {
-                return Err(CoordError::ConstrainedParameter {
+                return Err(AdapterError::ConstrainedParameter {
                     parameter: &TIMEZONE,
                     value: value.into(),
                     valid_values: None,
                 });
             }
         } else if name == TRANSACTION_ISOLATION.name {
-            Err(CoordError::ReadOnlyParameter(&TRANSACTION_ISOLATION))
+            Err(AdapterError::ReadOnlyParameter(&TRANSACTION_ISOLATION))
         } else {
-            Err(CoordError::UnknownParameter(name.into()))
+            Err(AdapterError::UnknownParameter(name.into()))
         }
     }
 
@@ -482,7 +483,7 @@ impl Vars {
     /// Like with [`Vars::get`], configuration parameters are matched case
     /// insensitively. If the named configuration parameter does not exist, an
     /// error is returned.
-    pub fn reset(&mut self, name: &str, local: bool) -> Result<(), CoordError> {
+    pub fn reset(&mut self, name: &str, local: bool) -> Result<(), AdapterError> {
         if name == APPLICATION_NAME.name {
             self.application_name.reset(local);
         } else if name == CLIENT_MIN_MESSAGES.name {
@@ -515,7 +516,7 @@ impl Vars {
         {
             // fixed value
         } else {
-            return Err(CoordError::UnknownParameter(name.into()));
+            return Err(AdapterError::UnknownParameter(name.into()));
         }
         Ok(())
     }
@@ -746,7 +747,7 @@ where
         }
     }
 
-    fn set(&mut self, s: &str, local: bool) -> Result<(), CoordError> {
+    fn set(&mut self, s: &str, local: bool) -> Result<(), AdapterError> {
         match V::parse(s) {
             Ok(v) => {
                 if local {
@@ -757,7 +758,7 @@ where
                 }
                 Ok(())
             }
-            Err(()) => Err(CoordError::InvalidParameterType(self.parent)),
+            Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
         }
     }
 

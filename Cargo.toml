@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "src/adapter",
     "src/audit-log",
     "src/avro-derive",
     "src/avro",
@@ -9,7 +10,6 @@ members = [
     "src/compute",
     "src/compute-client",
     "src/controller",
-    "src/coord",
     "src/frontegg-auth",
     "src/expr-test-util",
     "src/expr",

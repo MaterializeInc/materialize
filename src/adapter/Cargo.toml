@@ -1,6 +1,6 @@
 [package]
-name = "mz-coord"
-description = "Coordinates client requests with the dataflow layer."
+name = "mz-adapter"
+description = "Materialize's adapter layer."
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.61.0"
