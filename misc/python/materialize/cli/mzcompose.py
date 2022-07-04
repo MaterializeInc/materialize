@@ -404,6 +404,7 @@ class DockerComposeCommand(Command):
             )
             .strip()
             .strip("v")
+            .split("+")[0]
         )
         version = tuple(int(i) for i in output.split("."))
         if version < MIN_COMPOSE_VERSION:

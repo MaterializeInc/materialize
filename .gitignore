@@ -10,6 +10,7 @@
 # https://github.com/github/gitignore/tree/master/Global
 
 target
+target-ra
 target-xcompile
 miri-target
 .mtrlz.log

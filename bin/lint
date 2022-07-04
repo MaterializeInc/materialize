@@ -65,6 +65,7 @@ copyright_files=$(grep -vE \
     -e 'gen/.*\.rs' \
     -e 'misc/python/MANIFEST\.in' \
     -e 'misc/completions/.*' \
+    -e '.devcontainer/.*' \
     <<< "$files"
 )
 
