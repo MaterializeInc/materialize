@@ -18,6 +18,8 @@
 
 use mz_expr::{ExprHumanizer, RowSetFinishing};
 
+pub(crate) mod hir;
+
 /// Newtype struct for wrapping types that should
 /// implement the `Explain` trait.
 pub(crate) struct Explainable<'a, T>(&'a mut T);
