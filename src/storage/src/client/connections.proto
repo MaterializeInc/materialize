@@ -24,8 +24,9 @@ message ProtoStringOrSecret {
 }
 
 message ProtoKafkaConnectionSslConfig {
+    reserved 2;
+    reserved "key_password";
     mz_repr.global_id.ProtoGlobalId key = 1;
-    mz_repr.global_id.ProtoGlobalId key_password = 2;
     ProtoStringOrSecret certificate = 3;
     ProtoStringOrSecret certificate_authority = 4;
 }

@@ -279,12 +279,10 @@ To connect to a Kafka broker that requires [SSL authentication](https://docs.con
 
 ```sql
 CREATE SECRET materialized_key AS '...';
-CREATE SECRET materialized_key_password AS '...';
 CREATE MATERIALIZED SOURCE kafka_ssl
   FROM KAFKA BROKER 'localhost:9092' TOPIC 'top-secret' WITH (
       security_protocol = 'SSL',
       ssl_key_pem = SECRET materialized_key,
-      ssl_key_password = SECRET materialized_key_password,
       ssl_certificate_pem = '...',
       ssl_ca_pem = '...',
   )
@@ -303,7 +301,6 @@ Field                      | Value  | Description
 `security_protocol`        | `text` | Use `ssl` to connect to the Kafka cluster.
 `ssl_certificate_pem`      | `text` | Your SSL certificate. Required for SSL client authentication.
 `ssl_key_pem`              | `text` | Your SSL certificate's key. Required for SSL client authentication.
-`ssl_key_password`         | `text` | Your SSL key's password, if any.
 `ssl_ca_location`          | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 
 #### Confluent Schema Registry SSL `WITH` options

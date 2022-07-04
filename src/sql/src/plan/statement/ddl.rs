@@ -2905,7 +2905,6 @@ generate_extracted_config!(
     (Broker, String),
     (Brokers, Vec<String>),
     (SslKey, with_options::Secret),
-    (SslKeyPassword, with_options::Secret),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
     (SaslMechanisms, String),
@@ -2934,12 +2933,7 @@ impl KafkaConnectionOptionExtracted {
     }
     pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
-        HashSet::from([
-            SslKey,
-            SslKeyPassword,
-            SslCertificate,
-            SslCertificateAuthority,
-        ])
+        HashSet::from([SslKey, SslCertificate, SslCertificateAuthority])
     }
     pub fn sasl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
@@ -2957,7 +2951,6 @@ impl From<&KafkaConnectionOptionExtracted> for Option<SslConfig> {
         if k.ssl_config().iter().all(|config| k.seen.contains(config)) {
             Some(SslConfig {
                 key: k.ssl_key.unwrap().into(),
-                key_password: k.ssl_key_password.unwrap().into(),
                 certificate: k.ssl_certificate.clone().unwrap(),
                 certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
             })
