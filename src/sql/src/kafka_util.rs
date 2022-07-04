@@ -385,16 +385,15 @@ impl ClientContext for KafkaErrCheckContext {
     // handling in some situations.
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         use rdkafka::config::RDKafkaLogLevel::*;
-        match level {
-            Emerg | Alert | Critical | Error => {
-                let mut error = self.error.lock().expect("lock poisoned");
-                // Do not allow logging to overwrite other values if
-                // present.
-                if error.is_none() {
-                    *error = Some(log_message.to_string());
-                }
+        // `INFO` messages with a `fac` of `FAIL` occur when e.g. connecting to
+        // an SSL-authed broker without credentials.
+        if fac == "FAIL" || matches!(level, Emerg | Alert | Critical | Error) {
+            let mut error = self.error.lock().expect("lock poisoned");
+            // Do not allow logging to overwrite other values if
+            // present.
+            if error.is_none() {
+                *error = Some(log_message.to_string());
             }
-            _ => {}
         }
         MzClientContext.log(level, fac, log_message)
     }
