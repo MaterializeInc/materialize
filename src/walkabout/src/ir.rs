@@ -307,7 +307,7 @@ fn analyze_type(ty: &syn::Type) -> Result<Type> {
                 };
 
                 match &*segment_name {
-                    "bool" | "usize" | "u64" | "i64" | "char" | "String" | "PathBuf" => {
+                    "bool" | "usize" | "u64" | "i64" | "char" | "String" | "PathBuf" | "i32" => {
                         match segment.arguments {
                             syn::PathArguments::None => Ok(Type::Primitive),
                             _ => bail!(

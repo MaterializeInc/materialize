@@ -1768,6 +1768,34 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let mut parse_schema_strategy =
+            |kws| -> Result<Option<ReaderSchemaSelectionStrategy>, ParserError> {
+                if self.parse_keywords(kws) {
+                    Ok(Some(
+                        match self.expect_one_of_keywords(&[ID, LATEST, INLINE])? {
+                            ID => {
+                                let pos = self.index;
+                                ReaderSchemaSelectionStrategy::ById(
+                                    self.parse_literal_int()?.try_into().map_err(|_| {
+                                        ParserError::new(pos, "Expected a 32-bit integer")
+                                    })?,
+                                )
+                            }
+                            LATEST => ReaderSchemaSelectionStrategy::Latest,
+                            INLINE => {
+                                ReaderSchemaSelectionStrategy::Inline(self.parse_literal_string()?)
+                            }
+                            _ => unreachable!(),
+                        },
+                    ))
+                } else {
+                    Ok(None)
+                }
+            };
+
+        let key_strategy = parse_schema_strategy(&[KEY, STRATEGY])?;
+        let value_strategy = parse_schema_strategy(&[VALUE, STRATEGY])?;
+
         // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
         // accept `WITH (...)` here.
         let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
@@ -1779,6 +1807,8 @@ impl<'a> Parser<'a> {
             connection,
             seed,
             with_options,
+            key_strategy,
+            value_strategy,
         })
     }
 
