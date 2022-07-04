@@ -3,7 +3,7 @@ name = "mz-orchestrator-process"
 description = "Service orchestration via local processes for development."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 
 [dependencies]
@@ -16,7 +16,7 @@ itertools = "0.10.3"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore" }
 mz-pid-file = { path = "../pid-file" }
-serde_json = "1.0.81"
+serde_json = "1.0.82"
 scopeguard = "1.1.0"
 sysinfo = "0.24.5"
 tokio = "1.19.2"

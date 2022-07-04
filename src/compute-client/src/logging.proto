@@ -1,0 +1,66 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+import "repr/src/global_id.proto";
+import "proto/src/proto.proto";
+
+package mz_compute_client.logging;
+
+message ProtoActiveLog {
+    ProtoLogVariant key = 1;
+    mz_repr.global_id.ProtoGlobalId value = 2;
+}
+
+message ProtoTimelyLog {
+    oneof kind {
+        google.protobuf.Empty operates = 1;
+        google.protobuf.Empty channels = 2;
+        google.protobuf.Empty elapsed = 3;
+        google.protobuf.Empty histogram = 4;
+        google.protobuf.Empty addresses = 5;
+        google.protobuf.Empty parks = 6;
+        google.protobuf.Empty messages_sent = 7;
+        google.protobuf.Empty messages_received = 8;
+        google.protobuf.Empty reachability = 9;
+    }
+}
+
+message ProtoDifferentialLog {
+    oneof kind {
+        google.protobuf.Empty arrangement_batches = 1;
+        google.protobuf.Empty arrangement_records = 2;
+        google.protobuf.Empty sharing = 3;
+    }
+}
+
+message ProtoMaterializedLog {
+    oneof kind {
+        google.protobuf.Empty dataflow_current = 1;
+        google.protobuf.Empty dataflow_dependency = 2;
+        google.protobuf.Empty frontier_current = 3;
+        google.protobuf.Empty peek_current = 4;
+        google.protobuf.Empty peek_duration = 5;
+    }
+}
+message ProtoLogVariant {
+    oneof kind {
+        ProtoTimelyLog timely = 1;
+        ProtoDifferentialLog differential = 2;
+        ProtoMaterializedLog materialized = 3;
+    }
+}
+
+message ProtoLoggingConfig {
+    mz_proto.ProtoU128 granularity_ns = 1;
+    repeated ProtoActiveLog active_logs = 2;
+    bool log_logging = 3;
+}

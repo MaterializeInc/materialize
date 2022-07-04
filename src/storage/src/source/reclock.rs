@@ -23,8 +23,6 @@ use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 use tokio::sync::Mutex;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::sources::MzOffset;
 use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
@@ -32,6 +30,9 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::Timestamp;
+
+use crate::client::controller::CollectionMetadata;
+use crate::client::sources::MzOffset;
 
 /// The reclock operator reclocks a stream that is timestamped with some timestamp `SourceTime`
 /// into another time domain that is timestamped with some timestamp `DestTime`.

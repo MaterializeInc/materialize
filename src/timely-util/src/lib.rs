@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Utilities for working with Timely
+//! Utilities for working with Timely.
 
 #![warn(missing_docs)]
 
@@ -21,4 +21,5 @@ pub mod activator;
 pub mod event;
 pub mod operator;
 pub mod operators_async_ext;
+pub mod progress;
 pub mod replay;

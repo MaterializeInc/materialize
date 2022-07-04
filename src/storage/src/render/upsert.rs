@@ -11,24 +11,22 @@ use std::collections::{BTreeMap, HashMap};
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilityRef, Concat, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use tracing::error;
 
-use mz_dataflow_types::{
-    sources::{MzOffset, UpsertEnvelope, UpsertStyle},
-    DataflowError, DecodeError, LinearOperator,
-};
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
-use tracing::error;
-
-use crate::source::DecodeResult;
 use mz_timely_util::operator::StreamExt;
+
+use crate::client::errors::{DataflowError, DecodeError};
+use crate::client::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
+use crate::client::transforms::LinearOperator;
+use crate::source::DecodeResult;
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {
@@ -58,7 +56,7 @@ pub(crate) fn upsert<G>(
     upsert_envelope: UpsertEnvelope,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (mz_dataflow_types::DataflowError, Timestamp, Diff)>,
+    Stream<G, (DataflowError, Timestamp, Diff)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,

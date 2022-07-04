@@ -11,6 +11,7 @@
 //!
 //! Consult [ReducePlan] documentation for details.
 
+use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::difference::Semigroup;
@@ -27,26 +28,19 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 use tracing::error;
 
-use mz_dataflow_types::DataflowError;
-
-use mz_dataflow_types::plan::reduce::{
+use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
 };
-
-use dec::OrderedDecimal;
 use mz_expr::{AggregateExpr, AggregateFunc};
 use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
-use mz_repr::{Datum, DatumList, Diff, Row, RowArena};
+use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
+use mz_storage::client::errors::DataflowError;
 
-use super::context::Arrangement;
-use super::context::CollectionBundle;
-use super::context::Context;
-use super::ArrangementFlavor;
-use mz_repr::DatumVec;
-
-use mz_dataflow_types::RowSpine;
+use crate::render::context::{Arrangement, CollectionBundle, Context};
+use crate::render::ArrangementFlavor;
+use crate::typedefs::RowSpine;
 
 /// Render a dataflow based on the provided plan.
 ///
@@ -218,7 +212,7 @@ where
             let demand_map_len = demand_map.len();
             key_plan.permute(demand_map.clone(), demand_map_len);
             val_plan.permute(demand_map, demand_map_len);
-            let skips = mz_dataflow_types::plan::reduce::convert_indexes_to_skips(demand);
+            let skips = mz_compute_client::plan::reduce::convert_indexes_to_skips(demand);
             move |row_parts, time, diff| {
                 let temp_storage = RowArena::new();
 

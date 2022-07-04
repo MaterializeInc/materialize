@@ -17,11 +17,11 @@ use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport, PubNub};
 use timely::scheduling::SyncActivator;
 use tracing::info;
 
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
+use crate::client::connections::ConnectionContext;
+use crate::client::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
 use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
 
 /// Information required to sync data from PubNub

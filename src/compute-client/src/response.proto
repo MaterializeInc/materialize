@@ -1,0 +1,75 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "persist/src/persist.proto";
+import "proto/src/proto.proto";
+import "repr/src/global_id.proto";
+import "repr/src/row.proto";
+import "storage/src/client.proto";
+
+import "google/protobuf/empty.proto";
+
+package mz_compute_client.response;
+
+message ProtoComputeResponse {
+    message ProtoPeekResponseKind {
+        mz_proto.ProtoU128 id = 1;
+        ProtoPeekResponse resp = 2;
+    map<string, string> otel_ctx = 3;
+    }
+
+    message ProtoTailResponseKind {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        ProtoTailResponse resp = 2;
+    }
+
+    oneof kind {
+        mz_storage.client.ProtoFrontierUppersKind frontier_uppers = 1;
+        ProtoPeekResponseKind peek_response = 2;
+        ProtoTailResponseKind tail_response = 3;
+    }
+}
+
+message ProtoPeekResponse {
+    message ProtoRow {
+        mz_repr.row.ProtoRow row = 1;
+        uint64 diff = 2;
+    }
+
+    message ProtoRows {
+        repeated ProtoRow rows = 1;
+    }
+
+    oneof kind {
+        ProtoRows rows = 1;
+        string error = 2;
+        google.protobuf.Empty canceled = 3;
+    }
+}
+
+message ProtoTailResponse {
+    oneof kind {
+        ProtoTailBatch batch = 1;
+        mz_persist.gen.persist.ProtoU64Antichain dropped_at = 2;
+    }
+}
+
+message ProtoTailBatch {
+    message ProtoUpdate {
+        uint64 timestamp = 1;
+        mz_repr.row.ProtoRow row = 2;
+        int64 diff = 3;
+    }
+
+    mz_persist.gen.persist.ProtoU64Antichain lower = 1;
+    mz_persist.gen.persist.ProtoU64Antichain upper = 2;
+    repeated ProtoUpdate updates = 3;
+}

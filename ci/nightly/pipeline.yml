@@ -32,7 +32,6 @@ steps:
           - { value: testdrive-partitions-5 }
           - { value: feature-benchmark-single-node }
           - { value: feature-benchmark-cluster }
-          - { value: aws-config }
           - { value: zippy-kafka-sources }
           - { value: checks-drop-create-default-replica }
           - { value: checks-restart-computed }
@@ -233,16 +232,6 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-2, --persistent-user-tables]
     skip: Persistence tests disabled
-
-  - id: aws-config
-    label: "AWS credentials and role assumption"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: aws-config
 
   - id: zippy-kafka-sources
     label: "Zippy"

@@ -21,11 +21,11 @@ use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
-use mz_dataflow_types::client::{StorageCommand, StorageResponse};
-use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::now::NowFn;
-
 use mz_repr::{GlobalId, Timestamp};
+
+use crate::client::connections::ConnectionContext;
+use crate::client::{StorageCommand, StorageResponse};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;

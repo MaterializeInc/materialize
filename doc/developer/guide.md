@@ -61,7 +61,10 @@ On Debian-based Linux variants:
 apt install postgresql
 ```
 
-If you can run `psql` without arguments and connect, you're all set.
+If you can run `psql` without arguments and connect, you're all set. For the
+latter to work, you may need to create a new database with `createdb`. If you
+issue `createdb` without any arguments, a database with your username will be
+created.
 
 ### Confluent Platform
 
@@ -79,11 +82,11 @@ suite and should therefore install the Confluent Platform.
 
 #### All platforms
 
-First, install the CLI. As of January 2021 you can run this command on
+First, install the CLI. As of early July 2022 you can run this command on
 macOS and Linux:
 
 ```shell
-curl -L --http1.1 https://cnfl.io/cli | sh -s -- -b /usr/local/bin
+curl -sL --http1.1 https://cnfl.io/cli | sudo sh -s -- -b /usr/local/bin latest
 ```
 
 If this no longer works, follow the instructions in the [Confluent CLI]
@@ -103,10 +106,12 @@ Then, download and extract the Confluent Platform tarball:
 INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
 mkdir $INSTALL_DIR
 curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xC $INSTALL_DIR --strip-components=1
-echo export CONFLUENT_HOME=(cd $INSTALL_DIR && pwd) >> ~/.bashrc
+echo export CONFLUENT_HOME=$(cd $INSTALL_DIR && pwd) >> ~/.bashrc
 source ~/.bashrc
 confluent local services start
 ```
+Note that you need to create a `.bash_profile` that sources `.bashrc` to ensure
+the above works with the Terminal app.
 
 If you have multiple JDKs installed and your current JAVA_HOME points to an incompatible version,
 you can explicitly run confluent with JDK 8 or 11:

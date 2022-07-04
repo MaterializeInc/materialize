@@ -112,7 +112,7 @@ pub trait ToJson {
     fn json(self) -> serde_json::value::Value;
 }
 
-impl<'a> ToJson for TypedDatum<'_> {
+impl ToJson for TypedDatum<'_> {
     fn json(self) -> serde_json::value::Value {
         let TypedDatum { datum, typ } = self;
         if typ.nullable && datum.is_null() {
