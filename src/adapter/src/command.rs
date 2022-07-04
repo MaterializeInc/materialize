@@ -228,6 +228,10 @@ pub enum ExecuteResponse {
     CreatedView {
         existed: bool,
     },
+    /// The requested recorded view was created.
+    CreatedRecordedView {
+        existed: bool,
+    },
     /// The requested type was created.
     CreatedType,
     /// The requested prepared statement was removed.

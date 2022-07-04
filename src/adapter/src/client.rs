@@ -492,6 +492,7 @@ impl SessionClient {
                 | ExecuteResponse::CreatedSources
                 | ExecuteResponse::CreatedSink { existed: _ }
                 | ExecuteResponse::CreatedView { existed: _ }
+                | ExecuteResponse::CreatedRecordedView { existed: _ }
                 | ExecuteResponse::CreatedType
                 | ExecuteResponse::Deleted(_)
                 | ExecuteResponse::DiscardedTemp

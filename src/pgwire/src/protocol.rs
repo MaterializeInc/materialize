@@ -1118,6 +1118,9 @@ where
             ExecuteResponse::CreatedView { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "view")
             }
+            ExecuteResponse::CreatedRecordedView { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "recorded view")
+            }
             ExecuteResponse::CreatedType => command_complete!("CREATE TYPE"),
             ExecuteResponse::DeclaredCursor => {
                 self.complete_portal(&portal_name);

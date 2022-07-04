@@ -498,14 +498,39 @@ fn show_views<'a>(
 }
 
 fn show_recorded_views<'a>(
-    _scx: &'a StatementContext<'a>,
-    _full: bool,
-    _from: Option<ResolvedSchemaName>,
-    _in_cluster: Option<ResolvedClusterName>,
-    _filter: Option<ShowStatementFilter<Aug>>,
+    scx: &'a StatementContext<'a>,
+    full: bool,
+    from: Option<ResolvedSchemaName>,
+    in_cluster: Option<ResolvedClusterName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    // TODO(teskje): implement
-    bail!("not yet implemented");
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+    let mut where_clause = format!("schema_id = {schema_spec}");
+
+    if let Some(cluster) = in_cluster {
+        where_clause += &format!(" AND cluster_id = {}", cluster.0);
+    }
+
+    let query = if full {
+        format!(
+            "SELECT
+                clusters.name AS cluster,
+                rviews.name,
+                mz_internal.mz_classify_object_id(rviews.id) AS type
+             FROM mz_recorded_views AS rviews
+             JOIN mz_clusters AS clusters
+                ON clusters.id = rviews.cluster_id
+             WHERE {where_clause}"
+        )
+    } else {
+        format!(
+            "SELECT name
+             FROM mz_catalog.mz_recorded_views
+             WHERE {where_clause}"
+        )
+    };
+
+    ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_sinks<'a>(

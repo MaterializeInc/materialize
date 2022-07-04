@@ -217,7 +217,7 @@ default
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
 
-statement error cannot drop cluster with active indexes, sinks, or replicas
+statement error cannot drop cluster with active indexes, sinks, recorded views, or replicas
 DROP CLUSTER bar
 
 query TTTTTTT
@@ -252,7 +252,7 @@ CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234']))
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
 
-statement error cannot drop cluster with active indexes, sinks, or replicas
+statement error cannot drop cluster with active indexes, sinks, recorded views, or replicas
 DROP CLUSTER baz
 
 statement ok
