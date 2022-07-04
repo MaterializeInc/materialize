@@ -75,6 +75,5 @@ $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
 $ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
 {"f1": "ABC"}
 
-# TODO(teskje): Fix propagation of errors through recorded views.
-#! SELECT * FROM v1;
-#contains: invalid input syntax for type integer
+! SELECT * FROM v1;
+contains: invalid input syntax for type integer

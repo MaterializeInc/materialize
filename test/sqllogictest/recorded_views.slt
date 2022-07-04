@@ -145,6 +145,35 @@ SELECT * FROM rv
 15
 
 
+# Test: Query errors are propagated through recorded views.
+
+statement ok
+CREATE OR REPLACE RECORDED VIEW rv AS SELECT 100 / a FROM t
+
+query I rowsort
+SELECT * FROM rv
+----
+14
+20
+33
+
+statement ok
+INSERT INTO t VALUES (0, 0)
+
+query error Evaluation error: division by zero
+SELECT * FROM rv
+
+statement ok
+DELETE FROM t WHERE a = 0
+
+query I rowsort
+SELECT * FROM rv
+----
+14
+20
+33
+
+
 # Test: Recorded views can be nested.
 
 statement ok
