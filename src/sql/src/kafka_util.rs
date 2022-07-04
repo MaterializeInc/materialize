@@ -191,7 +191,6 @@ pub fn extract_config(
             Config::string_or_secret("ssl_ca_pem"),
             Config::string_or_secret("ssl_certificate_pem"),
             Config::secret("ssl_key_pem"),
-            Config::secret("ssl_key_password"),
             Config::new("transaction_timeout_ms", ValType::Number(0, i32::MAX)),
             Config::new("enable_idempotence", ValType::Boolean),
             Config::new(

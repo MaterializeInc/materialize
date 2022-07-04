@@ -158,7 +158,6 @@ pub enum Connection {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SslConfig {
     pub key: GlobalId,
-    pub key_password: GlobalId,
     pub certificate: StringOrSecret,
     pub certificate_authority: StringOrSecret,
 }
@@ -201,7 +200,6 @@ impl ConfigKey for KafkaConnectionOptionName {
         match self {
             Broker | Brokers => "bootstrap.servers",
             SslKey => "ssl.key.pem",
-            SslKeyPassword => "ssl.key.password",
             SslCertificate => "ssl.certificate.pem",
             SslCertificateAuthority => "ssl.ca.pem",
             SaslMechanisms => "sasl.mechanisms",
@@ -226,16 +224,11 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
         match v.security {
             Some(Security::Ssl(SslConfig {
                 key,
-                key_password,
                 certificate,
                 certificate_authority,
             })) => {
                 r.insert("security.protocol".into(), "SSL".into());
                 r.insert(SslKey.config_key(), StringOrSecret::Secret(key));
-                r.insert(
-                    SslKeyPassword.config_key(),
-                    StringOrSecret::Secret(key_password),
-                );
                 r.insert(SslCertificate.config_key(), certificate);
                 r.insert(SslCertificateAuthority.config_key(), certificate_authority);
             }
@@ -291,7 +284,6 @@ impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
             match v.unwrap_string().to_lowercase().as_str() {
                 config @ "ssl" => Some(Security::Ssl(SslConfig {
                     key: key_or_err(config, map, SslKey)?.unwrap_secret(),
-                    key_password: key_or_err(config, map, SslKeyPassword)?.unwrap_secret(),
                     certificate: key_or_err(config, map, SslCertificate)?,
                     certificate_authority: key_or_err(config, map, SslCertificateAuthority)?,
                 })),
@@ -326,7 +318,6 @@ impl RustType<ProtoKafkaConnectionSslConfig> for SslConfig {
     fn into_proto(&self) -> ProtoKafkaConnectionSslConfig {
         ProtoKafkaConnectionSslConfig {
             key: Some(self.key.into_proto()),
-            key_password: Some(self.key_password.into_proto()),
             certificate: Some(self.certificate.into_proto()),
             certificate_authority: Some(self.certificate_authority.into_proto()),
         }
@@ -337,9 +328,6 @@ impl RustType<ProtoKafkaConnectionSslConfig> for SslConfig {
             key: proto
                 .key
                 .into_rust_if_some("ProtoKafkaConnectionSslConfig::key")?,
-            key_password: proto
-                .key_password
-                .into_rust_if_some("ProtoKafkaConnectionSslConfig::key_password")?,
             certificate: proto
                 .certificate
                 .into_rust_if_some("ProtoKafkaConnectionSslConfig::certificate")?,
