@@ -4563,8 +4563,23 @@ impl<S: Append + 'static> Coordinator<S> {
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
             }
             ExplainStageNew::PhysicalPlan => {
-                let feature = "ExplainStageNew::PhysicalPlan";
-                Err(AdapterError::Unsupported(feature))?
+                // run partial pipeline
+                let decorrelated_plan = decorrelate(raw_plan)?;
+                self.validate_timeline(decorrelated_plan.depends_on())?;
+                let dataflow = optimize(self, decorrelated_plan)?;
+                let mut dataflow_plan =
+                    mz_compute_client::plan::Plan::<mz_repr::Timestamp>::finalize_dataflow(
+                        dataflow,
+                    )
+                    .expect("Dataflow planning failed; unrecoverable error");
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
             }
             ExplainStageNew::Trace => {
                 let feature = "ExplainStageNew::Trace";
