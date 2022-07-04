@@ -23,6 +23,7 @@ use timely::PartialOrder;
 
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::errors::DataflowError;
 use mz_storage::client::sinks::{PersistSinkConnection, SinkDesc};
 use mz_storage::client::sources::SourceData;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -51,6 +52,7 @@ where
         _sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -77,6 +79,8 @@ where
 
         let mut input =
             persist_op.new_input(&sinked_collection.inner, Exchange::new(move |_| hashed_id));
+        let mut err_input =
+            persist_op.new_input(&err_collection.inner, Exchange::new(move |_| hashed_id));
 
         let token = Rc::new(());
         let token_weak = Rc::downgrade(&token);
@@ -103,6 +107,7 @@ where
             scope,
             move |_capabilities, frontiers, scheduler| async move {
                 let mut buffer = Vec::new();
+                let mut err_buffer = Vec::new();
                 let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
                 // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -117,7 +122,10 @@ where
                     .expect("could not open persist shard");
 
                 while scheduler.notified().await {
-                    let input_frontier = frontiers.borrow()[0].clone();
+                    let mut input_frontier = Antichain::new();
+                    for frontier in frontiers.borrow().clone() {
+                        input_frontier.extend(frontier);
+                    }
 
                     if !active_write_worker
                         || token_weak.upgrade().is_none()
@@ -134,6 +142,18 @@ where
                             let row = value.expect("persist_source must have values");
                             stash.entry(ts).or_default().push((
                                 (SourceData(Ok(row)), ()),
+                                ts,
+                                diff,
+                            ));
+                        }
+                    });
+
+                    err_input.for_each(|_cap, data| {
+                        data.swap(&mut err_buffer);
+
+                        for (error, ts, diff) in err_buffer.drain(..) {
+                            stash.entry(ts).or_default().push((
+                                (SourceData(Err(error)), ()),
                                 ts,
                                 diff,
                             ));

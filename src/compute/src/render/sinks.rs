@@ -22,6 +22,7 @@ use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::errors::DataflowError;
 use mz_storage::client::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
 
 use crate::render::context::Context;
@@ -56,7 +57,7 @@ where
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let collection = if let Some((collection, _err_collection)) = &bundle.collection {
+        let (ok_collection, err_collection) = if let Some(collection) = &bundle.collection {
             collection.clone()
         } else {
             let (key, _arrangement) = bundle
@@ -68,18 +69,20 @@ where
             let (permutation, thinning) = permutation_for_arrangement(&key, unthinned_arity);
             let mut mfp = MapFilterProject::new(unthinned_arity);
             mfp.permute(permutation, thinning.len() + key.len());
-            let (collection, _err_collection) =
-                bundle.as_collection_core(mfp, Some((key.clone(), None)));
-            collection
+            bundle.as_collection_core(mfp, Some((key.clone(), None)))
         };
 
-        let collection = apply_sink_envelope(sink, &sink_render, collection);
+        // TODO(teskje): Remove envelope-wrapping once the Kafka sink has been
+        // moved to STORAGE.
+        let ok_collection = apply_sink_envelope(sink, &sink_render, ok_collection);
 
-        // TODO(benesch): errors should stream out through the sink,
-        // if we figure out a protocol for that.
-
-        let sink_token =
-            sink_render.render_continuous_sink(compute_state, sink, sink_id, collection);
+        let sink_token = sink_render.render_continuous_sink(
+            compute_state,
+            sink,
+            sink_id,
+            ok_collection,
+            err_collection,
+        );
 
         if let Some(sink_token) = sink_token {
             needed_tokens.push(sink_token);
@@ -219,6 +222,7 @@ where
         sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>;
