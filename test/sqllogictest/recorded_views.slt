@@ -291,6 +291,31 @@ SELECT count(*) FROM mz_recorded_views
 0
 
 
+# Test: Recorded views show in `SHOW OBJECTS`.
+
+statement ok
+CREATE RECORDED VIEW rv AS SELECT 1
+
+query T colnames,rowsort
+SHOW OBJECTS
+----
+name
+rv
+t
+
+
+# Test: Indexes on recorded views show in `SHOW INDEXES`.
+
+statement ok
+CREATE DEFAULT INDEX ON rv
+
+query TTTITTT colnames
+SHOW INDEXES ON rv
+----
+cluster on_name key_name       seq_in_index column_name expression nullable
+default rv      rv_primary_idx 1            ?column?    NULL       false
+
+
 # Cleanup
 
 statement ok
