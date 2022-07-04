@@ -47,52 +47,50 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         client.batch_execute("CREATE VIEW d.s.v AS SELECT 1")?;
     }
 
-    for config in [config.clone(), config.logging_granularity(None)] {
-        let server = util::start_server(config)?;
-        let mut client = server.connect(postgres::NoTls)?;
-        assert_eq!(
-            client
-                .query("SHOW VIEWS", &[])?
-                .into_iter()
-                .map(|row| row.get(0))
-                .collect::<Vec<String>>(),
-            &["constant", "logging_derived", "mat"]
-        );
-        assert_eq!(
-            client
-                .query("SHOW INDEXES FROM mat", &[])?
-                .into_iter()
-                .map(|row| (row.get("Column_name"), row.get("Seq_in_index")))
-                .collect::<Vec<(String, i64)>>(),
-            &[
-                ("a".into(), 1),
-                ("a_data".into(), 2),
-                ("c".into(), 3),
-                ("c_data".into(), 4),
-            ],
-        );
-        assert_eq!(
-            client
-                .query("SHOW VIEWS FROM d.s", &[])?
-                .into_iter()
-                .map(|row| row.get(0))
-                .collect::<Vec<String>>(),
-            &["v"]
-        );
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+    assert_eq!(
+        client
+            .query("SHOW VIEWS", &[])?
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect::<Vec<String>>(),
+        &["constant", "logging_derived", "mat"]
+    );
+    assert_eq!(
+        client
+            .query("SHOW INDEXES FROM mat", &[])?
+            .into_iter()
+            .map(|row| (row.get("Column_name"), row.get("Seq_in_index")))
+            .collect::<Vec<(String, i64)>>(),
+        &[
+            ("a".into(), 1),
+            ("a_data".into(), 2),
+            ("c".into(), 3),
+            ("c_data".into(), 4),
+        ],
+    );
+    assert_eq!(
+        client
+            .query("SHOW VIEWS FROM d.s", &[])?
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect::<Vec<String>>(),
+        &["v"]
+    );
 
-        // Test that catalog recovery correctly populates `mz_catalog_names`.
-        assert_eq!(
-            client
-                .query(
-                    "SELECT global_id FROM mz_catalog_names WHERE global_id LIKE 'u%' ORDER BY 1",
-                    &[]
-                )?
-                .into_iter()
-                .map(|row| row.get(0))
-                .collect::<Vec<String>>(),
-            vec!["u1", "u2", "u3", "u4", "u5", "u6"]
-        );
-    }
+    // Test that catalog recovery correctly populates `mz_catalog_names`.
+    assert_eq!(
+        client
+            .query(
+                "SELECT global_id FROM mz_catalog_names WHERE global_id LIKE 'u%' ORDER BY 1",
+                &[]
+            )?
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect::<Vec<String>>(),
+        vec!["u1", "u2", "u3", "u4", "u5", "u6"]
+    );
 
     Ok(())
 }

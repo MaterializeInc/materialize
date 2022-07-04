@@ -179,6 +179,8 @@ pub mod id_bundle;
 mod dataflow_builder;
 mod indexes;
 
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1);
+
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -257,8 +259,6 @@ pub struct SinkConnectionReady {
 pub struct Config<S> {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection<S>,
-    pub timestamp_frequency: Duration,
-    pub logical_compaction_window: Option<Duration>,
     pub unsafe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub metrics_registry: MetricsRegistry,
@@ -459,8 +459,6 @@ pub struct Coordinator<S> {
     view_optimizer: Optimizer,
     catalog: Catalog<S>,
 
-    /// Delta from leading edge of an arrangement from which we allow compaction.
-    logical_compaction_window_ms: Option<Timestamp>,
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
 
@@ -896,14 +894,18 @@ impl<S: Append + 'static> Coordinator<S> {
         for (instance, mut ids) in compute_policies_to_set.into_iter() {
             ids.sort();
             ids.dedup();
-            self.initialize_compute_read_policies(ids, instance, self.logical_compaction_window_ms)
-                .await;
+            self.initialize_compute_read_policies(
+                ids,
+                instance,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
         }
         storage_policies_to_set.sort();
         storage_policies_to_set.dedup();
         self.initialize_storage_read_policies(
             storage_policies_to_set,
-            self.logical_compaction_window_ms,
+            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
         )
         .await;
 
@@ -2859,7 +2861,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
-                    self.logical_compaction_window_ms,
+                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
                 )
                 .await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
@@ -2977,7 +2979,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.initialize_storage_read_policies(
                     vec![source_id],
-                    self.logical_compaction_window_ms,
+                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
                 )
                 .await;
                 if let Some((df, compute_instance)) = df {
@@ -3390,8 +3392,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(vec![id], self.logical_compaction_window_ms)
-                    .await;
+                self.initialize_storage_read_policies(
+                    vec![id],
+                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                )
+                .await;
 
                 self.ship_dataflow(df, compute_instance).await;
 
@@ -5320,7 +5325,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for o in plan.options {
             options.push(match o {
                 IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
-                    self.logical_compaction_window_ms.map(Duration::from_millis),
+                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(Duration::from_millis),
                 ),
             });
         }
@@ -5708,7 +5713,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.initialize_compute_read_policies(
             output_ids,
             instance,
-            self.logical_compaction_window_ms,
+            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
         )
         .await;
     }
@@ -5900,8 +5905,6 @@ pub async fn serve<S: Append + 'static>(
     Config {
         dataflow_client,
         storage,
-        timestamp_frequency,
-        logical_compaction_window,
         unsafe_mode,
         build_info,
         metrics_registry,
@@ -5919,7 +5922,6 @@ pub async fn serve<S: Append + 'static>(
         storage,
         unsafe_mode,
         build_info,
-        timestamp_frequency,
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
@@ -5953,8 +5955,6 @@ pub async fn serve<S: Append + 'static>(
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
-                logical_compaction_window_ms: logical_compaction_window
-                    .map(duration_to_timestamp_millis),
                 internal_cmd_tx,
                 global_timeline: timestamp_oracle,
                 advance_tables: AdvanceTables::new(),
@@ -6134,7 +6134,7 @@ pub mod fast_path_peek {
     use mz_stash::Append;
 
     use crate::client::ConnectionId;
-    use crate::coord::{PeekResponseUnary, PendingPeek};
+    use crate::coord::{PeekResponseUnary, PendingPeek, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS};
     use crate::AdapterError;
 
     #[derive(Debug)]
@@ -6341,7 +6341,7 @@ pub mod fast_path_peek {
                     self.initialize_compute_read_policies(
                         output_ids,
                         compute_instance,
-                        self.logical_compaction_window_ms,
+                        DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
                     )
                     .await;
 

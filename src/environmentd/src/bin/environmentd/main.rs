@@ -23,7 +23,6 @@ use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -76,15 +75,6 @@ pub static LONG_VERSION: Lazy<String> = Lazy::new(|| {
         .chain(build_info())
         .join("\n")
 });
-
-type OptionalDuration = Option<Duration>;
-
-fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
-    match s {
-        "off" => Ok(None),
-        _ => Ok(Some(mz_repr::util::parse_duration(s)?)),
-    }
-}
 
 /// Manages a single Materialize environment.
 #[derive(Parser, Debug)]
@@ -191,16 +181,6 @@ pub struct Args {
     /// Base port for spawning various services
     #[structopt(long, default_value = "2100")]
     base_service_port: u16,
-
-    // === Performance tuning parameters. ===
-    /// How much historical detail to maintain in arrangements.
-    ///
-    /// Set to "off" to disable logical compaction.
-    #[clap(long, env = "LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
-    logical_compaction_window: OptionalDuration,
-    /// Default frequency with which to advance timestamps
-    #[clap(long, env = "TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
-    timestamp_frequency: Duration,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -674,8 +654,6 @@ max log level: {max_log_level}",
     };
 
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
-        logical_compaction_window: args.logical_compaction_window,
-        timestamp_frequency: args.timestamp_frequency,
         sql_listen_addr: args.sql_listen_addr,
         http_listen_addr: args.http_listen_addr,
         internal_sql_listen_addr: args.internal_sql_listen_addr,

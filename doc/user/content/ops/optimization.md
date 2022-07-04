@@ -39,8 +39,7 @@ window into the state at the start of the window.
 
 Materialize will only perform this compaction on data that falls outside the
 logical compaction window. The default compaction window is 1 millisecond behind
-the current time, but the window can be adjusted via the
-[`--logical-compaction-window`](/cli/#compaction-window) option.
+the current time, but the window can be adjusted for each index.
 
 Adjusting the compaction window involves making a tradeoff between historical
 detail and resource usage. A larger compaction window retains more historical
