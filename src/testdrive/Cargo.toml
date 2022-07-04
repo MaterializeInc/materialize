@@ -47,7 +47,7 @@ mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
-prost = "0.10.3"
+prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.8.1", features = ["serde"] }
 protobuf-src = "1.0.4"
 rand = "0.8.5"
