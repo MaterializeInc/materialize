@@ -20,7 +20,9 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
 use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::{CsrConnection, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy};
+use mz_sql_parser::ast::{
+    CsrConnection, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy,
+};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -524,7 +526,8 @@ async fn get_remote_csr_schema(
     let subject = format!("{}-key", topic);
     let key_schema = get_schema_with_strategy(&ccsr_client, key_strategy, &subject).await?;
     Ok(Schema {
-        key_schema, value_schema
+        key_schema,
+        value_schema,
     })
 }
 
