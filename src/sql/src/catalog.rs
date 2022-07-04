@@ -22,13 +22,13 @@ use chrono::{DateTime, Utc, MIN_DATETIME};
 use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::connections::Connection;
-use mz_dataflow_types::sources::SourceDesc;
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
+use mz_storage::client::connections::Connection;
+use mz_storage::client::sources::SourceDesc;
 use uuid::Uuid;
 
 use crate::func::Func;
@@ -260,8 +260,9 @@ pub trait CatalogComputeInstance<'a> {
     /// Returns a stable ID for the compute instance.
     fn id(&self) -> ComputeInstanceId;
 
-    /// Returns the set of non-transient indexes on this cluster.
-    fn indexes(&self) -> &std::collections::HashSet<GlobalId>;
+    /// Returns the set of non-transient exports (indexes, sinks, recorded
+    /// views) of this cluster.
+    fn exports(&self) -> &std::collections::HashSet<GlobalId>;
 
     /// Returns the set of non-transient indexes on this cluster.
     fn replica_names(&self) -> HashSet<&String>;

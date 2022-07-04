@@ -17,12 +17,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::connections::Connection;
-use mz_dataflow_types::sources::SourceDesc;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_storage::client::connections::Connection;
+use mz_storage::client::sources::SourceDesc;
 
 use crate::ast::Expr;
 use crate::catalog::{

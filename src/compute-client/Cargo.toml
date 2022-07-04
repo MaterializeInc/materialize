@@ -1,0 +1,37 @@
+[package]
+name = "mz-compute-client"
+description = "The public API for the compute layer."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.61.0"
+publish = false
+
+[dependencies]
+anyhow = "1.0.58"
+async-trait = "0.1.56"
+chrono = { version = "0.4.0", default-features = false, features = ["std", "clock"] }
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+futures = "0.3.21"
+mz-expr = { path = "../expr" }
+mz-ore = { path = "../ore", features = ["tracing_"] }
+mz-persist = { path = "../persist" }
+mz-persist-types = { path = "../persist-types" }
+mz-proto = { path = "../proto" }
+mz-repr = { path = "../repr" }
+mz-service = { path = "../service" }
+mz-storage = { path = "../storage" }
+mz-timely-util = { path = "../timely-util" }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
+prost = "0.10.3"
+serde = { version = "1.0.138", features = ["derive"] }
+serde_json = "1.0.82"
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = "1.19.2"
+tokio-stream = "0.1.9"
+tonic = "0.7.2"
+tracing = "0.1.35"
+uuid = { version = "1.1.2", features = ["serde", "v4"] }
+
+[build-dependencies]
+tonic-build = "0.7"

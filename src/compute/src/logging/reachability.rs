@@ -20,16 +20,14 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
-use mz_dataflow_types::logging::LoggingConfig;
-use mz_dataflow_types::KeysValsHandle;
-use mz_dataflow_types::RowSpine;
+use mz_compute_client::logging::LoggingConfig;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
-
-use super::{LogVariant, TimelyLog};
-use crate::logging::ConsolidateBuffer;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
+
+use crate::logging::{ConsolidateBuffer, LogVariant, TimelyLog};
+use crate::typedefs::{KeysValsHandle, RowSpine};
 
 /// Constructs the logging dataflow for reachability logs.
 ///

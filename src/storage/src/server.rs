@@ -17,11 +17,12 @@ use mz_persist_client::cache::PersistClientCache;
 use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{LocalClient, LocalStorageClient};
-use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_service::local::LocalClient;
 
+use crate::client::connections::ConnectionContext;
+use crate::client::StorageClient;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::{StorageState, Worker};
 use crate::DecodeMetrics;
@@ -48,7 +49,7 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Error> {
+pub fn serve(config: Config) -> Result<(Server, Box<dyn StorageClient>), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -120,9 +121,9 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
         .iter()
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
-    let storage_client = LocalClient::new(response_rxs, command_txs, worker_threads);
+    let client = LocalClient::new_partitioned(response_rxs, command_txs, worker_threads);
     let server = Server {
         _worker_guards: worker_guards,
     };
-    Ok((server, storage_client))
+    Ok((server, Box::new(client)))
 }

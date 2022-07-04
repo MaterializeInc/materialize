@@ -20,15 +20,16 @@ use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use mz_dataflow_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
-use mz_dataflow_types::plan::join::JoinClosure;
-use mz_dataflow_types::DataflowError;
-use mz_repr::{Diff, Row, RowArena};
-
-use crate::render::context::CollectionBundle;
-use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
-use mz_repr::DatumVec;
+use mz_compute_client::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
+use mz_compute_client::plan::join::JoinClosure;
+use mz_repr::{DatumVec, Diff, Row, RowArena};
+use mz_storage::client::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+
+use crate::render::context::{
+    Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
+};
+use crate::typedefs::RowSpine;
 
 /// Different forms the streamed data might take.
 enum JoinedFlavor<G, T>
@@ -201,7 +202,6 @@ where
             });
 
             errors.push(errs);
-            use mz_dataflow_types::RowSpine;
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }

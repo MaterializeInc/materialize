@@ -8,8 +8,8 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-aws-arn = "0.2.0"
-aws-sdk-sts = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-arn = "0.2.1"
+aws-sdk-sts = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 enum-kinds = "0.5.1"
 globset = "0.4.9"
@@ -18,7 +18,7 @@ itertools = "0.10.3"
 once_cell = "1.12.0"
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
-mz-dataflow-types = { path = "../dataflow-types" }
+mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
@@ -30,14 +30,15 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-storage = { path = "../storage" }
 paste = "1.0"
 protobuf-native = "0.2.1"
 prost = "0.10.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.5.6"
 reqwest = "0.11.11"
-serde = { version = "1.0.137", features = ["derive"] }
-serde_json = "1.0.81"
+serde = { version = "1.0.138", features = ["derive"] }
+serde_json = "1.0.82"
 tokio = { version = "1.19.2", features = ["fs"] }
 tracing = "0.1.35"
 typemap_rev = "0.1.5"

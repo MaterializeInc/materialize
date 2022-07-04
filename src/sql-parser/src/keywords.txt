@@ -217,7 +217,6 @@ Outer
 Over
 Partition
 Password
-Persist
 Physical
 Plan
 Plans
@@ -319,6 +318,7 @@ Unique
 Unknown
 Update
 Upsert
+Url
 User
 Username
 Users

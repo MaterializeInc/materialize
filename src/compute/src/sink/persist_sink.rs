@@ -21,10 +21,10 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::sinks::{PersistSinkConnection, SinkDesc};
-use mz_dataflow_types::sources::SourceData;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::sinks::{PersistSinkConnection, SinkDesc};
+use mz_storage::client::sources::SourceData;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::render::sinks::SinkRender;
@@ -60,10 +60,6 @@ where
         let persist_clients = Arc::clone(&compute_state.persist_clients);
         let persist_location = self.storage_metadata.persist_location.clone();
         let shard_id = self.storage_metadata.data_shard;
-
-        // Log the shard ID so we know which shard to read for testing.
-        // TODO(teskje): Remove once we have a built-in way for reading back sinked data.
-        tracing::info!("persist_sink shard ID: {shard_id}");
 
         let operator_name = format!("persist_sink({})", shard_id);
         let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());

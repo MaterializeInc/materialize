@@ -9,15 +9,17 @@
 
 #![warn(missing_docs)]
 
-//! Driver for timely/differential dataflow.
+//! Materialize's compute layer.
 
 pub(crate) mod arrangement;
 pub mod communication;
 pub mod compute_state;
 pub(crate) mod logging;
+pub mod reconciliation;
 pub(crate) mod render;
 pub mod server;
 pub(crate) mod sink;
+mod typedefs;
 
 pub use arrangement::manager::{TraceManager, TraceMetrics};
 pub use sink::SinkBaseMetrics;
