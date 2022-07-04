@@ -31,8 +31,23 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
 
     /// Receives the next response from the dataflow server.
     ///
-    /// This method blocks until the next response is available, or, if the
-    /// dataflow server has been shut down, returns `None`.
+    /// This method blocks until the next response is available.
+    ///
+    /// A return value of `Ok(Some(_))` transmits a response.
+    ///
+    /// A return value of `Ok(None)` indicates graceful termination of the
+    /// connection. The owner of the client should not call `recv` again.
+    ///
+    /// A return value of `Err(_)` indicates an unrecoverable error. After
+    /// observing an error, the owner of the client must either drop the client,
+    /// or, if the client supports reconnection, call the
+    /// [`Reconnect::reconnect`] method.
+    ///
+    /// Implementations of this method **must** be [cancellation safe]. That
+    /// means that work must not be lost if the future returned by this method
+    /// is dropped.
+    ///
+    /// [cancellation safe]: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error>;
 
     /// Returns an adapter that treats the client as a stream.
