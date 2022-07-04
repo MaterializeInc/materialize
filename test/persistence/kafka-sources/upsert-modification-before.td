@@ -52,30 +52,30 @@ bìrd1:
 > CREATE MATERIALIZED SOURCE texttext
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
-  FORMAT TEXT
+  KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE textbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
-  FORMAT BYTES
+  KEY FORMAT TEXT VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
-  ENVELOPE UPSERT FORMAT TEXT
+  ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE bytesbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
-  FORMAT BYTES
+  KEY FORMAT BYTES VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE bytestext
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
-  FORMAT TEXT
+  KEY FORMAT BYTES VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
-  ENVELOPE UPSERT FORMAT BYTES
+  ENVELOPE UPSERT
 
 > select * from texttext
 key0          text  kafka_partition  mz_offset

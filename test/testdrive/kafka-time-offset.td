@@ -171,37 +171,37 @@ grape:grape
 > CREATE MATERIALIZED SOURCE upsert_time_offset_0
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=0)
-  FORMAT TEXT
+  KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=1)
-  FORMAT TEXT
+  KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=2)
-  FORMAT TEXT
+  KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=3)
-  FORMAT TEXT
+  KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=4)
-  FORMAT TEXT
+  KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
-  FORMAT TEXT
+  KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
 > SELECT * FROM upsert_time_offset_0

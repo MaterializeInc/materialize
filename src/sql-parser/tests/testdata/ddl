@@ -468,9 +468,9 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING SCHEMA 'long' VALUE FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [], format: KeyValue { key: Avro(InlineSchema { schema: Inline("long"), with_options: [] }), value: Avro(InlineSchema { schema: Inline("string"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None, remote: None })
+error: Expected end of statement, found FORMAT
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
+                                                                                                                  ^
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
@@ -482,37 +482,37 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None, remote: None })
+error: Expected end of statement, found FORMAT
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+                                                                                                                     ^
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = 2) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Number("2"))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None, remote: None })
+error: Expected end of statement, found FORMAT
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+                                                                                                                                         ^
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = []) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Array([]))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None, remote: None })
+error: Expected end of statement, found FORMAT
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+                                                                                                                                          ^
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2]) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Array([Number("2")]))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None, remote: None })
+error: Expected end of statement, found FORMAT
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+                                                                                                                                           ^
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2, 40000000]) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Array([Number("2"), Number("40000000")]))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None, remote: None })
+error: Expected end of statement, found FORMAT
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+                                                                                                                                                     ^
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SEKRET)

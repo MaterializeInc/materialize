@@ -318,8 +318,6 @@ pub enum CreateSourceFormat<T: AstInfo> {
     /// `CREATE SOURCE .. FORMAT`
     Bare(Format<T>),
     /// `CREATE SOURCE .. KEY FORMAT .. VALUE FORMAT`
-    ///
-    /// Also the destination for the legacy `ENVELOPE UPSERT FORMAT ...`
     KeyValue {
         key: Format<T>,
         value: Format<T>,
