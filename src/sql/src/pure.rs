@@ -424,7 +424,7 @@ async fn purify_csr_connection_avro(
             key_schema,
             value_schema,
         } = get_remote_csr_schema(
-            ccsr_config,
+            &ccsr_client,
             key_strategy.clone().unwrap_or_default(),
             value_strategy.clone().unwrap_or_default(),
             topic.clone(),
