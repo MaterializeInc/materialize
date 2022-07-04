@@ -67,6 +67,7 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::fmt::Write;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::ops::Neg;
 use std::sync::Arc;
@@ -4662,24 +4663,28 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         if options.timing {
             if let Some(decorrelation) = &timings.decorrelation {
-                explanation_string.push_str(&format!(
+                write!(
+                    explanation_string,
                     "\nDecorrelation time: {}",
                     Interval {
                         months: 0,
                         days: 0,
                         micros: decorrelation.as_micros().try_into().unwrap(),
                     }
-                ));
+                )
+                .expect("Write failed");
             }
             if let Some(optimization) = &timings.optimization {
-                explanation_string.push_str(&format!(
+                write!(
+                    explanation_string,
                     "\nOptimization time: {}",
                     Interval {
                         months: 0,
                         days: 0,
                         micros: optimization.as_micros().try_into().unwrap(),
                     }
-                ));
+                )
+                .expect("Write failed");
             }
             if timings.decorrelation.is_some() || timings.optimization.is_some() {
                 explanation_string.push_str("\n");

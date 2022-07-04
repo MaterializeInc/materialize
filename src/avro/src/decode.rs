@@ -447,7 +447,7 @@ impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
             // TODO -- we can use len_in_bytes to quickly skip non-demanded arrays
             let (len, _len_in_bytes) = match zag_i64(self.r)? {
                 len if len > 0 => (len as usize, None),
-                neglen if neglen < 0 => (neglen.abs() as usize, Some(decode_len(self.r)?)),
+                neglen if neglen < 0 => (neglen.unsigned_abs() as usize, Some(decode_len(self.r)?)),
                 0 => {
                     self.done = true;
                     return Ok(None);
@@ -526,7 +526,7 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
             // TODO -- we can use len_in_bytes to quickly skip non-demanded arrays
             let (len, _len_in_bytes) = match zag_i64(self.r)? {
                 len if len > 0 => (len as usize, None),
-                neglen if neglen < 0 => (neglen.abs() as usize, Some(decode_len(self.r)?)),
+                neglen if neglen < 0 => (neglen.unsigned_abs() as usize, Some(decode_len(self.r)?)),
                 0 => {
                     self.done = true;
                     return Ok(None);

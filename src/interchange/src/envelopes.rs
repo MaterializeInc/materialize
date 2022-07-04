@@ -86,9 +86,9 @@ where
                                 .expect_err("there should be no zero-multiplicity entries");
 
                             // Step (3) above
-                            let befores = elts[0..pos_idx]
-                                .iter()
-                                .flat_map(|elt| iter::repeat(elt).take(elt.2.abs() as usize));
+                            let befores = elts[0..pos_idx].iter().flat_map(|elt| {
+                                iter::repeat(elt).take(elt.2.unsigned_abs() as usize)
+                            });
                             let afters = elts[pos_idx..]
                                 .iter()
                                 .flat_map(|elt| iter::repeat(elt).take(elt.2 as usize));
