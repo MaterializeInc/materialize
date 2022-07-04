@@ -27,7 +27,7 @@ once_cell = "1.12.0"
 # vendored feature is transitively depended upon by tokio-openssl.
 openssl = { version = "0.10.40", features = ["vendored"], optional = true }
 paste = "1.0.7"
-pin-project = "1.0.0"
+pin-project = "1.0.11"
 prometheus = { version = "0.13.1", default-features = false, optional = true }
 smallvec = { version = "1.8.1", optional = true }
 stacker = { version = "0.1.14", optional = true }
