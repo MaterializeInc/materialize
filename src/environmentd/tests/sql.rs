@@ -361,7 +361,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
-    client_writes.batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t")?;
+    client_writes.batch_execute(
+        "CREATE DEFAULT INDEX t_primary_idx ON t WITH (LOGICAL COMPACTION WINDOW 0)",
+    )?;
     // Now that the index (and its since) are initialized to 0, we can resume using
     // system time. Do a read to bump the oracle's state so it will read from the
     // system clock during inserts below.

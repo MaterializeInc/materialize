@@ -18,7 +18,6 @@ Flag | Default | Modifies
 [`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags.
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for HTTP and SQL connections.
-[`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements.
 [`--log-filter`](#log-filter) | `info` | Which log messages to emit.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA).
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file.
@@ -99,25 +98,6 @@ also use this to change the port that Materialize listens on from the default
 
 The `materialized` [Docker image](/install/#docker) instead uses a listen
 address of `0.0.0.0:6875` by default, in accordance with Docker conventions.
-
-### Compaction window
-
-The `--logical-compaction-window` option specifies the duration of time for
-which Materialize is required to maintain full historical detail in its
-[arrangements][api-indexes]. Note that compaction happens
-lazily, so Materialize may retain more historical detail than requested, but it
-will never retain less.
-
-The value of the option is any valid SQL [interval](/sql/types/interval)
-string, like `10ms` (10 milliseconds) or `1min 30s` (1 minute, 30
-seconds). The special value `off` disables logical compaction and
-corresponds to an unboundedly large duration.
-
-The logical compaction window ends at the current time and extends backwards in
-time for the configured duration. The default window is 1 millisecond.
-
-See the [Deployment section](/ops/optimization/#compaction) for guidance on tuning
-the compaction window.
 
 ### Log filter
 

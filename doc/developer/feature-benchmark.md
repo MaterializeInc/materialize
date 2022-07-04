@@ -254,9 +254,9 @@ class ScalingScenario(ScenarioBig):
 * Aim for the query or queries being benchmarked to take around 1 second to execute. This allows the framework to perform several iterations without blowing up
 the total execution time. Avoid queries that take milliseconds to run, as the noise from various sources will overwhelm any signal.
 
-* The benchmarks will run with `--timestamp-frequency` and `--introspection-interval` set to `100ms`. This places a lower bound on the granularity and the
+* The benchmarks will run with the default timestamp and introspection granularity. This places a lower bound on the granularity and the
 information value obtained when benchmarking anything impacted by those intervals. Ingest enough data into Kafka so that operations take many times the
-timestamp frequency to complete.
+timestamp granularity to complete.
 
 * Operations in Materialize are more asynchronous than a person familiar with typical databases would expect. For example, `CREATE INDEX` returns before the
 index has been fully populated; DML operations may return to the user before all of their work is done. In both of those cases, the extra latency would be observed

@@ -28,7 +28,6 @@ services:
       --listen-addr 0.0.0.0:6875
       --data-directory=/mzdata
       --unsafe-mode
-      --timestamp-frequency 100ms
     image: antithesis-materialized:${ANT_IMAGE_TAG}
     volumes:
       - mzdata:/mzdata:rw
