@@ -29,8 +29,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use async_trait::async_trait;
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::ChangeBatch;
 use tracing::warn;
 
 use mz_compute_client::command::{ComputeCommand, DataflowDescription};
@@ -39,6 +37,7 @@ use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
+use mz_service::frontiers::FrontierReconcile;
 use mz_storage::client::controller::CollectionMetadata;
 
 /// Reconcile commands targeted at a COMPUTE instance.
@@ -58,7 +57,7 @@ pub struct ComputeCommandReconcile<T, C> {
     /// Stash of responses to send back to the controller.
     responses: VecDeque<ComputeResponse<T>>,
     /// Upper frontiers for indexes, sources, and sinks.
-    uppers: HashMap<GlobalId, MutableAntichain<T>>,
+    uppers: FrontierReconcile<T>,
 }
 
 #[async_trait]
@@ -108,25 +107,16 @@ where
     /// If we're already tracking this ID, it means that the controller lost connection and
     /// reconnected (or has a bug). We're updating the controller's upper to match the local state.
     fn start_tracking(&mut self, id: GlobalId) {
-        let frontier = timely::progress::frontier::MutableAntichain::new_bottom(T::minimum());
-        match self.uppers.entry(id) {
-            Entry::Occupied(entry) => {
-                // We're about to start tracking an already-bound ID. This means that the controller
-                // needs to be informed about the `upper`.
-                let mut change_batch = ChangeBatch::new_from(T::minimum(), -1);
-                change_batch.extend(entry.get().frontier().iter().copied().map(|t| (t, 1)));
-                self.responses
-                    .push_back(ComputeResponse::FrontierUppers(vec![(id, change_batch)]));
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(frontier);
-            }
+        let mut correction = self.uppers.start_tracking(id);
+        if !correction.is_empty() {
+            self.responses
+                .push_back(ComputeResponse::FrontierUppers(vec![(id, correction)]));
         }
     }
 
     /// Stop tracking the id within an instance.
     fn stop_tracking(&mut self, id: GlobalId) {
-        let previous = self.uppers.remove(&id);
+        let previous = self.uppers.stop_tracking(id);
         if previous.is_none() {
             warn!("Protocol error: ceasing frontier tracking for absent identifier {id:?}");
         }
@@ -138,15 +128,7 @@ where
     pub fn absorb_response(&mut self, message: ComputeResponse<T>) {
         match message {
             ComputeResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
-                    if let Some(frontier) = self.uppers.get_mut(id) {
-                        let iter = frontier.update_iter(changes.drain());
-                        changes.extend(iter);
-                    } else {
-                        changes.clear();
-                    }
-                }
-
+                self.uppers.absorb(&mut list);
                 self.responses
                     .push_back(ComputeResponse::FrontierUppers(list));
             }
@@ -172,7 +154,7 @@ where
                 if !self.created {
                     if let Some(logging) = &config.logging {
                         for id in logging.log_identifiers() {
-                            if !self.uppers.contains_key(&id) {
+                            if !self.uppers.is_tracked(id) {
                                 self.start_tracking(id);
                             }
                         }
