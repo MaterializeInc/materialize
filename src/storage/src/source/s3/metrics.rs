@@ -20,7 +20,7 @@ pub(super) struct BucketMetrics {
     messages_ingested: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
-impl<'a> BucketMetrics {
+impl BucketMetrics {
     pub(super) fn new(base_metrics: &SourceBaseMetrics, source_id: &str, bucket_id: &str) -> Self {
         let labels = &[bucket_id.to_string(), source_id.to_string()];
         let s3 = &base_metrics.s3;

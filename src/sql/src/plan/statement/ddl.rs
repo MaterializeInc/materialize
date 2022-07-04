@@ -14,6 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -2448,7 +2449,7 @@ pub fn plan_create_index(
                     _ => "expr".to_string(),
                 })
                 .join("_");
-            idx_name.item += &format!("_{}_idx", index_name_col_suffix);
+            write!(idx_name.item, "_{index_name_col_suffix}_idx")?;
             idx_name.item = normalize::ident(Ident::new(&idx_name.item))
         }
 
