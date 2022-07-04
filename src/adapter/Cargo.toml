@@ -38,7 +38,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
 mz-storage = { path = "../storage"}
 mz-transform = { path = "../transform" }
-prost = "0.10.3"
+prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.5.6"

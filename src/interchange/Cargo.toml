@@ -26,7 +26,7 @@ mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 ordered-float = { version = "3.0.0", features = ["serde"] }
-prost = "0.10.3"
+prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 prost-reflect = "0.8.1"
 serde_json = "1.0.82"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
