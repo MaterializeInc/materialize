@@ -4487,7 +4487,7 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         } = plan;
 
-        let _decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
+        let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
             let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
                 qgm_optimizations: session.vars().qgm_optimizations(),
             })?;
@@ -4535,8 +4535,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 Err(AdapterError::Unsupported(feature))?
             }
             ExplainStageNew::DecorrelatedPlan => {
-                let feature = "ExplainStageNew::DecorrelatedPlan";
-                Err(AdapterError::Unsupported(feature))?
+                // run partial pipeline
+                let decorrelated_plan = decorrelate(raw_plan)?;
+                self.validate_timeline(decorrelated_plan.depends_on())?;
+                let mut dataflow = OptimizedMirRelationExpr::declare_optimized(decorrelated_plan);
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut dataflow).explain(&format, &config, &context)?
             }
             ExplainStageNew::OptimizedPlan => {
                 let feature = "ExplainStageNew::OptimizedPlan";
