@@ -7,4 +7,4 @@ rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-aws-sdk-kinesis = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-kinesis = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
