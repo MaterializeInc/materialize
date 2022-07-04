@@ -3,7 +3,7 @@ name = "mz-sqllogictest"
 description = "A driver for sqllogictest, a SQL correctness testing framework."
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 
 [dependencies]

@@ -3,7 +3,7 @@ name = "mz-expr"
 description = "The core expression language for Materialize."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 
 [[bench]]
