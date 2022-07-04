@@ -3,7 +3,7 @@ name = "mz-timely-util"
 description = "Utilities for working with Timely."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 
 [dependencies]

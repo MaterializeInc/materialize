@@ -3,7 +3,7 @@ name = "mz-persist"
 description = "Abstraction for Materialize dataplane persistence."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 # Since we intentionally will only ever have one bench target, auto discovery of
 # benches is unnecessary. Turning it off allows us to have helper code in
