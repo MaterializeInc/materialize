@@ -19,6 +19,7 @@ from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
+    Postgres,
     Redpanda,
     SchemaRegistry,
     Storaged,
@@ -77,9 +78,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # remote storaged tests
     test_remote_storaged(c, args.redpanda)
 
-    # remote cluster tests
-    test_cluster(c, "smoke/*.td")
-    test_github_12251(c)
+    # # remote cluster tests
+    # test_cluster(c, "smoke/*.td")
+    # test_github_12251(c)
 
 
 def workflow_nightly(c: Composition) -> None:
@@ -169,8 +170,17 @@ def test_github_12251(c: Composition) -> None:
 
 
 def test_remote_storaged(c: Composition, redpanda: bool) -> None:
-    with c.override(Testdrive()):
-        dependencies = ["materialized", "storaged"]
+    with c.override(
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+        # Use a separate PostgreSQL service for persist rather than the one in
+        # the `Materialized` service, so that crashing `environmentd` does not
+        # also take down PostgreSQL.
+        Postgres(),
+        Materialized(
+            options="--persist-consensus-url=postgres://postgres:postgres@postgres"
+        ),
+    ):
+        dependencies = ["materialized", "postgres", "storaged"]
         if redpanda:
             dependencies += ["redpanda"]
         else:
@@ -178,4 +188,7 @@ def test_remote_storaged(c: Composition, redpanda: bool) -> None:
         c.start_and_wait_for_tcp(
             services=dependencies,
         )
-        c.run("testdrive", "storaged/smoketest.td")
+        c.run("testdrive", "storaged/01-create-sources.td")
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "storaged/02-after-environmentd-restart.td")

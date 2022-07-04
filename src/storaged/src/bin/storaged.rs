@@ -25,7 +25,6 @@ use mz_pid_file::PidFile;
 use mz_service::grpc::GrpcServer;
 use mz_storage::client::connections::ConnectionContext;
 use mz_storage::client::proto_storage_server::ProtoStorageServer;
-use mz_storage::client::StorageClient;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -167,7 +166,5 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     let (_server, client) = mz_storage::serve(config)?;
-    let client: Box<dyn StorageClient> = Box::new(client);
-
     GrpcServer::serve(args.listen_addr, client, ProtoStorageServer::new).await
 }
