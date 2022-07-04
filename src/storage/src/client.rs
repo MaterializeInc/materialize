@@ -33,7 +33,9 @@ use mz_proto::any_uuid;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{BidiProtoClient, GrpcClient, GrpcServer, ResponseStream};
+use mz_service::grpc::{
+    BidiProtoClient, GrpcClient, GrpcServer, GrpcServerCommand, ResponseStream,
+};
 use mz_timely_util::progress::any_change_batch;
 
 use crate::client::controller::CollectionMetadata;
@@ -95,7 +97,7 @@ impl BidiProtoClient<ProtoStorageCommand, ProtoStorageResponse> for ProtoStorage
 #[async_trait]
 impl<G> ProtoStorage for GrpcServer<G>
 where
-    G: StorageClient + 'static,
+    G: GenericClient<GrpcServerCommand<StorageCommand>, StorageResponse> + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoStorageResponse>;
 
@@ -238,6 +240,8 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
 
+    // TODO(benesch,gus): remove this variant, because it is not produced by
+    // storaged processes.
     /// Data about timestamp bindings, sent to the coordinator, in service
     /// of a specific "linearized" read request
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),

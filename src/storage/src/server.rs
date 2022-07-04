@@ -13,19 +13,24 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use mz_persist_client::cache::PersistClientCache;
 use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
+use mz_service::client::GenericClient;
+use mz_service::grpc::GrpcServerCommand;
 use mz_service::local::LocalClient;
 
 use crate::client::connections::ConnectionContext;
-use crate::client::StorageClient;
+use crate::client::{StorageCommand, StorageResponse};
+use crate::server::reconciliation::StorageCommandReconcile;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::{StorageState, Worker};
 use crate::DecodeMetrics;
+
+mod reconciliation;
 
 /// Configures a dataflow server.
 pub struct Config {
@@ -49,7 +54,15 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<(Server, Box<dyn StorageClient>), anyhow::Error> {
+pub fn serve(
+    config: Config,
+) -> Result<
+    (
+        Server,
+        Box<dyn GenericClient<GrpcServerCommand<StorageCommand>, StorageResponse>>,
+    ),
+    anyhow::Error,
+> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -122,6 +135,7 @@ pub fn serve(config: Config) -> Result<(Server, Box<dyn StorageClient>), anyhow:
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
     let client = LocalClient::new_partitioned(response_rxs, command_txs, worker_threads);
+    let client = StorageCommandReconcile::new(client);
     let server = Server {
         _worker_guards: worker_guards,
     };

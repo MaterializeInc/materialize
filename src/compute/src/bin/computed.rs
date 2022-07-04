@@ -17,9 +17,7 @@ use once_cell::sync::Lazy;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_compute::reconciliation::ComputeCommandReconcile;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
-use mz_compute_client::service::ComputeClient;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
@@ -171,6 +169,5 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     let (_server, client) = mz_compute::server::serve(config)?;
-    let client: Box<dyn ComputeClient> = Box::new(ComputeCommandReconcile::new(client));
     GrpcServer::serve(args.listen_addr, client, ProtoComputeServer::new).await
 }

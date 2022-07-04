@@ -159,6 +159,17 @@ pub trait BidiProtoClient<PC, PR> {
     ) -> Result<Response<Streaming<PR>>, Status>;
 }
 
+/// A command from a gRPC server.
+pub enum GrpcServerCommand<T> {
+    /// A command indicating the upstream client has reconnected.
+    ///
+    /// This message is delivered by the [`GrpcServer`] immediately after client
+    /// reconnection.
+    Reconnected,
+    /// A command sent by the upstream client.
+    Client(T),
+}
+
 /// A gRPC server that stitches a gRPC service with a single bidirectional
 /// stream to a [`GenericClient`].
 ///
@@ -229,7 +240,7 @@ where
         request: Request<Streaming<PC>>,
     ) -> Result<Response<ResponseStream<PR>>, Status>
     where
-        G: GenericClient<C, R> + 'static,
+        G: GenericClient<GrpcServerCommand<C>, R> + 'static,
         C: RustType<PC> + Send + Sync + 'static + fmt::Debug,
         R: RustType<PR> + Send + Sync + 'static + fmt::Debug,
         PC: fmt::Debug + Send + Sync + 'static,
@@ -253,6 +264,9 @@ where
         let state = Arc::clone(&self.state);
         let response = stream! {
             let mut client = state.client.lock().await;
+            if let Err(e) = client.send(GrpcServerCommand::Reconnected).await {
+                yield Err(Status::unknown(e.to_string()));
+            }
             loop {
                 select! {
                     command = request.next() => {
@@ -265,7 +279,7 @@ where
                             }
                         };
                         let command = match command.into_rust() {
-                            Ok(command) => command,
+                            Ok(command) => GrpcServerCommand::Client(command),
                             Err(e) => {
                                 error!("error converting command to protobuf: {}", e);
                                 break;

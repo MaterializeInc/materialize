@@ -38,6 +38,7 @@ use mz_compute_client::service::ComputeClient;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 use mz_service::frontiers::FrontierReconcile;
+use mz_service::grpc::GrpcServerCommand;
 use mz_storage::client::controller::CollectionMetadata;
 
 /// Reconcile commands targeted at a COMPUTE instance.
@@ -61,12 +62,16 @@ pub struct ComputeCommandReconcile<T, C> {
 }
 
 #[async_trait]
-impl<T, C> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ComputeCommandReconcile<T, C>
+impl<T, C> GenericClient<GrpcServerCommand<ComputeCommand<T>>, ComputeResponse<T>>
+    for ComputeCommandReconcile<T, C>
 where
     C: ComputeClient<T>,
     T: timely::progress::Timestamp + Copy,
 {
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    async fn send(
+        &mut self,
+        cmd: GrpcServerCommand<ComputeCommand<T>>,
+    ) -> Result<(), anyhow::Error> {
         self.absorb_command(cmd).await
     }
 
@@ -145,10 +150,18 @@ where
         }
     }
 
-    async fn absorb_command(&mut self, command: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    async fn absorb_command(
+        &mut self,
+        command: GrpcServerCommand<ComputeCommand<T>>,
+    ) -> Result<(), anyhow::Error> {
         use ComputeCommand::*;
+        use GrpcServerCommand::*;
         match command {
-            CreateInstance(config) => {
+            Reconnected => {
+                self.uppers.bump_epoch();
+                Ok(())
+            }
+            Client(CreateInstance(config)) => {
                 // TODO: Handle `config.logging` correctly when reconnecting. We currently assume
                 // that the logging config stays the same.
                 if !self.created {
@@ -164,7 +177,7 @@ where
                 }
                 Ok(())
             }
-            cmd @ DropInstance => {
+            Client(cmd @ DropInstance) => {
                 if self.created {
                     self.created = false;
                     self.uppers.clear();
@@ -173,7 +186,7 @@ where
                     Ok(())
                 }
             }
-            CreateDataflows(dataflows) => {
+            Client(CreateDataflows(dataflows)) => {
                 let mut create = Vec::new();
                 for dataflow in dataflows {
                     for id in dataflow.export_ids() {
@@ -198,7 +211,7 @@ where
                 }
                 Ok(())
             }
-            AllowCompaction(frontiers) => {
+            Client(AllowCompaction(frontiers)) => {
                 for (id, frontier) in &frontiers {
                     if frontier.is_empty() {
                         self.stop_tracking(*id);
@@ -206,11 +219,11 @@ where
                 }
                 self.client.send(AllowCompaction(frontiers)).await
             }
-            Peek(peek) => {
+            Client(Peek(peek)) => {
                 self.peeks.insert(peek.uuid);
                 self.client.send(ComputeCommand::Peek(peek)).await
             }
-            CancelPeeks { uuids } => {
+            Client(CancelPeeks { uuids }) => {
                 for uuid in &uuids {
                     self.peeks.remove(uuid);
                 }
