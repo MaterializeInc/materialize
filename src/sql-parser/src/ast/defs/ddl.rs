@@ -168,7 +168,7 @@ impl Default for ReaderSchemaSelectionStrategy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrConnectorAvro<T: AstInfo> {
+pub struct CsrConnectionAvro<T: AstInfo> {
     pub connection: CsrConnection<T>,
     pub key_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub value_strategy: Option<ReaderSchemaSelectionStrategy>,
