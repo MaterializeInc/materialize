@@ -139,8 +139,8 @@ use mz_sql::plan::{
     DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
     ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
     MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    StatementDesc, TailFrom, TailPlan, View,
+    RecordedView, ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::client::connections::ConnectionContext;
@@ -818,6 +818,38 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
                 CatalogItem::View(_) => (),
+                CatalogItem::RecordedView(rview) => {
+                    // Re-create the storage collection.
+                    self.dataflow_client
+                        .storage_mut()
+                        .create_collections(vec![(
+                            entry.id(),
+                            CollectionDescription {
+                                desc: rview.desc.clone(),
+                                ingestion: None,
+                                remote_addr: None,
+                            },
+                        )])
+                        .await
+                        .unwrap();
+
+                    self.initialize_storage_read_policies(
+                        vec![entry.id()],
+                        self.logical_compaction_window_ms,
+                    )
+                    .await;
+
+                    // Re-create the sink on the compute instance.
+                    let id_bundle = self
+                        .index_oracle(rview.compute_instance)
+                        .sufficient_collections(&rview.depends_on);
+                    let as_of = self.least_valid_read(&id_bundle, rview.compute_instance);
+                    let internal_view_id = self.allocate_transient_id()?;
+                    let df = self
+                        .dataflow_builder(rview.compute_instance)
+                        .build_recorded_view_dataflow(entry.id(), as_of, internal_view_id)?;
+                    self.ship_dataflow(df, rview.compute_instance).await;
+                }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
@@ -3264,12 +3296,99 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_recorded_view(
         &mut self,
-        _session: &Session,
-        _plan: CreateRecordedViewPlan,
-        _depends_on: Vec<GlobalId>,
+        session: &Session,
+        plan: CreateRecordedViewPlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        // TODO(teskje): implement
-        Err(AdapterError::Unsupported("recorded views"))
+        let CreateRecordedViewPlan {
+            name,
+            recorded_view:
+                RecordedView {
+                    create_sql,
+                    expr: view_expr,
+                    column_names,
+                    compute_instance,
+                },
+            replace,
+            if_not_exists,
+        } = plan;
+
+        self.validate_timeline(depends_on.clone())?;
+
+        // Allocate IDs for the recorded view in the catalog.
+        let id = self.catalog.allocate_user_id().await?;
+        let oid = self.catalog.allocate_oid().await?;
+        // Allocate a unique ID that can be used by the dataflow builder to
+        // connect the view dataflow to the storage sink.
+        let internal_view_id = self.allocate_transient_id()?;
+
+        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
+        let desc = RelationDesc::new(optimized_expr.typ(), column_names);
+
+        // Pick the least valid read timestamp as the as-of for the view
+        // dataflow. This makes the recorded view include the maximum possible
+        // amount of historical detail.
+        let id_bundle = self
+            .index_oracle(compute_instance)
+            .sufficient_collections(&depends_on);
+        let as_of = self.least_valid_read(&id_bundle, compute_instance);
+
+        let mut ops = Vec::new();
+        if let Some(drop_id) = replace {
+            ops.extend(self.catalog.drop_items_ops(&[drop_id]));
+        }
+        ops.push(catalog::Op::CreateItem {
+            id,
+            oid,
+            name,
+            item: CatalogItem::RecordedView(catalog::RecordedView {
+                create_sql,
+                optimized_expr,
+                desc: desc.clone(),
+                depends_on,
+                compute_instance,
+            }),
+        });
+
+        match self
+            .catalog_transact(Some(session), ops, |txn| {
+                // Create a dataflow that materializes the view query and sinks
+                // it to storage.
+                let df = txn
+                    .dataflow_builder(compute_instance)
+                    .build_recorded_view_dataflow(id, as_of, internal_view_id)?;
+                Ok(df)
+            })
+            .await
+        {
+            Ok(df) => {
+                // Announce the creation of the recorded view source.
+                self.dataflow_client
+                    .storage_mut()
+                    .create_collections(vec![(
+                        id,
+                        CollectionDescription {
+                            desc,
+                            ingestion: None,
+                            remote_addr: None,
+                        },
+                    )])
+                    .await
+                    .unwrap();
+
+                self.initialize_storage_read_policies(vec![id], self.logical_compaction_window_ms)
+                    .await;
+
+                self.ship_dataflow(df, compute_instance).await;
+
+                Ok(ExecuteResponse::CreatedRecordedView { existed: false })
+            }
+            Err(AdapterError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedRecordedView { existed: true }),
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_index(
@@ -3429,7 +3548,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     compute_id: instance.id,
                 });
             }
-            let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
+            let ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
@@ -5133,6 +5252,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut tables_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
+        let mut recorded_views_to_drop = vec![];
         let mut replication_slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
         let mut secrets_to_drop = vec![];
 
@@ -5169,6 +5289,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         compute_instance, ..
                     }) => {
                         indexes_to_drop.push((*compute_instance, *id));
+                    }
+                    CatalogItem::RecordedView(catalog::RecordedView {
+                        compute_instance, ..
+                    }) => {
+                        recorded_views_to_drop.push((*compute_instance, *id));
                     }
                     CatalogItem::Secret(_) => {
                         secrets_to_drop.push(*id);
@@ -5218,6 +5343,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
+            }
+            if !recorded_views_to_drop.is_empty() {
+                self.drop_recorded_views(recorded_views_to_drop).await;
             }
             if !secrets_to_drop.is_empty() {
                 self.drop_secrets(secrets_to_drop).await;
@@ -5323,6 +5451,37 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await
                 .unwrap();
         }
+    }
+
+    async fn drop_recorded_views(&mut self, rviews: Vec<(ComputeInstanceId, GlobalId)>) {
+        let mut by_compute_instance = HashMap::new();
+        let mut source_ids = Vec::new();
+        for (compute_instance, id) in rviews {
+            if self.read_capability.remove(&id).is_some() {
+                by_compute_instance
+                    .entry(compute_instance)
+                    .or_insert(vec![])
+                    .push(id);
+                source_ids.push(id);
+            } else {
+                tracing::error!("Instructed to drop a recorded view that isn't one");
+            }
+        }
+
+        // Drop compute sinks.
+        for (compute_instance, ids) in by_compute_instance {
+            // A cluster could have been dropped, so verify it exists.
+            if let Some(mut compute) = self.dataflow_client.compute_mut(compute_instance) {
+                compute.drop_sinks(ids).await.unwrap();
+            }
+        }
+
+        // Drop storage sources.
+        self.dataflow_client
+            .storage_mut()
+            .drop_sources(source_ids)
+            .await
+            .unwrap();
     }
 
     async fn set_index_options(
@@ -5509,6 +5668,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 CatalogItem::View(view) => {
                     ids.extend(view.optimized_expr.depends_on());
+                }
+                CatalogItem::RecordedView(rview) => {
+                    ids.extend(rview.optimized_expr.depends_on());
                 }
                 CatalogItem::Table(table) => {
                     timelines.insert(id, table.timeline());

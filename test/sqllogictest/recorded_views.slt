@@ -1,0 +1,300 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Setup
+
+statement ok
+CREATE TABLE t (a int, b int)
+
+statement ok
+INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
+
+statement ok
+CREATE CLUSTER other REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'))
+
+
+# Test: Recorded view can be created.
+
+statement ok
+CREATE RECORDED VIEW rv AS SELECT 1
+
+
+# Test: Recorded view can be replaced.
+
+statement ok
+CREATE OR REPLACE RECORDED VIEW rv AS SELECT 2
+
+query I
+SELECT * FROM rv
+----
+2
+
+
+# Test: Recorded view creation can be skipped if a recorded view already exists.
+
+statement error catalog item 'rv' already exists
+CREATE RECORDED VIEW rv AS SELECT 1
+
+statement ok
+CREATE RECORDED VIEW IF NOT EXISTS rv AS SELECT 1
+
+query I
+SELECT * FROM rv
+----
+2
+
+
+# Test: Recorded view can have explicit column names.
+
+statement ok
+CREATE OR REPLACE RECORDED VIEW rv (name, age) AS SELECT 'jon', 12
+
+query TI colnames
+SELECT * FROM rv
+----
+name age
+jon  12
+
+
+# Test: Explicit column names must have the right cardinality.
+
+statement error recorded view .+ definition names 2 columns, but recorded view .+ has 1 column
+CREATE RECORDED VIEW error (name, age) AS SELECT 'jon'
+
+
+# Test: Recorded view can be created in another cluster.
+
+statement ok
+CREATE RECORDED VIEW other_rv IN CLUSTER other AS SELECT 1
+
+query TTT colnames,rowsort
+SHOW FULL RECORDED VIEWS
+----
+cluster name     type
+default rv       user
+other   other_rv user
+
+statement ok
+DROP RECORDED VIEW other_rv
+
+
+# Test: Recorded view can not be created in a non-existing cluster.
+
+statement error unknown cluster 'doesnotexist'
+CREATE RECORDED VIEW error IN CLUSTER doesnotexist AS SELECT 1
+
+
+# Test: Recorded view data is accessible from the same cluster.
+
+statement ok
+CREATE OR REPLACE RECORDED VIEW rv AS SELECT a + b FROM t
+
+query I rowsort
+SELECT * FROM rv
+----
+3
+7
+11
+
+
+# Test: Recorded view data is accessible from other clusters.
+
+statement ok
+SET cluster = other
+
+query I rowsort
+SELECT * FROM rv
+----
+3
+7
+11
+
+statement ok
+RESET cluster
+
+
+# Test: Recorded view reflects input data changes.
+
+statement ok
+INSERT INTO t VALUES (7, 8)
+
+query I rowsort
+SELECT * FROM rv
+----
+3
+7
+11
+15
+
+statement ok
+DELETE FROM t WHERE a = 1
+
+query I rowsort
+SELECT * FROM rv
+----
+7
+11
+15
+
+
+# Test: Recorded views can be nested.
+
+statement ok
+CREATE RECORDED VIEW rv2 AS SELECT count(*) FROM rv
+
+query I
+SELECT * FROM rv2
+----
+3
+
+statement ok
+DROP RECORDED VIEW rv2
+
+
+# Test: Recorded views can have indexes on top.
+
+statement ok
+CREATE DEFAULT INDEX ON rv;
+
+
+# Test: Recorded views can be dropped.
+
+statement ok
+CREATE OR REPLACE RECORDED VIEW rv AS SELECT 1
+
+statement ok
+DROP RECORDED VIEW rv
+
+
+# Test: Recorded views can not be dropped if they have dependants.
+
+statement ok
+CREATE RECORDED VIEW rv AS SELECT 1
+
+statement ok
+CREATE VIEW v AS SELECT * FROM rv
+
+statement error cannot drop materialize.public.rv: still depended upon by catalog item 'materialize.public.v'
+DROP RECORDED VIEW rv
+
+
+# Test: Recorded views with dependants can be dropped with CASCADE.
+
+statement ok
+DROP RECORDED VIEW rv CASCADE
+
+query error unknown catalog item 'v'
+SELECT * FROM v
+
+
+# Test: Recorded view prevents dropping its cluster.
+
+statement ok
+CREATE CLUSTER to_drop REPLICAS ()
+
+statement ok
+CREATE RECORDED VIEW to_drop_rv IN CLUSTER to_drop AS SELECT 1
+
+statement error cannot drop cluster with active indexes, sinks, recorded views, or replicas
+DROP CLUSTER to_drop
+
+
+# Test: Cluster with dependent recorded view can be dropped with CASCADE.
+
+statement ok
+DROP CLUSTER to_drop CASCADE
+
+query error unknown catalog item 'to_drop_rv'
+SELECT * FROM to_drop_rv
+
+
+# Test: SHOW CREATE RECORDED VIEW
+
+statement ok
+CREATE RECORDED VIEW rv AS SELECT 1
+
+query TT colnames
+SHOW CREATE RECORDED VIEW rv
+----
+Recorded␠View         Create␠Recorded␠View
+materialize.public.rv CREATE␠RECORDED␠VIEW␠"materialize"."public"."rv"␠IN␠CLUSTER␠[1]␠AS␠SELECT␠1
+
+
+# Test: SHOW RECORDED VIEWS
+
+statement ok
+CREATE RECORDED VIEW other_rv IN CLUSTER other AS SELECT 1
+
+query T colnames,rowsort
+SHOW RECORDED VIEWS
+----
+name
+rv
+other_rv
+
+query TTT colnames,rowsort
+SHOW FULL RECORDED VIEWS
+----
+cluster name     type
+default rv       user
+other   other_rv user
+
+query TTT colnames,rowsort
+SHOW FULL RECORDED VIEWS IN CLUSTER other
+----
+cluster name     type
+other   other_rv user
+
+statement ok
+DROP RECORDED VIEW other_rv
+
+
+# Test: Recorded view can be renamed.
+
+statement ok
+ALTER RECORDED VIEW rv RENAME TO rv2
+
+query I
+SELECT * FROM rv2
+----
+1
+
+statement ok
+DROP RECORDED VIEW rv2
+
+
+# Test: Recorded views show up in mz_recorded_views.
+
+statement ok
+CREATE RECORDED VIEW rv AS SELECT 1
+
+query TT colnames
+SELECT name, definition FROM mz_recorded_views
+----
+name definition
+rv   SELECT␠1;
+
+statement ok
+DROP RECORDED VIEW rv
+
+query I
+SELECT count(*) FROM mz_recorded_views
+----
+0
+
+
+# Cleanup
+
+statement ok
+DROP TABLE t CASCADE
+
+statement ok
+DROP CLUSTER other CASCADE

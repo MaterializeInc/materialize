@@ -14,6 +14,8 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
+use timely::progress::Antichain;
+
 use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
 use mz_expr::visit::Visit;
@@ -24,9 +26,9 @@ use mz_expr::{
 use mz_ore::stack::maybe_grow;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
-use mz_storage::client::sinks::SinkDesc;
+use mz_storage::client::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
 
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};
@@ -148,6 +150,9 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         let expr = view.optimized_expr.clone();
                         self.import_view_into_dataflow(id, &expr, dataflow)?;
                     }
+                    CatalogItem::RecordedView(rview) => {
+                        dataflow.import_source(*id, rview.desc.typ().clone(), false);
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -249,6 +254,52 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         mz_transform::optimize_dataflow(dataflow, &self.index_oracle())?;
 
         Ok(())
+    }
+
+    /// Builds a dataflow description for the recorded view specified by `id`.
+    ///
+    /// For this, we first build a dataflow for the view expression, then we
+    /// add a sink that writes that dataflow's output to storage.
+    /// `internal_view_id` is the ID we assign to the view dataflow internally,
+    /// so we can connect the sink to it.
+    pub fn build_recorded_view_dataflow(
+        &mut self,
+        id: GlobalId,
+        as_of: Antichain<Timestamp>,
+        internal_view_id: GlobalId,
+    ) -> Result<DataflowDesc, AdapterError> {
+        let rview_entry = self.catalog.get_entry(&id);
+        let rview = match rview_entry.item() {
+            CatalogItem::RecordedView(rv) => rv,
+            _ => unreachable!(
+                "cannot create recorded view dataflow on something that is not a recorded view"
+            ),
+        };
+
+        let name = rview_entry.name().to_string();
+        let mut dataflow = DataflowDesc::new(name);
+
+        self.import_view_into_dataflow(&internal_view_id, &rview.optimized_expr, &mut dataflow)?;
+        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
+            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
+        }
+
+        let sink_description = SinkDesc {
+            from: internal_view_id,
+            from_desc: rview.desc.clone(),
+            connection: SinkConnection::Persist(PersistSinkConnection {
+                value_desc: rview.desc.clone(),
+                storage_metadata: (),
+            }),
+            envelope: None,
+            as_of: SinkAsOf {
+                frontier: as_of,
+                strict: false,
+            },
+        };
+        self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
+
+        Ok(dataflow)
     }
 }
 
