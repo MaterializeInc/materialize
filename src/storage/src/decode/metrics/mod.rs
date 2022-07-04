@@ -9,8 +9,9 @@
 
 //! Utilities for tracking metrics related to decoding.
 
+use mz_ore::metric;
+use mz_ore::metrics::raw::IntCounterVec;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::{metric, metrics::raw::IntCounterVec};
 
 use crate::decode::{DataDecoderInner, PreDelimitedFormat};
 

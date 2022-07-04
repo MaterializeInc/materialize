@@ -3,7 +3,7 @@ name = "mz-pgwire"
 description = "A server for the PostgreSQL wire protocol."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 
 [dependencies]
@@ -13,7 +13,7 @@ byteorder = "1.4.3"
 bytes = "1.1.0"
 futures = "0.3.21"
 itertools = "0.10.3"
-mz-coord = { path = "../coord" }
+mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["tracing_"] }

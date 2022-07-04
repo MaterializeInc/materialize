@@ -25,11 +25,6 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection, SourceConnection,
-};
-use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -37,6 +32,11 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
+use crate::client::connections::ConnectionContext;
+use crate::client::errors::SourceErrorDetails;
+use crate::client::sources::{
+    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection, SourceConnection,
+};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };

@@ -22,6 +22,10 @@
 // of which can be found in the LICENSE file at the root of this repository.
 
 //! Logic handling the intermediate representation of Avro values.
+
+// `EnumKind` unconditionally introduces a lifetime.
+#![allow(clippy::extra_unused_lifetimes)]
+
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::BuildHasher;

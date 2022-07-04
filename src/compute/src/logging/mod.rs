@@ -28,7 +28,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::ExchangeData;
 
-use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
+use mz_compute_client::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
 use mz_repr::Timestamp;
 
 /// Logs events as a timely stream, with progress statements.

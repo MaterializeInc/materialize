@@ -27,11 +27,11 @@ use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
-use mz_dataflow_types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_dataflow_types::connections::{Connection, ConnectionContext};
-use mz_dataflow_types::sources::PostgresSourceDetails;
 use mz_proto::RustType;
 use mz_repr::strconv;
+use mz_storage::client::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_storage::client::connections::{Connection, ConnectionContext};
+use mz_storage::client::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
@@ -97,7 +97,7 @@ pub async fn purify_create_source(
                         KafkaAddrs::from_str(&broker)?.to_string().into(),
                     );
 
-                    mz_dataflow_types::connections::KafkaConnection::try_from(
+                    mz_storage::client::connections::KafkaConnection::try_from(
                         &mut connection_options,
                     )?
                 }

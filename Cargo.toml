@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "src/adapter",
     "src/audit-log",
     "src/avro-derive",
     "src/avro",
@@ -7,9 +8,8 @@ members = [
     "src/build-info",
     "src/ccsr",
     "src/compute",
-    "src/coord",
-    "src/dataflow-bin",
-    "src/dataflow-types",
+    "src/compute-client",
+    "src/controller",
     "src/frontegg-auth",
     "src/expr-test-util",
     "src/expr",
@@ -44,6 +44,7 @@ members = [
     "src/secrets",
     "src/secrets-filesystem",
     "src/secrets-kubernetes",
+    "src/service",
     "src/sql-parser",
     "src/sql",
     "src/sqllogictest",

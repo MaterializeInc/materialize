@@ -184,7 +184,7 @@ contains:missing SSL KEY (ssl.key.pem)
     SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
     SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
 
-> CREATE MATERIALIZED SOURCE connector_source
+> CREATE MATERIALIZED SOURCE kafka_connector_source
   FROM KAFKA CONNECTION kafka_ssl
   TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -197,8 +197,30 @@ contains:missing SSL KEY (ssl.key.pem)
   )
   ENVELOPE DEBEZIUM
 
+> SELECT * FROM kafka_connector_source
+a
+---
+1
+2
 
-> SELECT * FROM connector_source
+> CREATE CONNECTION csr_ssl
+  FOR CONFLUENT SCHEMA REGISTRY
+    URL '${testdrive.schema-registry-url}',
+    SSL KEY = SECRET ssl_key_csr,
+    SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}',
+    USERNAME = 'materialize',
+    PASSWORD = SECRET password_csr;
+
+> CREATE MATERIALIZED SOURCE kafka_csr_connector_source
+  FROM KAFKA CONNECTION kafka_ssl
+    TOPIC 'testdrive-data-${testdrive.seed}'
+    FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
+  ENVELOPE DEBEZIUM
+
+
+> SELECT * FROM kafka_csr_connector_source
 a
 ---
 1

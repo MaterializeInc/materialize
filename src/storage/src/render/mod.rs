@@ -107,10 +107,10 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::sources::IngestionDescription;
 use mz_repr::GlobalId;
 
+use crate::client::controller::CollectionMetadata;
+use crate::client::sources::IngestionDescription;
 use crate::storage_state::StorageState;
 
 mod debezium;

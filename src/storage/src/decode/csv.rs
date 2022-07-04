@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_dataflow_types::{sources::encoding::CsvEncoding, DecodeError, LinearOperator};
 use mz_repr::{Datum, Row};
+
+use crate::client::errors::DecodeError;
+use crate::client::sources::encoding::CsvEncoding;
+use crate::client::transforms::LinearOperator;
 
 #[derive(Debug)]
 pub struct CsvDecoderState {

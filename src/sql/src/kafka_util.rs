@@ -20,13 +20,13 @@ use rdkafka::{Offset, TopicPartitionList};
 use reqwest::Url;
 use tokio::time::Duration;
 
-use mz_dataflow_types::connections::{
-    CsrConnection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, StringOrSecret,
-};
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::Value;
+use mz_storage::client::connections::{
+    CsrConnection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, StringOrSecret,
+};
 
 use crate::normalize::SqlValueOrSecret;
 
@@ -225,7 +225,7 @@ pub async fn create_consumer(
     secrets_reader: &SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
     let mut config = create_new_client_config(librdkafka_log_level);
-    mz_dataflow_types::populate_client_config(
+    mz_storage::client::connections::populate_client_config(
         kafka_connection.clone(),
         options,
         std::collections::HashSet::new(),

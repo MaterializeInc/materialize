@@ -7,19 +7,35 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
-use std::fs::File;
-use std::path::PathBuf;
-
 fn main() {
-    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-
-    prost_build::Config::new()
-        .include_file("mod.rs")
-        .compile_protos(&["storage/src/source.proto"], &[".."])
+    tonic_build::configure()
+        .extern_path(".mz_ccsr.config", "::mz_ccsr")
+        .extern_path(".mz_expr.id", "::mz_expr")
+        .extern_path(".mz_expr.linear", "::mz_expr")
+        .extern_path(".mz_expr.relation", "::mz_expr")
+        .extern_path(".mz_expr.scalar", "::mz_expr")
+        .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
+        .extern_path(".mz_persist.gen.persist", "::mz_persist::gen::persist")
+        .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
+        .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
+        .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
+        .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_proto", "::mz_proto")
+        .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
+        .extern_path(".mz_repr.row", "::mz_repr")
+        .extern_path(".mz_repr.url", "::mz_repr::url")
+        .compile(
+            &[
+                "storage/src/client.proto",
+                "storage/src/client/controller.proto",
+                "storage/src/client/errors.proto",
+                "storage/src/client/connections/aws.proto",
+                "storage/src/client/sinks.proto",
+                "storage/src/client/sources.proto",
+                "storage/src/client/sources/encoding.proto",
+                "storage/src/client/transforms.proto",
+            ],
+            &[".."],
+        )
         .unwrap();
-
-    // Work around a prost bug in which the module index expects to include a
-    // file for the well-known types.
-    File::create(out_dir.join("google.protobuf.rs")).unwrap();
 }

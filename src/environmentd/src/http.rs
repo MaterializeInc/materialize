@@ -34,7 +34,7 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
-use mz_coord::SessionClient;
+use mz_adapter::SessionClient;
 use mz_ore::metrics::MetricsRegistry;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
@@ -46,7 +46,7 @@ use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use mz_coord::session::Session;
+use mz_adapter::session::Session;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 
 use crate::BUILD_INFO;
@@ -62,7 +62,7 @@ const SYSTEM_USER: &str = "mz_system";
 pub struct Config {
     pub tls: Option<TlsConfig>,
     pub frontegg: Option<FronteggAuthentication>,
-    pub coord_client: mz_coord::Client,
+    pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
 }
 
@@ -92,7 +92,7 @@ impl Server {
         Config {
             tls,
             frontegg,
-            coord_client,
+            adapter_client,
             allowed_origin,
         }: Config,
     ) -> Server {
@@ -112,7 +112,7 @@ impl Server {
             )
             .nest("/prof/", mz_prof::http::router(&BUILD_INFO))
             .route("/static/*path", routing::get(root::handle_static))
-            .layer(Extension(coord_client))
+            .layer(Extension(adapter_client))
             .layer(middleware::from_fn(move |req, next| {
                 let frontegg = Arc::clone(&frontegg);
                 async move { auth(req, next, tls_mode, &frontegg).await }
@@ -196,20 +196,21 @@ where
             user,
             create_if_not_exists,
         } = req.extensions().get::<AuthedUser>().unwrap();
-        let coord_client = req.extensions().get::<mz_coord::Client>().unwrap();
+        let adapter_client = req.extensions().get::<mz_adapter::Client>().unwrap();
 
-        let coord_client = coord_client
+        let adapter_client = adapter_client
             .new_conn()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let session = Session::new(coord_client.conn_id(), user.clone());
-        let (coord_client, _) = match coord_client.startup(session, *create_if_not_exists).await {
-            Ok(coord_client) => coord_client,
+        let session = Session::new(adapter_client.conn_id(), user.clone());
+        let (adapter_client, _) = match adapter_client.startup(session, *create_if_not_exists).await
+        {
+            Ok(adapter_client) => adapter_client,
             Err(e) => {
                 return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
             }
         };
 
-        Ok(AuthedClient(coord_client))
+        Ok(AuthedClient(adapter_client))
     }
 }
 

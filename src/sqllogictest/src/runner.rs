@@ -59,7 +59,7 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
-use mz_dataflow_types::client::controller::ControllerConfig;
+use mz_controller::ControllerConfig;
 use mz_environmentd::SecretsControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::id_gen::PortAllocator;
