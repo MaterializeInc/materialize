@@ -43,6 +43,7 @@ use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 use uuid::Uuid;
 
+use mz_expr::PartitionId;
 use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -55,7 +56,7 @@ use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::errors::DataflowError;
-use crate::client::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
+use crate::client::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
 use crate::client::{
     GenericClient, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse, StorageClient,
     StorageCommand, StorageGrpcClient, StorageResponse, Update,
@@ -471,27 +472,9 @@ where
                 data_shard: ShardId::new(),
                 remap_shard: ShardId::new(),
             };
-            let metadata = match description {
-                // We also can't persist the shards for postgres collections until we wire up
-                // correct start offsets to the SourceReaders
-                CollectionDescription {
-                    ingestion:
-                        Some(IngestionDescription {
-                            desc:
-                                SourceDesc {
-                                    connection: SourceConnection::Postgres(_),
-                                    ..
-                                },
-                            ..
-                        }),
-                    ..
-                } => metadata,
-                _ => {
-                    METADATA_COLLECTION
-                        .insert_without_overwrite(&mut self.state.stash, &id, metadata)
-                        .await?
-                }
-            };
+            let metadata = METADATA_COLLECTION
+                .insert_without_overwrite(&mut self.state.stash, &id, metadata)
+                .await?;
 
             let (write, read) = self
                 .persist_client
@@ -519,6 +502,38 @@ where
 
                 let remote_addr = description.remote_addr.clone();
 
+                let metadata = self.collection(id)?.collection_metadata.clone();
+
+                // Calculate the point at which we can resume ingestion computing the greatest
+                // antichain that is less or equal to all state and output shard uppers.
+                let mut resume_upper: Antichain<T> = Antichain::new();
+                let remap_write = self
+                    .persist_client
+                    .open_writer::<(), PartitionId, T, MzOffset>(metadata.remap_shard)
+                    .await
+                    .unwrap();
+                for t in remap_write.upper().elements() {
+                    resume_upper.insert(t.clone());
+                }
+                let data_write = self
+                    .persist_client
+                    .open_writer::<SourceData, (), T, Diff>(metadata.data_shard)
+                    .await
+                    .unwrap();
+                for t in data_write.upper().elements() {
+                    resume_upper.insert(t.clone());
+                }
+
+                // Check if this ingestion is using any operators that are stateful AND are not
+                // storing their state in persist shards. This whole section should be eventually
+                // removed as we make each operator durably record its state in persist shards.
+                let resume_upper = match ingestion.desc.envelope {
+                    // We can only resume with the None envelope right now which is stateless
+                    SourceEnvelope::None(_) => resume_upper,
+                    // Otherwise re-ingest everything
+                    _ => Antichain::from_elem(T::minimum()),
+                };
+
                 let augmented_ingestion = IngestSourceCommand {
                     id,
                     description: IngestionDescription {
@@ -528,6 +543,7 @@ where
                         desc: ingestion.desc,
                         typ: description.desc.typ().clone(),
                     },
+                    resume_upper,
                 };
 
                 let addr = if let Some(remote_addr) = remote_addr {
