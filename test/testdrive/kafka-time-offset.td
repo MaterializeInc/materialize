@@ -205,7 +205,7 @@ grape:grape
   ENVELOPE UPSERT
 
 > SELECT * FROM upsert_time_offset_0
-key0      text      mz_offset
+key       text      mz_offset
 -----------------------------
 banana    banana    2
 date      date      2
@@ -214,7 +214,7 @@ fig       fig       5
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_1
-key0      text      mz_offset
+key       text      mz_offset
 -----------------------------
 banana    banana    2
 date      date      2
@@ -223,7 +223,7 @@ fig       fig       5
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_2
-key0      text      mz_offset
+key       text      mz_offset
 -----------------------------
 date      date      2
 eggfruit  eggfruit  3
@@ -231,18 +231,18 @@ fig       fig       5
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_3
-key0      text      mz_offset
+key       text      mz_offset
 -----------------------------
 fig       fig       5
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_4
-key0      text      mz_offset
+key       text      mz_offset
 -----------------------------
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_5
-key0      text      mz_offset
+key       text      mz_offset
 -----------------------------
 
 $ kafka-add-partitions topic=t2 total-partitions=4
@@ -254,7 +254,7 @@ hazelnut:hazelnut
 $ set-sql-timeout duration=60s
 
 > SELECT * FROM upsert_time_offset_5
-key0      text      mz_offset
+key       text      mz_offset
 -----------------------------
 hazelnut  hazelnut  1
 

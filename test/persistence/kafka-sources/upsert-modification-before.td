@@ -78,28 +78,28 @@ bìrd1:
   ENVELOPE UPSERT
 
 > select * from texttext
-key0          text  kafka_partition  mz_offset
+key           text  kafka_partition  mz_offset
 ----------------------------------------------
 fish          fish  0                1
 bírdmore      geese 0                3
 mammal1       moose 0                4
 
 > select * from textbytes
-key0          data  kafka_partition  mz_offset
+key           data  kafka_partition  mz_offset
 ----------------------------------------------
 fish          fish  0                1
 bírdmore      geese 0                3
 mammal1       moose 0                4
 
 > select * from bytestext
-key0            text  kafka_partition  mz_offset
+key             text  kafka_partition  mz_offset
 ------------------------------------------------
 fish            fish  0                1
 b\xc3\xadrdmore geese 0                3
 mammal1         moose 0                4
 
 > select * from bytesbytes
-key0            data  kafka_partition  mz_offset
+key             data  kafka_partition  mz_offset
 ------------------------------------------------
 fish            fish  0                1
 b\xc3\xadrdmore geese 0                3

@@ -41,7 +41,7 @@ mammal1:
 mammal1:mouse
 
 > select * from texttext
-key0          text  kafka_partition  mz_offset
+key           text  kafka_partition  mz_offset
 ----------------------------------------------
 fish          fish  0                1
 bírdmore      géese 0                6
@@ -49,7 +49,7 @@ mammal1       mouse 0                9
 mammalmore    moose 0                7
 
 > select * from textbytes
-key0          data            kafka_partition  mz_offset
+key           data            kafka_partition  mz_offset
 -------------------------------------------------------
 fish          fish            0                1
 bírdmore      g\xc3\xa9ese    0                6
@@ -57,7 +57,7 @@ mammal1       mouse           0                9
 mammalmore    moose           0                7
 
 > select * from bytestext
-key0            text  kafka_partition  mz_offset
+key             text  kafka_partition  mz_offset
 ------------------------------------------------
 fish            fish  0                1
 b\xc3\xadrdmore géese 0                6
@@ -65,7 +65,7 @@ mammal1         mouse 0                9
 mammalmore      moose 0                7
 
 > select * from bytesbytes
-key0               data            kafka_partition  mz_offset
+key                data            kafka_partition  mz_offset
 -------------------------------------------------------------
 fish               fish            0                1
 b\xc3\xadrdmore    g\xc3\xa9ese    0                6

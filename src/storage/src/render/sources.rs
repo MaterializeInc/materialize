@@ -490,9 +490,7 @@ where
 {
     match upsert_envelope {
         UpsertEnvelope {
-            style:
-                UpsertStyle::Default(KeyEnvelope::LegacyUpsert | KeyEnvelope::Flattened)
-                | UpsertStyle::Debezium { .. },
+            style: UpsertStyle::Default(KeyEnvelope::Flattened) | UpsertStyle::Debezium { .. },
             ..
         } => results,
         UpsertEnvelope {
@@ -541,7 +539,7 @@ where
 
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
-        KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
+        KeyEnvelope::Flattened => results
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
                 maybe_kv.map(|(key, value, diff)| {

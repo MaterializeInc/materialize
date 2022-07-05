@@ -294,8 +294,6 @@ pub enum KeyEnvelope {
     None,
     /// For composite key encodings, pull the fields from the encoding into columns.
     Flattened,
-    /// Upsert is identical to Flattened but differs for non-avro sources, for which key names are overwritten.
-    LegacyUpsert,
     /// Always use the given name for the key.
     ///
     /// * For a single-field key, this means that the column will get the given name.
@@ -311,7 +309,6 @@ impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
             kind: Some(match self {
                 KeyEnvelope::None => Kind::None(()),
                 KeyEnvelope::Flattened => Kind::Flattened(()),
-                KeyEnvelope::LegacyUpsert => Kind::LegacyUpsert(()),
                 KeyEnvelope::Named(name) => Kind::Named(name.clone()),
             }),
         }
@@ -325,7 +322,6 @@ impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
         Ok(match kind {
             Kind::None(()) => KeyEnvelope::None,
             Kind::Flattened(()) => KeyEnvelope::Flattened,
-            Kind::LegacyUpsert(()) => KeyEnvelope::LegacyUpsert,
             Kind::Named(name) => KeyEnvelope::Named(name),
         })
     }
@@ -1025,16 +1021,6 @@ impl UnplannedSourceEnvelope {
                         let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
                         let key_desc = key_desc.with_key(key_indices.clone());
                         (key_desc.concat(value_desc), Some(key_indices))
-                    }
-                    KeyEnvelope::LegacyUpsert => {
-                        let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
-                        let key_desc = key_desc.with_key(key_indices.clone());
-                        let names = (0..key_desc.arity()).map(|i| format!("key{}", i));
-                        // Rename key columns to "keyN"
-                        (
-                            key_desc.with_names(names).concat(value_desc),
-                            Some(key_indices),
-                        )
                     }
                     KeyEnvelope::Named(key_name) => {
                         let key_desc = {
