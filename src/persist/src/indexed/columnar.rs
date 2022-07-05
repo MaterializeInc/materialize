@@ -473,7 +473,7 @@ impl ColumnarRecordsBuilder {
         self.timestamps.push(i64::from_le_bytes(ts));
         self.diffs.push(i64::from_le_bytes(diff));
         self.len += 1;
-        debug_assert_eq!(self.borrow().validate(), Ok(()));
+
         true
     }
 
