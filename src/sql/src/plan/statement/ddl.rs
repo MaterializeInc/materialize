@@ -3418,7 +3418,16 @@ pub fn plan_drop_item(
             scx.catalog.resolve_full_name(catalog_entry.name()),
         );
     }
-    if object_type != catalog_entry.item_type() {
+    let item_type = catalog_entry.item_type();
+
+    // Return a more helpful error on `DROP VIEW <recorded-view>`.
+    if object_type == ObjectType::View && item_type == CatalogItemType::RecordedView {
+        let name = scx
+            .catalog
+            .resolve_full_name(catalog_entry.name())
+            .to_string();
+        return Err(PlanError::DropViewOnRecordedView(name));
+    } else if object_type != item_type {
         sql_bail!(
             "{} is not of type {}",
             scx.catalog.resolve_full_name(catalog_entry.name()),
@@ -3551,7 +3560,12 @@ pub fn plan_alter_object_rename(
     match scx.catalog.resolve_item(&name) {
         Ok(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
-            if entry.item_type() != object_type {
+            let item_type = entry.item_type();
+
+            // Return a more helpful error on `DROP VIEW <recorded-view>`.
+            if object_type == ObjectType::View && item_type == CatalogItemType::RecordedView {
+                return Err(PlanError::AlterViewOnRecordedView(full_name.to_string()));
+            } else if object_type != item_type {
                 sql_bail!(
                     "{} is a {} not a {}",
                     full_name,
