@@ -172,12 +172,10 @@ where
             }
         }
         let mut client = ActiveReplication::default();
-        client
-            .send(ComputeCommand::CreateInstance(InstanceConfig {
-                replica_id: Default::default(),
-                logging: logging.clone(),
-            }))
-            .await;
+        client.send(ComputeCommand::CreateInstance(InstanceConfig {
+            replica_id: Default::default(),
+            logging: logging.clone(),
+        }));
 
         Self {
             client,
@@ -408,8 +406,7 @@ where
 
         self.compute
             .client
-            .send(ComputeCommand::CreateDataflows(augmented_dataflows))
-            .await;
+            .send(ComputeCommand::CreateDataflows(augmented_dataflows));
 
         Ok(())
     }
@@ -461,21 +458,18 @@ where
         self.update_read_capabilities(&mut updates).await?;
         self.compute.peeks.insert(uuid, (id, timestamp.clone()));
 
-        self.compute
-            .client
-            .send(ComputeCommand::Peek(Peek {
-                id,
-                key,
-                uuid,
-                timestamp,
-                finishing,
-                map_filter_project,
-                target_replica,
-                // Obtain an `OpenTelemetryContext` from the thread-local tracing
-                // tree to forward it on to the compute worker.
-                otel_ctx: OpenTelemetryContext::obtain(),
-            }))
-            .await;
+        self.compute.client.send(ComputeCommand::Peek(Peek {
+            id,
+            key,
+            uuid,
+            timestamp,
+            finishing,
+            map_filter_project,
+            target_replica,
+            // Obtain an `OpenTelemetryContext` from the thread-local tracing
+            // tree to forward it on to the compute worker.
+            otel_ctx: OpenTelemetryContext::obtain(),
+        }));
 
         Ok(())
     }
@@ -493,12 +487,9 @@ where
     ///   * No `PeekResponse` at all.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
         self.remove_peeks(uuids.iter().cloned()).await?;
-        self.compute
-            .client
-            .send(ComputeCommand::CancelPeeks {
-                uuids: uuids.clone(),
-            })
-            .await;
+        self.compute.client.send(ComputeCommand::CancelPeeks {
+            uuids: uuids.clone(),
+        });
         Ok(())
     }
 
@@ -698,8 +689,7 @@ where
         if !compaction_commands.is_empty() {
             self.compute
                 .client
-                .send(ComputeCommand::AllowCompaction(compaction_commands))
-                .await;
+                .send(ComputeCommand::AllowCompaction(compaction_commands));
         }
 
         // We may have storage consequences to process.

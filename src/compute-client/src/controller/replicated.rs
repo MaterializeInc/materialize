@@ -520,14 +520,7 @@ impl<T> ActiveReplication<T>
 where
     T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
 {
-    /// The ADAPTER layer's isolation from COMPUTE depends on the fact that this
-    /// function is essentially non-blocking, i.e. the ADAPTER blindly awaits
-    /// calls to this function. This lets the ADAPTER continue operating even in
-    /// the face of unhealthy or absent replicas.
-    ///
-    /// If this function every become blocking (e.g. making networking calls),
-    /// the ADAPTER must amend its contract with COMPUTE.
-    pub async fn send(&mut self, cmd: ComputeCommand<T>) {
+    pub fn send(&mut self, cmd: ComputeCommand<T>) {
         let frontiers = self
             .replicas
             .keys()
@@ -545,9 +538,6 @@ where
             let mut command = cmd.clone();
             specialize_command(&mut command, *id);
 
-            // Errors are suppressed by this client, which awaits a reconnection
-            // in `recv` and will rehydrate the client when that happens.
-            //
             // NOTE: Broadcasting commands to replicas irrespective of their
             // presence or health is part of the isolation contract between
             // ADAPTER and COMPUTE. If this changes (e.g. awaiting responses
