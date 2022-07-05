@@ -597,7 +597,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
-    async fn get_local_write_ts(&mut self) -> Result<Timestamp, CoordError> {
+    async fn get_local_write_ts(&mut self) -> Result<Timestamp, AdapterError> {
         let (timestamp, persist_timestamp) = self.global_timeline.write_ts();
         if let Some(persist_timestamp) = persist_timestamp {
             self.catalog.persist_timestamp(persist_timestamp).await?;
@@ -608,7 +608,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
-    async fn get_and_step_local_write_ts(&mut self) -> Result<WriteTimestamp, CoordError> {
+    async fn get_and_step_local_write_ts(&mut self) -> Result<WriteTimestamp, AdapterError> {
         let (timestamp, persist_timestamp) = self.global_timeline.write_ts();
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
          * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
@@ -637,7 +637,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.global_timeline.peek_ts()
     }
 
-    async fn local_fast_forward(&mut self, lower_bound: Timestamp) -> Result<(), CoordError> {
+    async fn local_fast_forward(&mut self, lower_bound: Timestamp) -> Result<(), AdapterError> {
         let persist_timestamp = self.global_timeline.fast_forward(lower_bound);
         if let Some(persist_timestamp) = persist_timestamp {
             self.catalog.persist_timestamp(persist_timestamp).await?;
