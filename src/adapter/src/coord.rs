@@ -734,6 +734,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
 
+        // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
+        let mut storage_policies_to_set = Vec::new();
+        let mut compute_policies_to_set = BTreeMap::new();
+
         for entry in &entries {
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
@@ -768,11 +772,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         )])
                         .await
                         .unwrap();
-                    self.initialize_storage_read_policies(
-                        vec![entry.id()],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+
+                    storage_policies_to_set.push(entry.id());
                 }
                 CatalogItem::Table(table) => {
                     self.dataflow_client
@@ -788,34 +789,32 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    let since_ts = self.get_local_write_ts();
-                    let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
-                    self.dataflow_client
-                        .storage_mut()
-                        .set_read_policy(vec![(entry.id(), policy)])
-                        .await
-                        .unwrap();
-
-                    self.initialize_storage_read_policies(
-                        vec![entry.id()],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+                    storage_policies_to_set.push(entry.id());
                 }
                 CatalogItem::Index(idx) => {
                     if logs.contains(&idx.on) {
-                        // TODO: make this one call, not many.
-                        self.initialize_compute_read_policies(
-                            vec![entry.id()],
-                            idx.compute_instance,
-                            self.logical_compaction_window_ms,
-                        )
-                        .await;
+                        compute_policies_to_set
+                            .entry(idx.compute_instance)
+                            .or_insert_with(Vec::new)
+                            .push(entry.id());
                     } else {
-                        let df = self
+                        let dataflow = self
                             .dataflow_builder(idx.compute_instance)
                             .build_index_dataflow(entry.id())?;
-                        self.ship_dataflow(df, idx.compute_instance).await;
+                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.compute_instance)`,
+                        // but we cannot call that as it will also downgrade the read hold on the index.
+                        compute_policies_to_set
+                            .entry(idx.compute_instance)
+                            .or_insert_with(Vec::new)
+                            .extend(dataflow.export_ids());
+                        let dataflow_plan =
+                            vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
+                        self.dataflow_client
+                            .compute_mut(idx.compute_instance)
+                            .unwrap()
+                            .create_dataflows(dataflow_plan)
+                            .await
+                            .unwrap();
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -834,11 +833,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    self.initialize_storage_read_policies(
-                        vec![entry.id()],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+                    storage_policies_to_set.push(entry.id());
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
@@ -893,6 +888,22 @@ impl<S: Append + 'static> Coordinator<S> {
                 | CatalogItem::Connection(_) => {}
             }
         }
+
+        // Having installed all entries, creating all constraints, we can now relax read policies.
+        // We do compute first, and they may result in additional storage policy effects.
+        for (instance, mut ids) in compute_policies_to_set.into_iter() {
+            ids.sort();
+            ids.dedup();
+            self.initialize_compute_read_policies(ids, instance, self.logical_compaction_window_ms)
+                .await;
+        }
+        storage_policies_to_set.sort();
+        storage_policies_to_set.dedup();
+        self.initialize_storage_read_policies(
+            storage_policies_to_set,
+            self.logical_compaction_window_ms,
+        )
+        .await;
 
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
