@@ -190,6 +190,7 @@ impl AdapterError {
                 "The object depends on the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
+            AdapterError::PlanError(e) => e.detail(),
             _ => None,
         }
     }
@@ -234,6 +235,7 @@ impl AdapterError {
                  selection, use `RESET cluster_replica`."
                     .into(),
             ),
+            AdapterError::PlanError(e) => e.hint(),
             _ => None,
         }
     }

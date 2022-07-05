@@ -15,8 +15,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{anyhow, bail};
-
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
@@ -38,7 +36,7 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanOld, InsertPlan, MutationKind, Params,
-    PeekPlan, Plan, QueryContext, ReadThenWritePlan, TailFrom, TailPlan,
+    PeekPlan, Plan, PlanError, QueryContext, ReadThenWritePlan, TailFrom, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -55,7 +53,7 @@ pub fn describe_insert(
         source,
         returning,
     }: InsertStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     let (_, _, returning) = query::plan_insert_query(scx, table_name, columns, source, returning)?;
     let desc = if returning.expr.is_empty() {
         None
@@ -74,7 +72,7 @@ pub fn plan_insert(
         returning,
     }: InsertStatement<Aug>,
     params: &Params,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(&params)?;
@@ -95,7 +93,7 @@ pub fn plan_insert(
 pub fn describe_delete(
     scx: &StatementContext,
     stmt: DeleteStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     query::plan_delete_query(scx, stmt)?;
     Ok(StatementDesc::new(None))
 }
@@ -104,7 +102,7 @@ pub fn plan_delete(
     scx: &StatementContext,
     stmt: DeleteStatement<Aug>,
     params: &Params,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
     plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
 }
@@ -112,7 +110,7 @@ pub fn plan_delete(
 pub fn describe_update(
     scx: &StatementContext,
     stmt: UpdateStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     query::plan_update_query(scx, stmt)?;
     Ok(StatementDesc::new(None))
 }
@@ -121,7 +119,7 @@ pub fn plan_update(
     scx: &StatementContext,
     stmt: UpdateStatement<Aug>,
     params: &Params,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
     plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
 }
@@ -136,7 +134,7 @@ pub fn plan_read_then_write(
         finishing,
         assignments,
     }: query::ReadThenWritePlan,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     selection.bind_parameters(&params)?;
     let selection = selection.optimize_and_lower(&scx.into())?;
     let mut assignments_outer = HashMap::new();
@@ -159,7 +157,7 @@ pub fn plan_read_then_write(
 pub fn describe_select(
     scx: &StatementContext,
     stmt: SelectStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     let query::PlannedQuery { desc, .. } =
         query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot(scx.pcx()?))?;
     Ok(StatementDesc::new(Some(desc)))
@@ -170,7 +168,7 @@ pub fn plan_select(
     SelectStatement { query, as_of }: SelectStatement<Aug>,
     params: &Params,
     copy_to: Option<CopyFormat>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let query::PlannedQuery {
         expr, finishing, ..
     } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
@@ -186,7 +184,7 @@ pub fn plan_select(
 pub fn describe_explain(
     scx: &StatementContext,
     explain: ExplainStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     match explain {
         ExplainStatement::New(explain) => describe_explain_new(scx, explain),
         ExplainStatement::Old(explain) => describe_explain_old(scx, explain),
@@ -196,8 +194,8 @@ pub fn describe_explain(
 pub fn describe_explain_new(
     _scx: &StatementContext,
     _explain: ExplainStatementNew<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
-    Err(anyhow!("unimplemented interface")) // TODO: #13295
+) -> Result<StatementDesc, PlanError> {
+    sql_bail!("unimplemented interface") // TODO: #13295
 }
 
 pub fn describe_explain_old(
@@ -205,7 +203,7 @@ pub fn describe_explain_old(
     ExplainStatementOld {
         stage, explainee, ..
     }: ExplainStatementOld<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
         match stage {
             ExplainStageOld::RawPlan => "Raw Plan",
@@ -237,7 +235,7 @@ pub fn plan_explain(
     scx: &StatementContext,
     explain: ExplainStatement<Aug>,
     params: &Params,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     match explain {
         ExplainStatement::Old(explain) => plan_explain_old(scx, explain, params),
         ExplainStatement::New(explain) => plan_explain_new(scx, explain, params),
@@ -252,13 +250,13 @@ pub fn plan_explain_old(
         options,
     }: ExplainStatementOld<Aug>,
     params: &Params,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let is_view = matches!(explainee, Explainee::View(_));
     let query = match explainee {
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
             if view.item_type() != CatalogItemType::View {
-                bail!("Expected {} to be a view, not a {}", name, view.item_type());
+                sql_bail!("Expected {} to be a view, not a {}", name, view.item_type());
             }
             let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
@@ -303,8 +301,8 @@ pub fn plan_explain_new(
     _scx: &StatementContext,
     _explain: ExplainStatementNew<Aug>,
     _params: &Params,
-) -> Result<Plan, anyhow::Error> {
-    Err(anyhow!("unimplemented interface")) // TODO: #13295
+) -> Result<Plan, PlanError> {
+    sql_bail!("unimplemented interface") // TODO: #13295
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
@@ -314,7 +312,7 @@ pub fn plan_query(
     query: Query<Aug>,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<query::PlannedQuery<MirRelationExpr>, anyhow::Error> {
+) -> Result<query::PlannedQuery<MirRelationExpr>, PlanError> {
     let query::PlannedQuery {
         mut expr,
         desc,
@@ -333,7 +331,7 @@ generate_extracted_config!(TailOption, (Snapshot, bool), (Progress, bool));
 pub fn describe_tail(
     scx: &StatementContext,
     stmt: TailStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     let relation_desc = match stmt.relation {
         TailRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
@@ -376,7 +374,7 @@ pub fn plan_tail(
         as_of,
     }: TailStatement<Aug>,
     copy_to: Option<CopyFormat>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let from = match relation {
         TailRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
@@ -390,7 +388,7 @@ pub fn plan_tail(
                 | CatalogItemType::Sink
                 | CatalogItemType::Type
                 | CatalogItemType::Secret
-                | CatalogItemType::Connection => bail!(
+                | CatalogItemType::Connection => sql_bail!(
                     "'{}' cannot be tailed because it is a {}",
                     name.full_name_str(),
                     entry.item_type(),
@@ -434,7 +432,7 @@ pub fn describe_table(
     scx: &StatementContext,
     table_name: <Aug as AstInfo>::ObjectName,
     columns: Vec<Ident>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     let (_, desc, _) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -442,7 +440,7 @@ pub fn describe_table(
 pub fn describe_copy(
     scx: &StatementContext,
     CopyStatement { relation, .. }: CopyStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(match relation {
         CopyRelation::Table { name, columns } => describe_table(scx, name, columns)?,
         CopyRelation::Select(stmt) => describe_select(scx, stmt)?,
@@ -457,10 +455,10 @@ fn plan_copy_from(
     columns: Vec<Ident>,
     format: CopyFormat,
     options: CopyOptionExtracted,
-) -> Result<Plan, anyhow::Error> {
-    fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), anyhow::Error> {
+) -> Result<Plan, PlanError> {
+    fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), PlanError> {
         match option {
-            Some(_) => bail!("COPY {} available only in CSV mode", param),
+            Some(_) => sql_bail!("COPY {} available only in CSV mode", param),
             None => Ok(()),
         }
     }
@@ -469,10 +467,10 @@ fn plan_copy_from(
         v: Option<String>,
         default: u8,
         param_name: &str,
-    ) -> Result<u8, anyhow::Error> {
+    ) -> Result<u8, PlanError> {
         match v {
             Some(v) if v.len() == 1 => Ok(v.as_bytes()[0]),
-            Some(..) => bail!("COPY {} must be a single one-byte character", param_name),
+            Some(..) => sql_bail!("COPY {} must be a single one-byte character", param_name),
             None => Ok(default),
         }
     }
@@ -484,7 +482,7 @@ fn plan_copy_from(
             only_available_with_csv(options.header, "HEADER")?;
             let delimiter = match options.delimiter {
                 Some(delimiter) if delimiter.len() > 1 => {
-                    bail!("COPY delimiter must be a single one-byte character");
+                    sql_bail!("COPY delimiter must be a single one-byte character");
                 }
                 Some(delimiter) => Cow::from(delimiter),
                 None => Cow::from("\t"),
@@ -501,7 +499,7 @@ fn plan_copy_from(
             let header = options.header.unwrap_or(false);
             let delimiter = extract_byte_param_value(options.delimiter, b',', "delimiter")?;
             if delimiter == quote {
-                bail!("COPY delimiter and quote must be different");
+                sql_bail!("COPY delimiter and quote must be different");
             }
             let null = match options.null {
                 Some(null) => Cow::from(null),
@@ -544,25 +542,25 @@ pub fn plan_copy(
         target,
         options,
     }: CopyStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let options = CopyOptionExtracted::try_from(options)?;
     let format = match options.format.to_lowercase().as_str() {
         "text" => CopyFormat::Text,
         "csv" => CopyFormat::Csv,
         "binary" => CopyFormat::Binary,
-        _ => bail!("unknown FORMAT: {}", options.format),
+        _ => sql_bail!("unknown FORMAT: {}", options.format),
     };
     if let CopyDirection::To = direction {
         if options.delimiter.is_some() {
-            bail!("COPY TO does not support DELIMITER option yet");
+            sql_bail!("COPY TO does not support DELIMITER option yet");
         }
         if options.null.is_some() {
-            bail!("COPY TO does not support NULL option yet");
+            sql_bail!("COPY TO does not support NULL option yet");
         }
     }
     match (&direction, &target) {
         (CopyDirection::To, CopyTarget::Stdout) => match relation {
-            CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
+            CopyRelation::Table { .. } => sql_bail!("table with COPY TO unsupported"),
             CopyRelation::Select(stmt) => {
                 Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
             }
@@ -572,8 +570,8 @@ pub fn plan_copy(
             CopyRelation::Table { name, columns } => {
                 plan_copy_from(scx, name, columns, format, options)
             }
-            _ => bail!("COPY FROM {} not supported", target),
+            _ => sql_bail!("COPY FROM {} not supported", target),
         },
-        _ => bail!("COPY {} {} not supported", direction, target),
+        _ => sql_bail!("COPY {} {} not supported", direction, target),
     }
 }

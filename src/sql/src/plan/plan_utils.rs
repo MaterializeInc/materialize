@@ -11,12 +11,11 @@
 
 use std::fmt;
 
-use anyhow::bail;
-
 use mz_repr::RelationDesc;
 
 use crate::ast::Ident;
 use crate::normalize;
+use crate::plan::PlanError;
 
 /// Renames the columns in `desc` with the names in `column_names` if
 /// `column_names` is non-empty.
@@ -27,13 +26,13 @@ pub fn maybe_rename_columns(
     context: impl fmt::Display,
     desc: RelationDesc,
     column_names: &[Ident],
-) -> Result<RelationDesc, anyhow::Error> {
+) -> Result<RelationDesc, PlanError> {
     if column_names.is_empty() {
         return Ok(desc);
     }
 
     if column_names.len() != desc.typ().column_types.len() {
-        bail!(
+        sql_bail!(
             "{0} definition names {1} column{2}, but {0} has {3} column{4}",
             context,
             column_names.len(),

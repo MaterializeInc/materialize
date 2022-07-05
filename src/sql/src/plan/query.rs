@@ -281,12 +281,12 @@ pub fn plan_insert_query(
     // Ensure the types of the source query match the types of the target table,
     // installing assignment casts where necessary and possible.
     let expr = cast_relation(&qcx, CastContext::Assignment, expr, source_types).map_err(|e| {
-        PlanError::Unstructured(format!(
+        sql_err!(
             "column {} is of type {} but expression is of type {}",
             desc.get_name(ordering[e.column]).as_str().quoted(),
             qcx.humanize_scalar_type(&e.target_type),
             qcx.humanize_scalar_type(&e.source_type),
-        ))
+        )
     })?;
 
     // Fill in any omitted columns and rearrange into correct order
@@ -967,10 +967,7 @@ fn check_col_index(name: &str, e: &Expr<Aug>, max: usize) -> Result<Option<usize
     match e {
         Expr::Value(Value::Number(n)) => {
             let n = n.parse::<usize>().map_err(|e| {
-                PlanError::Unstructured(format!(
-                    "unable to parse column reference in {}: {}: {}",
-                    name, n, e
-                ))
+                sql_err!("unable to parse column reference in {}: {}: {}", name, n, e)
             })?;
             if n < 1 || n > max {
                 sql_bail!(
@@ -1509,7 +1506,7 @@ fn plan_view_select(
             allow_windows: false,
         };
         let expr = plan_expr(ecx, &selection)
-            .map_err(|e| PlanError::Unstructured(format!("WHERE clause error: {}", e)))?
+            .map_err(|e| sql_err!("WHERE clause error: {}", e))?
             .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
@@ -4736,9 +4733,7 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
         match item.func() {
             Ok(Func::Aggregate { .. }) => {
                 if self.within_aggregate {
-                    self.err = Some(PlanError::Unstructured(
-                        "nested aggregate functions are not allowed".into(),
-                    ));
+                    self.err = Some(sql_err!("nested aggregate functions are not allowed",));
                     return;
                 }
                 self.aggs.push(func.clone());
@@ -4789,10 +4784,8 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
                 if let Ok(item) = self.scx.resolve_function(func.name.clone()) {
                     if let Ok(Func::Table { .. }) = item.func() {
                         if let Some(context) = self.table_disallowed_context.last() {
-                            self.err = Some(PlanError::Unstructured(format!(
-                                "table functions are not allowed in {}",
-                                context
-                            )));
+                            self.err =
+                                Some(sql_err!("table functions are not allowed in {}", context));
                             return;
                         }
                         table_func = Some(func.clone());
@@ -5032,7 +5025,7 @@ impl<'a> ExprContext<'a> {
         self.qcx.derived_context(scope, self.relation_type.clone())
     }
 
-    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
         self.qcx.scx.require_unsafe_mode(feature_name)
     }
 

@@ -14,7 +14,6 @@
 
 use std::collections::HashSet;
 
-use anyhow::{anyhow, bail};
 use uncased::UncasedStr;
 
 use mz_repr::adt::interval::Interval;
@@ -31,13 +30,13 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
-    FetchPlan, Plan, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
+    FetchPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
 };
 
 pub fn describe_set_variable(
     _: &StatementContext,
     _: SetVariableStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
@@ -48,7 +47,7 @@ pub fn plan_set_variable(
         variable,
         value,
     }: SetVariableStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.to_string(),
         value,
@@ -59,14 +58,14 @@ pub fn plan_set_variable(
 pub fn describe_reset_variable(
     _: &StatementContext,
     _: ResetVariableStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_reset_variable(
     _: &StatementContext,
     ResetVariableStatement { variable }: ResetVariableStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     Ok(Plan::ResetVariable(ResetVariablePlan {
         name: variable.to_string(),
     }))
@@ -75,7 +74,7 @@ pub fn plan_reset_variable(
 pub fn describe_show_variable(
     _: &StatementContext,
     ShowVariableStatement { variable, .. }: ShowVariableStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::empty()
             .with_column("name", ScalarType::String.nullable(false))
@@ -90,7 +89,7 @@ pub fn describe_show_variable(
 pub fn plan_show_variable(
     _: &StatementContext,
     ShowVariableStatement { variable }: ShowVariableStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     if variable.as_str() == UncasedStr::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
@@ -103,14 +102,14 @@ pub fn plan_show_variable(
 pub fn describe_discard(
     _: &StatementContext,
     _: DiscardStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_discard(
     _: &StatementContext,
     DiscardStatement { target }: DiscardStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     match target {
         DiscardTarget::All => Ok(Plan::DiscardAll),
         DiscardTarget::Temp => Ok(Plan::DiscardTemp),
@@ -122,14 +121,14 @@ pub fn plan_discard(
 pub fn describe_declare(
     _: &StatementContext,
     _: DeclareStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_declare(
     _: &StatementContext,
     DeclareStatement { name, stmt }: DeclareStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
         stmt: *stmt,
@@ -139,7 +138,7 @@ pub fn plan_declare(
 pub fn describe_fetch(
     _: &StatementContext,
     _: FetchStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
@@ -152,7 +151,7 @@ pub fn plan_fetch(
         count,
         options,
     }: FetchStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let FetchOptionExtracted { timeout, .. } = options.try_into()?;
     let timeout = match timeout {
         Some(timeout) => {
@@ -162,7 +161,7 @@ pub fn plan_fetch(
             const SECS_PER_DAY: f64 = 60f64 * 60f64 * 24f64;
             let timeout_secs = timeout.as_epoch_seconds::<f64>();
             if !timeout_secs.is_finite() || timeout_secs < 0f64 || timeout_secs > SECS_PER_DAY {
-                bail!("timeout out of range: {:#}", timeout);
+                sql_bail!("timeout out of range: {:#}", timeout);
             }
             ExecuteTimeout::Seconds(timeout_secs)
         }
@@ -176,17 +175,14 @@ pub fn plan_fetch(
     }))
 }
 
-pub fn describe_close(
-    _: &StatementContext,
-    _: CloseStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+pub fn describe_close(_: &StatementContext, _: CloseStatement) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_close(
     _: &StatementContext,
     CloseStatement { name }: CloseStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     Ok(Plan::Close(ClosePlan {
         name: name.to_string(),
     }))
@@ -195,14 +191,14 @@ pub fn plan_close(
 pub fn describe_prepare(
     _: &StatementContext,
     _: PrepareStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_prepare(
     scx: &StatementContext,
     PrepareStatement { name, stmt }: PrepareStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];
     let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt.clone())?;
@@ -217,7 +213,7 @@ pub fn plan_prepare(
 pub fn describe_execute(
     scx: &StatementContext,
     stmt: ExecuteStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     // The evaluation of the statement doesn't happen until it gets to coord. That
     // means if the statement is now invalid due to an object having been dropped,
     // describe is unable to notice that. This is currently an existing problem
@@ -229,19 +225,19 @@ pub fn describe_execute(
 pub fn plan_execute(
     scx: &StatementContext,
     stmt: ExecuteStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     Ok(plan_execute_desc(scx, stmt)?.1)
 }
 
 fn plan_execute_desc<'a>(
     scx: &'a StatementContext,
     ExecuteStatement { name, params }: ExecuteStatement<Aug>,
-) -> Result<(&'a StatementDesc, Plan), anyhow::Error> {
+) -> Result<(&'a StatementDesc, Plan), PlanError> {
     let name = name.to_string();
     let desc = match scx.catalog.get_prepared_statement_desc(&name) {
         Some(desc) => desc,
         // TODO(mjibson): use CoordError::UnknownPreparedStatement.
-        None => bail!("unknown prepared statement {}", name),
+        None => sql_bail!("unknown prepared statement {}", name),
     };
     Ok((
         desc,
@@ -255,14 +251,14 @@ fn plan_execute_desc<'a>(
 pub fn describe_deallocate(
     _: &StatementContext,
     _: DeallocateStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_deallocate(
     _: &StatementContext,
     DeallocateStatement { name }: DeallocateStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     Ok(Plan::Deallocate(DeallocatePlan {
         name: name.map(|name| name.to_string()),
     }))

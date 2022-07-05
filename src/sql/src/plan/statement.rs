@@ -14,8 +14,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use anyhow::bail;
-
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{RawObjectName, UnresolvedDatabaseName, UnresolvedSchemaName};
 
@@ -90,7 +88,7 @@ pub fn describe(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     param_types_in: &[Option<ScalarType>],
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
         if let Some(ty) = ty {
@@ -197,7 +195,7 @@ pub fn plan(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     params: &Params,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let param_types = params
         .types
         .iter()
@@ -290,7 +288,7 @@ pub fn plan_copy_from(
     id: GlobalId,
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
-) -> Result<super::HirRelationExpr, anyhow::Error> {
+) -> Result<super::HirRelationExpr, PlanError> {
     Ok(query::plan_copy_from_rows(pcx, catalog, id, columns, rows)?)
 }
 
@@ -349,21 +347,20 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn pcx(&self) -> Result<&PlanContext, anyhow::Error> {
-        self.pcx.ok_or_else(|| anyhow::anyhow!("no plan context"))
+    pub fn pcx(&self) -> Result<&PlanContext, PlanError> {
+        self.pcx.ok_or_else(|| sql_err!("no plan context"))
     }
 
-    pub fn allocate_full_name(
-        &self,
-        name: PartialObjectName,
-    ) -> Result<FullObjectName, anyhow::Error> {
+    pub fn allocate_full_name(&self, name: PartialObjectName) -> Result<FullObjectName, PlanError> {
         let schema = name.schema.unwrap_or_else(|| DEFAULT_SCHEMA.into());
         let database = match name.database {
             Some(name) => RawDatabaseSpecifier::Name(name),
             None if self.catalog.is_system_schema(&schema) => RawDatabaseSpecifier::Ambient,
             None => match self.catalog.active_database_name() {
                 Some(name) => RawDatabaseSpecifier::Name(name.to_string()),
-                None => bail!("no database specified for non-system schema and no active database"),
+                None => {
+                    sql_bail!("no database specified for non-system schema and no active database")
+                }
             },
         };
         let item = name.item;
@@ -377,7 +374,7 @@ impl<'a> StatementContext<'a> {
     pub fn allocate_qualified_name(
         &self,
         name: PartialObjectName,
-    ) -> Result<QualifiedObjectName, anyhow::Error> {
+    ) -> Result<QualifiedObjectName, PlanError> {
         let full_name = self.allocate_full_name(name)?;
         let database_spec = match full_name.database {
             RawDatabaseSpecifier::Ambient => ResolvedDatabaseSpecifier::Ambient,
@@ -520,10 +517,10 @@ impl<'a> StatementContext<'a> {
     pub fn get_item_by_resolved_name(
         &self,
         name: &ResolvedObjectName,
-    ) -> Result<&dyn CatalogItem, anyhow::Error> {
+    ) -> Result<&dyn CatalogItem, PlanError> {
         match name {
             ResolvedObjectName::Object { id, .. } => Ok(self.get_item(id)),
-            ResolvedObjectName::Cte { .. } => bail!("non-user item"),
+            ResolvedObjectName::Cte { .. } => sql_bail!("non-user item"),
             ResolvedObjectName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
@@ -548,19 +545,19 @@ impl<'a> StatementContext<'a> {
         self.catalog.config().unsafe_mode
     }
 
-    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
         if !self.unsafe_mode() {
-            bail!("{} is unsupported", feature_name)
+            sql_bail!("{} is unsupported", feature_name)
         }
         Ok(())
     }
 
-    pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, anyhow::Error> {
+    pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {
         let param_types = self.param_types.into_inner();
         let mut out = vec![];
         for (i, (n, typ)) in param_types.into_iter().enumerate() {
             if n != i + 1 {
-                bail!("unable to infer type for parameter ${}", i + 1);
+                sql_bail!("unable to infer type for parameter ${}", i + 1);
             }
             out.push(typ);
         }
