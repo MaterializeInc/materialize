@@ -202,7 +202,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         replica_sizes: Default::default(),
         availability_zones: Default::default(),
         connection_context: Default::default(),
-        otel_collector_enabler: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+        otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
     }))?;
     let server = Server {
         inner,

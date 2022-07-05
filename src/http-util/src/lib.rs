@@ -119,7 +119,7 @@ pub async fn handle_enable_otel(
     callback: mz_ore::tracing::OpenTelemetryEnableCallback,
     Json(cfg): Json<DynamicOtelConfig>,
 ) -> impl IntoResponse {
-    match callback.0(cfg.enabled) {
+    match callback.call(cfg.enabled) {
         Ok(()) => (
             StatusCode::OK,
             format!(

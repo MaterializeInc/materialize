@@ -632,7 +632,7 @@ impl Runner {
             replica_sizes: Default::default(),
             availability_zones: Default::default(),
             connection_context: Default::default(),
-            otel_collector_enabler: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+            otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
