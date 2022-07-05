@@ -115,7 +115,7 @@ pub struct Config {
     pub availability_zones: Vec<String>,
 
     /// A callback used to enable or disable the OpenTelemetry tracing collector.
-    pub otel_collector_enabler: OpenTelemetryEnableCallback,
+    pub otel_enable_callback: OpenTelemetryEnableCallback,
 }
 
 /// Configures TLS encryption for connections.
@@ -275,7 +275,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
         let metrics_registry = config.metrics_registry.clone();
-        let server = http::InternalServer::new(metrics_registry, config.otel_collector_enabler);
+        let server = http::InternalServer::new(metrics_registry, config.otel_enable_callback);
         let bound_server = server.bind(config.internal_http_listen_addr);
         let internal_http_local_addr = bound_server.local_addr();
         task::spawn(|| "internal_http_server", {

@@ -322,17 +322,17 @@ async fn auth<B>(
 #[derive(Clone)]
 pub struct InternalServer {
     metrics_registry: MetricsRegistry,
-    otel_collector_enabler: OpenTelemetryEnableCallback,
+    otel_enable_callback: OpenTelemetryEnableCallback,
 }
 
 impl InternalServer {
     pub fn new(
         metrics_registry: MetricsRegistry,
-        otel_collector_enabler: OpenTelemetryEnableCallback,
+        otel_enable_callback: OpenTelemetryEnableCallback,
     ) -> Self {
         Self {
             metrics_registry,
-            otel_collector_enabler,
+            otel_enable_callback,
         }
     }
 
@@ -352,7 +352,7 @@ impl InternalServer {
             .route(
                 "/api/opentelemetry/config",
                 routing::put(move |payload| async move {
-                    mz_http_util::handle_enable_otel(self.otel_collector_enabler, payload).await
+                    mz_http_util::handle_enable_otel(self.otel_enable_callback, payload).await
                 }),
             );
         axum::Server::bind(&addr).serve(router.into_make_service())

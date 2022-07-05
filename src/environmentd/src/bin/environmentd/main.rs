@@ -420,7 +420,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-    let otel_collector_enabler =
+    let otel_enable_callback =
         runtime.block_on(mz_ore::tracing::configure("environmentd", &args.tracing))?;
 
     // Initialize fail crate for failpoint support
@@ -554,7 +554,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
     let persist_clients = PersistClientCache::new(&metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
-    let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+    let orchestrator = Arc::new(TracingOrchestrator::new(
+        orchestrator,
+        args.tracing.clone(),
+        otel_enable_callback.clone(),
+    ));
     let controller = ControllerConfig {
         orchestrator,
         persist_location: PersistLocation {
@@ -692,7 +696,7 @@ max log level: {max_log_level}",
             args.aws_external_id_prefix,
             secrets_path,
         ),
-        otel_collector_enabler,
+        otel_enable_callback,
     }))?;
 
     println!(

@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::io;
 #[cfg(feature = "tokio-console")]
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -98,14 +99,43 @@ pub struct OpenTelemetryConfig {
 
 /// A callback that can be used to enable or disable the OpenTelemetry
 /// layer.
-pub struct OpenTelemetryEnableCallback(
-    pub Arc<dyn Fn(bool) -> Result<(), anyhow::Error> + Send + Sync>,
-);
+pub struct OpenTelemetryEnableCallback {
+    callback: Arc<dyn Fn(bool) -> Result<(), anyhow::Error> + Send + Sync>,
+    current_enabled: Arc<AtomicBool>,
+}
 
 impl OpenTelemetryEnableCallback {
+    /// Call the contained callback with the `enable` bool.
+    /// This also updates the shared value returned by `current_enabled`
+    pub fn call(&self, enable: bool) -> Result<(), anyhow::Error> {
+        (self.callback)(enable)?;
+
+        // Note that this happens AFTER we reset the callback.
+        // This is fine, as long as users of `current_enabled`
+        // don't expect to read a fresh value before this
+        // function returns.
+        //
+        // Note that the `Ordering`s are chosen using the same
+        // logic as <https://github.com/tokio-rs/tracing/blob/2aa0cb010d8a7fa0de610413b5acd4557a00dd34/tracing-core/src/metadata.rs#L646-L694>
+        // but could probably all be `Relaxed`, as we don't expect
+        // any strict ordering guarantees with enabling/disabling
+        // the OpenTelemetry collector
+        self.current_enabled.swap(enable, Ordering::AcqRel);
+        Ok(())
+    }
+
+    /// Return the most recent value `call` was called with.
+    pub fn current_enabled(&self) -> bool {
+        self.current_enabled.load(Ordering::Relaxed)
+    }
+
     /// A callback that does nothing. Useful for tests.
     pub fn none() -> Self {
-        Self(Arc::new(|_| Ok(())))
+        Self {
+            callback: Arc::new(|_| Ok(())),
+            // meaningless, for now
+            current_enabled: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -118,7 +148,10 @@ impl std::fmt::Debug for OpenTelemetryEnableCallback {
 
 impl Clone for OpenTelemetryEnableCallback {
     fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        Self {
+            callback: Arc::clone(&self.callback),
+            current_enabled: Arc::clone(&self.current_enabled),
+        }
     }
 }
 
@@ -236,27 +269,33 @@ where
         let layer = tracing_opentelemetry::layer()
             .with_tracer(tracer)
             .with_filter(filter);
-        let reloader = OpenTelemetryEnableCallback(Arc::new(move |enable| {
-            filter_handle.modify(|filter| {
-                // This code should be kept panic-free to
-                // avoid weird poisoning issues in our subscriber
-                // stack.
-                if enable {
-                    *filter = otel_config.filter.clone()
-                } else {
-                    *filter = Targets::default()
-                }
-            })?;
-            Ok(())
-        }));
+        let reloader = OpenTelemetryEnableCallback {
+            callback: Arc::new(move |enable| {
+                filter_handle.modify(|filter| {
+                    // This code should be kept panic-free to
+                    // avoid weird poisoning issues in our subscriber
+                    // stack.
+                    if enable {
+                        *filter = otel_config.filter.clone()
+                    } else {
+                        *filter = Targets::default()
+                    }
+                })?;
+                Ok(())
+            }),
+            current_enabled: Arc::new(AtomicBool::new(otel_config.start_enabled)),
+        };
         (Some(layer), reloader)
     } else {
-        let reloader = OpenTelemetryEnableCallback(Arc::new(move |enable| {
-            bail!(
-                "Tried to {} the otel collector but there is no endpoint",
-                if enable { "enable" } else { "disable" },
-            );
-        }));
+        let reloader = OpenTelemetryEnableCallback {
+            callback: Arc::new(move |enable| {
+                bail!(
+                    "Tried to {} the otel collector but there is no endpoint",
+                    if enable { "enable" } else { "disable" },
+                );
+            }),
+            current_enabled: Arc::new(AtomicBool::new(false)),
+        };
         (None, reloader)
     };
 
