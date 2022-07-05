@@ -22,10 +22,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
-use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::BufMut;
@@ -45,8 +43,7 @@ use tokio_stream::StreamMap;
 use uuid::Uuid;
 
 use mz_expr::PartitionId;
-use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
-use mz_ore::collections::CollectionExt;
+use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{
     read::ReadHandle, write::WriteHandle, PersistClient, PersistLocation, ShardId,
@@ -54,15 +51,17 @@ use mz_persist_client::{
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
-use mz_service::client::Reconnect;
 use mz_stash::{self, StashError, TypedCollection};
 
+use crate::client::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::client::errors::DataflowError;
 use crate::client::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
 use crate::client::{
-    GenericClient, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse, StorageClient,
-    StorageCommand, StorageGrpcClient, StorageResponse, Update,
+    IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse, StorageCommand,
+    StorageResponse, Update,
 };
+
+mod hosts;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.client.controller.rs"));
 
@@ -83,7 +82,7 @@ pub struct CollectionDescription {
     pub remote_addr: Option<String>,
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 pub trait StorageController: Debug + Send {
     type Timestamp;
 
@@ -288,7 +287,6 @@ pub struct StorageControllerState<
     T: Timestamp + Lattice + Codec64,
     S = mz_stash::Memory<mz_stash::Postgres>,
 > {
-    pub(super) clients: BTreeMap<GlobalId, Box<dyn StorageClient<T>>>,
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -302,14 +300,12 @@ pub struct StorageControllerState<
 #[derive(Debug)]
 pub struct Controller<T: Timestamp + Lattice + Codec64 + Unpin> {
     state: StorageControllerState<T>,
+    /// Storage host provisioning and storage object assignment.
+    hosts: StorageHosts<T>,
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
     persist_client: PersistClient,
-    /// An orchestrator to start and stop storage processes.
-    orchestrator: Arc<dyn NamespacedOrchestrator>,
-    /// The storaged image to use when starting new storage processes.
-    storaged_image: String,
 }
 
 #[derive(Debug)]
@@ -409,7 +405,6 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             .expect("could not connect to postgres storage stash");
         let stash = mz_stash::Memory::new(stash);
         Self {
-            clients: BTreeMap::default(),
             collections: BTreeMap::default(),
             stash,
             persist_handles: BTreeMap::default(),
@@ -417,7 +412,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
@@ -494,15 +489,12 @@ where
             self.state.collections.insert(id, collection_state);
 
             if let Some(ingestion) = description.ingestion {
-                // Here we create a new storaged process to handle each new description. Each
-                // ingestion is augmented with the collection metadata.
+                // Each ingestion is augmented with the collection metadata.
                 let mut source_imports = BTreeMap::new();
                 for (id, _) in ingestion.source_imports {
                     let metadata = self.collection(id)?.collection_metadata.clone();
                     source_imports.insert(id, metadata);
                 }
-
-                let remote_addr = description.remote_addr.clone();
 
                 let metadata = self.collection(id)?.collection_metadata.clone();
 
@@ -548,74 +540,16 @@ where
                     resume_upper,
                 };
 
-                let addr = if let Some(remote_addr) = remote_addr {
-                    tracing::info!(
-                        "{}: connecting to pre-existing storaged instance at address: {}",
-                        id,
-                        remote_addr
-                    );
-                    remote_addr
-                } else {
-                    let storage_service = self
-                        .orchestrator
-                        .ensure_service(
-                            &id.to_string(),
-                            ServiceConfig {
-                                image: self.storaged_image.clone(),
-                                args: &|assigned| {
-                                    vec![
-                                        format!("--workers=1"),
-                                        format!(
-                                            "--listen-addr={}:{}",
-                                            assigned.listen_host, assigned.ports["controller"]
-                                        ),
-                                        format!(
-                                            "--internal-http-listen-addr={}:{}",
-                                            assigned.listen_host, assigned.ports["internal-http"]
-                                        ),
-                                        format!("--opentelemetry-resource=storage_id={}", id),
-                                    ]
-                                },
-                                ports: vec![
-                                    ServicePort {
-                                        name: "controller".into(),
-                                        port_hint: 2100,
-                                    },
-                                    ServicePort {
-                                        name: "internal-http".into(),
-                                        port_hint: 6877,
-                                    },
-                                ],
-                                // TODO: limits?
-                                cpu_limit: None,
-                                memory_limit: None,
-                                scale: NonZeroUsize::new(1).unwrap(),
-                                labels: HashMap::new(),
-                                availability_zone: None,
-                            },
-                        )
-                        .await?;
-
-                    storage_service.addresses("controller").into_element()
-                };
-
-                // TODO: don't block waiting for a connection. Put a queue in the
-                // middle instead.
-                let mut client: Box<dyn StorageClient<T>> = Box::new({
-                    let mut client = StorageGrpcClient::new(addr.clone());
-                    while let Err(e) = client.reconnect().await {
-                        tracing::info!("connecting to storage {addr} failed (retrying in 1s): {e}");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
-                    client
-                });
+                // Provision a storage host for the ingestion.
+                let client = self
+                    .hosts
+                    .provision(id, description.remote_addr.clone())
+                    .await?;
 
                 client
                     .send(StorageCommand::IngestSources(vec![augmented_ingestion]))
                     .await
                     .expect("Storage command failed; unrecoverable");
-
-                self.state.clients.insert(id, client);
             }
         }
 
@@ -854,7 +788,7 @@ where
         let compaction_commands = futs.collect::<Vec<_>>().await;
 
         for (id, frontier) in compaction_commands {
-            if let Some(client) = self.state.clients.get_mut(&id) {
+            if let Some(client) = self.hosts.client(id) {
                 client
                     .send(StorageCommand::AllowCompaction(vec![(
                         id,
@@ -863,8 +797,7 @@ where
                     .await?;
 
                 if frontier.is_empty() {
-                    self.state.clients.remove(&id);
-                    self.orchestrator.drop_service(&id.to_string()).await?;
+                    self.hosts.deprovision(id).await?;
                 }
             }
         }
@@ -873,7 +806,13 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
-        if self.state.clients.is_empty() {
+        let mut clients = self
+            .hosts
+            .clients()
+            .map(|client| client.as_stream())
+            .enumerate()
+            .collect::<StreamMap<_, _>>();
+        if clients.is_empty() {
             // If there are no clients, block forever. This signals that there
             // may be more work to do (e.g., if this future is dropped and
             // `create_collections` is called). Awaiting the stream map would
@@ -881,12 +820,6 @@ where
             // of the stream.
             return future::pending().await;
         }
-        let mut clients = self
-            .state
-            .clients
-            .iter_mut()
-            .map(|(id, client)| (id, client.as_stream()))
-            .collect::<StreamMap<_, _>>();
         clients.next().await.map(|(_id, res)| res).transpose()
     }
 
@@ -935,10 +868,12 @@ where
 
         Self {
             state: StorageControllerState::new(postgres_url).await,
+            hosts: StorageHosts::new(StorageHostsConfig {
+                orchestrator,
+                storaged_image,
+            }),
             persist_location,
             persist_client,
-            orchestrator,
-            storaged_image,
         }
     }
 
