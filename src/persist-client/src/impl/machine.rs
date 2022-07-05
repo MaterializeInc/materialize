@@ -30,7 +30,7 @@ use crate::error::InvalidUsage;
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
-use crate::r#impl::state::{HollowBatch, ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::state::{HollowBatch, SeqNoCapability, Since, State, StateCollections, Upper};
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
 use crate::ShardId;
@@ -95,7 +95,7 @@ where
         self.state.upper()
     }
 
-    pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
+    pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, SeqNoCapability) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap)) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
@@ -118,7 +118,7 @@ where
         since
     }
 
-    pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
+    pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> SeqNoCapability {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, read_cap) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, state| {
