@@ -51,25 +51,29 @@ pub fn plan_show_create_view(
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let view = scx.get_item_by_resolved_name(&view_name)?;
-    if let CatalogItemType::View = view.item_type() {
-        let name = view_name.full_name_str();
-        let view_sql = view.create_sql();
-        let parsed = parse::parse(view_sql)?;
-        let parsed = parsed[0].clone();
-        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
-        let mut s = NameSimplifier {
-            catalog: scx.catalog,
-        };
-        s.visit_statement_mut(&mut resolved);
+    match view.item_type() {
+        CatalogItemType::View => {
+            let name = view_name.full_name_str();
+            let view_sql = view.create_sql();
+            let parsed = parse::parse(view_sql)?;
+            let parsed = parsed[0].clone();
+            let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
+            let mut s = NameSimplifier {
+                catalog: scx.catalog,
+            };
+            s.visit_statement_mut(&mut resolved);
 
-        Ok(Plan::SendRows(SendRowsPlan {
-            rows: vec![Row::pack_slice(&[
-                Datum::String(&name),
-                Datum::String(&resolved.to_ast_string_stable()),
-            ])],
-        }))
-    } else {
-        sql_bail!("{} is not a view", view_name.full_name_str());
+            Ok(Plan::SendRows(SendRowsPlan {
+                rows: vec![Row::pack_slice(&[
+                    Datum::String(&name),
+                    Datum::String(&resolved.to_ast_string_stable()),
+                ])],
+            }))
+        }
+        CatalogItemType::RecordedView => Err(PlanError::ShowCreateViewOnRecordedView(
+            view_name.full_name_str(),
+        )),
+        _ => sql_bail!("{} is not a view", view_name.full_name_str()),
     }
 }
 

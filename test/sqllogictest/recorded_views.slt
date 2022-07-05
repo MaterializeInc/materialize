@@ -351,6 +351,18 @@ statement error recorded view objects cannot depend on log sources
 CREATE OR REPLACE RECORDED VIEW rv AS SELECT * FROM mz_dataflow_operators;
 
 
+# Test: Attempting to use view commands on recorded views gives helpful errors.
+
+statement error materialize.public.rv is not a view\nHINT: Use DROP RECORDED VIEW to remove a recorded view.
+DROP VIEW rv
+
+statement error materialize.public.rv is not a view\nHINT: Use SHOW CREATE RECORDED VIEW to show a recorded view.
+SHOW CREATE VIEW rv
+
+statement error materialize.public.rv is not a view\nHINT: Use ALTER RECORDED VIEW to rename a recorded view.
+ALTER VIEW rv RENAME TO rv2
+
+
 # Cleanup
 
 statement ok

@@ -75,6 +75,9 @@ pub enum PlanError {
     InvalidTemporarySchema,
     Parser(ParserError),
     Qgm(QGMError),
+    DropViewOnRecordedView(String),
+    AlterViewOnRecordedView(String),
+    ShowCreateViewOnRecordedView(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -92,7 +95,18 @@ impl PlanError {
     }
 
     pub fn hint(&self) -> Option<String> {
-        None
+        match self {
+            Self::DropViewOnRecordedView(_) => {
+                Some("Use DROP RECORDED VIEW to remove a recorded view.".into())
+            }
+            Self::AlterViewOnRecordedView(_) => {
+                Some("Use ALTER RECORDED VIEW to rename a recorded view.".into())
+            }
+            Self::ShowCreateViewOnRecordedView(_) => {
+                Some("Use SHOW CREATE RECORDED VIEW to show a recorded view.".into())
+            }
+            _ => None,
+        }
     }
 }
 
@@ -177,6 +191,9 @@ impl fmt::Display for PlanError {
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
+            Self::DropViewOnRecordedView(name)
+            | Self::AlterViewOnRecordedView(name)
+            | Self::ShowCreateViewOnRecordedView(name) => write!(f, "{name} is not a view"),
         }
     }
 }
