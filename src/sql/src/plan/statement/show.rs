@@ -15,8 +15,6 @@
 
 use std::fmt::Write;
 
-use anyhow::bail;
-
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -35,12 +33,12 @@ use crate::names::{
 };
 use crate::parse;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{Params, Plan, SendRowsPlan};
+use crate::plan::{Params, Plan, PlanError, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
     _: ShowCreateViewStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
             .with_column("View", ScalarType::String.nullable(false))
@@ -51,7 +49,7 @@ pub fn describe_show_create_view(
 pub fn plan_show_create_view(
     scx: &mut StatementContext,
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let view = scx.get_item_by_resolved_name(&view_name)?;
     if let CatalogItemType::View = view.item_type() {
         let name = view_name.full_name_str();
@@ -71,14 +69,14 @@ pub fn plan_show_create_view(
             ])],
         }))
     } else {
-        bail!("{} is not a view", view_name.full_name_str());
+        sql_bail!("{} is not a view", view_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_recorded_view(
     _: &StatementContext,
     _: ShowCreateRecordedViewStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
             .with_column("Recorded View", ScalarType::String.nullable(false))
@@ -89,7 +87,7 @@ pub fn describe_show_create_recorded_view(
 pub fn plan_show_create_recorded_view(
     scx: &mut StatementContext,
     stmt: ShowCreateRecordedViewStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let name = stmt.recorded_view_name;
     let rview = scx.get_item_by_resolved_name(&name)?;
     if let CatalogItemType::RecordedView = rview.item_type() {
@@ -110,14 +108,14 @@ pub fn plan_show_create_recorded_view(
             ])],
         }))
     } else {
-        bail!("{} is not a recorded view", name.full_name_str());
+        sql_bail!("{} is not a recorded view", name.full_name_str());
     }
 }
 
 pub fn describe_show_create_table(
     _: &StatementContext,
     _: ShowCreateTableStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
             .with_column("Table", ScalarType::String.nullable(false))
@@ -128,7 +126,7 @@ pub fn describe_show_create_table(
 pub fn plan_show_create_table(
     scx: &mut StatementContext,
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
@@ -145,14 +143,14 @@ pub fn plan_show_create_table(
             ])],
         }))
     } else {
-        bail!("{} is not a table", table_name.full_name_str());
+        sql_bail!("{} is not a table", table_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_source(
     _: &StatementContext,
     _: ShowCreateSourceStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
             .with_column("Source", ScalarType::String.nullable(false))
@@ -163,7 +161,7 @@ pub fn describe_show_create_source(
 pub fn plan_show_create_source(
     scx: &StatementContext,
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let source = scx.get_item_by_resolved_name(&source_name)?;
     if let CatalogItemType::Source = source.item_type() {
         let name = source_name.full_name_str();
@@ -174,14 +172,14 @@ pub fn plan_show_create_source(
             ])],
         }))
     } else {
-        bail!("{} is not a source", source_name.full_name_str());
+        sql_bail!("{} is not a source", source_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_sink(
     _: &StatementContext,
     _: ShowCreateSinkStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
             .with_column("Sink", ScalarType::String.nullable(false))
@@ -192,7 +190,7 @@ pub fn describe_show_create_sink(
 pub fn plan_show_create_sink(
     scx: &StatementContext,
     ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let sink = scx.get_item_by_resolved_name(&sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
         let name = sink_name.full_name_str();
@@ -203,14 +201,14 @@ pub fn plan_show_create_sink(
             ])],
         }))
     } else {
-        bail!("'{}' is not a sink", sink_name.full_name_str());
+        sql_bail!("'{}' is not a sink", sink_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_index(
     _: &StatementContext,
     _: ShowCreateIndexStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
             .with_column("Index", ScalarType::String.nullable(false))
@@ -221,7 +219,7 @@ pub fn describe_show_create_index(
 pub fn plan_show_create_index(
     scx: &StatementContext,
     ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let index = scx.get_item_by_resolved_name(&index_name)?;
     if let CatalogItemType::Index = index.item_type() {
         let name = index_name.full_name_str();
@@ -232,14 +230,14 @@ pub fn plan_show_create_index(
             ])],
         }))
     } else {
-        bail!("'{}' is not an index", index_name.full_name_str());
+        sql_bail!("'{}' is not an index", index_name.full_name_str());
     }
 }
 
 pub fn describe_show_create_connection(
     _: &StatementContext,
     _: ShowCreateConnectionStatement<Aug>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
             .with_column("Connection", ScalarType::String.nullable(false))
@@ -250,7 +248,7 @@ pub fn describe_show_create_connection(
 pub fn plan_show_create_connection(
     scx: &StatementContext,
     ShowCreateConnectionStatement { connection_name }: ShowCreateConnectionStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let connection = scx.get_item_by_resolved_name(&connection_name)?;
     if let CatalogItemType::Connection = connection.item_type() {
         let name = connection_name.full_name_str();
@@ -261,14 +259,14 @@ pub fn plan_show_create_connection(
             ])],
         }))
     } else {
-        bail!("'{}' is not a connection", connection_name.full_name_str());
+        sql_bail!("'{}' is not a connection", connection_name.full_name_str());
     }
 }
 
 pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
     ShowDatabasesStatement { filter }: ShowDatabasesStatement<Aug>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -281,12 +279,12 @@ pub fn show_schemas<'a>(
         full,
         filter,
     }: ShowSchemasStatement<Aug>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let database_id = match from {
         Some(ResolvedDatabaseName::Database { id, .. }) => id.0,
         None => match scx.active_database() {
             Some(id) => id.0,
-            None => bail!("no database specified and no active database"),
+            None => sql_bail!("no database specified and no active database"),
         },
         Some(ResolvedDatabaseName::Error) => {
             unreachable!("should have been handled in name resolution")
@@ -333,7 +331,7 @@ pub fn show_objects<'a>(
         in_cluster,
         filter,
     }: ShowObjectsStatement<Aug>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     match object_type {
         ObjectType::Table => show_tables(scx, extended, full, from, filter),
         ObjectType::Source => show_sources(scx, full, materialized, from, filter),
@@ -357,7 +355,7 @@ fn show_connections<'a>(
     full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
@@ -381,7 +379,7 @@ fn show_tables<'a>(
     full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
@@ -407,7 +405,7 @@ fn show_sources<'a>(
     materialized: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = match (full, materialized) {
@@ -463,7 +461,7 @@ fn show_views<'a>(
     materialized: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = if !full & !materialized {
@@ -505,12 +503,13 @@ fn show_recorded_views<'a>(
     from: Option<ResolvedSchemaName>,
     in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let mut where_clause = format!("schema_id = {schema_spec}");
 
     if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND cluster_id = {}", cluster.0)?;
+        write!(where_clause, " AND cluster_id = {}", cluster.0)
+            .expect("write on string cannot fail");
     }
 
     let query = if full {
@@ -541,7 +540,7 @@ fn show_sinks<'a>(
     from: Option<ResolvedSchemaName>,
     in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filters = vec![];
 
     if let Some(ResolvedSchemaName::Schema { schema_spec, .. }) = from {
@@ -590,7 +589,7 @@ fn show_types<'a>(
     full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
@@ -616,7 +615,7 @@ fn show_all_objects<'a>(
     full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let mut query = format!(
@@ -644,7 +643,7 @@ pub fn show_indexes<'a>(
         table_name,
         filter,
     }: ShowIndexesStatement<Aug>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     // Exclude system indexes unless `EXTENDED` is requested.
     let mut query_filter = if extended {
         vec!["TRUE".into()]
@@ -659,7 +658,7 @@ pub fn show_indexes<'a>(
             && from.item_type() != CatalogItemType::Source
             && from.item_type() != CatalogItemType::Table
         {
-            bail!(
+            sql_bail!(
                 "cannot show indexes on {} because it is a {}",
                 table_name.full_name_str(),
                 from.item_type(),
@@ -704,7 +703,7 @@ pub fn show_columns<'a>(
         table_name,
         filter,
     }: ShowColumnsStatement<Aug>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     if extended {
         bail_unsupported!("SHOW EXTENDED COLUMNS");
     }
@@ -736,7 +735,7 @@ pub fn show_columns<'a>(
 pub fn show_clusters<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let query = "SELECT mz_clusters.name FROM mz_catalog.mz_clusters".to_string();
 
     ShowSelect::new(scx, query, filter, None, None)
@@ -745,7 +744,7 @@ pub fn show_clusters<'a>(
 pub fn show_cluster_replicas<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let query = r#"
     SELECT
         mz_catalog.mz_clusters.name AS cluster,
@@ -765,7 +764,7 @@ pub fn show_secrets<'a>(
     scx: &'a StatementContext<'a>,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, anyhow::Error> {
+) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = format!(
@@ -801,7 +800,7 @@ impl<'a> ShowSelect<'a> {
         filter: Option<ShowStatementFilter<Aug>>,
         order: Option<&str>,
         projection: Option<&[&str]>,
-    ) -> Result<ShowSelect<'a>, anyhow::Error> {
+    ) -> Result<ShowSelect<'a>, PlanError> {
         let filter = match filter {
             Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
             Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
@@ -826,12 +825,12 @@ impl<'a> ShowSelect<'a> {
     }
 
     /// Computes the shape of this `ShowSelect`.
-    pub fn describe(self) -> Result<StatementDesc, anyhow::Error> {
+    pub fn describe(self) -> Result<StatementDesc, PlanError> {
         dml::describe_select(self.scx, self.stmt)
     }
 
     /// Converts this `ShowSelect` into a [`Plan`].
-    pub fn plan(self) -> Result<Plan, anyhow::Error> {
+    pub fn plan(self) -> Result<Plan, PlanError> {
         dml::plan_select(self.scx, self.stmt, &Params::empty(), None)
     }
 }

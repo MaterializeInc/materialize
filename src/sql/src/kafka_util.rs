@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::convert::{self, TryInto};
 use std::sync::{Arc, Mutex};
 
-use anyhow::bail;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -29,6 +28,7 @@ use mz_storage::client::connections::{
 };
 
 use crate::normalize::SqlValueOrSecret;
+use crate::plan::PlanError;
 
 enum ValType {
     String { transform: fn(String) -> String },
@@ -96,7 +96,7 @@ impl Config {
 fn extract(
     input: &mut BTreeMap<String, SqlValueOrSecret>,
     configs: &[Config],
-) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
+) -> Result<BTreeMap<String, StringOrSecret>, PlanError> {
     let mut out = BTreeMap::new();
     for config in configs {
         // Look for config.name
@@ -109,7 +109,7 @@ fn extract(
                     Ok(parsed_n) if *lower <= parsed_n && parsed_n <= *upper => {
                         StringOrSecret::String(n.to_string())
                     }
-                    _ => bail!("must be a number between {} and {}", lower, upper),
+                    _ => sql_bail!("must be a number between {} and {}", lower, upper),
                 }
             }
             (Some(SqlValueOrSecret::Value(Value::String(s))), ValType::String { transform }) => {
@@ -128,14 +128,14 @@ fn extract(
                 None => continue,
             },
             (Some(SqlValueOrSecret::Value(v)), _) => {
-                bail!(
+                sql_bail!(
                     "Invalid WITH option {}={}: unexpected value type",
                     config.name,
                     v
                 );
             }
             (Some(SqlValueOrSecret::Secret(_)), _) => {
-                bail!(
+                sql_bail!(
                     "WITH option {} does not accept secret references",
                     config.name
                 );
@@ -158,7 +158,7 @@ fn extract(
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
+) -> Result<BTreeMap<String, StringOrSecret>, PlanError> {
     extract(
         with_options,
         &[
@@ -222,7 +222,7 @@ pub async fn create_consumer(
     options: &BTreeMap<String, StringOrSecret>,
     librdkafka_log_level: tracing::Level,
     secrets_reader: &SecretsReader,
-) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
+) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, PlanError> {
     let mut config = create_new_client_config(librdkafka_log_level);
     mz_storage::client::connections::populate_client_config(
         kafka_connection.clone(),
@@ -238,8 +238,11 @@ pub async fn create_consumer(
         .get("bootstrap.servers")
         .expect("callers must have already set bootstrap.servers");
 
-    let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> =
-        Arc::new(config.create_with_context(KafkaErrCheckContext::default())?);
+    let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> = Arc::new(
+        config
+            .create_with_context(KafkaErrCheckContext::default())
+            .map_err(|e| sql_err!("{}", e))?,
+    );
     let context = Arc::clone(&consumer.context());
     let owned_topic = String::from(topic);
     // Wait for a metadata request for up to one second. This greatly
@@ -253,10 +256,11 @@ pub async fn create_consumer(
             let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
         }
     })
-    .await?;
+    .await
+    .map_err(|e| sql_err!("{}", e))?;
     let error = context.error.lock().expect("lock poisoned");
     if let Some(error) = &*error {
-        bail!("librdkafka: {}", error)
+        sql_bail!("librdkafka: {}", error)
     }
     Ok(consumer)
 }
@@ -281,11 +285,11 @@ pub async fn lookup_start_offsets(
     topic: &str,
     with_options: &BTreeMap<String, SqlValueOrSecret>,
     now: u64,
-) -> Result<Option<Vec<i64>>, anyhow::Error> {
+) -> Result<Option<Vec<i64>>, PlanError> {
     let time_offset = match with_options.get("kafka_time_offset").cloned() {
         None => return Ok(None),
         Some(_) if with_options.contains_key("start_offset") => {
-            bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
+            sql_bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
         }
         Some(offset) => offset,
     };
@@ -298,15 +302,15 @@ pub async fn lookup_start_offsets(
                 let now: i64 = now.try_into()?;
                 let ts = now - ts.abs();
                 if ts <= 0 {
-                    bail!("Relative `kafka_time_offset` must be smaller than current system timestamp")
+                    sql_bail!("Relative `kafka_time_offset` must be smaller than current system timestamp")
                 }
                 ts
             }
             // Timestamp in millis (e.g. 1622659034343)
             Ok(ts) => ts,
-            _ => bail!("`kafka_time_offset` must be a number"),
+            _ => sql_bail!("`kafka_time_offset` must be a number"),
         },
-        _ => bail!("`kafka_time_offset` must be a number"),
+        _ => sql_bail!("`kafka_time_offset` must be a number"),
     };
 
     // Lookup offsets
@@ -319,14 +323,18 @@ pub async fn lookup_start_offsets(
                 consumer.as_ref().client(),
                 &topic,
                 Duration::from_secs(10),
-            )?
+            )
+            .map_err(|e| sql_err!("{}", e))?
             .len();
 
             let mut tpl = TopicPartitionList::with_capacity(1);
             tpl.add_partition_range(&topic, 0, num_partitions as i32 - 1);
-            tpl.set_all_offsets(Offset::Offset(time_offset))?;
+            tpl.set_all_offsets(Offset::Offset(time_offset))
+                .map_err(|e| sql_err!("{}", e))?;
 
-            let offsets_for_times = consumer.offsets_for_times(tpl, Duration::from_secs(10))?;
+            let offsets_for_times = consumer
+                .offsets_for_times(tpl, Duration::from_secs(10))
+                .map_err(|e| sql_err!("{}", e))?;
 
             // Translate to `start_offsets`
             let start_offsets = offsets_for_times
@@ -335,7 +343,7 @@ pub async fn lookup_start_offsets(
                 .map(|elem| match elem.offset() {
                     Offset::Offset(offset) => Ok(offset),
                     Offset::End => fetch_end_offset(&consumer, &topic, elem.partition()),
-                    _ => bail!(
+                    _ => sql_bail!(
                         "Unexpected offset {:?} for partition {}",
                         elem.offset(),
                         elem.partition()
@@ -344,7 +352,7 @@ pub async fn lookup_start_offsets(
                 .collect::<Result<Vec<_>, _>>()?;
 
             if start_offsets.len() != num_partitions {
-                bail!(
+                sql_bail!(
                     "Expected offsets for {} partitions, but received {}",
                     num_partitions,
                     start_offsets.len(),
@@ -354,7 +362,8 @@ pub async fn lookup_start_offsets(
             Ok(Some(start_offsets))
         }
     })
-    .await?
+    .await
+    .map_err(|e| sql_err!("{}", e))?
 }
 
 // Kafka supports bulk lookup of watermarks, but it is not exposed in rdkafka.
@@ -365,8 +374,10 @@ fn fetch_end_offset(
     consumer: &BaseConsumer<KafkaErrCheckContext>,
     topic: &str,
     pid: i32,
-) -> Result<i64, anyhow::Error> {
-    let (_low, high) = consumer.fetch_watermarks(topic, pid, Duration::from_secs(10))?;
+) -> Result<i64, PlanError> {
+    let (_low, high) = consumer
+        .fetch_watermarks(topic, pid, Duration::from_secs(10))
+        .map_err(|e| sql_err!("{}", e))?;
     Ok(high)
 }
 
@@ -410,7 +421,7 @@ impl ClientContext for KafkaErrCheckContext {
 pub fn generate_ccsr_connection(
     url: Url,
     ccsr_options: &mut BTreeMap<String, SqlValueOrSecret>,
-) -> Result<CsrConnection, anyhow::Error> {
+) -> Result<CsrConnection, PlanError> {
     let mut ccsr_options = extract(
         ccsr_options,
         &[
@@ -435,7 +446,7 @@ pub fn generate_ccsr_connection(
             let key = key.unwrap_secret();
             Some(CsrConnectionTlsIdentity { cert, key })
         }
-        _ => bail!(
+        _ => sql_bail!(
             "Reading from SSL-auth Confluent Schema Registry \
              requires both ssl.key.pem and ssl.certificate.pem"
         ),

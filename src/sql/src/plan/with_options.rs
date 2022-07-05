@@ -9,7 +9,6 @@
 
 //! Provides tooling to handle `WITH` options.
 
-use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use mz_repr::adt::interval::Interval;
@@ -19,14 +18,14 @@ use mz_storage::client::connections::StringOrSecret;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
 use crate::names::ResolvedObjectName;
-use crate::plan::Aug;
+use crate::plan::{Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
-    fn try_from_value(v: T) -> Result<Self, anyhow::Error>;
+    fn try_from_value(v: T) -> Result<Self, PlanError>;
 }
 
 pub trait ImpliedValue: Sized {
-    fn implied_value() -> Result<Self, anyhow::Error>;
+    fn implied_value() -> Result<Self, PlanError>;
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -39,22 +38,22 @@ impl From<Secret> for GlobalId {
 }
 
 impl TryFromValue<WithOptionValue<Aug>> for Secret {
-    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         match StringOrSecret::try_from_value(v)? {
             StringOrSecret::Secret(id) => Ok(Secret(id)),
-            _ => bail!("must provide a secret value"),
+            _ => sql_bail!("must provide a secret value"),
         }
     }
 }
 
 impl ImpliedValue for Secret {
-    fn implied_value() -> Result<Self, anyhow::Error> {
-        bail!("must provide a secret value")
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a secret value")
     }
 }
 
 impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
-    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
             WithOptionValue::Secret(ResolvedObjectName::Object { id, .. }) => {
                 StringOrSecret::Secret(id)
@@ -65,25 +64,25 @@ impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
 }
 
 impl ImpliedValue for StringOrSecret {
-    fn implied_value() -> Result<Self, anyhow::Error> {
-        bail!("must provide a string or secret value")
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a string or secret value")
     }
 }
 
 impl TryFromValue<Value> for Interval {
-    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
         Ok(match v {
             Value::Interval(IntervalValue { value, .. })
             | Value::Number(value)
             | Value::String(value) => strconv::parse_interval(&value)?,
-            _ => bail!("cannot use value as interval"),
+            _ => sql_bail!("cannot use value as interval"),
         })
     }
 }
 
 impl ImpliedValue for Interval {
-    fn implied_value() -> Result<Self, anyhow::Error> {
-        bail!("must provide an interval value")
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an interval value")
     }
 }
 
@@ -103,7 +102,7 @@ impl From<Interval> for OptionalInterval {
 }
 
 impl TryFromValue<Value> for OptionalInterval {
-    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
         Ok(match v {
             Value::Null => OptionalInterval(None),
             v => Interval::try_from_value(v)?.into(),
@@ -112,60 +111,60 @@ impl TryFromValue<Value> for OptionalInterval {
 }
 
 impl ImpliedValue for OptionalInterval {
-    fn implied_value() -> Result<Self, anyhow::Error> {
-        bail!("must provide an interval value")
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an interval value")
     }
 }
 
 impl TryFromValue<Value> for String {
-    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
             Value::String(v) => Ok(v),
-            _ => anyhow::bail!("cannot use value as string"),
+            _ => sql_bail!("cannot use value as string"),
         }
     }
 }
 
 impl ImpliedValue for String {
-    fn implied_value() -> Result<Self, anyhow::Error> {
-        bail!("must provide a string value")
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a string value")
     }
 }
 
 impl TryFromValue<Value> for bool {
-    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
             Value::Boolean(v) => Ok(v),
-            _ => anyhow::bail!("cannot use value as boolean"),
+            _ => sql_bail!("cannot use value as boolean"),
         }
     }
 }
 
 impl ImpliedValue for bool {
-    fn implied_value() -> Result<Self, anyhow::Error> {
+    fn implied_value() -> Result<Self, PlanError> {
         Ok(true)
     }
 }
 
 impl TryFromValue<Value> for i32 {
-    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
             Value::Number(v) => v
                 .parse::<i32>()
-                .map_err(|_| anyhow::anyhow!("invalid numeric value")),
-            _ => anyhow::bail!("cannot use value as number"),
+                .map_err(|e| sql_err!("invalid numeric value: {e}")),
+            _ => sql_bail!("cannot use value as number"),
         }
     }
 }
 
 impl ImpliedValue for i32 {
-    fn implied_value() -> Result<Self, anyhow::Error> {
-        bail!("must provide an integer value")
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an integer value")
     }
 }
 
 impl<V: TryFromValue<Value>> TryFromValue<Value> for Vec<V> {
-    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
             Value::Array(a) => {
                 let mut out = Vec::with_capacity(a.len());
@@ -177,43 +176,43 @@ impl<V: TryFromValue<Value>> TryFromValue<Value> for Vec<V> {
                 }
                 Ok(out)
             }
-            _ => anyhow::bail!("cannot use value as array"),
+            _ => sql_bail!("cannot use value as array"),
         }
     }
 }
 
 impl<V: TryFromValue<Value>> ImpliedValue for Vec<V> {
-    fn implied_value() -> Result<Self, anyhow::Error> {
-        bail!("must provide an array value")
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an array value")
     }
 }
 
 impl<T: AstInfo, V: TryFromValue<WithOptionValue<T>>> TryFromValue<WithOptionValue<T>>
     for Option<V>
 {
-    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         Ok(Some(V::try_from_value(v)?))
     }
 }
 
 impl<V: ImpliedValue> ImpliedValue for Option<V> {
-    fn implied_value() -> Result<Self, anyhow::Error> {
+    fn implied_value() -> Result<Self, PlanError> {
         Ok(Some(V::implied_value()?))
     }
 }
 
 impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOptionValue<T>> for V {
-    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.to_string())),
-            _ => bail!("incompatible value types"),
+            _ => sql_bail!("incompatible value types"),
         }
     }
 }
 
 impl<T, V: TryFromValue<T> + ImpliedValue> TryFromValue<Option<T>> for V {
-    fn try_from_value(v: Option<T>) -> Result<Self, anyhow::Error> {
+    fn try_from_value(v: Option<T>) -> Result<Self, PlanError> {
         match v {
             Some(v) => V::try_from_value(v),
             None => V::implied_value(),

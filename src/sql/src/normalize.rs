@@ -17,7 +17,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use anyhow::{bail, Context};
 use itertools::Itertools;
 
 use mz_repr::{ColumnName, GlobalId};
@@ -141,7 +140,7 @@ impl From<SqlValueOrSecret> for Option<Value> {
 /// - If any `WithOption` has a value of type `WithOptionValue::Secret`.
 pub fn options(
     options: &[WithOption<Aug>],
-) -> Result<BTreeMap<String, SqlValueOrSecret>, anyhow::Error> {
+) -> Result<BTreeMap<String, SqlValueOrSecret>, PlanError> {
     let mut out = BTreeMap::new();
     for option in options {
         let value = match &option.value {
@@ -159,7 +158,7 @@ pub fn options(
                 panic!("SECRET option {} must be Object", option.key)
             }
             None => {
-                bail!("option {} requires a value", option.key);
+                sql_bail!("option {} requires a value", option.key);
             }
         };
         out.insert(option.key.to_string(), value);
@@ -206,7 +205,7 @@ pub fn unresolve(name: FullObjectName) -> UnresolvedObjectName {
 
 /// Converts an `UnresolvedObjectName` to a `FullObjectName` if the
 /// `UnresolvedObjectName` is fully specified. Otherwise returns an error.
-pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, anyhow::Error> {
+pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, PlanError> {
     match raw_name.0.len() {
         3 => Ok(FullObjectName {
             item: ident(raw_name.0.pop().unwrap()),
@@ -218,7 +217,7 @@ pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, a
             schema: ident(raw_name.0.pop().unwrap()),
             database: RawDatabaseSpecifier::Ambient,
         }),
-        _ => bail!("unresolved name {} not fully qualified", raw_name),
+        _ => sql_bail!("unresolved name {} not fully qualified", raw_name),
     }
 }
 
@@ -233,7 +232,7 @@ pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, a
 pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement<Aug>,
-) -> Result<String, anyhow::Error> {
+) -> Result<String, PlanError> {
     let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_full_name(
             unresolved_object_name(name.clone())?,
@@ -384,7 +383,7 @@ pub fn create_statement(
                 normalizer.visit_column_def_mut(c);
             }
             if let Some(err) = normalizer.err {
-                return Err(err.into());
+                return Err(err);
             }
             *if_not_exists = false;
         }
@@ -425,7 +424,7 @@ pub fn create_statement(
                 let mut normalizer = QueryNormalizer::new(scx);
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
-                    return Err(err.into());
+                    return Err(err);
                 }
             }
             *materialized = false;
@@ -444,7 +443,7 @@ pub fn create_statement(
                 let mut normalizer = QueryNormalizer::new(scx);
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
-                    return Err(err.into());
+                    return Err(err);
                 }
             }
             *if_exists = IfExistsBehavior::Error;
@@ -463,7 +462,7 @@ pub fn create_statement(
                 for key_part in key_parts {
                     normalizer.visit_expr_mut(key_part);
                     if let Some(err) = normalizer.err {
-                        return Err(err.into());
+                        return Err(err);
                     }
                 }
             }
@@ -483,7 +482,7 @@ pub fn create_statement(
                     }
                 }
                 if let Some(err) = normalizer.err {
-                    return Err(err.into());
+                    return Err(err);
                 }
             }
             CreateTypeAs::Record { column_defs } => {
@@ -492,7 +491,7 @@ pub fn create_statement(
                     normalizer.visit_column_def_mut(c);
                 }
                 if let Some(err) = normalizer.err {
-                    return Err(err.into());
+                    return Err(err);
                 }
             }
         },
@@ -581,20 +580,20 @@ macro_rules! generate_extracted_config {
             }
 
             impl std::convert::TryFrom<Vec<$option_ty<Aug>>> for [<$option_ty Extracted>] {
-                type Error = anyhow::Error;
+                type Error = $crate::plan::PlanError;
                 fn try_from(v: Vec<$option_ty<Aug>>) -> Result<[<$option_ty Extracted>], Self::Error> {
                     use [<$option_ty Name>]::*;
                     let mut extracted = [<$option_ty Extracted>]::default();
                     for option in v {
                         if !extracted.seen.insert(option.name.clone()) {
-                            bail!("{} specified more than once", option.name.to_ast_string());
+                            sql_bail!("{} specified more than once", option.name.to_ast_string());
                         }
                         match option.name {
                             $(
                                 $option_name => {
                                     extracted.[<$option_name:snake>] =
                                         <$t>::try_from_value(option.value)
-                                            .map_err(|e| anyhow!("invalid {}: {}", option.name.to_ast_string(), e))?;
+                                            .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
                                 }
                             )*
                         }
@@ -614,9 +613,9 @@ macro_rules! generate_extracted_config {
 pub(crate) fn ensure_empty_options<V>(
     with_options: &BTreeMap<String, V>,
     context: &str,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), PlanError> {
     if !with_options.is_empty() {
-        bail!(
+        sql_bail!(
             "unexpected parameters for {}: {}",
             context,
             with_options.keys().join(",")
@@ -629,7 +628,7 @@ pub(crate) fn ensure_empty_options<V>(
 pub fn aws_config(
     options: &mut BTreeMap<String, SqlValueOrSecret>,
     region: Option<String>,
-) -> Result<AwsConfig, anyhow::Error> {
+) -> Result<AwsConfig, PlanError> {
     let mut extract = |key| match options.remove(key) {
         // TODO: support secrets in S3
         Some(SqlValueOrSecret::Value(Value::String(key))) => {
@@ -639,7 +638,7 @@ pub fn aws_config(
                 Ok(None)
             }
         }
-        Some(_) => bail!("{} must be a string", key),
+        Some(_) => sql_bail!("{} must be a string", key),
         _ => Ok(None),
     };
 
@@ -648,7 +647,7 @@ pub fn aws_config(
             for name in &["access_key_id", "secret_access_key", "token"] {
                 let extracted = extract(name);
                 if matches!(extracted, Ok(Some(_)) | Err(_)) {
-                    bail!(
+                    sql_bail!(
                         "AWS profile cannot be set in combination with '{0}', \
                          configure '{0}' inside the profile file",
                         name
@@ -671,12 +670,14 @@ pub fn aws_config(
                     }
                 }
                 (Some(_), None, _) => {
-                    bail!("secret_access_key must be specified if access_key_id is specified")
+                    sql_bail!("secret_access_key must be specified if access_key_id is specified")
                 }
                 (None, Some(_), _) => {
-                    bail!("secret_access_key cannot be specified without access_key_id")
+                    sql_bail!("secret_access_key cannot be specified without access_key_id")
                 }
-                (None, None, Some(_)) => bail!("token cannot be specified without access_key_id"),
+                (None, None, Some(_)) => {
+                    sql_bail!("token cannot be specified without access_key_id")
+                }
             };
 
             credentials
@@ -689,7 +690,11 @@ pub fn aws_config(
     };
     let endpoint = match extract("endpoint")? {
         None => None,
-        Some(endpoint) => Some(SerdeUri(endpoint.parse().context("parsing AWS endpoint")?)),
+        Some(endpoint) => Some(SerdeUri(
+            endpoint
+                .parse()
+                .map_err(|e| sql_err!("parsing AWS endpoint: {e}"))?,
+        )),
     };
     let arn = extract("role_arn")?;
     Ok(AwsConfig {

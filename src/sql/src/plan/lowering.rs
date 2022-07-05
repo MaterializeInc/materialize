@@ -38,7 +38,6 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::bail;
 use itertools::Itertools;
 
 use mz_ore::collections::CollectionExt;
@@ -49,7 +48,7 @@ use mz_repr::*;
 use crate::plan::expr::{
     AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
-use crate::plan::transform_expr;
+use crate::plan::{transform_expr, PlanError};
 
 /// Maps a leveled column reference to a specific column.
 ///
@@ -1365,7 +1364,7 @@ impl HirScalarExpr {
     }
 
     /// Rewrites `self` into a `mz_expr::ScalarExpr`.
-    pub fn lower_uncorrelated(self) -> Result<mz_expr::MirScalarExpr, anyhow::Error> {
+    pub fn lower_uncorrelated(self) -> Result<mz_expr::MirScalarExpr, PlanError> {
         use self::HirScalarExpr::*;
         use mz_expr::MirScalarExpr as SS;
 
@@ -1395,7 +1394,7 @@ impl HirScalarExpr {
                 els: Box::new(els.lower_uncorrelated()?),
             },
             Select { .. } | Exists { .. } | Parameter(..) | Column(..) | Windowing(..) => {
-                bail!("unexpected ScalarExpr in uncorrelated plan: {:?}", self);
+                sql_bail!("unexpected ScalarExpr in uncorrelated plan: {:?}", self);
             }
         })
     }

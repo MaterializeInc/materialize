@@ -18,14 +18,16 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::strconv::ParseError;
+use mz_repr::strconv;
 use mz_repr::ColumnName;
+use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::CatalogError;
 use crate::names::PartialObjectName;
 use crate::names::ResolvedObjectName;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::query_model::QGMError;
 
 #[derive(Clone, Debug)]
 pub enum PlanError {
@@ -63,7 +65,7 @@ pub enum PlanError {
     },
     UnknownParameter(usize),
     RecursionLimit(RecursionLimitError),
-    Parse(ParseError),
+    StrconvParse(strconv::ParseError),
     Catalog(CatalogError),
     UpsertSinkWithoutKey,
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
@@ -71,6 +73,8 @@ pub enum PlanError {
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(ResolvedObjectName),
     InvalidTemporarySchema,
+    Parser(ParserError),
+    Qgm(QGMError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -81,6 +85,14 @@ impl PlanError {
             table: item.table_name.clone(),
             column: item.column_name.clone(),
         }
+    }
+
+    pub fn detail(&self) -> Option<String> {
+        None
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        None
     }
 }
 
@@ -152,14 +164,16 @@ impl fmt::Display for PlanError {
             }
             Self::UnknownParameter(n) => write!(f, "there is no parameter ${}", n),
             Self::RecursionLimit(e) => write!(f, "{}", e),
-            Self::Parse(e) => write!(f, "{}", e),
+            Self::StrconvParse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),
             Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
+            Self::Parser(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
+            Self::Qgm(e) => e.fmt(f),
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
@@ -175,9 +189,9 @@ impl From<CatalogError> for PlanError {
     }
 }
 
-impl From<ParseError> for PlanError {
-    fn from(e: ParseError) -> PlanError {
-        PlanError::Parse(e)
+impl From<strconv::ParseError> for PlanError {
+    fn from(e: strconv::ParseError) -> PlanError {
+        PlanError::StrconvParse(e)
     }
 }
 
@@ -207,25 +221,37 @@ impl From<InvalidVarCharMaxLengthError> for PlanError {
 
 impl From<anyhow::Error> for PlanError {
     fn from(e: anyhow::Error) -> PlanError {
-        PlanError::Unstructured(format!("{:#}", e))
+        sql_err!("{:#}", e)
     }
 }
 
 impl From<TryFromIntError> for PlanError {
     fn from(e: TryFromIntError) -> PlanError {
-        PlanError::Unstructured(format!("{:#}", e))
+        sql_err!("{:#}", e)
     }
 }
 
 impl From<ParseIntError> for PlanError {
     fn from(e: ParseIntError) -> PlanError {
-        PlanError::Unstructured(format!("{:#}", e))
+        sql_err!("{:#}", e)
     }
 }
 
 impl From<EvalError> for PlanError {
     fn from(e: EvalError) -> PlanError {
-        PlanError::Unstructured(format!("{:#}", e))
+        sql_err!("{:#}", e)
+    }
+}
+
+impl From<ParserError> for PlanError {
+    fn from(e: ParserError) -> PlanError {
+        PlanError::Parser(e)
+    }
+}
+
+impl From<QGMError> for PlanError {
+    fn from(e: QGMError) -> PlanError {
+        PlanError::Qgm(e)
     }
 }
 

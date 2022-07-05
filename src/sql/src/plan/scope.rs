@@ -44,8 +44,6 @@
 use std::collections::HashSet;
 use std::iter;
 
-use anyhow::bail;
-
 use mz_ore::iter::IteratorExt;
 use mz_repr::ColumnName;
 
@@ -405,7 +403,7 @@ impl Scope {
             })
     }
 
-    pub fn product(self, right: Self) -> Result<Self, anyhow::Error> {
+    pub fn product(self, right: Self) -> Result<Self, PlanError> {
         let mut l_tables = self.table_names().into_iter().collect::<Vec<_>>();
         // Make ordering deterministic for testing
         l_tables.sort_by(|l, r| l.item.cmp(&r.item));
@@ -413,7 +411,7 @@ impl Scope {
         for l in l_tables {
             for r in &r_tables {
                 if l.matches(r) {
-                    bail!("table name \"{}\" specified more than once", l.item)
+                    sql_bail!("table name \"{}\" specified more than once", l.item)
                 }
             }
         }
