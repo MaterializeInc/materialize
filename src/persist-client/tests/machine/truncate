@@ -1,0 +1,47 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+write-batch output=b0 lower=0 upper=3
+zero 0 1
+one 1 1
+two 2 1
+----
+parts=1 len=3
+
+fetch-batch input=b0
+----
+<part 0>
+zero 0 1
+one 1 1
+two 2 1
+
+truncate-batch-desc input=b0 output=b1 lower=1 upper=2
+----
+parts=1 len=3
+
+fetch-batch input=b1
+----
+<part 0>
+one 1 1
+
+write-batch output=nope lower=1 upper=3
+----
+parts=0 len=0
+
+truncate-batch-desc input=nope output=nope0 lower=0 upper=2
+----
+error: invalid batch bounds [Antichain { elements: [1] }, Antichain { elements: [3] }) for append call with [Antichain { elements: [0] }, Antichain { elements: [2] })
+
+write-batch output=nope lower=0 upper=2
+----
+parts=0 len=0
+
+truncate-batch-desc input=nope output=nope1 lower=1 upper=3
+----
+error: invalid batch bounds [Antichain { elements: [0] }, Antichain { elements: [2] }) for append call with [Antichain { elements: [1] }, Antichain { elements: [3] })

@@ -1,0 +1,99 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Batches start empty
+batches
+----
+
+# Insert a len=1 batch.
+insert
+0 1 0 1 k0
+----
+ok
+
+batches
+----
+[0][1][0] 1 k0
+
+take-merge-reqs
+----
+<empty>
+
+# Insert more len=1 batches.
+insert
+1 2 0 1 k1
+2 3 0 1 k2
+3 4 0 1 k3
+4 5 0 1 k4
+5 6 0 1 k5
+6 7 0 1 k6
+7 8 0 1 k7
+----
+ok
+
+batches
+----
+[0][4][0] 4/4 k0 k1 k2 k3
+[4][6][0] 2/2 k4 k5
+[6][7][0] 1 k6
+[7][8][0] 1 k7
+
+take-merge-reqs
+----
+[0][2][0] k0 k1
+[0][4][0] k0 k1 k2 k3
+[4][6][0] k4 k5
+
+# Insert a large batch, which because of spine's invariants, must be inserted at
+# a higher level. This causes the len=1 batches to smash together at the level
+# above it and generate a merge.
+insert
+8 9 0 100 k8
+----
+ok
+
+batches
+----
+[0][8][0] 8/8 k0 k1 k2 k3 k4 k5 k6 k7
+[8][9][0] 100 k8
+
+take-merge-reqs
+----
+[0][8][0] k0 k1 k2 k3 k4 k5 k6 k7
+
+# Merge responses that we didn't generate are ignored.
+apply-merge-res
+1 3 0 0 nope
+----
+no-op
+
+# For now, we only apply a merge req if it exactly matches the bounds of some
+# SpineBatch. In practice, this means a merge req that is outdated when it
+# arrives will be a no-op.
+apply-merge-res
+0 2 0 2 nope
+----
+no-op
+
+# Verify that nothing has been changed by the no-op.
+batches
+----
+[0][8][0] 8/8 k0 k1 k2 k3 k4 k5 k6 k7
+[8][9][0] 100 k8
+
+# Successfully apply a merge res
+apply-merge-res
+0 8 0 5 k0-7
+----
+applied
+
+batches
+----
+[0][8][0] 5 k0-7
+[8][9][0] 100 k8

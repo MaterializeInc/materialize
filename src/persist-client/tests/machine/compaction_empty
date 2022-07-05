@@ -1,0 +1,41 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Compaction with empty inputs and outputs
+
+write-batch output=b0 lower=0 upper=1
+zero 0 1
+----
+parts=1 len=1
+
+write-batch output=b1 lower=1 upper=2
+zero 1 -1
+----
+parts=1 len=1
+
+compact output=b_empty_output inputs=(b0,b1) lower=0 upper=2 since=1
+----
+parts=0 len=0
+
+fetch-batch input=b_empty_output
+----
+<empty>
+
+write-batch output=b_empty lower=1 upper=2
+----
+parts=0 len=0
+
+compact output=b_empty_input inputs=(b0,b_empty) lower=0 upper=2 since=0
+----
+parts=1 len=1
+
+fetch-batch input=b_empty_input
+----
+<part 0>
+zero 0 1

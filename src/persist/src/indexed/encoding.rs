@@ -233,7 +233,7 @@ impl Codec for BlobTraceBatchPart {
     where
         B: BufMut,
     {
-        encode_trace_parquet(&mut buf.writer(), self).expect("writes to BufMut are infallible");
+        encode_trace_parquet(&mut buf.writer(), self).expect("batch was invalid");
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
@@ -635,7 +635,7 @@ mod tests {
             let trace = BlobTraceBatchPart {
                 desc: Description::new(
                     Antichain::from_elem(0),
-                    Antichain::from_elem(1),
+                    Antichain::new(),
                     Antichain::from_elem(0),
                 ),
                 index: 0,
@@ -657,7 +657,7 @@ mod tests {
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000)),
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000 / 100)),
             ),
-            "1/1=1031 25/1=2782 1000/1=73026 1000/100=113071"
+            "1/1=1027 25/1=2778 1000/1=73022 1000/100=113067"
         );
     }
 }

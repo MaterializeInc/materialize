@@ -1,0 +1,54 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# since and upper start at minimum ts
+since-upper
+----
+[0][0]
+
+# A [0,1) batch advances the upper to [1]
+insert
+0 1 0 0
+----
+ok
+
+since-upper
+----
+[0][1]
+
+# Downgrade the since to [1]
+downgrade-since
+1
+----
+ok
+
+since-upper
+----
+[1][1]
+
+# It's legal (though of unclear benefit) to advance the since past the upper
+downgrade-since
+2
+----
+ok
+
+since-upper
+----
+[2][1]
+
+
+# Advance the upper again
+insert
+1 3 0 0
+----
+ok
+
+since-upper
+----
+[2][3]

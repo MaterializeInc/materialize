@@ -213,7 +213,7 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
     let trace = BlobTraceBatchPart {
         desc: Description::new(
             Antichain::from_elem(0),
-            Antichain::from_elem(1),
+            Antichain::new(),
             Antichain::from_elem(0),
         ),
         index: 0,

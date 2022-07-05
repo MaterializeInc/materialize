@@ -103,6 +103,12 @@ impl ColumnarRecords {
         self.len
     }
 
+    /// The number of logical bytes in the represented data, excluding offsets
+    /// and lengths.
+    pub fn goodbytes(&self) -> usize {
+        self.key_data.len() + self.val_data.len() + 8 * self.timestamps.len() + 8 * self.diffs.len()
+    }
+
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
@@ -567,17 +573,26 @@ impl ColumnarRecordsVecBuilder {
     /// Add a record to Self.
     pub fn push(&mut self, record: ((&[u8], &[u8]), [u8; 8], [u8; 8])) {
         let ((key, val), ts, diff) = record;
-        if !self.current.can_fit(key, val, self.key_val_data_max_len) {
+        let mut needs_flush = !self.current.can_fit(key, val, self.key_val_data_max_len);
+        if needs_flush && self.current.len() > 0 {
             // We don't have room in this ColumnarRecords, finish it up and
             // try in a fresh one.
             let prev = std::mem::take(&mut self.current);
             self.filled.push(prev.finish());
+            needs_flush = false;
         }
         // If it fails now, this individual record is too big to fit
         // in a ColumnarRecords by itself. The limits are big, so this
         // is a pretty extreme case that we intentionally don't handle
         // right now.
         assert!(self.current.push(((key, val), ts, diff)));
+        if needs_flush {
+            // This only happens when an individual record is larger than the
+            // max len, which probably only happens in tests where we set it
+            // artificially small.
+            let prev = std::mem::take(&mut self.current);
+            self.filled.push(prev.finish());
+        }
     }
 
     /// Finalize constructing a [Vec<ColumnarRecords>].
@@ -590,11 +605,11 @@ impl ColumnarRecordsVecBuilder {
     }
 
     /// Returns the list of filled [ColumnarRecords].
-    pub fn take_filled(&mut self) -> Option<Vec<ColumnarRecords>> {
+    pub fn take_filled(&mut self) -> Vec<ColumnarRecords> {
         if self.filled.len() > 0 {
-            Some(std::mem::take(&mut self.filled))
+            std::mem::take(&mut self.filled)
         } else {
-            None
+            vec![]
         }
     }
 }
@@ -690,5 +705,16 @@ mod tests {
         // Tests for not exactly filling ColumnarRecords
         testcase(40, (ten_k, ""), 23, 12);
         testcase(40, ("", ten_v), 23, 12);
+    }
+
+    // Regression test for a bug where an empty ColumnarRecords would be
+    // produced if the first record added was larger than
+    // `key_val_data_max_len`. This really only comes up in tests.
+    #[test]
+    fn regression_empty_chunk() {
+        let mut builder = ColumnarRecordsVecBuilder::new_with_len(0);
+        builder.push(((&[], &[]), [0u8; 8], [0u8; 8]));
+        assert_eq!(builder.take_filled().len(), 1);
+        assert_eq!(builder.finish().len(), 0);
     }
 }
