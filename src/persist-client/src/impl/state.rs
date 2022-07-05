@@ -157,8 +157,6 @@ where
         }
     }
 
-    // WIP: Do we still need this? When will we have use for the `SeqNo` that we
-    // hold in read capabilities?
     pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
         let existed = self.readers.remove(reader_id).is_some();
 

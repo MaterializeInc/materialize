@@ -347,8 +347,7 @@ impl PersistClient {
             )
         });
         let reader_id = ReaderId::new();
-        // WIP: We don't use the SeqNo that's now the only thing remaining in a
-        // ReadCapability.
+
         let (shard_upper, _read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
