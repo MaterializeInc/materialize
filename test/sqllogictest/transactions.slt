@@ -93,7 +93,7 @@ ROLLBACK
 simple
 INSERT INTO t VALUES (5);
 BEGIN;
-SELECT 1;
+SELECT * FROM t;
 ----
 db error: ERROR: transaction in write-only mode
 
@@ -470,3 +470,40 @@ INSERT INTO bar VALUES (42)
 
 statement ok
 ROLLBACK
+
+# Test that constant reads are allowed in write-only transactions
+
+statement ok
+BEGIN
+
+query I
+SELECT 1
+----
+1
+
+statement ok
+SELECT now()
+
+query T
+SELECT INTERVAL '1 day'
+----
+1 day
+
+statement ok
+INSERT INTO t VALUES (1), (3)
+
+query I
+SELECT 1
+----
+1
+
+statement ok
+SELECT now()
+
+query T
+SELECT INTERVAL '1 day'
+----
+1 day
+
+statement ok
+COMMIT
