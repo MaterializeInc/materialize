@@ -1248,6 +1248,7 @@ impl CatalogItem {
             CatalogItem::Source(source) => Some(source.timeline.clone()),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
+            | CatalogItem::RecordedView(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
