@@ -11,11 +11,11 @@
 # that newly ingested data does not appear.
 
 > SELECT * from remote1
-one   1
-two   2
+one
+two
 > SELECT * from remote2
-one  1
-two  2
+one
+two
 
 $ kafka-ingest format=bytes topic=remote1
 three
@@ -23,8 +23,8 @@ $ kafka-ingest format=bytes topic=remote2
 three
 
 > SELECT * from remote1
-one   1
-two   2
+one
+two
 > SELECT * from remote2
-one  1
-two  2
+one
+two

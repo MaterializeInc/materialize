@@ -27,6 +27,6 @@ one
   REMOTE 'storaged:2100'
 
 > SELECT * from remote1
-one  1
+one
 > SELECT * from remote2
-one  1
+one

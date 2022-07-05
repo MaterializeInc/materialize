@@ -36,9 +36,9 @@ $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb mess
 {"i": 1}
 
 > SELECT * FROM evolution
-i  mz_offset
-------------
-1  1
+i
+---
+1
 
 # Adding new fields and renaming existing fields is safe. New fields won't be
 # reflected in the source, though.
@@ -64,10 +64,10 @@ $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb mess
 {"i_renamed": 2, "extra": false}
 
 > SELECT * FROM evolution
-i  mz_offset
-------------
-1  1
-2  2
+i
+---
+1
+2
 
 # Changing the size of an integer type is allowed; values are truncated/promoted
 # as in C.
@@ -92,11 +92,11 @@ $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb mess
 {"i_demoted": false}
 
 > SELECT * FROM evolution
-i  mz_offset
-------------
-1  1
-2  2
-0  3
+i
+---
+1
+2
+0
 
 # Expect that ingesting an incompatible message will brick the topic. We have to
 # explicitly disable the schema registry's protection against this.

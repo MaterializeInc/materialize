@@ -11,9 +11,9 @@
 # present, then try ingesting more data.
 
 > SELECT * from remote1
-one  1
+one
 > SELECT * from remote2
-one  1
+one
 
 $ kafka-ingest format=bytes topic=remote1
 two
@@ -21,8 +21,8 @@ $ kafka-ingest format=bytes topic=remote2
 two
 
 > SELECT * from remote1
-one   1
-two   2
+one
+two
 > SELECT * from remote2
-one  1
-two  2
+one
+two

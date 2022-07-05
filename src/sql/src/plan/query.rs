@@ -1014,9 +1014,9 @@ fn plan_query_inner(
         let (val, scope) = plan_nested_query(qcx, &cte.query)?;
         let typ = qcx.relation_type(&val);
         let mut val_desc = RelationDesc::new(typ, scope.column_names());
-        val_desc = plan_utils::maybe_rename_columns(
+        plan_utils::maybe_rename_columns(
             format!("CTE {}", cte.alias.name),
-            val_desc,
+            &mut val_desc,
             &cte.alias.columns,
         )?;
 

@@ -674,7 +674,7 @@ fn to_metadata_row(
             for item in metadata_items.iter() {
                 match item {
                     IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
-                    IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => {
+                    IncludedColumnSource::Offset => {
                         // note this is bitwise cast, so offsets > i64::MAX will be
                         // rendered as negative
                         // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
@@ -722,17 +722,8 @@ fn to_metadata_row(
             }
         }
         PartitionId::None => {
-            for item in metadata_items.iter() {
-                match item {
-                    IncludedColumnSource::DefaultPosition => {
-                        // note this is bitwise cast, so offsets > i64::MAX will be
-                        // rendered as negative
-                        // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
-                        // is resolved.
-                        packer.push(Datum::from(position as i64))
-                    }
-                    _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
-                }
+            if !metadata_items.is_empty() {
+                unreachable!("Only Kafka supports metadata items");
             }
         }
     }

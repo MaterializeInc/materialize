@@ -242,10 +242,6 @@ impl From<tokio_postgres::types::PgLsn> for MzOffset {
 /// Which piece of metadata a column corresponds to
 #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum IncludedColumnSource {
-    /// The materialize-specific notion of "position"
-    ///
-    /// This is legacy, and should be removed when default metadata is no longer included
-    DefaultPosition,
     Partition,
     Offset,
     Timestamp,
@@ -258,7 +254,6 @@ impl RustType<ProtoIncludedColumnSource> for IncludedColumnSource {
         use proto_included_column_source::Kind;
         ProtoIncludedColumnSource {
             kind: Some(match self {
-                IncludedColumnSource::DefaultPosition => Kind::DefaultPosition(()),
                 IncludedColumnSource::Partition => Kind::Partition(()),
                 IncludedColumnSource::Offset => Kind::Offset(()),
                 IncludedColumnSource::Timestamp => Kind::Timestamp(()),
@@ -274,7 +269,6 @@ impl RustType<ProtoIncludedColumnSource> for IncludedColumnSource {
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoIncludedColumnSource::kind"))?;
         Ok(match kind {
-            Kind::DefaultPosition(()) => IncludedColumnSource::DefaultPosition,
             Kind::Partition(()) => IncludedColumnSource::Partition,
             Kind::Offset(()) => IncludedColumnSource::Offset,
             Kind::Timestamp(()) => IncludedColumnSource::Timestamp,
@@ -1088,22 +1082,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     }
 }
 
-/// Legacy logic included something like an offset into almost data streams
-///
-/// Eventually we will require `INCLUDE <metadata>` for everything.
-pub fn provide_default_metadata(
-    envelope: &UnplannedSourceEnvelope,
-    encoding: &encoding::DataEncoding,
-) -> bool {
-    let is_avro = matches!(encoding.inner, encoding::DataEncodingInner::Avro(_));
-    let is_stateless_dbz = match envelope {
-        UnplannedSourceEnvelope::Debezium(_) => true,
-        _ => false,
-    };
-
-    !is_avro && !is_stateless_dbz
-}
-
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Compression {
     Gzip,
@@ -1282,9 +1260,7 @@ impl SourceConnection {
     ///
     /// The columns declared here must be kept in sync with the actual source
     /// implementations that produce these columns.
-    pub fn metadata_columns(&self, include_defaults: bool) -> Vec<(&str, ColumnType)> {
-        let mut columns = Vec::new();
-        let default_col = |name| (name, ScalarType::Int64.nullable(false));
+    pub fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         match self {
             Self::Kafka(KafkaSourceConnection {
                 include_partition: part,
@@ -1295,11 +1271,6 @@ impl SourceConnection {
                 ..
             }) => {
                 let mut items = BTreeMap::new();
-                // put the offset at the end if necessary
-                if include_defaults && offset.is_none() {
-                    items.insert(4, default_col("mz_offset"));
-                }
-
                 for (include, ty) in [
                     (offset, ScalarType::Int64),
                     (part, ScalarType::Int32),
@@ -1332,42 +1303,20 @@ impl SourceConnection {
                     ),
                 ] {
                     if let Some(include) = include {
-                        items.insert(include.pos + 1, (&include.name, ty.nullable(false)));
+                        items.insert(include.pos + 1, (&*include.name, ty.nullable(false)));
                     }
                 }
 
                 items.into_values().collect()
             }
-            Self::Kinesis(_) => {
-                if include_defaults {
-                    columns.push(default_col("mz_offset"))
-                };
-                columns
-            }
-            // TODO: should we include object key and possibly object-internal offset here?
-            Self::S3(_) => {
-                if include_defaults {
-                    columns.push(default_col("mz_record"))
-                };
-                columns
-            }
+            Self::Kinesis(_) => vec![],
+            Self::S3(_) => vec![],
             Self::Postgres(_) => vec![],
             Self::PubNub(_) => vec![],
         }
     }
 
-    // TODO(bwm): get rid of this when we no longer have the notion of default metadata
-    pub fn default_metadata_column_name(&self) -> Option<&str> {
-        match self {
-            SourceConnection::Kafka(_) => Some("mz_offset"),
-            SourceConnection::Kinesis(_) => Some("mz_offset"),
-            SourceConnection::S3(_) => Some("mz_record"),
-            SourceConnection::Postgres(_) => None,
-            SourceConnection::PubNub(_) => None,
-        }
-    }
-
-    pub fn metadata_column_types(&self, include_defaults: bool) -> Vec<IncludedColumnSource> {
+    pub fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         match self {
             SourceConnection::Kafka(KafkaSourceConnection {
                 include_partition: part,
@@ -1381,9 +1330,6 @@ impl SourceConnection {
                 // TODO: should key be included in the sorted list? Breaking change, and it's
                 // already special (it commonly multiple columns embedded in it).
                 let mut items = BTreeMap::new();
-                if include_defaults && offset.is_none() {
-                    items.insert(4, IncludedColumnSource::DefaultPosition);
-                }
                 for (include, ty) in [
                     (offset, IncludedColumnSource::Offset),
                     (part, IncludedColumnSource::Partition),
@@ -1399,13 +1345,7 @@ impl SourceConnection {
                 items.into_values().collect()
             }
 
-            SourceConnection::Kinesis(_) | SourceConnection::S3(_) => {
-                if include_defaults {
-                    vec![IncludedColumnSource::DefaultPosition]
-                } else {
-                    Vec::new()
-                }
-            }
+            SourceConnection::Kinesis(_) | SourceConnection::S3(_) => vec![],
             SourceConnection::Postgres(_) | SourceConnection::PubNub(_) => Vec::new(),
         }
     }

@@ -179,7 +179,7 @@ A
   FORMAT BYTES
 
 > SELECT * FROM source1
-A 1
+A
 
 # Sinks
 

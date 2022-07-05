@@ -27,14 +27,13 @@ path               true      text
 search_kw          true      text
 product_detail_id  true      text
 code               true      text
-mz_offset          false     bigint
 
 > SELECT * FROM regex_source
-ip            ts                      path                                           search_kw           product_detail_id  code  mz_offset
--------------------------------------------------------------------------------------------------------------------------------------------
-123.17.127.5  "22/Jan/2020 18:59:52"  "GET / HTTP/1.1"                               <null>              <null>             200   1
-8.15.119.56   "22/Jan/2020 18:59:52"  "GET /detail/nNZpqxzR HTTP/1.1"                <null>              nNZpqxzR           200   2
-96.12.83.72   "22/Jan/2020 18:59:52"  "GET /search/?kw=helper+ins+hennaed HTTP/1.1"  helper+ins+hennaed  <null>             200   3
+ip            ts                      path                                           search_kw           product_detail_id  code
+---------------------------------------------------------------------------------------------------------------------------------
+123.17.127.5  "22/Jan/2020 18:59:52"  "GET / HTTP/1.1"                               <null>              <null>             200
+8.15.119.56   "22/Jan/2020 18:59:52"  "GET /detail/nNZpqxzR HTTP/1.1"                <null>              nNZpqxzR           200
+96.12.83.72   "22/Jan/2020 18:59:52"  "GET /search/?kw=helper+ins+hennaed HTTP/1.1"  helper+ins+hennaed  <null>             200
 
 > SELECT search_kw FROM regex_source WHERE search_kw IS NOT NULL
 search_kw
@@ -54,12 +53,12 @@ path               true      text
 search_kw          true      text
 product_detail_id  true      text
 code               true      text
-mz_offset          false     bigint
 
 # verify metadata column renaming
 > CREATE MATERIALIZED SOURCE regex_source_renamed_cols (ip, ts, path, search_kw, product_detail_id, code, lineno)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-request-log-${testdrive.seed}'
   FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
+  INCLUDE OFFSET
 
 > SHOW COLUMNS FROM regex_source_renamed_cols
 name               nullable  type
@@ -73,11 +72,11 @@ code               true      text
 lineno             false     bigint
 
 > SELECT * FROM regex_source_named_cols
-ip            ts                      path                                           search_kw           product_detail_id  code  mz_offset
--------------------------------------------------------------------------------------------------------------------------------------------
-123.17.127.5  "22/Jan/2020 18:59:52"  "GET / HTTP/1.1"                               <null>              <null>             200   1
-8.15.119.56   "22/Jan/2020 18:59:52"  "GET /detail/nNZpqxzR HTTP/1.1"                <null>              nNZpqxzR           200   2
-96.12.83.72   "22/Jan/2020 18:59:52"  "GET /search/?kw=helper+ins+hennaed HTTP/1.1"  helper+ins+hennaed  <null>             200   3
+ip            ts                      path                                           search_kw           product_detail_id  code
+---------------------------------------------------------------------------------------------------------------------------------
+123.17.127.5  "22/Jan/2020 18:59:52"  "GET / HTTP/1.1"                               <null>              <null>             200
+8.15.119.56   "22/Jan/2020 18:59:52"  "GET /detail/nNZpqxzR HTTP/1.1"                <null>              nNZpqxzR           200
+96.12.83.72   "22/Jan/2020 18:59:52"  "GET /search/?kw=helper+ins+hennaed HTTP/1.1"  helper+ins+hennaed  <null>             200
 
 # Malformed regex with non-utf-8 characters
 $ kafka-create-topic topic=malformed-request-log

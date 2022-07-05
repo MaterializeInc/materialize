@@ -21,10 +21,10 @@ $ kafka-create-topic topic=missing_keys_or_values partitions=1
 $ kafka-ingest topic=missing_keys_or_values format=bytes key-format=bytes key-terminator=:
 hello:world
 
-> SELECT * FROM missing_keys_or_values ORDER BY mz_offset ASC
-key   text mz_offset
----------------------------------
-hello world 1
+> SELECT * FROM missing_keys_or_values
+key   text
+-----------
+hello world
 
 
 # send a value without a key. key columns should be null
@@ -32,22 +32,22 @@ hello world 1
 $ kafka-ingest topic=missing_keys_or_values format=bytes omit-key=true
 foo
 
-> SELECT * FROM missing_keys_or_values ORDER BY mz_offset ASC
-key    text  mz_offset
----------------------------------
-hello  world 1
-<null> foo   2
+> SELECT * FROM missing_keys_or_values
+key    text
+-------------
+hello  world
+<null> foo
 
 
 # send an empty record with neither key nor value, should be skipped
 
 $ kafka-ingest topic=missing_keys_or_values format=bytes omit-value=true omit-key=true
 
-> SELECT * FROM missing_keys_or_values ORDER BY mz_offset ASC
-key    text  mz_offset
----------------------------------
-hello  world 1
-<null> foo   2
+> SELECT * FROM missing_keys_or_values
+key    text
+-------------
+hello  world
+<null> foo
 
 
 # send a key without a value, should error
@@ -55,5 +55,5 @@ hello  world 1
 $ kafka-ingest topic=missing_keys_or_values key-format=bytes format=bytes omit-value=true
 bar
 
-! SELECT * FROM missing_keys_or_values ORDER BY mz_offset ASC
+! SELECT * FROM missing_keys_or_values
 contains: Decode error: Text: Value not present for message

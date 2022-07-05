@@ -190,7 +190,6 @@ projects:
             test_materialized_view_index,1,1,
             test_materialized_view_index,1,1,
             test_source,1,1,
-            test_source,2,2,
             test_source_index,1,1,
             test_view_index,1,1,
             test_view_index,2,,pg_catalog.length(a)

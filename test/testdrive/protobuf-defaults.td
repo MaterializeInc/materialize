@@ -40,6 +40,6 @@ $ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb messag
   FORMAT PROTOBUF MESSAGE '.Defaults' USING SCHEMA FILE '${testdrive.temp-dir}/defaults.pb'
 
 > SELECT * FROM defaults
-bool  int32  int64  float  double  bytes  string enum  mz_offset
+bool  int32  int64  float  double  bytes  string enum
 ----
-true  42     42     42     42      aaa    bbb    ENUM1 1
+true  42     42     42     42      aaa    bbb    ENUM1

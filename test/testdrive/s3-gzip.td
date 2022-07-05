@@ -33,13 +33,13 @@ b3
   )
   FORMAT TEXT;
 
-> SELECT * FROM s3_all_none ORDER BY mz_record;
-a1 1
-a2 2
-a3 3
-b1 4
-b2 5
-b3 6
+> SELECT * FROM s3_all_none
+a1
+a2
+a3
+b1
+b2
+b3
 
 # Test explicit lack of compression
 
@@ -70,13 +70,13 @@ b3
   )
   FORMAT TEXT;
 
-> SELECT * FROM s3_all_gzip ORDER BY mz_record;
-a1 1
-a2 2
-a3 3
-b1 4
-b2 5
-b3 6
+> SELECT * FROM s3_all_gzip
+a1
+a2
+a3
+b1
+b2
+b3
 
 # Test automatic decompression handling
 # $ set bucket=materialize-ci-testdrive-auto-${testdrive.seed}
@@ -105,10 +105,10 @@ b3 6
 #   )
 #   FORMAT TEXT;
 #
-# > SELECT * FROM s3_all ORDER BY mz_record;
-# a1 1
-# a2 2
-# a3 3
-# b1 4
-# b2 5
-# b3 6
+# > SELECT * FROM s3_all
+# a1
+# a2
+# a3
+# b1
+# b2
+# b3
