@@ -11,6 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
+use std::error::Error as StdError;
 use std::iter;
 use std::path::Path;
 use std::str::FromStr;
@@ -19,14 +20,17 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
 use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::{CsrConnection, KafkaConnection, KafkaSourceConnection};
+use mz_sql_parser::ast::{
+    CsrConnection, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy,
+};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use tracing::info;
 use uuid::Uuid;
 
-use mz_ccsr::{Client, GetBySubjectError};
+use mz_ccsr::Schema as CcsrSchema;
+use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
 use mz_repr::strconv;
 use mz_storage::client::connections::aws::{AwsConfig, AwsExternalIdPrefix};
@@ -394,6 +398,8 @@ async fn purify_csr_connection_avro(
     let CsrConnectionAvro {
         connection,
         seed,
+        key_strategy,
+        value_strategy,
         with_options: ccsr_options,
     } = csr_connection;
     if seed.is_none() {
@@ -417,7 +423,13 @@ async fn purify_csr_connection_avro(
         let Schema {
             key_schema,
             value_schema,
-        } = get_remote_csr_schema(&ccsr_client, topic.clone()).await?;
+        } = get_remote_csr_schema(
+            &ccsr_client,
+            key_strategy.clone().unwrap_or_default(),
+            value_strategy.clone().unwrap_or_default(),
+            topic.clone(),
+        )
+        .await?;
         if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
             bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
         }
@@ -437,13 +449,72 @@ pub struct Schema {
     pub value_schema: String,
 }
 
+#[derive(Debug)]
+pub enum GetSchemaError {
+    Subject(GetBySubjectError),
+    Id(GetByIdError),
+}
+
+impl From<GetBySubjectError> for GetSchemaError {
+    fn from(inner: GetBySubjectError) -> Self {
+        Self::Subject(inner)
+    }
+}
+
+impl From<GetByIdError> for GetSchemaError {
+    fn from(inner: GetByIdError) -> Self {
+        Self::Id(inner)
+    }
+}
+
+impl std::fmt::Display for GetSchemaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GetSchemaError::Subject(e) => write!(f, "failed to look up schema by subject: {e}"),
+            GetSchemaError::Id(e) => write!(f, "failed to look up schema by id: {e}"),
+        }
+    }
+}
+
+impl StdError for GetSchemaError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            GetSchemaError::Subject(e) => Some(e),
+            GetSchemaError::Id(e) => Some(e),
+        }
+    }
+}
+
+async fn get_schema_with_strategy(
+    client: &Client,
+    strategy: ReaderSchemaSelectionStrategy,
+    subject: &str,
+) -> Result<Option<String>, GetSchemaError> {
+    match strategy {
+        ReaderSchemaSelectionStrategy::Latest => {
+            match client.get_schema_by_subject(subject).await {
+                Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
+                Err(GetBySubjectError::SubjectNotFound) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        }
+        ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(raw)),
+        ReaderSchemaSelectionStrategy::ById(id) => match client.get_schema_by_id(id).await {
+            Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
+            Err(GetByIdError::SchemaNotFound) => Ok(None),
+            Err(e) => Err(e.into()),
+        },
+    }
+}
+
 async fn get_remote_csr_schema(
     ccsr_client: &mz_ccsr::Client,
+    key_strategy: ReaderSchemaSelectionStrategy,
+    value_strategy: ReaderSchemaSelectionStrategy,
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema = ccsr_client
-        .get_schema_by_subject(&value_schema_name)
+    let value_schema = get_schema_with_strategy(&ccsr_client, value_strategy, &value_schema_name)
         .await
         .with_context(|| {
             format!(
@@ -451,15 +522,12 @@ async fn get_remote_csr_schema(
                 value_schema_name
             )
         })?;
+    let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
     let subject = format!("{}-key", topic);
-    let key_schema = match ccsr_client.get_schema_by_subject(&subject).await {
-        Ok(ks) => Some(ks),
-        Err(GetBySubjectError::SubjectNotFound) => None,
-        Err(e) => bail!(e),
-    };
+    let key_schema = get_schema_with_strategy(&ccsr_client, key_strategy, &subject).await?;
     Ok(Schema {
-        key_schema: key_schema.map(|s| s.raw),
-        value_schema: value_schema.raw,
+        key_schema,
+        value_schema,
     })
 }
 

@@ -3912,6 +3912,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "serde",
+ "timely",
  "tokio",
  "tokio-stream",
  "tonic",

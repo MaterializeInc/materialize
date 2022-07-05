@@ -10,10 +10,11 @@ from textwrap import dedent
 from typing import List
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import CheckDisabled
 
 
-class CreateReplica(Check):
+# https://github.com/MaterializeInc/materialize/issues/13235
+class CreateReplica(CheckDisabled):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -51,7 +52,8 @@ class CreateReplica(Check):
         )
 
 
-class DropReplica(Check):
+# https://github.com/MaterializeInc/materialize/issues/13235
+class DropReplica(CheckDisabled):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))

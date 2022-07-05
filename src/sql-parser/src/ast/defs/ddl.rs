@@ -155,8 +155,23 @@ pub enum CsrConnection<T: AstInfo> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ReaderSchemaSelectionStrategy {
+    Latest,
+    Inline(String),
+    ById(i32),
+}
+
+impl Default for ReaderSchemaSelectionStrategy {
+    fn default() -> Self {
+        Self::Latest
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectionAvro<T: AstInfo> {
     pub connection: CsrConnection<T>,
+    pub key_strategy: Option<ReaderSchemaSelectionStrategy>,
+    pub value_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<WithOption<T>>,
 }

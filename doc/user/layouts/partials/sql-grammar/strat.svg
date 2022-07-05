@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="339" height="125">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="51" y="3" width="64" height="32" rx="10"/>
+   <rect x="49"
+         y="1"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="21">INLINE</text>
+   <rect x="135" y="3" width="156" height="32"/>
+   <rect x="133" y="1" width="156" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="143" y="21">avro_reader_schema</text>
+   <rect x="51" y="47" width="34" height="32" rx="10"/>
+   <rect x="49"
+         y="45"
+         width="34"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="65">ID</text>
+   <rect x="105" y="47" width="146" height="32"/>
+   <rect x="103" y="45" width="146" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="113" y="65">schema_registry_id</text>
+   <rect x="51" y="91" width="74" height="32" rx="10"/>
+   <rect x="49"
+         y="89"
+         width="74"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="109">LATEST</text>
+   <path class="line"
+         d="m17 17 h2 m20 0 h10 m64 0 h10 m0 0 h10 m156 0 h10 m-280 0 h20 m260 0 h20 m-300 0 q10 0 10 10 m280 0 q0 -10 10 -10 m-290 10 v24 m280 0 v-24 m-280 24 q0 10 10 10 m260 0 q10 0 10 -10 m-270 10 h10 m34 0 h10 m0 0 h10 m146 0 h10 m0 0 h40 m-270 -10 v20 m280 0 v-20 m-280 20 v24 m280 0 v-24 m-280 24 q0 10 10 10 m260 0 q10 0 10 -10 m-270 10 h10 m74 0 h10 m0 0 h166 m23 -88 h-3"/>
+   <polygon points="329 17 337 13 337 21"/>
+   <polygon points="329 17 321 13 321 21"/>
+</svg>

@@ -17,7 +17,7 @@ use crossbeam_channel::Sender;
 use itertools::Itertools;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::client::{GenericClient, Partitionable, Partitioned, Reconnect};
+use crate::client::{GenericClient, Partitionable, Partitioned};
 
 /// A client to a thread in the same process.
 ///
@@ -28,17 +28,6 @@ pub struct LocalClient<C, R> {
     rx: UnboundedReceiver<R>,
     tx: Sender<C>,
     thread: Thread,
-}
-
-#[async_trait]
-impl<C: Send, R: Send> Reconnect for LocalClient<C, R> {
-    fn disconnect(&mut self) {
-        panic!("Disconnecting and reconnecting local clients is currently impossible");
-    }
-
-    async fn reconnect(&mut self) {
-        panic!("Disconnecting and reconnecting local clients is currently impossible");
-    }
 }
 
 #[async_trait]

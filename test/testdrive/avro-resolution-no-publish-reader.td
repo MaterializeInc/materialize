@@ -25,4 +25,4 @@ $ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schem
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-no-publish-writer-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
-contains:subject not found
+contains:No value schema found

@@ -191,6 +191,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                                     port_metadata_file_location,
                                 ),
                             })));
+                            processes.push(port_metadata);
                             continue;
                         }
                     }

@@ -89,6 +89,50 @@ export PATH=$HOME/.cargo/bin:$PATH
 % brew services start buildkite-agent
 ```
 
+To reduce the frequency of issues due to disk space being full, we
+clear the Rust target directories every week at midnight Sunday morning.
+Create the following script at `~/Library/Scripts/clean-target.sh`:
+
+```bash
+#!/usr/bin/env bash
+name="mac-1" # mac-2 on ARM
+rm -rf /opt/builds/$name/materialize/{tests,deploy}/target
+```
+
+And the following file at `~/Library/LaunchAgents/com.materialize.clean-target.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.materialize.clean-target</string>
+    <key>Program</key>
+    <string>/Users/administrator/Library/Scripts/clean-target.sh</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>0</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+</dict>
+</plist>
+```
+
+Then execute the following commands:
+
+```shell
+chmod u+x ~/Library/Scripts/clean-target.sh
+# This needs a `launchctl unload` first, if you're iterating and
+# it's already loaded. Otherwise it will fail with an obscure error.
+launchctl load ~/Library/LaunchAgents/com.materialize.clean-target.plist
+launchctl enable user/`id -u`/com.materialize.clean-target
+```
+
 Our goal is to build binaries that will run on the last three macOS versions on
 both Intel and ARM machines. This matches the versions that Homebrew supports.
 That means building the binaries on a machine running the oldest version of

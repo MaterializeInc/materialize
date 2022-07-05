@@ -188,10 +188,6 @@ pub struct Args {
     /// orchestrator.
     #[structopt(long, default_value = "always", arg_enum)]
     kubernetes_image_pull_policy: KubernetesImagePullPolicy,
-    /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
-    /// ADAPTER is lost.
-    #[clap(long, possible_values = &["true", "false"])]
-    orchestrator_linger: Option<bool>,
     /// Base port for spawning various services
     #[structopt(long, default_value = "2100")]
     base_service_port: u16,
@@ -378,22 +374,6 @@ enum OrchestratorKind {
     Process,
 }
 
-impl OrchestratorKind {
-    /// Default linger value for orchestrator type.
-    ///
-    /// Locally it is convenient for all the processes to be cleaned up when environmentd dies
-    /// which is why `Process` defaults to false.
-    ///
-    /// In production we want COMPUTE and STORAGE nodes to be resilient to ADAPTER failures which
-    /// is why `Kubernetes` defaults to true.
-    pub fn default_linger_value(&self) -> bool {
-        match self {
-            Self::Kubernetes => true,
-            Self::Process => false,
-        }
-    }
-}
-
 fn main() {
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),
@@ -576,9 +556,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
         orchestrator,
-        linger: args
-            .orchestrator_linger
-            .unwrap_or_else(|| args.orchestrator.default_linger_value()),
         persist_location: PersistLocation {
             blob_uri: match args.persist_blob_url {
                 // TODO: need to handle non-UTF-8 paths here.

@@ -1190,7 +1190,8 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type) AS
       SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
 UNION SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
-UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views",
+UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views
+UNION SELECT id, oid, schema_id, name, 'recorded view' FROM mz_catalog.mz_recorded_views",
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {

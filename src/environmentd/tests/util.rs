@@ -179,7 +179,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             orchestrator: Arc::new(orchestrator),
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
-            linger: false,
             persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", data_directory.display()),
                 consensus_uri,
