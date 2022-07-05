@@ -20,10 +20,10 @@ $ kafka-ingest format=bytes topic=input_csv
 2,3
 
 > SELECT * from input_csv;
-first second mz_offset
-----------------------
-1     2      1
-2     3      2
+first second
+-------------
+1     2
+2     3
 
 $ kafka-ingest format=bytes topic=input_csv_partitioned partition=0
 1,2
@@ -37,6 +37,6 @@ $ kafka-ingest format=bytes topic=input_csv_partitioned partition=1
   FORMAT CSV WITH 2 COLUMNS;
 
 > SELECT * FROM input_csv_partitioned
-first second mz_offset
-----------------------
-2     3      1
+first second
+------------
+2     3

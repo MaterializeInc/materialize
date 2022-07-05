@@ -30,13 +30,13 @@ b3
   )
   FORMAT TEXT;
 
-> SELECT * FROM s3_all ORDER BY mz_record;
-a1 1
-a2 2
-a3 3
-b1 4
-b2 5
-b3 6
+> SELECT * FROM s3_all
+a1
+a2
+a3
+b1
+b2
+b3
 
 > CREATE MATERIALIZED SOURCE s3_glob_a
   FROM S3 DISCOVER OBJECTS MATCHING '**/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
@@ -49,10 +49,10 @@ b3 6
   )
   FORMAT TEXT;
 
-> SELECT * FROM s3_glob_a ORDER BY mz_record;
-a1 1
-a2 2
-a3 3
+> SELECT * FROM s3_glob_a
+a1
+a2
+a3
 
 > CREATE MATERIALIZED SOURCE s3_just_a
   FROM S3 DISCOVER OBJECTS MATCHING 'short/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
@@ -65,10 +65,10 @@ a3 3
   )
   FORMAT TEXT;
 
-> SELECT * FROM s3_just_a ORDER BY mz_record;
-a1 1
-a2 2
-a3 3
+> SELECT * FROM s3_just_a
+a1
+a2
+a3
 
 $ s3-put-object bucket=test key=csv.csv
 c,7
@@ -86,13 +86,13 @@ c,9
   )
   FORMAT CSV WITH 2 COLUMNS;
 
-> SELECT * FROM csv_example ORDER BY mz_record;
-c 7 1
-c 8 2
-c 9 3
+> SELECT * FROM csv_example
+c 7
+c 8
+c 9
 
 > SELECT * FROM csv_example WHERE counts = '8';
-c 8 2
+c 8
 
 $ s3-put-object bucket=test key=logs/2020/12/31/frontend.log
 99.99.44.44 - - [12/31/2020:23:55:59] "GET /updates HTTP/1.1" 200 10020 "-" "Python/Requests_22"

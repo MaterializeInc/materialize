@@ -60,10 +60,10 @@ $ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Im
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Importer' USING SCHEMA FILE '${testdrive.temp-dir}/import.pb'
 
-> SELECT importee1::text, importee2::text, mz_offset FROM import
-importee1  importee2            mz_offset
------------------------------------------
-(f)        "(\"(1234,5678)\")"  1
+> SELECT importee1::text, importee2::text FROM import
+importee1  importee2
+------------------------------
+(f)        "(\"(1234,5678)\")"
 
 
 # Then, test again with the Confluent Schema Registry. Publishing Protobuf
@@ -103,14 +103,14 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> SELECT importee1::text, importee2::text, mz_offset FROM import_csr
-importee1  importee2            mz_offset
------------------------------------------
-(f)        "(\"(1234,5678)\")"  1
+> SELECT importee1::text, importee2::text FROM import_csr
+importee1  importee2
+-------------------------------
+(f)        "(\"(1234,5678)\")"
 
 # Test that non-zero message IDs in the Confluent wire format are rejected.
 $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true schema-message-id=123
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
-! SELECT importee1::text, importee2::text, mz_offset FROM import_csr
+! SELECT importee1::text, importee2::text FROM import_csr
 contains:Decode error: Text: protobuf deserialization error: unsupported Confluent-style protobuf message descriptor id: expected 0, but found: 123. See https://github.com/MaterializeInc/materialize/issues/9250

@@ -128,11 +128,11 @@ bìrd1:
   ENVELOPE UPSERT
 
 > select * from texttext
-key           text  mz_offset
------------------------------
-fish          fish  1
-bírdmore      geese 3
-mammal1       moose 4
+key           text
+-------------------
+fish          fish
+bírdmore      geese
+mammal1       moose
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 bírdmore:géese
@@ -141,34 +141,34 @@ mammal1:
 mammal1:mouse
 
 > select * from textbytes
-key           data             mz_offset
-----------------------------------------
-fish          fish             1
-bírdmore      g\xc3\xa9ese     6
-mammal1       mouse            9
-mammalmore    moose            7
+key           data
+---------------------------
+fish          fish
+bírdmore      g\xc3\xa9ese
+mammal1       mouse
+mammalmore    moose
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 mammalmore:herd
 
 > select * from bytesbytes
-key              data             mz_offset
-----------------------------------------
-fish             fish             1
-b\xc3\xadrdmore  g\xc3\xa9ese     6
-mammal1          mouse            9
-mammalmore       herd             10
+key              data
+------------------------------
+fish             fish
+b\xc3\xadrdmore  g\xc3\xa9ese
+mammal1          mouse
+mammalmore       herd
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 bìrd1:
 fish:
 
 > select * from bytestext
-key              text             mz_offset
-----------------------------------------
-b\xc3\xadrdmore  géese            6
-mammal1          mouse            9
-mammalmore       herd             10
+key              text
+-----------------------
+b\xc3\xadrdmore  géese
+mammal1          mouse
+mammalmore       herd
 
 $ file-append path=test.proto
 syntax = "proto3";
@@ -201,14 +201,14 @@ bìrd1:{"f": "two"}
 birdmore: {}
 
 > SELECT * FROM bytesproto
-fish         one 1
-b\xc3\xacrd1 two 2
-birdmore     "" 3
+fish         one
+b\xc3\xacrd1 two
+birdmore     ""
 
 > SELECT * FROM textproto
-fish      one  1
-bìrd1     two  2
-birdmore  ""   3
+fish      one
+bìrd1     two
+birdmore  ""
 
 $ kafka-ingest topic=textproto
   format=protobuf descriptor-file=test.pb message=Test
@@ -222,18 +222,18 @@ mammal1:
 mammalmore: {"f": "seven"}
 
 > SELECT * FROM bytesproto
-fish              one    1
-birdmore          four   6
-m\xc3\xa4mmalmore five   7
-b\xc3\xacrd1      six    8
-mammalmore        seven  10
+fish              one
+birdmore          four
+m\xc3\xa4mmalmore five
+b\xc3\xacrd1      six
+mammalmore        seven
 
 > SELECT * FROM textproto
-fish        one    1
-birdmore    four   6
-mämmalmore  five   7
-bìrd1       six    8
-mammalmore  seven  10
+fish        one
+birdmore    four
+mämmalmore  five
+bìrd1       six
+mammalmore  seven
 
 $ kafka-create-topic topic=nullkey partitions=1
 
@@ -254,10 +254,10 @@ mammal1:
   ENVELOPE UPSERT
 
 > select * from nullkey
-key           text  mz_offset
------------------------------
-birdmore      geese 5
-mammalmore    moose 6
+key           text
+-------------------
+birdmore      geese
+mammalmore    moose
 
 $ kafka-create-topic topic=realtimeavroavro partitions=1
 

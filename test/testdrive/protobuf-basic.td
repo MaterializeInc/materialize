@@ -67,11 +67,10 @@ bytes      false     bytea
 string     false     text
 enum       false     text
 message    true      record
-mz_offset  false     bigint
 
-> SELECT bool, int32, int64, float, double, bytes, string, enum, message::text, mz_offset FROM basic
-bool  int32  int64  float  double  bytes  string enum  message                             mz_offset
+> SELECT bool, int32, int64, float, double, bytes, string, enum, message::text FROM basic
+bool  int32  int64  float  double  bytes  string enum  message
 ----
-true  1      2      1.2    3.2     aaa    bbb    ENUM1 (t,1,2,1.2,3.2,\x616161,bbb,ENUM1)  1
-false 0      0      0      0       ""     ""     ENUM0 <null>                              2
-false 0      0      0      0       ""     ""     ENUM0 "(f,0,0,0,0,\\x,\"\",ENUM0)"        3
+true  1      2      1.2    3.2     aaa    bbb    ENUM1 (t,1,2,1.2,3.2,\x616161,bbb,ENUM1)
+false 0      0      0      0       ""     ""     ENUM0 <null>
+false 0      0      0      0       ""     ""     ENUM0 "(f,0,0,0,0,\\x,\"\",ENUM0)"

@@ -195,12 +195,12 @@ two,2:bee,honey
   VALUE FORMAT TEXT
   INCLUDE KEY
 
-> SELECT * FROM textsrc ORDER BY mz_offset ASC
-key    text        mz_offset
----------------------------
-one,1  horse,apple 1
-two,2  bee,honey   2
-<null> cow,grass   3
+> SELECT * FROM textsrc
+key    text
+-------------------
+one,1  horse,apple
+two,2  bee,honey
+<null> cow,grass
 
 > CREATE MATERIALIZED SOURCE regexvalue
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
@@ -209,11 +209,11 @@ two,2  bee,honey   2
   INCLUDE KEY
 
 > SELECT * FROM regexvalue
-key   animal  food  mz_offset
-----------------------------
-one,1  horse  apple 1
-two,2  bee    honey 2
-<null> cow    grass 3
+key   animal  food
+--------------------
+one,1  horse  apple
+two,2  bee    honey
+<null> cow    grass
 
 > CREATE MATERIALIZED SOURCE regexboth
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
@@ -221,12 +221,12 @@ two,2  bee    honey 2
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY
 
-> SELECT * FROM regexboth ORDER BY mz_offset ASC
-id_name id     animal food  mz_offset
----------------------------------
-one     1      horse  apple 1
-two     2      bee    honey 2
-<null>  <null> cow    grass 3
+> SELECT * FROM regexboth
+id_name id     animal food
+---------------------------
+one     1      horse  apple
+two     2      bee    honey
+<null>  <null> cow    grass
 
 
 > CREATE MATERIALIZED SOURCE regexbothnest
@@ -276,11 +276,11 @@ $ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Va
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   INCLUDE KEY
 
-> SELECT * FROM input_proto ORDER BY measurement ASC
-id     measurement  mz_offset
---------------------------
-a      10           1
-<null> 11           2
+> SELECT * FROM input_proto
+id     measurement
+-------------------
+a      10
+<null> 11
 
 $ kafka-create-topic topic=proto-structured partitions=1
 
@@ -295,7 +295,7 @@ $ kafka-ingest topic=proto-structured
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   INCLUDE KEY AS key
 
-> SELECT key::text, (key).id1, (key).id2, measurement, mz_offset FROM input_proto_structured
-key    id1  id2  measurement  mz_offset
----------------------------------------
-(1,2)  1    2    10           1
+> SELECT key::text, (key).id1, (key).id2, measurement FROM input_proto_structured
+key    id1  id2  measurement
+----------------------------
+(1,2)  1    2    10

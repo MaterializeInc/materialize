@@ -20,18 +20,21 @@ $ kafka-create-topic topic=t0
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'missing_topic'
   WITH (kafka_time_offset=1)
   FORMAT TEXT
+  INCLUDE OFFSET
 contains:topic missing_topic does not exist
 
 ! CREATE MATERIALIZED SOURCE pick_one
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset=1, start_offset=1)
   FORMAT TEXT
+  INCLUDE OFFSET
 contains:`start_offset` and `kafka_time_offset` cannot be set at the same time.
 
 ! CREATE MATERIALIZED SOURCE not_a_number
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset="not_a_number")
   FORMAT TEXT
+  INCLUDE OFFSET
 contains:`kafka_time_offset` must be a number
 
 #
@@ -59,34 +62,40 @@ grape:grape
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=0)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 > CREATE MATERIALIZED SOURCE append_time_offset_1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=1, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 > CREATE MATERIALIZED SOURCE append_time_offset_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=2, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 > CREATE MATERIALIZED SOURCE append_time_offset_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=3, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 > CREATE MATERIALIZED SOURCE append_time_offset_4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=4, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 > CREATE MATERIALIZED SOURCE append_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 > SELECT * FROM append_time_offset_0
-text      mz_offset
+text      offset
 -------------------
 apple     1
 banana    2
@@ -97,7 +106,7 @@ fig       4
 grape     1
 
 > SELECT * FROM append_time_offset_1
-text      mz_offset
+text      offset
 -------------------
 apple     1
 banana    2
@@ -108,7 +117,7 @@ fig       4
 grape     1
 
 > SELECT * FROM append_time_offset_2
-text      mz_offset
+text      offset
 -------------------
 cherry    1
 date      2
@@ -117,18 +126,18 @@ fig       4
 grape     1
 
 > SELECT * FROM append_time_offset_3
-text      mz_offset
+text      offset
 -------------------
 fig       4
 grape     1
 
 > SELECT * FROM append_time_offset_4
-text      mz_offset
+text      offset
 -------------------
 grape     1
 
 > SELECT * FROM append_time_offset_5
-text      mz_offset
+text      offset
 -------------------
 
 $ kafka-add-partitions topic=t1 total-partitions=4
@@ -139,7 +148,7 @@ hazelnut:hazelnut
 $ set-sql-timeout duration=60s
 
 > SELECT * FROM append_time_offset_5
-text      mz_offset
+text      offset
 -------------------
 hazelnut  1
 
@@ -172,40 +181,46 @@ grape:grape
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=0)
   KEY FORMAT TEXT VALUE FORMAT TEXT
+  INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=1)
   KEY FORMAT TEXT VALUE FORMAT TEXT
+  INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=2)
   KEY FORMAT TEXT VALUE FORMAT TEXT
+  INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=3)
   KEY FORMAT TEXT VALUE FORMAT TEXT
+  INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=4)
   KEY FORMAT TEXT VALUE FORMAT TEXT
+  INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
   KEY FORMAT TEXT VALUE FORMAT TEXT
+  INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > SELECT * FROM upsert_time_offset_0
-key       text      mz_offset
+key       text      offset
 -----------------------------
 banana    banana    2
 date      date      2
@@ -214,7 +229,7 @@ fig       fig       5
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_1
-key       text      mz_offset
+key       text      offset
 -----------------------------
 banana    banana    2
 date      date      2
@@ -223,7 +238,7 @@ fig       fig       5
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_2
-key       text      mz_offset
+key       text      offset
 -----------------------------
 date      date      2
 eggfruit  eggfruit  3
@@ -231,18 +246,18 @@ fig       fig       5
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_3
-key       text      mz_offset
+key       text      offset
 -----------------------------
 fig       fig       5
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_4
-key       text      mz_offset
+key       text      offset
 -----------------------------
 grape     grape     1
 
 > SELECT * FROM upsert_time_offset_5
-key       text      mz_offset
+key       text      offset
 -----------------------------
 
 $ kafka-add-partitions topic=t2 total-partitions=4
@@ -254,7 +269,7 @@ hazelnut:hazelnut
 $ set-sql-timeout duration=60s
 
 > SELECT * FROM upsert_time_offset_5
-key       text      mz_offset
+key       text      offset
 -----------------------------
 hazelnut  hazelnut  1
 
@@ -282,20 +297,22 @@ cherry
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t3-${testdrive.seed}'
   WITH (kafka_time_offset=-946100000000)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 > CREATE MATERIALIZED SOURCE relative_time_offset_today
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t3-${testdrive.seed}'
   WITH (kafka_time_offset=-1)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 > SELECT * FROM relative_time_offset_30_years_ago
-text      mz_offset
+text      offset
 -------------------
 banana    2
 cherry    3
 
 > SELECT * FROM relative_time_offset_today
-text      mz_offset
+text      offset
 -------------------
 cherry    3
 
@@ -313,6 +330,7 @@ pie
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t4-${testdrive.seed}'
   WITH (kafka_time_offset = -1)
   FORMAT TEXT
+  INCLUDE OFFSET
 
 
 #

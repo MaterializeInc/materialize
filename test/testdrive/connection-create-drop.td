@@ -45,10 +45,10 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
   FORMAT CSV WITH 2 COLUMNS
 
 > SELECT * FROM connection_source
-first second mz_offset
-----------------------
-1     2      1
-2     3      2
+first second
+------------
+1     2
+2     3
 
 # Confirm we cannot drop the connection while a source depends upon it
 ! DROP CONNECTION testconn;
@@ -238,10 +238,10 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 
-> SELECT importee1::text, importee2::text, mz_offset FROM import_connection_csr
-importee1  importee2            mz_offset
------------------------------------------
-(f)        "(\"(1234,5678)\")"  1
+> SELECT importee1::text, importee2::text FROM import_connection_csr
+importee1  importee2
+--------------------------------
+(f)        "(\"(1234,5678)\")"
 
 # Test invalid connection parameter combinations
 

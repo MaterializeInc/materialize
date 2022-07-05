@@ -47,7 +47,7 @@ use mz_storage::client::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_storage::client::sources::{
-    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
+    DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
     KinesisSourceConnection, MzOffset, PostgresSourceConnection, PostgresSourceDetails,
     ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection, SourceConnection,
@@ -716,38 +716,10 @@ pub fn plan_create_source(
         }
     };
 
-    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset) syntax is implemented
-    let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
-    let metadata_columns = external_connection.metadata_columns(include_defaults);
-    let metadata_column_types = external_connection.metadata_column_types(include_defaults);
+    let metadata_columns = external_connection.metadata_columns();
+    let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    // Append default metadata columns if column aliases were provided but do not include them.
-    //
-    // This is a confusing hack due to two combined facts:
-    //
-    // * we used to not allow users to refer to/alias the metadata columns because they were
-    //   specified in render, instead of here in plan
-    // * we don't follow postgres semantics and allow a shorter rename list than total column list
-    //
-    // TODO: probably we should just migrate to pg semantics and allow specifying fewer columns than
-    // actually exist?
-    let tmp_col;
-    let col_names = if include_defaults
-        && !col_names.is_empty()
-        && metadata_columns.len() + col_names.len() == desc.arity()
-    {
-        let mut tmp = Vec::with_capacity(desc.arity());
-        tmp.extend(col_names.iter().cloned());
-        tmp.push(Ident::from(
-            external_connection.default_metadata_column_name().unwrap(),
-        ));
-        tmp_col = tmp;
-        &tmp_col
-    } else {
-        col_names
-    };
 
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
@@ -759,7 +731,7 @@ pub fn plan_create_source(
         desc = desc.without_keys();
     }
 
-    desc = plan_utils::maybe_rename_columns(format!("source {}", name), desc, &col_names)?;
+    plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, &col_names)?;
 
     let names: Vec<_> = desc.iter_names().cloned().collect();
     if let Some(dup) = names.iter().duplicates().next() {
@@ -1447,7 +1419,7 @@ pub fn plan_view(
         scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
     };
 
-    desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, &columns)?;
+    plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, &columns)?;
     let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
@@ -1692,7 +1664,7 @@ pub fn plan_create_recorded_view(
 
     let query::PlannedQuery {
         mut expr,
-        desc,
+        mut desc,
         finishing,
     } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
 
@@ -1700,8 +1672,7 @@ pub fn plan_create_recorded_view(
     expr.finish(finishing);
     let expr = expr.optimize_and_lower(&scx.into())?;
 
-    let desc =
-        plan_utils::maybe_rename_columns(format!("recorded view {}", name), desc, &stmt.columns)?;
+    plan_utils::maybe_rename_columns(format!("recorded view {}", name), &mut desc, &stmt.columns)?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = column_names.iter().duplicates().next() {

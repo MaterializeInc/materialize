@@ -55,9 +55,9 @@ contains:CSV error at record number 1: expected 2 columns, got 3.
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM matching_column_names where zip = '14618'
-city state zip mz_record
--------------------------
-Rochester NY 14618 1
+city state zip
+------------------
+Rochester NY 14618
 
 > CREATE MATERIALIZED SOURCE matching_column_names_alias (a, b, c)
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
@@ -71,9 +71,9 @@ Rochester NY 14618 1
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM matching_column_names_alias where c = '14618'
-a b c mz_record
+a b c
 ----------------
-Rochester NY 14618 1
+Rochester NY 14618
 
 > CREATE MATERIALIZED SOURCE mismatched_column_names
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
@@ -114,12 +114,12 @@ contains:CSV error at record number 1: expected 2 columns, got 3
   FORMAT CSV WITH 3 COLUMNS
 
 > SELECT * FROM static_csv
-column1        column2  column3  mz_record
---------------------------------------------
-city           state     zip     1
-Rochester      NY        14618   2
-"New York"     NY        10004   3
-"bad,\nplace\""  CA        92679   4
+column1        column2  column3
+---------------------------------
+city           state     zip
+Rochester      NY        14618
+"New York"     NY        10004
+"bad,\nplace\""  CA      92679
 
 ! CREATE SOURCE static_csv_nothing_demanded_src
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
@@ -151,11 +151,11 @@ contains:Expected a list of columns in parentheses, found EOF
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM static_csv_manual_header
-city_man       state_man  zip_man  mz_record
----------------------------------------------
-Rochester      NY         14618    1
-"New York"     NY         10004    2
-"bad,\nplace\""  CA         92679    3
+city_man       state_man  zip_man
+-----------------------------------
+Rochester      NY         14618
+"New York"     NY         10004
+"bad,\nplace\""  CA       92679
 
 # Dynamic CSV with automatic headers.
 
@@ -171,18 +171,18 @@ $ kafka-ingest topic=dynamic format=bytes
 Rochester,NY,14618
 
 > SELECT * FROM dynamic_csv
-city           state     zip     mz_offset
-------------------------------------------
-Rochester      NY        14618   1
+city           state     zip
+------------------------------
+Rochester      NY        14618
 
 $ kafka-ingest topic=dynamic format=bytes
 New York,NY,10004
 
 > SELECT * FROM dynamic_csv
-city           state     zip     mz_offset
-------------------------------------------
-Rochester      NY        14618   1
-"New York"     NY        10004   2
+city           state     zip
+------------------------------
+Rochester      NY        14618
+"New York"     NY        10004
 
 # Static malformed CSV
 $ s3-put-object bucket=test key=malformed.csv
@@ -246,6 +246,6 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
-{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004", "mz_record": 2}
-{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618", "mz_record": 1}
-{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679", "mz_record": 3}
+{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004"}
+{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618"}
+{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679"}

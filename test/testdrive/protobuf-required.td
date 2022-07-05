@@ -28,9 +28,9 @@ $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb messag
   FORMAT PROTOBUF MESSAGE '.Required' USING SCHEMA FILE '${testdrive.temp-dir}/required.pb'
 
 > SELECT * FROM required
-f   mz_offset
--------------
-42  1
+f
+----
+42
 
 $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=Required
 {}

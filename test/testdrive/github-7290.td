@@ -24,7 +24,7 @@ bar
   )
   FORMAT BYTES;
 
-> SELECT data FROM posix ORDER BY mz_record;
+> SELECT data FROM posix
 foo
 bar
 
@@ -43,6 +43,6 @@ bar
   )
   FORMAT BYTES;
 
-> SELECT data FROM non_posix ORDER BY mz_record;
+> SELECT data FROM non_posix
 foo
 bar
