@@ -735,37 +735,42 @@ SELECT INTERVAL '1' YEAR / 0
 ## Largest values
 
 query T
-SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'
+SELECT INTERVAL '2147483647 days 2562047788 hours 54.775807 seconds'
 ----
-2147483647 days 2147483647:59:59.999999
+2147483647 days 2562047788:00:54.775807
 
 query T
-SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds'
+SELECT INTERVAL '2147483647 days 2562047787 hours 59 minutes 59.999999 seconds'
 ----
--2147483647 days -2147483647:59:59.999999
+2147483647 days 2562047787:59:59.999999
 
 query T
-SELECT INTERVAL '-2147483648 days -2147483648 hours -59 minutes -59.999999 seconds'
+SELECT INTERVAL '-2147483648 days -2562047788 hours -54.775808 seconds'
 ----
--2147483648 days -2147483648:59:59.999999
+-2147483648 days -2562047788:00:54.775808
 
-statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '2147483647 days 2147483648 hours'
+query T
+SELECT INTERVAL '-2147483648 days -2562047787 hours -59 minutes -59.999999 seconds'
+----
+-2147483648 days -2562047787:59:59.999999
 
-statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '-2147483648 days -2147483649 hours'
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '2147483647 days 2562047789 hours';
 
-statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '-2147483648 days -2147483648 hours -60 min'
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-2147483648 days -2562047789 hours'
 
-statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '-2147483648 days -2147483648 hours -59 min -60 sec'
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-2147483648 days -2562047788 hours -60 min'
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-2147483648 days -2562047788 hours -59 min -60 sec'
 
 statement error interval out of range
-SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds' + INTERVAL '1';
+SELECT INTERVAL '2147483647 days 2562047788 hours 54 seconds' + INTERVAL '1'
 
 statement error interval out of range
-SELECT INTERVAL '-2147483648 days -2147483648 hours -59 minutes -59.999999 seconds' - INTERVAL '1';
+SELECT INTERVAL '-2147483648 days -2562047788 hours -54 seconds' - INTERVAL '1'
 
 statement error interval out of range
 SELECT INTERVAL '2147483647' MONTH / 0.99
@@ -773,11 +778,16 @@ SELECT INTERVAL '2147483647' MONTH / 0.99
 statement error interval out of range
 SELECT INTERVAL '-2147483647' MONTH * 1.01
 
-# Largest number of cumulative nanoseconds
+# Largest and smallest numbers of cumulative microseconds
 query T
-SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.999999999 minutes 0.999999999 seconds';
+SELECT INTERVAL '9223372036854775807 microseconds'
 ----
-29 days 49:01:00.997318
+2562047788:00:54.775807
+
+query T
+SELECT INTERVAL '-9223372036854775808 microseconds'
+----
+-2562047788:00:54.775808
 
 ## Overflows
 
@@ -929,7 +939,7 @@ query error interval out of range
 SELECT -INTERVAL '-2147483648 days';
 
 query error interval out of range
-SELECT -INTERVAL '-2147483648 hours';
+SELECT -INTERVAL '-9223372036854775808 microseconds';
 
 query error interval out of range
 SELECT INTERVAL '-1 months' - INTERVAL '-2147483648 months';
@@ -938,10 +948,10 @@ query error interval out of range
 SELECT INTERVAL '-1 day' - INTERVAL '-2147483648 days';
 
 query error interval out of range
-SELECT INTERVAL '-1 hours' - INTERVAL '-2147483648 hours';
+SELECT INTERVAL '-1 hours' - INTERVAL '-2562047788 hours';
 
 query error interval out of range
-SELECT -INTERVAL '-2147483648 days -2147483648 hours -59 minutes -59.999999 seconds';
+SELECT -INTERVAL '-2147483648 days -2562047787 hours -59 minutes -59.999999 seconds';
 
 # Cast Interval to time
 query T

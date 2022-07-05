@@ -555,10 +555,7 @@ impl ParsedDateTime {
             self.add_field(field, &mut months, &mut days, &mut micros)?;
         }
 
-        match Interval::new(months, days, micros) {
-            Ok(i) => Ok(i),
-            Err(e) => Err(e.to_string()),
-        }
+        Ok(Interval::new(months, days, micros))
     }
     /// Adds the appropriate values from self's ParsedDateTime to `months`,
     /// `days`, and `micros`. These fields are then appropriate to construct
@@ -4158,8 +4155,7 @@ fn test_parseddatetime_compute_interval() {
             0,
             1,
             (-2 * 60 * 60 * 1_000_000) + (-3 * 60 * 1_000_000) + (-4 * 1_000_000) + -500_000,
-        )
-        .unwrap(),
+        ),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4174,8 +4170,7 @@ fn test_parseddatetime_compute_interval() {
             0,
             -1,
             (2 * 60 * 60 * 1_000_000) + (3 * 60 * 1_000_000) + (4 * 1_000_000) + 500_000,
-        )
-        .unwrap(),
+        ),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4184,7 +4179,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 1 day -00:00:00.27
-        Interval::new(0, 1, -270_000).unwrap(),
+        Interval::new(0, 1, -270_000),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4193,7 +4188,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -1 day 00:00:00.27
-        Interval::new(0, -1, 270_000).unwrap(),
+        Interval::new(0, -1, 270_000),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4210,8 +4205,7 @@ fn test_parseddatetime_compute_interval() {
             -16,
             13,
             (7 * 60 * 60 * 1_000_000) + (7 * 60 * 1_000_000) + (53 * 1_000_000) + 220_829,
-        )
-        .unwrap(),
+        ),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4220,7 +4214,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:03.003
-        Interval::new(0, 0, (3 * 1_000_000) + 3_000).unwrap(),
+        Interval::new(0, 0, (3 * 1_000_000) + 3_000),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4229,7 +4223,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:03.000003
-        Interval::new(0, 0, (3 * 1_000_000) + 3).unwrap(),
+        Interval::new(0, 0, (3 * 1_000_000) + 3),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4238,7 +4232,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:00.0012034
-        Interval::new(0, 0, 1_203).unwrap(),
+        Interval::new(0, 0, 1_203),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4249,7 +4243,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 1234 years
-        Interval::new(1234 * 12, 0, 0).unwrap(),
+        Interval::new(1234 * 12, 0, 0),
     );
 
     fn run_test_parseddatetime_compute_interval(pdt: ParsedDateTime, expected: Interval) {
