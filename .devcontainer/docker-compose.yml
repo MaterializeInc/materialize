@@ -1,0 +1,46 @@
+version: '3.8'
+
+volumes:
+  postgres-data:
+
+
+services:
+  mz:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Use the VARIANT arg to pick a Debian OS version: buster, bullseye
+        # Use bullseye when on local on arm64/Apple Silicon.
+        VARIANT: bullseye
+    env_file:
+      - .env
+
+    volumes:
+      - ..:/workspace:cached
+
+    # Overrides default command so things don't shut down after the process ends.
+    command: sleep infinity
+
+    # Runs app on the same network host, allowing the vscode container to connect to mzcompose containers over a network.
+    # TODO: Is there a better way to achieve this?
+    # TODO: does this allow "forwardPorts" in devcontainer.json to function?
+    network_mode: "host"
+    # Uncomment the next line to use a non-root user for all processes.
+    # user: vscode
+
+    # Use "forwardPorts" in **devcontainer.json** to forward an app port locally.
+    # (Adding the "ports" property to this file will not forward from a Codespace.)
+
+  postgres:
+    image: postgres:13.6
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    env_file:
+      - .env
+    network_mode: "host"
+    # Uncomment to enable replication slots, needed for postgres source testing.
+    #command: postgres -c log_statement=all -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20
+    # Add "forwardPorts": ["5432"] to **devcontainer.json** to forward PostgreSQL locally.
+    # (Adding the "ports" property to this file will not forward from a Codespace.)
