@@ -658,8 +658,19 @@ where
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
         let as_of = Antichain::from_elem(as_of);
-        let mut snapshot = self.state.persist_handles[&id]
-            .read
+
+        // We open a new `ReadHandle` and don't store one in the collection
+        // metadata because snapshot should be used rarely. Keeping around a
+        // ReadHandle will hold back compaction (even of metadata) in persist
+        // and requires periodic downgrading.
+        let shard_id = self.collection(id)?.collection_metadata.data_shard;
+        let read_handle = self
+            .persist_client
+            .open_reader::<SourceData, (), _, _>(shard_id)
+            .await
+            .expect("invalid persist usage");
+
+        let mut snapshot = read_handle
             .snapshot(as_of)
             .await
             .map_err(|_| StorageError::ReadBeforeSince(id))?;
@@ -672,6 +683,10 @@ where
                 contents.push((row, diff));
             }
         }
+
+        // Explicitly expire so that our reader state can be removed as soon as
+        // possible in persist.
+        read_handle.expire().await;
 
         Ok(contents)
     }
