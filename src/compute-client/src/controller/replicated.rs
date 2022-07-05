@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
+use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 use tokio::select;
@@ -214,17 +215,13 @@ pub struct PendingPeek {
     otel_ctx: OpenTelemetryContext,
 }
 
-/// A client backed by multiple replicas.
+/// The internal state of the client.
+///
+/// This lives in a separate struct from the handles to the individual replica
+/// tasks, so that we can call methods on it
+/// while holding mutable borrows to those.
 #[derive(Debug)]
-pub struct ActiveReplication<T> {
-    /// Handles to the replicas themselves.
-    replicas: HashMap<
-        ReplicaId,
-        (
-            UnboundedSender<ComputeCommand<T>>,
-            UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
-        ),
-    >,
+pub struct ActiveReplicationState<T> {
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashMap<uuid::Uuid, PendingPeek>,
     /// Reported frontier of each in-progress tail.
@@ -242,95 +239,15 @@ pub struct ActiveReplication<T> {
     pending_response: VecDeque<ActiveReplicationResponse<T>>,
 }
 
-impl<T> Default for ActiveReplication<T> {
-    fn default() -> Self {
-        Self {
-            replicas: Default::default(),
-            peeks: Default::default(),
-            tails: Default::default(),
-            uppers: Default::default(),
-            history: Default::default(),
-            last_command_count: 0,
-            pending_response: Default::default(),
-        }
-    }
-}
-
-impl<T> ActiveReplication<T>
+impl<T> ActiveReplicationState<T>
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + Lattice,
 {
-    /// Introduce a new replica, and catch it up to the commands of other replicas.
-    ///
-    /// It is not yet clear under which circumstances a replica can be removed.
-    pub fn add_replica<C>(&mut self, id: ReplicaId, client: C)
-    where
-        C: ComputeClient<T> + Reconnect + 'static,
-    {
-        for (_, frontiers) in self.uppers.values_mut() {
-            frontiers.insert(id, {
-                let mut frontier = timely::progress::frontier::MutableAntichain::new();
-                frontier.update_iter(Some((T::minimum(), 1)));
-                frontier
-            });
-        }
-        let (cmd_tx, resp_rx) = ReplicaTask::spawn(id, client);
-        self.replicas.insert(id, (cmd_tx, resp_rx.into()));
-        self.hydrate_replica(id);
-    }
-
-    pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
-        self.replicas.keys().copied()
-    }
-
-    /// Remove a replica by its identifier.
-    pub fn remove_replica(&mut self, id: ReplicaId) {
-        self.replicas.remove(&id);
-        for (_frontier, frontiers) in self.uppers.iter_mut() {
-            frontiers.1.remove(&id);
-        }
-    }
-
-    /// Pipes a command stream at the indicated replica, introducing new dataflow identifiers.
-    fn hydrate_replica(&mut self, replica_id: ReplicaId) {
-        // Zero out frontiers maintained by this replica.
-        for (_id, (_, frontiers)) in self.uppers.iter_mut() {
-            *frontiers.get_mut(&replica_id).unwrap() =
-                timely::progress::frontier::MutableAntichain::new();
-            frontiers
-                .get_mut(&replica_id)
-                .unwrap()
-                .update_iter(Some((T::minimum(), 1)));
-        }
-        // Take this opportunity to clean up the history we should present.
-        self.last_command_count = self.history.reduce(&self.peeks);
-
-        // Replay the commands at the client, creating new dataflow identifiers.
-        let (cmd_tx, _) = self.replicas.get_mut(&replica_id).unwrap();
-        for command in self.history.iter() {
-            let mut command = command.clone();
-            specialize_command(&mut command, replica_id);
-
-            cmd_tx
-                .send(command)
-                .expect("Channel to client has gone away!")
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl<T> GenericClient<ComputeCommand<T>, ActiveReplicationResponse<T>> for ActiveReplication<T>
-where
-    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
-{
-    /// The ADAPTER layer's isolation from COMPUTE depends on the fact that this
-    /// function is essentially non-blocking, i.e. the ADAPTER blindly awaits
-    /// calls to this function. This lets the ADAPTER continue operating even in
-    /// the face of unhealthy or absent replicas.
-    ///
-    /// If this function every become blocking (e.g. making networking calls),
-    /// the ADAPTER must amend its contract with COMPUTE.
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    fn handle_command(
+        &mut self,
+        cmd: &ComputeCommand<T>,
+        frontiers: HashMap<u64, MutableAntichain<T>>,
+    ) {
         // Update our tracking of peek commands.
         match &cmd {
             ComputeCommand::Peek(Peek { uuid, otel_ctx, .. }) => {
@@ -371,16 +288,8 @@ where
         cmd.frontier_tracking(&mut start, &mut cease);
         for id in start.into_iter() {
             let frontier = timely::progress::Antichain::from_elem(T::minimum());
-            let frontiers = self
-                .replicas
-                .keys()
-                .map(|id| {
-                    let mut frontier = timely::progress::frontier::MutableAntichain::new();
-                    frontier.update_iter(Some((T::minimum(), 1)));
-                    (id.clone(), frontier)
-                })
-                .collect();
-            let previous = self.uppers.insert(id, (frontier, frontiers));
+
+            let previous = self.uppers.insert(id, (frontier, frontiers.clone()));
             assert!(previous.is_none());
         }
         for id in cease.into_iter() {
@@ -395,6 +304,237 @@ where
         if self.history.len() > 2 * self.last_command_count {
             self.last_command_count = self.history.reduce(&self.peeks);
         }
+    }
+
+    fn handle_message(
+        &mut self,
+        message: ComputeResponse<T>,
+        replica_id: ReplicaId,
+    ) -> Option<ActiveReplicationResponse<T>> {
+        self.pending_response
+            .push_front(ActiveReplicationResponse::ReplicaHeartbeat(
+                replica_id,
+                Utc::now(),
+            ));
+        match message {
+            ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
+                // If this is the first response, forward it; otherwise do not.
+                // TODO: we could collect the other responses to assert equivalence?
+                // Trades resources (memory) for reassurances; idk which is best.
+                //
+                // NOTE: we use the `otel_ctx` from the response, not the
+                // pending peek, because we currently want the parent
+                // to be whatever the compute worker did with this peek.
+                //
+                // Additionally, we just use the `otel_ctx` from the first worker to
+                // respond.
+                self.peeks.remove(&uuid).map(|_| {
+                    ActiveReplicationResponse::ComputeResponse(ComputeResponse::PeekResponse(
+                        uuid, response, otel_ctx,
+                    ))
+                })
+            }
+            ComputeResponse::FrontierUppers(mut list) => {
+                for (id, changes) in list.iter_mut() {
+                    if let Some((frontier, frontiers)) = self.uppers.get_mut(id) {
+                        // Apply changes to replica `replica_id`
+                        frontiers
+                            .get_mut(&replica_id)
+                            .unwrap()
+                            .update_iter(changes.drain());
+                        // We can swap `frontier` into `changes, negated, and then use that to repopulate `frontier`.
+                        // Working
+                        changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
+                        frontier.clear();
+                        for (time1, _neg_one) in changes.iter() {
+                            for time2 in frontiers[&replica_id].frontier().iter() {
+                                frontier.insert(time1.join(time2));
+                            }
+                        }
+                        changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
+                        changes.compact();
+                    }
+                }
+                if !list.is_empty() {
+                    Some(ActiveReplicationResponse::ComputeResponse(
+                        ComputeResponse::FrontierUppers(list),
+                    ))
+                } else {
+                    None
+                }
+            }
+            ComputeResponse::TailResponse(id, response) => {
+                match response {
+                    TailResponse::Batch(TailBatch {
+                        lower: _,
+                        upper,
+                        mut updates,
+                    }) => {
+                        // It is sufficient to compare `upper` against the last reported frontier for `id`,
+                        // and if `upper` is not less or equal to that frontier, some progress has happened.
+                        // If so, we retain only the updates greater or equal to that last reported frontier,
+                        // and announce a batch from that frontier to its join with `upper`.
+
+                        // Ensure that we have a recorded frontier ready to go.
+                        let entry = self
+                            .tails
+                            .entry(id)
+                            .or_insert_with(|| Antichain::from_elem(T::minimum()));
+                        // If the upper frontier has changed, we have a statement to make.
+                        // This happens if there is any element of `entry` not greater or
+                        // equal to some element of `upper`.
+                        let new_upper = entry.join(&upper);
+                        if &new_upper != entry {
+                            let new_lower = entry.clone();
+                            entry.clone_from(&new_upper);
+                            updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
+                            Some(ActiveReplicationResponse::ComputeResponse(
+                                ComputeResponse::TailResponse(
+                                    id,
+                                    TailResponse::Batch(TailBatch {
+                                        lower: new_lower,
+                                        upper: new_upper,
+                                        updates,
+                                    }),
+                                ),
+                            ))
+                        } else {
+                            None
+                        }
+                    }
+                    TailResponse::DroppedAt(frontier) => {
+                        // Introduce a new terminal frontier to suppress all future responses.
+                        // We cannot simply remove the entry, as we currently create new entries in response
+                        // to observed responses; if we pre-load the entries in response to commands we can
+                        // clean up the state here.
+                        self.tails.insert(id, Antichain::new());
+                        Some(ActiveReplicationResponse::ComputeResponse(
+                            ComputeResponse::TailResponse(id, TailResponse::DroppedAt(frontier)),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A client backed by multiple replicas.
+#[derive(Debug)]
+pub struct ActiveReplication<T> {
+    /// Handles to the replicas themselves.
+    replicas: HashMap<
+        ReplicaId,
+        (
+            UnboundedSender<ComputeCommand<T>>,
+            UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
+        ),
+    >,
+    /// All other internal state of the client
+    state: ActiveReplicationState<T>,
+}
+
+impl<T> Default for ActiveReplication<T> {
+    fn default() -> Self {
+        Self {
+            replicas: Default::default(),
+            state: ActiveReplicationState {
+                peeks: Default::default(),
+                tails: Default::default(),
+                uppers: Default::default(),
+                history: Default::default(),
+                last_command_count: 0,
+                pending_response: Default::default(),
+            },
+        }
+    }
+}
+
+impl<T> ActiveReplication<T>
+where
+    T: timely::progress::Timestamp,
+{
+    /// Introduce a new replica, and catch it up to the commands of other replicas.
+    ///
+    /// It is not yet clear under which circumstances a replica can be removed.
+    pub fn add_replica<C>(&mut self, id: ReplicaId, client: C)
+    where
+        C: ComputeClient<T> + Reconnect + 'static,
+    {
+        for (_, frontiers) in self.state.uppers.values_mut() {
+            frontiers.insert(id, {
+                let mut frontier = timely::progress::frontier::MutableAntichain::new();
+                frontier.update_iter(Some((T::minimum(), 1)));
+                frontier
+            });
+        }
+        let (cmd_tx, resp_rx) = ReplicaTask::spawn(id, client);
+        self.replicas.insert(id, (cmd_tx, resp_rx.into()));
+        self.hydrate_replica(id);
+    }
+
+    pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+        self.replicas.keys().copied()
+    }
+
+    /// Remove a replica by its identifier.
+    pub fn remove_replica(&mut self, id: ReplicaId) {
+        self.replicas.remove(&id);
+        for (_frontier, frontiers) in self.state.uppers.iter_mut() {
+            frontiers.1.remove(&id);
+        }
+    }
+
+    /// Pipes a command stream at the indicated replica, introducing new dataflow identifiers.
+    fn hydrate_replica(&mut self, replica_id: ReplicaId) {
+        // Zero out frontiers maintained by this replica.
+        for (_id, (_, frontiers)) in self.state.uppers.iter_mut() {
+            *frontiers.get_mut(&replica_id).unwrap() =
+                timely::progress::frontier::MutableAntichain::new();
+            frontiers
+                .get_mut(&replica_id)
+                .unwrap()
+                .update_iter(Some((T::minimum(), 1)));
+        }
+        // Take this opportunity to clean up the history we should present.
+        self.state.last_command_count = self.state.history.reduce(&self.state.peeks);
+
+        // Replay the commands at the client, creating new dataflow identifiers.
+        let (cmd_tx, _) = self.replicas.get_mut(&replica_id).unwrap();
+        for command in self.state.history.iter() {
+            let mut command = command.clone();
+            specialize_command(&mut command, replica_id);
+
+            cmd_tx
+                .send(command)
+                .expect("Channel to client has gone away!")
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<T> GenericClient<ComputeCommand<T>, ActiveReplicationResponse<T>> for ActiveReplication<T>
+where
+    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
+{
+    /// The ADAPTER layer's isolation from COMPUTE depends on the fact that this
+    /// function is essentially non-blocking, i.e. the ADAPTER blindly awaits
+    /// calls to this function. This lets the ADAPTER continue operating even in
+    /// the face of unhealthy or absent replicas.
+    ///
+    /// If this function every become blocking (e.g. making networking calls),
+    /// the ADAPTER must amend its contract with COMPUTE.
+    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+        let frontiers = self
+            .replicas
+            .keys()
+            .map(|id| {
+                let mut frontier = timely::progress::frontier::MutableAntichain::new();
+                frontier.update_iter(Some((T::minimum(), 1)));
+                (id.clone(), frontier)
+            })
+            .collect();
+
+        self.state.handle_command(&cmd, frontiers);
 
         // Clone the command for each active replica.
         for (id, (tx, _)) in self.replicas.iter_mut() {
@@ -417,7 +557,7 @@ where
 
     async fn recv(&mut self) -> Result<Option<ActiveReplicationResponse<T>>, anyhow::Error> {
         // If we have a pending response, we should send it immediately.
-        if let Some(response) = self.pending_response.pop_front() {
+        if let Some(response) = self.state.pending_response.pop_front() {
             return Ok(Some(response));
         }
 
@@ -437,110 +577,11 @@ where
 
             use futures::StreamExt;
             while let Some((replica_id, message)) = stream.next().await {
-                self.pending_response
-                    .push_front(ActiveReplicationResponse::ReplicaHeartbeat(
-                        replica_id,
-                        Utc::now(),
-                    ));
                 match message {
-                    Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)) => {
-                        // If this is the first response, forward it; otherwise do not.
-                        // TODO: we could collect the other responses to assert equivalence?
-                        // Trades resources (memory) for reassurances; idk which is best.
-                        //
-                        // NOTE: we use the `otel_ctx` from the response, not the
-                        // pending peek, because we currently want the parent
-                        // to be whatever the compute worker did with this peek.
-                        //
-                        // Additionally, we just use the `otel_ctx` from the first worker to
-                        // respond.
-                        if self.peeks.remove(&uuid).is_some() {
-                            return Ok(Some(ActiveReplicationResponse::ComputeResponse(
-                                ComputeResponse::PeekResponse(uuid, response, otel_ctx),
-                            )));
-                        }
-                    }
-                    Ok(ComputeResponse::FrontierUppers(mut list)) => {
-                        for (id, changes) in list.iter_mut() {
-                            if let Some((frontier, frontiers)) = self.uppers.get_mut(id) {
-                                // Apply changes to replica `replica_id`
-                                frontiers
-                                    .get_mut(&replica_id)
-                                    .unwrap()
-                                    .update_iter(changes.drain());
-                                // We can swap `frontier` into `changes, negated, and then use that to repopulate `frontier`.
-                                // Working
-                                changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
-                                frontier.clear();
-                                for (time1, _neg_one) in changes.iter() {
-                                    for time2 in frontiers[&replica_id].frontier().iter() {
-                                        frontier.insert(time1.join(time2));
-                                    }
-                                }
-                                changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
-                                changes.compact();
-                            }
-                        }
-                        if !list.is_empty() {
-                            return Ok(Some(ActiveReplicationResponse::ComputeResponse(
-                                ComputeResponse::FrontierUppers(list),
-                            )));
-                        }
-                    }
-                    Ok(ComputeResponse::TailResponse(id, response)) => {
-                        match response {
-                            TailResponse::Batch(TailBatch {
-                                lower: _,
-                                upper,
-                                mut updates,
-                            }) => {
-                                // It is sufficient to compare `upper` against the last reported frontier for `id`,
-                                // and if `upper` is not less or equal to that frontier, some progress has happened.
-                                // If so, we retain only the updates greater or equal to that last reported frontier,
-                                // and announce a batch from that frontier to its join with `upper`.
-
-                                // Ensure that we have a recorded frontier ready to go.
-                                let entry = self
-                                    .tails
-                                    .entry(id)
-                                    .or_insert_with(|| Antichain::from_elem(T::minimum()));
-                                // If the upper frontier has changed, we have a statement to make.
-                                // This happens if there is any element of `entry` not greater or
-                                // equal to some element of `upper`.
-                                use differential_dataflow::lattice::Lattice;
-                                let new_upper = entry.join(&upper);
-                                if &new_upper != entry {
-                                    let new_lower = entry.clone();
-                                    entry.clone_from(&new_upper);
-                                    updates
-                                        .retain(|(time, _data, _diff)| new_lower.less_equal(time));
-                                    return Ok(Some(ActiveReplicationResponse::ComputeResponse(
-                                        ComputeResponse::TailResponse(
-                                            id,
-                                            TailResponse::Batch(TailBatch {
-                                                lower: new_lower,
-                                                upper: new_upper,
-                                                updates,
-                                            }),
-                                        ),
-                                    )));
-                                }
-                            }
-                            TailResponse::DroppedAt(frontier) => {
-                                // Introduce a new terminal frontier to suppress all future responses.
-                                // We cannot simply remove the entry, as we currently create new entries in response
-                                // to observed responses; if we pre-load the entries in response to commands we can
-                                // clean up the state here.
-                                self.tails.insert(id, Antichain::new());
-                                return Ok(Some(ActiveReplicationResponse::ComputeResponse(
-                                    ComputeResponse::TailResponse(
-                                        id,
-                                        TailResponse::DroppedAt(frontier),
-                                    ),
-                                )));
-                            }
-                        }
-                    }
+                    Ok(message) => match self.state.handle_message(message, replica_id) {
+                        Some(response) => return Ok(Some(response)),
+                        None => { /* continue */ }
+                    },
                     Err(e) => {
                         warn!("Rehydrating replica {}: {}", replica_id, e);
                         drop(stream);
