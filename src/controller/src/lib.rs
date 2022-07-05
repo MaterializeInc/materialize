@@ -30,7 +30,6 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use maplit::hashmap;
-use mz_service::client::GenericClient;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -256,12 +255,10 @@ where
         &mut self,
         instance: ComputeInstanceId,
         logging: Option<LoggingConfig>,
-    ) -> Result<(), anyhow::Error> {
+    ) {
         // Insert a new compute instance controller.
         self.compute
-            .insert(instance, ComputeControllerState::new(&logging).await?);
-
-        Ok(())
+            .insert(instance, ComputeControllerState::new(&logging).await);
     }
 
     /// Adds replicas of an instance.
@@ -403,7 +400,7 @@ where
             self.compute_orchestrator
                 .drop_service(&format!("cluster-{instance}"))
                 .await?;
-            compute.client.send(ComputeCommand::DropInstance).await?;
+            compute.client.send(ComputeCommand::DropInstance).await;
         }
         Ok(())
     }
@@ -499,7 +496,6 @@ where
             loop {
                 tokio::select! {
                     Some((instance, response)) = compute_stream.next() => {
-                        let response = response?;
                         assert!(self.stashed_response.is_none());
                         self.stashed_response = Some(UnderlyingControllerResponse::Compute(instance, response));
                         return Ok(());

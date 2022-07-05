@@ -709,8 +709,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
                 .create_instance(instance.id, instance.logging.clone())
-                .await
-                .unwrap();
+                .await;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.dataflow_client
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
@@ -2715,8 +2714,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("compute instance must exist after creation");
         self.dataflow_client
             .create_instance(instance.id, instance.logging.clone())
-            .await
-            .unwrap();
+            .await;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.dataflow_client
                 .add_replica_to_instance(instance.id, replica_id, replica.config)

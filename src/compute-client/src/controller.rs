@@ -35,7 +35,7 @@ use uuid::Uuid;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_service::client::{GenericClient, Reconnect};
+use mz_service::client::Reconnect;
 use mz_storage::client::controller::{ReadPolicy, StorageController, StorageError};
 use mz_storage::client::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 
@@ -157,7 +157,7 @@ impl<T> ComputeControllerState<T>
 where
     T: Timestamp + Lattice,
 {
-    pub async fn new(logging: &Option<LoggingConfig>) -> Result<Self, anyhow::Error> {
+    pub async fn new(logging: &Option<LoggingConfig>) -> Self {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -177,13 +177,13 @@ where
                 replica_id: Default::default(),
                 logging: logging.clone(),
             }))
-            .await?;
+            .await;
 
-        Ok(Self {
+        Self {
             client,
             collections,
             peeks: Default::default(),
-        })
+        }
     }
 }
 
@@ -409,8 +409,7 @@ where
         self.compute
             .client
             .send(ComputeCommand::CreateDataflows(augmented_dataflows))
-            .await
-            .expect("Compute command failed; unrecoverable");
+            .await;
 
         Ok(())
     }
@@ -476,8 +475,9 @@ where
                 // tree to forward it on to the compute worker.
                 otel_ctx: OpenTelemetryContext::obtain(),
             }))
-            .await
-            .map_err(ComputeError::from)
+            .await;
+
+        Ok(())
     }
 
     /// Cancels existing peek requests.
@@ -498,8 +498,8 @@ where
             .send(ComputeCommand::CancelPeeks {
                 uuids: uuids.clone(),
             })
-            .await
-            .map_err(ComputeError::from)
+            .await;
+        Ok(())
     }
 
     /// Downgrade the read capabilities of specific identifiers to specific frontiers.
@@ -699,8 +699,7 @@ where
             self.compute
                 .client
                 .send(ComputeCommand::AllowCompaction(compaction_commands))
-                .await
-                .expect("Compute instance command failed; unrecoverable");
+                .await;
         }
 
         // We may have storage consequences to process.
