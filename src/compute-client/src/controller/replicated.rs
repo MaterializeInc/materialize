@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use futures::Stream;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 use tokio::select;
@@ -38,7 +39,7 @@ use tracing::{debug, info, warn};
 
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
-use mz_service::client::{GenericClient, Reconnect};
+use mz_service::client::Reconnect;
 
 use crate::command::{ComputeCommand, Peek, ReplicaId};
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
@@ -511,8 +512,11 @@ where
     }
 }
 
-#[async_trait::async_trait]
-impl<T> GenericClient<ComputeCommand<T>, ActiveReplicationResponse<T>> for ActiveReplication<T>
+// We avoid implementing `GenericClient` here, because the protocol between
+// the compute controller and this client is subtly but meaningfully different:
+// this client is expected to handle errors, rather than propagate them, and therefore
+// it returns infallible values.
+impl<T> ActiveReplication<T>
 where
     T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
 {
@@ -523,7 +527,7 @@ where
     ///
     /// If this function every become blocking (e.g. making networking calls),
     /// the ADAPTER must amend its contract with COMPUTE.
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    pub async fn send(&mut self, cmd: ComputeCommand<T>) {
         let frontiers = self
             .replicas
             .keys()
@@ -551,14 +555,12 @@ where
             // COMPUTE differently.
             let _ = tx.send(command);
         }
-
-        Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<ActiveReplicationResponse<T>>, anyhow::Error> {
+    pub async fn recv(&mut self) -> Option<ActiveReplicationResponse<T>> {
         // If we have a pending response, we should send it immediately.
         if let Some(response) = self.state.pending_response.pop_front() {
-            return Ok(Some(response));
+            return Some(response);
         }
 
         if self.replicas.is_empty() {
@@ -579,7 +581,7 @@ where
             while let Some((replica_id, message)) = stream.next().await {
                 match message {
                     Ok(message) => match self.state.handle_message(message, replica_id) {
-                        Some(response) => return Ok(Some(response)),
+                        Some(response) => return Some(response),
                         None => { /* continue */ }
                     },
                     Err(e) => {
@@ -591,6 +593,21 @@ where
                 }
             }
         }
+    }
+
+    /// Returns an adapter that treats the client as a stream.
+    ///
+    /// The stream produces the responses that would be produced by repeated
+    /// calls to `recv`.
+    pub fn as_stream<'a>(&'a mut self) -> impl Stream<Item = ActiveReplicationResponse<T>> + 'a {
+        Box::pin(async_stream::stream!({
+            loop {
+                match self.recv().await {
+                    Some(response) => yield response,
+                    None => return,
+                }
+            }
+        }))
     }
 }
 

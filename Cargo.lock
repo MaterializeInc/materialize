@@ -3104,6 +3104,7 @@ name = "mz-compute-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "chrono",
  "differential-dataflow",
