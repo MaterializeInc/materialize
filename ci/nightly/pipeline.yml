@@ -35,6 +35,7 @@ steps:
           - { value: zippy-kafka-sources }
           - { value: checks-drop-create-default-replica }
           - { value: checks-restart-computed }
+          - { value: checks-restart-entire-mz }
           - { value: secrets }
           - { value: unused-deps }
         multiple: true
@@ -262,6 +263,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartComputed]
+
+  - id: checks-restart-entire-mz
+    label: "Checks + restart of the entire Mz"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEntireMz]
 
   - id: secrets
     label: "Secrets"
