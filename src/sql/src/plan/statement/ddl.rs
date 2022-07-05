@@ -68,10 +68,10 @@ use crate::ast::{
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
     CsrConnection, CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName,
-    CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
-    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
-    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
+    CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode, DbzTxMetadataOption,
+    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
+    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
     KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
     QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select,
     SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, Statement,
@@ -1347,15 +1347,13 @@ fn get_encoding_inner(
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
                 csr_connection:
-                    CsrConnectionProto {
+                    CsrConnectionProtobuf {
                         connection,
                         seed,
                         with_options: ccsr_options,
                     },
             } => {
-                if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
-                    seed
-                {
+                if let Some(CsrSeedProtobuf { key, value }) = seed {
                     // We validate to match the behavior of Avro CSR connections,
                     // even though we don't actually use the connection. (It
                     // was used during purification.)

@@ -120,7 +120,7 @@ impl_display_t!(AvroSchema);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProtobufSchema<T: AstInfo> {
     Csr {
-        csr_connection: CsrConnectionProto<T>,
+        csr_connection: CsrConnectionProtobuf<T>,
     },
     InlineSchema {
         message_name: String,
@@ -172,7 +172,7 @@ pub struct CsrConnectionAvro<T: AstInfo> {
     pub connection: CsrConnection<T>,
     pub key_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub value_strategy: Option<ReaderSchemaSelectionStrategy>,
-    pub seed: Option<CsrSeed>,
+    pub seed: Option<CsrSeedAvro>,
     pub with_options: Vec<WithOption<T>>,
 }
 
@@ -204,13 +204,13 @@ impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
 impl_display_t!(CsrConnectionAvro);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrConnectionProto<T: AstInfo> {
+pub struct CsrConnectionProtobuf<T: AstInfo> {
     pub connection: CsrConnection<T>,
-    pub seed: Option<CsrSeedCompiledOrLegacy>,
+    pub seed: Option<CsrSeedProtobuf>,
     pub with_options: Vec<WithOption<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for CsrConnectionProto<T> {
+impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
         match &self.connection {
@@ -237,15 +237,15 @@ impl<T: AstInfo> AstDisplay for CsrConnectionProto<T> {
         }
     }
 }
-impl_display_t!(CsrConnectionProto);
+impl_display_t!(CsrConnectionProtobuf);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrSeed {
+pub struct CsrSeedAvro {
     pub key_schema: Option<String>,
     pub value_schema: String,
 }
 
-impl AstDisplay for CsrSeed {
+impl AstDisplay for CsrSeedAvro {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SEED");
         if let Some(key_schema) = &self.key_schema {
@@ -258,33 +258,17 @@ impl AstDisplay for CsrSeed {
         f.write_str("'");
     }
 }
-impl_display!(CsrSeed);
+impl_display!(CsrSeedAvro);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CsrSeedCompiledOrLegacy {
-    Compiled(CsrSeedCompiled),
-    // Starting with version 0.9.13, Legacy should only be found when reading
-    // from the catalog and should be transformed during migration.
-    Legacy(CsrSeed),
+pub struct CsrSeedProtobuf {
+    pub key: Option<CsrSeedProtobufSchema>,
+    pub value: CsrSeedProtobufSchema,
 }
-impl AstDisplay for CsrSeedCompiledOrLegacy {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            CsrSeedCompiledOrLegacy::Compiled(c) => f.write_node(c),
-            CsrSeedCompiledOrLegacy::Legacy(l) => f.write_node(l),
-        }
-    }
-}
-impl_display!(CsrSeedCompiledOrLegacy);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrSeedCompiled {
-    pub key: Option<CsrSeedCompiledEncoding>,
-    pub value: CsrSeedCompiledEncoding,
-}
-impl AstDisplay for CsrSeedCompiled {
+impl AstDisplay for CsrSeedProtobuf {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SEED COMPILED");
+        f.write_str("SEED");
         if let Some(key) = &self.key {
             f.write_str(" KEY ");
             f.write_node(key);
@@ -293,15 +277,15 @@ impl AstDisplay for CsrSeedCompiled {
         f.write_node(&self.value);
     }
 }
-impl_display!(CsrSeedCompiled);
+impl_display!(CsrSeedProtobuf);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrSeedCompiledEncoding {
+pub struct CsrSeedProtobufSchema {
     // Hex encoded string.
     pub schema: String,
     pub message_name: String,
 }
-impl AstDisplay for CsrSeedCompiledEncoding {
+impl AstDisplay for CsrSeedProtobufSchema {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(" SCHEMA '");
         f.write_str(&display::escape_single_quote_string(&self.schema));
@@ -310,7 +294,7 @@ impl AstDisplay for CsrSeedCompiledEncoding {
         f.write_str("'");
     }
 }
-impl_display!(CsrSeedCompiledEncoding);
+impl_display!(CsrSeedProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceFormat<T: AstInfo> {

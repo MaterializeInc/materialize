@@ -67,7 +67,6 @@ Columns
 Commit
 Committed
 Compaction
-Compiled
 Compression
 Confluent
 Connection
