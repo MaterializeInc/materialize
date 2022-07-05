@@ -4527,12 +4527,29 @@ impl<S: Append + 'static> Coordinator<S> {
                 Explainable::new(&mut raw_plan).explain(&format, &config, &context)?
             }
             ExplainStageNew::QueryGraph => {
-                let feature = "ExplainStageNew::QueryGraph";
-                Err(AdapterError::Unsupported(feature))?
+                // run partial pipeline
+                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut model).explain(&format, &config, &context)?
             }
             ExplainStageNew::OptimizedQueryGraph => {
-                let feature = "ExplainStageNew::OptimizedQueryGraph";
-                Err(AdapterError::Unsupported(feature))?
+                // run partial pipeline
+                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
+                model.optimize();
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut model).explain(&format, &config, &context)?
             }
             ExplainStageNew::DecorrelatedPlan => {
                 // run partial pipeline
