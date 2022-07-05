@@ -51,14 +51,16 @@ class NoRestartNoUpgrade(Scenario):
         ]
 
 
-class RestartMz(Scenario):
+class RestartEntireMz(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
             Initialize(self.checks),
+            RestartMzAction(),
             Manipulate(self.checks, phase=1),
             RestartMzAction(),
             Manipulate(self.checks, phase=2),
+            RestartMzAction(),
             Validate(self.checks),
         ]
 

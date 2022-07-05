@@ -158,6 +158,54 @@ class Insert(DML):
         )
 
 
+class InsertBatch(DML):
+    """Measure the time it takes for a batch of INSERT statements to return."""
+
+    SCALE = 4
+
+    def benchmark(self) -> MeasurementSource:
+        inserts = "\n".join(
+            f"> INSERT INTO t1 VALUES ({i});" for i in range(0, self.n())
+        )
+
+        return Td(
+            f"""
+> DROP TABLE IF EXISTS t1;
+
+> CREATE TABLE t1 (f1 INTEGER)
+  /* A */
+
+> BEGIN
+
+{inserts}
+
+> COMMIT
+  /* B */
+"""
+        )
+
+
+class InsertMultiRow(DML):
+    """Measure the time it takes for a single multi-row INSERT statement to return."""
+
+    SCALE = 4
+
+    def benchmark(self) -> MeasurementSource:
+        values = ", ".join(f"({i})" for i in range(0, self.n()))
+
+        return Td(
+            f"""
+> DROP TABLE IF EXISTS t1;
+
+> CREATE TABLE t1 (f1 INTEGER)
+  /* A */
+
+> INSERT INTO t1 VALUES {values}
+  /* B */
+"""
+        )
+
+
 class Update(DML):
     """Measure the time it takes for an UPDATE statement to return to client"""
 

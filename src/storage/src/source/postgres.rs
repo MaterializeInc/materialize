@@ -164,7 +164,7 @@ impl SourceReader for PostgresSourceReader {
         _worker_count: usize,
         consumer_activator: SyncActivator,
         connection: SourceConnection,
-        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         _connection_context: ConnectionContext,
@@ -180,11 +180,25 @@ impl SourceReader for PostgresSourceReader {
         // for the speed to pass pg-cdc-resumption tests on a local machine.
         let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(50_000);
 
+        // Pick out the partition we care about
+        // TODO(petrosagg): add an associated type to SourceReader so that each source can define
+        // its own gauge type
+        let start_offset = start_offsets
+            .into_iter()
+            .find_map(|(pid, offset)| {
+                if pid == PartitionId::None {
+                    offset
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
         let task_info = PostgresTaskInfo {
             source_id: source_id.clone(),
             connection: connection.clone(),
             /// Our cursor into the WAL
-            lsn: 0.into(),
+            lsn: start_offset.offset.into(),
             metrics: PgSourceMetrics::new(&metrics, source_id),
             source_tables: HashMap::from_iter(
                 connection.details.tables.iter().map(|t| (t.oid, t.clone())),
@@ -274,33 +288,34 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
 async fn postgres_replication_loop_inner(
     task_info: &mut PostgresTaskInfo,
 ) -> Result<(), SourceReaderError> {
-    let source_id = task_info.source_id.clone();
-    // Buffer rows from snapshot to retract and retry, if initial snapshot fails.
-    // Postgres sources cannot proceed without a successful snapshot.
-    match task_info.produce_snapshot().await {
-        Ok(_) => {
-            info!(
-                "replication snapshot for source {} succeeded",
-                &task_info.source_id
-            );
-        }
-        Err(ReplicationError::Recoverable(e)) => {
-            // TODO: In the future we probably want to handle this more gracefully,
-            // to avoid stressing out any monitoring tools,
-            // but for now panicking is the easiest way to dump the data in the pipe.
-            // The restarted storaged instance will restart the snapshot fresh, which will
-            // avoid any inconsistencies. Note that if the same lsn is chosen in the
-            // next snapshotting, the remapped timestamp chosen will be the same for
-            // both instances of storaged.
-            panic!(
-                "replication snapshot for source {} failed: {}",
-                &task_info.source_id, e
-            );
-        }
-        Err(ReplicationError::Fatal(e)) => {
-            return Err(SourceReaderError {
-                inner: SourceErrorDetails::Initialization(e.to_string()),
-            })
+    if task_info.lsn == PgLsn::from(0) {
+        // Buffer rows from snapshot to retract and retry, if initial snapshot fails.
+        // Postgres sources cannot proceed without a successful snapshot.
+        match task_info.produce_snapshot().await {
+            Ok(_) => {
+                info!(
+                    "replication snapshot for source {} succeeded",
+                    &task_info.source_id
+                );
+            }
+            Err(ReplicationError::Recoverable(e)) => {
+                // TODO: In the future we probably want to handle this more gracefully,
+                // to avoid stressing out any monitoring tools,
+                // but for now panicking is the easiest way to dump the data in the pipe.
+                // The restarted storaged instance will restart the snapshot fresh, which will
+                // avoid any inconsistencies. Note that if the same lsn is chosen in the
+                // next snapshotting, the remapped timestamp chosen will be the same for
+                // both instances of storaged.
+                panic!(
+                    "replication snapshot for source {} failed: {}",
+                    &task_info.source_id, e
+                );
+            }
+            Err(ReplicationError::Fatal(e)) => {
+                return Err(SourceReaderError {
+                    inner: SourceErrorDetails::Initialization(e.to_string()),
+                })
+            }
         }
     }
 
@@ -309,7 +324,7 @@ async fn postgres_replication_loop_inner(
             Err(ReplicationError::Recoverable(e)) => {
                 warn!(
                     "replication for source {} interrupted, retrying: {}",
-                    source_id, e
+                    task_info.source_id, e
                 )
             }
             Err(ReplicationError::Fatal(e)) => {
@@ -325,7 +340,7 @@ async fn postgres_replication_loop_inner(
 
         // TODO(petrosagg): implement exponential back-off
         tokio::time::sleep(Duration::from_secs(3)).await;
-        info!("resuming replication for source {}", source_id);
+        info!("resuming replication for source {}", task_info.source_id);
     }
 }
 

@@ -3947,6 +3947,9 @@ impl<S: Append + 'static> Coordinator<S> {
             session.transaction(),
             &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
         );
+        // Queries are independent of the logical timestamp iff there are no referenced
+        // sources or indexes and there is no reference to `mz_logical_timestamp()`.
+        let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
         // For explicit or implicit transactions that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
         // query, we don't care about any possible transaction timestamp. If this is a
@@ -3954,10 +3957,6 @@ impl<S: Append + 'static> Coordinator<S> {
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
         let timestamp = if in_transaction && when == QueryWhen::Immediately {
-            // Queries are independent of the logical timestamp iff there are no referenced
-            // sources or indexes and there is no reference to `mz_logical_timestamp()`.
-            let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
-
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
             if let Some(read_txn) = self.txn_reads.get(&conn_id) {
@@ -3979,7 +3978,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let timestamp = self.determine_timestamp(
                         session,
                         &id_bundle,
-                        QueryWhen::Immediately,
+                        &QueryWhen::Immediately,
                         compute_instance,
                     )?;
                     let read_holds = read_holds::ReadHolds {
@@ -3996,7 +3995,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     timestamp
                 }
             };
-            session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
 
             // Verify that the references and indexes for this query are in the
             // current read transaction.
@@ -4046,7 +4044,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
-            self.determine_timestamp(session, &id_bundle, when, compute_instance)?
+            self.determine_timestamp(session, &id_bundle, &when, compute_instance)?
         };
 
         // before we have the corrected timestamp ^
@@ -4112,6 +4110,15 @@ impl<S: Append + 'static> Coordinator<S> {
             thinning.len(),
         )?;
 
+        // We only track the peeks in the session if the query is in a transaction,
+        // the query doesn't use AS OF, it's a non-constant or timestamp dependent query.
+        if in_transaction
+            && when == QueryWhen::Immediately
+            && (!matches!(fast_path, fast_path_peek::Plan::Constant(_)) || !timestamp_independent)
+        {
+            session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
+        }
+
         // Implement the peek, and capture the response.
         let resp = self
             .implement_fast_path_peek(
@@ -4169,7 +4176,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .sufficient_collections(uses);
             // If a timestamp was explicitly requested, use that.
             let timestamp =
-                coord.determine_timestamp(session, &id_bundle, when, compute_instance)?;
+                coord.determine_timestamp(session, &id_bundle, &when, compute_instance)?;
 
             Ok::<_, AdapterError>(SinkDesc {
                 from,
@@ -4306,7 +4313,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
-        when: QueryWhen,
+        when: &QueryWhen,
         compute_instance: ComputeInstanceId,
     ) -> Result<Timestamp, AdapterError> {
         // Each involved trace has a validity interval `[since, upper)`.
@@ -4593,7 +4600,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let timestamp = self.determine_timestamp(
                     &session,
                     &id_bundle,
-                    QueryWhen::Immediately,
+                    &QueryWhen::Immediately,
                     compute_instance,
                 )?;
                 let since = self

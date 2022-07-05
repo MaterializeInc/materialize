@@ -49,7 +49,7 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, TailBatch, TailResponse,
 };
-use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
+use mz_compute_client::service::ComputeGrpcClient;
 use mz_orchestrator::{
     CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
     ServicePort,
@@ -73,9 +73,6 @@ pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 pub struct ControllerConfig {
     /// The orchestrator implementation to use.
     pub orchestrator: Arc<dyn Orchestrator>,
-    /// Whether or not storage and compute processes should die when connection
-    /// with their controller is lost.
-    pub linger: bool,
     /// The persist location where all storage collections will be written to.
     pub persist_location: PersistLocation,
     /// A process-global cache of (blob_uri, consensus_uri) ->
@@ -242,7 +239,6 @@ enum UnderlyingControllerResponse<T> {
 /// referred to as the `dataflow_client` in the coordinator to be very
 /// confusing. We should find the one correct name, and use it everywhere!
 pub struct Controller<T = mz_repr::Timestamp> {
-    linger: bool,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
@@ -289,7 +285,6 @@ where
             ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
                 let client = ComputeGrpcClient::new_partitioned(replicas.into_iter().collect());
-                let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 compute_instance.add_replica(replica_id, client);
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
@@ -331,9 +326,6 @@ where
                                         index
                                     ));
                                 }
-                                if self.linger {
-                                    compute_opts.push(format!("--linger"));
-                                }
                                 compute_opts
                             },
                             ports: vec![
@@ -362,7 +354,6 @@ where
                     )
                     .await?;
                 let client = ComputeGrpcClient::new_partitioned(service.addresses("controller"));
-                let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance_id)
                     .unwrap()
                     .add_replica(replica_id, client);
@@ -622,7 +613,6 @@ where
         )
         .await;
         Self {
-            linger: config.linger,
             storage_controller: Box::new(storage_controller),
             compute_orchestrator: config.orchestrator.namespace("compute"),
             computed_image: config.computed_image,

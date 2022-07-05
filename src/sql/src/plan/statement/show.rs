@@ -13,6 +13,8 @@
 //! `SHOW CREATE TABLE` and `SHOW VIEWS`. Note that `SHOW <var>` is considered
 //! an SCL statement.
 
+use std::fmt::Write;
+
 use anyhow::bail;
 
 use mz_ore::collections::CollectionExt;
@@ -508,7 +510,7 @@ fn show_recorded_views<'a>(
     let mut where_clause = format!("schema_id = {schema_spec}");
 
     if let Some(cluster) = in_cluster {
-        where_clause += &format!(" AND cluster_id = {}", cluster.0);
+        write!(where_clause, " AND cluster_id = {}", cluster.0)?;
     }
 
     let query = if full {

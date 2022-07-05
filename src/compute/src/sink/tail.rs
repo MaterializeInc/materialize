@@ -23,6 +23,7 @@ use timely::progress::Antichain;
 use mz_compute_client::response::{TailBatch, TailResponse};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::errors::DataflowError;
 use mz_storage::client::sinks::{SinkAsOf, SinkDesc, TailSinkConnection};
 
 use crate::render::sinks::SinkRender;
@@ -49,6 +50,9 @@ where
         sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        // TODO(benesch): errors should stream out through the sink,
+        // if we figure out a protocol for that.
+        _err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,

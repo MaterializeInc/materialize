@@ -18,7 +18,7 @@ mz-proto = { path = "../proto" }
 num_cpus = "1.13.1"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
-prost = "0.10.1"
+prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde = { version = "1.0.138", features = ["derive"] }

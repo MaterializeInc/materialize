@@ -30,6 +30,18 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{< diagram "format-spec.svg" >}}
 
+#### `key_strat`
+
+{{< diagram "key-strat.svg" >}}
+
+#### `val_strat`
+
+{{< diagram "val-strat.svg" >}}
+
+#### `strat`
+
+{{< diagram "strat.svg" >}}
+
 #### `key_constraint`
 
 {{< diagram "key-constraint.svg" >}}
@@ -252,6 +264,12 @@ Field               | Value | Description
 `start_offset`      | `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers, and the source must use either `ENVELOPE NONE` or `(DEBEZIUM) UPSERT`.
 `kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used.
 
+#### `KEY STRATEGY` and `VALUE STRATEGY`
+
+It is possible to define how an Avro reader schema will be chosen for Avro sources by
+using the `KEY STRATEGY` and `VALUE STRATEGY` keywords, as shown in the syntax diagram.
+
+A strategy of `LATEST` (the default) will choose the latest writer schema from the schema registry to use as a reader schema. `ID` or `INLINE` will allow specifying a schema from the registry by ID or inline in the `CREATE SOURCE` statement, respectively.
 
 ## Authentication
 

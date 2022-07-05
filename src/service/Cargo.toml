@@ -18,6 +18,7 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ore = { path = "../ore" }
 serde = { version = "1.0.138", features = ["derive"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.19.2"
 tokio-stream = "0.1.9"
 tonic = "0.7.2"

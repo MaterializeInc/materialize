@@ -18,19 +18,15 @@ use std::collections::HashMap;
 use std::iter;
 
 use async_trait::async_trait;
-use futures::stream::StreamExt;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::progress::ChangeBatch;
-use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::debug;
 use uuid::Uuid;
 
 use mz_proto::any_uuid;
@@ -80,53 +76,34 @@ pub type StorageGrpcClient = GrpcClient<
 >;
 
 #[async_trait]
-impl BidiProtoClient for ProtoStorageClient<Channel> {
-    type ProtoCommand = ProtoStorageCommand;
-    type ProtoResponse = ProtoStorageResponse;
-
-    async fn connect(addr: String) -> Result<Self, anyhow::Error>
+impl BidiProtoClient<ProtoStorageCommand, ProtoStorageResponse> for ProtoStorageClient<Channel> {
+    async fn connect(addr: String) -> Result<Self, tonic::transport::Error>
     where
         Self: Sized,
     {
-        Ok(ProtoStorageClient::connect(addr).await?)
+        ProtoStorageClient::connect(addr).await
     }
 
-    async fn create_stream(
+    async fn establish_bidi_stream(
         &mut self,
-        rx: UnboundedReceiver<Self::ProtoCommand>,
-    ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error> {
-        match self
-            .command_response_stream(UnboundedReceiverStream::new(rx))
-            .await
-        {
-            Ok(resp_rx_wrap) => Ok(resp_rx_wrap.into_inner()),
-            Err(err) => Err(err)?,
-        }
+        rx: UnboundedReceiverStream<ProtoStorageCommand>,
+    ) -> Result<Response<Streaming<ProtoStorageResponse>>, Status> {
+        self.command_response_stream(rx).await
     }
 }
 
 #[async_trait]
-impl ProtoStorage for GrpcServer<ProtoStorageCommand, ProtoStorageResponse> {
+impl<G> ProtoStorage for GrpcServer<G>
+where
+    G: StorageClient + 'static,
+{
     type CommandResponseStreamStream = ResponseStream<ProtoStorageResponse>;
 
     async fn command_response_stream(
         &self,
-        req: Request<Streaming<ProtoStorageCommand>>,
+        request: Request<Streaming<ProtoStorageCommand>>,
     ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, Status> {
-        debug!("GrpcServer: remote client connected");
-
-        // Consistent with the ActiveReplication client, we use unbounded channels.
-        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-
-        // Store channels in state
-        *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
-        self.shared.queue_change.notify_waiters();
-
-        let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
-
-        Ok(Response::new(
-            Box::pin(receiver_stream) as Self::CommandResponseStreamStream
-        ))
+        self.forward_bidi_stream(request).await
     }
 }
 
@@ -134,7 +111,7 @@ impl ProtoStorage for GrpcServer<ProtoStorageCommand, ProtoStorageResponse> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    IngestSources(Vec<IngestSourceCommand>),
+    IngestSources(Vec<IngestSourceCommand<T>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -143,19 +120,42 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
 }
 
 /// A command that starts ingesting the given ingestion description
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct IngestSourceCommand {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct IngestSourceCommand<T> {
     /// The id of the storage collection being ingested.
     pub id: GlobalId,
     /// The description of what source type should be ingested and what post-processing steps must
     /// be applied to the data before writing them down into the storage collection
     pub description: IngestionDescription<CollectionMetadata>,
+    /// The upper frontier that this ingestion should resume at
+    pub resume_upper: Antichain<T>,
 }
-impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand {
+
+impl Arbitrary for IngestSourceCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<GlobalId>(),
+            any::<IngestionDescription<CollectionMetadata>>(),
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4).prop_map(Antichain::from),
+        )
+            .prop_map(|(id, description, resume_upper)| Self {
+                id,
+                description,
+                resume_upper,
+            })
+            .boxed()
+    }
+}
+
+impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoIngestSourceCommand {
         ProtoIngestSourceCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
+            resume_upper: Some((&self.resume_upper).into()),
         }
     }
 
@@ -165,6 +165,10 @@ impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand {
             description: proto
                 .description
                 .into_rust_if_some("ProtoIngestSourceCommand::description")?,
+            resume_upper: proto
+                .resume_upper
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoCompaction::resume_upper"))?,
         })
     }
 }
@@ -208,7 +212,7 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec(any::<IngestSourceCommand>(), 1..4)
+            proptest::collection::vec(any::<IngestSourceCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::IngestSources),
             proptest::collection::vec(
                 (

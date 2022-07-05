@@ -1275,6 +1275,8 @@ fn get_encoding_inner(
                             connection,
                             seed,
                             with_options: ccsr_options,
+                            key_strategy: _,
+                            value_strategy: _,
                         },
                 } => {
                     let mut normalized_options = normalize::options(&ccsr_options)?;
@@ -1885,12 +1887,21 @@ fn kafka_sink_builder(
                 CsrConnectionAvro {
                     connection: CsrConnection::Inline { url },
                     seed,
+                    key_strategy,
+                    value_strategy,
                     with_options,
                 },
         })) => {
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
+            if key_strategy.is_some() {
+                bail!("KEY STRATEGY option does not make sense with sinks");
+            }
+            if value_strategy.is_some() {
+                bail!("VALUE STRATEGY option does not make sense with sinks");
+            }
+
             let mut normalized_with_options = normalize::options(&with_options)?;
             let csr_connection =
                 kafka_util::generate_ccsr_connection(url.parse()?, &mut normalized_with_options)?;
@@ -2051,12 +2062,21 @@ fn get_kafka_sink_consistency_config(
                     CsrConnectionAvro {
                         connection: CsrConnection::Inline { url },
                         seed,
+                        key_strategy,
+                        value_strategy,
                         with_options,
                     },
             })) => {
                 if seed.is_some() {
                     bail!("SEED option does not make sense with sinks");
                 }
+                if key_strategy.is_some() {
+                    bail!("KEY STRATEGY option does not make sense with sinks");
+                }
+                if value_strategy.is_some() {
+                    bail!("VALUE STRATEGY option does not make sense with sinks");
+                }
+
                 let csr_connection = kafka_util::generate_ccsr_connection(
                     url.parse()?,
                     &mut normalize::options(&with_options)?,

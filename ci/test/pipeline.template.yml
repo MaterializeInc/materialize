@@ -381,6 +381,18 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: kafka-avro-ccsr
+    label: Tests of certain Avro sources with a schema registry
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/kafka-avro-ccsr]
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-avro-ccsr
+    agents:
+      queue: linux-x86_64
+
   - id: s3-resumption
     label: S3 resumption tests
     depends_on: build-x86_64
