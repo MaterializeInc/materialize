@@ -164,7 +164,7 @@ Client libraries and ORM frameworks tend to run complex introspection queries th
 
 | Language | Support level | Tested drivers | Notes |
 | --- | --- | --- | --- |
-| Golang | {{< supportLevel production >}} | [`pgx`](https://github.com/jackc/pgx) | See the [Golang cheatsheet](/integrations/golang/). |
+| Go | {{< supportLevel production >}} | [`pgx`](https://github.com/jackc/pgx) | See the [Go cheatsheet](/integrations/golang/). |
 | Java | {{< supportLevel production >}} | [PostgreSQL JDBC driver](https://jdbc.postgresql.org/) | See the [Java cheatsheet](/integrations/java-jdbc/). |
 | Node.js | {{< supportLevel production >}} | [`node-postgres`](https://node-postgres.com/) | See the [Node.js cheatsheet](/integrations/node-js/). |
 | PHP | {{< supportLevel production >}} | [`pdo_pgsql`](https://www.php.net/manual/en/ref.pgsql.php) | See the [PHP cheatsheet](/integrations/php/). |

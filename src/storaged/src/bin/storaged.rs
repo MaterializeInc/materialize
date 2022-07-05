@@ -17,13 +17,15 @@ use once_cell::sync::Lazy;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::StorageClient;
-use mz_dataflow_types::connections::ConnectionContext;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
+use mz_service::grpc::GrpcServer;
+use mz_storage::client::connections::ConnectionContext;
+use mz_storage::client::proto_storage_server::ProtoStorageServer;
+use mz_storage::client::StorageClient;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -68,12 +70,6 @@ struct Args {
     /// The path at which secrets are stored.
     #[clap(long)]
     secrets_path: PathBuf,
-    /// Whether or not process should die when connection with ADAPTER is lost.
-    #[clap(long)]
-    linger: bool,
-    /// Enable command reconciliation.
-    #[clap(long, requires = "linger")]
-    reconcile: bool,
 
     /// The address of the internal HTTP server.
     #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
@@ -170,22 +166,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ),
     };
 
-    let serve_config = mz_dataflow_types::client::grpc::ServeConfig {
-        listen_addr: args.listen_addr,
-        linger: args.linger,
-    };
-
-    assert!(
-        !args.reconcile,
-        "Storage runtime does not support command reconciliation."
-    );
     let (_server, client) = mz_storage::serve(config)?;
     let client: Box<dyn StorageClient> = Box::new(client);
 
-    mz_dataflow_types::client::grpc::serve(
-        serve_config,
-        client,
-        mz_dataflow_types::client::grpc::ProtoStorageServer::new,
-    )
-    .await
+    GrpcServer::serve(args.listen_addr, client, ProtoStorageServer::new).await
 }

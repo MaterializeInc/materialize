@@ -44,3 +44,11 @@ class Check:
 
     def run_validate(self, c: Composition) -> None:
         self._validate.execute(c)
+
+
+class CheckDisabled(Check):
+    def manipulate(self) -> List[Testdrive]:
+        return [Testdrive(""), Testdrive("")]
+
+    def validate(self) -> Testdrive:
+        return Testdrive("")

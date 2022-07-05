@@ -21,10 +21,11 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::sinks::{PersistSinkConnection, SinkDesc};
-use mz_dataflow_types::sources::SourceData;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::client::errors::DataflowError;
+use mz_storage::client::sinks::{PersistSinkConnection, SinkDesc};
+use mz_storage::client::sources::SourceData;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::render::sinks::SinkRender;
@@ -51,6 +52,7 @@ where
         _sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -60,10 +62,6 @@ where
         let persist_clients = Arc::clone(&compute_state.persist_clients);
         let persist_location = self.storage_metadata.persist_location.clone();
         let shard_id = self.storage_metadata.data_shard;
-
-        // Log the shard ID so we know which shard to read for testing.
-        // TODO(teskje): Remove once we have a built-in way for reading back sinked data.
-        tracing::info!("persist_sink shard ID: {shard_id}");
 
         let operator_name = format!("persist_sink({})", shard_id);
         let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
@@ -81,6 +79,8 @@ where
 
         let mut input =
             persist_op.new_input(&sinked_collection.inner, Exchange::new(move |_| hashed_id));
+        let mut err_input =
+            persist_op.new_input(&err_collection.inner, Exchange::new(move |_| hashed_id));
 
         let token = Rc::new(());
         let token_weak = Rc::downgrade(&token);
@@ -107,6 +107,7 @@ where
             scope,
             move |_capabilities, frontiers, scheduler| async move {
                 let mut buffer = Vec::new();
+                let mut err_buffer = Vec::new();
                 let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
                 // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -121,7 +122,10 @@ where
                     .expect("could not open persist shard");
 
                 while scheduler.notified().await {
-                    let input_frontier = frontiers.borrow()[0].clone();
+                    let mut input_frontier = Antichain::new();
+                    for frontier in frontiers.borrow().clone() {
+                        input_frontier.extend(frontier);
+                    }
 
                     if !active_write_worker
                         || token_weak.upgrade().is_none()
@@ -138,6 +142,18 @@ where
                             let row = value.expect("persist_source must have values");
                             stash.entry(ts).or_default().push((
                                 (SourceData(Ok(row)), ()),
+                                ts,
+                                diff,
+                            ));
+                        }
+                    });
+
+                    err_input.for_each(|_cap, data| {
+                        data.swap(&mut err_buffer);
+
+                        for (error, ts, diff) in err_buffer.drain(..) {
+                            stash.entry(ts).or_default().push((
+                                (SourceData(Err(error)), ()),
                                 ts,
                                 diff,
                             ));

@@ -14,19 +14,21 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
-use mz_persist_client::cache::PersistClientCache;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
 use tokio::sync::mpsc;
-use tracing::warn;
 
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
-use mz_dataflow_types::connections::ConnectionContext;
+use mz_compute_client::command::ComputeCommand;
+use mz_compute_client::response::ComputeResponse;
+use mz_compute_client::service::ComputeClient;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
+use mz_service::local::LocalClient;
+use mz_storage::client::connections::ConnectionContext;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
@@ -67,7 +69,7 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Error> {
+pub fn serve(config: Config) -> Result<(Server, Box<dyn ComputeClient>), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -135,11 +137,11 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
         .iter()
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
-    let compute_client = LocalClient::new(compute_response_rxs, command_txs, worker_threads);
+    let client = LocalClient::new_partitioned(compute_response_rxs, command_txs, worker_threads);
     let server = Server {
         _worker_guards: worker_guards,
     };
-    Ok((server, compute_client))
+    Ok((server, Box::new(client)))
 }
 
 /// State maintained for each worker thread.
@@ -228,19 +230,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     _ => (),
                 }
 
-                if self.compute_state.is_none() {
-                    // STOP-GAP for #12233 FIXME
-                    // We should never reach this branch, but due to a bug in the controller,
-                    // we don't start the protocol correctly and might send messages in the window
-                    // between establishing the connection and hydrating this instance. We need to
-                    // ignore these messages until the controller produces a correct instance of
-                    // the communication protocol. It seems that this is the case when we see a
-                    // `CreateInstance` command floating by, from which point on we're confident we
-                    // won't drop messages anymore.
-                    warn!("Received command without initialization (stop-gap for #12233): {cmd:?}");
-                } else {
-                    self.activate_compute().unwrap().handle_compute_command(cmd);
-                }
+                self.activate_compute().unwrap().handle_compute_command(cmd);
                 if should_drop_compute {
                     self.compute_state = None;
                 }

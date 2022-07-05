@@ -3,13 +3,14 @@ name = "mz-timely-util"
 description = "Utilities for working with Timely."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 
 [dependencies]
-futures-util = "0.3.19"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+futures-util = "0.3.19"
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1.19.2", features = ["macros", "rt-multi-thread", "time"] }

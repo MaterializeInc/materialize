@@ -23,8 +23,6 @@ use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 use tokio::sync::Mutex;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::sources::MzOffset;
 use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
@@ -32,6 +30,9 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::Timestamp;
+
+use crate::client::controller::CollectionMetadata;
+use crate::client::sources::MzOffset;
 
 /// The reclock operator reclocks a stream that is timestamped with some timestamp `SourceTime`
 /// into another time domain that is timestamped with some timestamp `DestTime`.
@@ -222,6 +223,21 @@ impl ReclockOperator {
                 self.sync(&actual_upper).await;
             }
         }
+    }
+
+    /// Calculates the source upper frontier at a particular timestamp
+    pub fn source_upper_at(&self, target: Timestamp) -> HashMap<PartitionId, MzOffset> {
+        let mut source_upper = HashMap::new();
+        for pid in self.remap_trace.keys() {
+            let binding = self
+                .partition_bindings(pid)
+                .take_while(|(ts, _)| ts <= &target)
+                .last();
+            if let Some((_, part_upper)) = binding {
+                source_upper.insert(pid.clone(), part_upper);
+            }
+        }
+        source_upper
     }
 
     /// Syncs the state of this operator to match that of the persist shard until the provided

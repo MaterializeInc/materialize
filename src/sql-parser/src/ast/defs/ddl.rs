@@ -155,8 +155,23 @@ pub enum CsrConnection<T: AstInfo> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ReaderSchemaSelectionStrategy {
+    Latest,
+    Inline(String),
+    ById(i32),
+}
+
+impl Default for ReaderSchemaSelectionStrategy {
+    fn default() -> Self {
+        Self::Latest
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectionAvro<T: AstInfo> {
     pub connection: CsrConnection<T>,
+    pub key_strategy: Option<ReaderSchemaSelectionStrategy>,
+    pub value_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<WithOption<T>>,
 }
@@ -588,13 +603,54 @@ impl<T: AstInfo> AstDisplay for KafkaConnectionOption<T> {
 impl_display_t!(KafkaConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CsrConnectionOptionName {
+    Url,
+    SslKey,
+    SslCertificate,
+    SslCertificateAuthority,
+    Username,
+    Password,
+}
+
+impl AstDisplay for CsrConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CsrConnectionOptionName::Url => "URL",
+            CsrConnectionOptionName::SslKey => "SSL KEY",
+            CsrConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
+            CsrConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
+            CsrConnectionOptionName::Username => "USERNAME",
+            CsrConnectionOptionName::Password => "PASSWORD",
+        })
+    }
+}
+impl_display!(CsrConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CONNECTION...CONFLUENT SCHEMA REGISTRY`.
+pub struct CsrConnectionOption<T: AstInfo> {
+    pub name: CsrConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CsrConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(CsrConnectionOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
     Kafka {
         with_options: Vec<KafkaConnectionOption<T>>,
     },
     Csr {
-        url: String,
-        with_options: Vec<WithOption<T>>,
+        with_options: Vec<CsrConnectionOption<T>>,
     },
 }
 
@@ -605,18 +661,9 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
                 f.write_str("KAFKA ");
                 f.write_node(&display::comma_separated(&with_options));
             }
-            Self::Csr {
-                url: registry,
-                with_options,
-            } => {
-                f.write_str("CONFLUENT SCHEMA REGISTRY '");
-                f.write_node(&display::escape_single_quote_string(registry));
-                f.write_str("'");
-                if with_options.len() > 0 {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(&with_options));
-                    f.write_str(")");
-                }
+            Self::Csr { with_options } => {
+                f.write_str("CONFLUENT SCHEMA REGISTRY ");
+                f.write_node(&display::comma_separated(&with_options));
             }
         }
     }
@@ -760,7 +807,6 @@ pub enum CreateSinkConnection<T: AstInfo> {
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
     },
-    Persist,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
@@ -784,9 +830,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 if let Some(consistency) = consistency.as_ref() {
                     f.write_node(consistency);
                 }
-            }
-            CreateSinkConnection::Persist => {
-                f.write_str("PERSIST");
             }
         }
     }

@@ -26,7 +26,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tower_http::cors::AllowOrigin;
 
-use mz_dataflow_types::client::controller::ControllerConfig;
+use mz_controller::ControllerConfig;
 use mz_environmentd::{SecretsControllerConfig, TlsMode};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
@@ -179,7 +179,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             orchestrator: Arc::new(orchestrator),
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
-            linger: false,
             persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", data_directory.display()),
                 consensus_uri,

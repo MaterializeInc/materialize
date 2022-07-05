@@ -12,9 +12,9 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use postgres::error::SqlState;
 
-use mz_coord::session::ClientSeverity as CoordClientSeverity;
-use mz_coord::session::TransactionStatus as CoordTransactionStatus;
-use mz_coord::{CoordError, StartupMessage};
+use mz_adapter::session::ClientSeverity as AdapterClientSeverity;
+use mz_adapter::session::TransactionStatus as AdapterTransactionStatus;
+use mz_adapter::{AdapterError, StartupMessage};
 use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 
@@ -258,7 +258,7 @@ impl From<ErrorResponse> for BackendMessage {
     }
 }
 
-/// A local representation of [`CoordTransactionStatus`]
+/// A local representation of [`AdapterTransactionStatus`]
 #[derive(Debug, Clone, Copy)]
 pub enum TransactionStatus {
     /// Not currently in a transaction
@@ -269,15 +269,15 @@ pub enum TransactionStatus {
     Failed,
 }
 
-impl<T> From<&CoordTransactionStatus<T>> for TransactionStatus {
+impl<T> From<&AdapterTransactionStatus<T>> for TransactionStatus {
     /// Convert from the Session's version
-    fn from(status: &CoordTransactionStatus<T>) -> TransactionStatus {
+    fn from(status: &AdapterTransactionStatus<T>) -> TransactionStatus {
         match status {
-            CoordTransactionStatus::Default => TransactionStatus::Idle,
-            CoordTransactionStatus::Started(_) => TransactionStatus::InTransaction,
-            CoordTransactionStatus::InTransaction(_) => TransactionStatus::InTransaction,
-            CoordTransactionStatus::InTransactionImplicit(_) => TransactionStatus::InTransaction,
-            CoordTransactionStatus::Failed(_) => TransactionStatus::Failed,
+            AdapterTransactionStatus::Default => TransactionStatus::Idle,
+            AdapterTransactionStatus::Started(_) => TransactionStatus::InTransaction,
+            AdapterTransactionStatus::InTransaction(_) => TransactionStatus::InTransaction,
+            AdapterTransactionStatus::InTransactionImplicit(_) => TransactionStatus::InTransaction,
+            AdapterTransactionStatus::Failed(_) => TransactionStatus::Failed,
         }
     }
 }
@@ -356,67 +356,67 @@ impl ErrorResponse {
         }
     }
 
-    pub fn from_coord(severity: Severity, e: CoordError) -> ErrorResponse {
+    pub fn from_adapter(severity: Severity, e: AdapterError) -> ErrorResponse {
         // TODO(benesch): we should only use `SqlState::INTERNAL_ERROR` for
         // those errors that are truly internal errors. At the moment we have
         // a various classes of uncategorized errors that use this error code
         // inappropriately.
         let code = match e {
-            CoordError::Catalog(_) => SqlState::INTERNAL_ERROR,
-            CoordError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
-            CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
-            CoordError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
+            AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
+            AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
+            AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
             }
-            CoordError::Eval(EvalError::CharacterTooLargeForEncoding(_)) => {
+            AdapterError::Eval(EvalError::CharacterTooLargeForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
             }
-            CoordError::Eval(EvalError::NullCharacterNotPermitted) => {
+            AdapterError::Eval(EvalError::NullCharacterNotPermitted) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
             }
-            CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
-            CoordError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
-            CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
-            CoordError::Internal(_) => SqlState::INTERNAL_ERROR,
-            CoordError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
-            CoordError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
-            CoordError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
-            CoordError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
-            CoordError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
-            CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
-            CoordError::PlanError(_) => SqlState::INTERNAL_ERROR,
-            CoordError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
-            CoordError::QGM(_) => SqlState::INTERNAL_ERROR,
-            CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
-            CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
-            CoordError::StatementTimeout => SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
-            CoordError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
-            CoordError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
-            CoordError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
-            CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
-            CoordError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
-            CoordError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
-            CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
-            CoordError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
-            CoordError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-            CoordError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
-            CoordError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,
-            CoordError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::Eval(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
+            AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
+            AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+            AdapterError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
+            AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            AdapterError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
+            AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
+            AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
+            AdapterError::QGM(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
+            AdapterError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+            AdapterError::StatementTimeout => SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+            AdapterError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
+            AdapterError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
+            AdapterError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
+            AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
+            AdapterError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction" and "single table write transaction" are
             // not things in Postgres. This error code is the generic "bad txn thing"
             // code, so it's probably the best choice.
-            CoordError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            CoordError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
         };
         ErrorResponse {
             severity,
@@ -490,19 +490,19 @@ impl Severity {
     /// Postgres only considers the session setting after the client authentication
     /// handshake is completed. Since this function is only called after client authentication
     /// is done, we are not treating this case right now, but be aware if refactoring it.
-    pub fn should_output_to_client(&self, minimum_client_severity: &CoordClientSeverity) -> bool {
+    pub fn should_output_to_client(&self, minimum_client_severity: &AdapterClientSeverity) -> bool {
         match (minimum_client_severity, self) {
             // INFO messages are always sent
             (_, Severity::Info) => true,
-            (CoordClientSeverity::Error, Severity::Error | Severity::Fatal | Severity::Panic) => {
+            (AdapterClientSeverity::Error, Severity::Error | Severity::Fatal | Severity::Panic) => {
                 true
             }
             (
-                CoordClientSeverity::Warning,
+                AdapterClientSeverity::Warning,
                 Severity::Error | Severity::Fatal | Severity::Panic | Severity::Warning,
             ) => true,
             (
-                CoordClientSeverity::Notice,
+                AdapterClientSeverity::Notice,
                 Severity::Error
                 | Severity::Fatal
                 | Severity::Panic
@@ -510,7 +510,7 @@ impl Severity {
                 | Severity::Notice,
             ) => true,
             (
-                CoordClientSeverity::Info,
+                AdapterClientSeverity::Info,
                 Severity::Error
                 | Severity::Fatal
                 | Severity::Panic
@@ -518,7 +518,7 @@ impl Severity {
                 | Severity::Notice,
             ) => true,
             (
-                CoordClientSeverity::Log,
+                AdapterClientSeverity::Log,
                 Severity::Error
                 | Severity::Fatal
                 | Severity::Panic
@@ -527,24 +527,25 @@ impl Severity {
                 | Severity::Log,
             ) => true,
             (
-                CoordClientSeverity::Debug1
-                | CoordClientSeverity::Debug2
-                | CoordClientSeverity::Debug3
-                | CoordClientSeverity::Debug4
-                | CoordClientSeverity::Debug5,
+                AdapterClientSeverity::Debug1
+                | AdapterClientSeverity::Debug2
+                | AdapterClientSeverity::Debug3
+                | AdapterClientSeverity::Debug4
+                | AdapterClientSeverity::Debug5,
                 _,
             ) => true,
 
             (
-                CoordClientSeverity::Error,
+                AdapterClientSeverity::Error,
                 Severity::Warning | Severity::Notice | Severity::Log | Severity::Debug,
             ) => false,
-            (CoordClientSeverity::Warning, Severity::Notice | Severity::Log | Severity::Debug) => {
-                false
-            }
-            (CoordClientSeverity::Notice, Severity::Log | Severity::Debug) => false,
-            (CoordClientSeverity::Info, Severity::Log | Severity::Debug) => false,
-            (CoordClientSeverity::Log, Severity::Debug) => false,
+            (
+                AdapterClientSeverity::Warning,
+                Severity::Notice | Severity::Log | Severity::Debug,
+            ) => false,
+            (AdapterClientSeverity::Notice, Severity::Log | Severity::Debug) => false,
+            (AdapterClientSeverity::Info, Severity::Log | Severity::Debug) => false,
+            (AdapterClientSeverity::Log, Severity::Debug) => false,
         }
     }
 }
@@ -589,28 +590,28 @@ mod tests {
     fn test_should_output_to_client() {
         #[rustfmt::skip]
         let test_cases = [
-            (CoordClientSeverity::Debug1, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Debug2, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Debug3, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Debug4, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Debug5, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Log, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Log, vec![Severity::Debug], false),
-            (CoordClientSeverity::Info, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Info, vec![Severity::Debug, Severity::Log], false),
-            (CoordClientSeverity::Notice, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Notice, vec![Severity::Debug, Severity::Log], false),
-            (CoordClientSeverity::Warning, vec![Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Warning, vec![Severity::Debug, Severity::Log, Severity::Notice], false),
-            (CoordClientSeverity::Error, vec![Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (CoordClientSeverity::Error, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning], false),
+            (AdapterClientSeverity::Debug1, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Debug2, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Debug3, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Debug4, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Debug5, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Log, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Log, vec![Severity::Debug], false),
+            (AdapterClientSeverity::Info, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Info, vec![Severity::Debug, Severity::Log], false),
+            (AdapterClientSeverity::Notice, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Notice, vec![Severity::Debug, Severity::Log], false),
+            (AdapterClientSeverity::Warning, vec![Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Warning, vec![Severity::Debug, Severity::Log, Severity::Notice], false),
+            (AdapterClientSeverity::Error, vec![Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (AdapterClientSeverity::Error, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning], false),
         ];
 
         for test_case in test_cases {
             run_test(test_case)
         }
 
-        fn run_test(test_case: (CoordClientSeverity, Vec<Severity>, bool)) {
+        fn run_test(test_case: (AdapterClientSeverity, Vec<Severity>, bool)) {
             let client_min_messages_setting = test_case.0;
             let expected = test_case.2;
             for message_severity in test_case.1 {

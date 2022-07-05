@@ -409,6 +409,7 @@ mz_kafka_sinks
 mz_list_types
 mz_map_types
 mz_pseudo_types
+mz_recorded_views
 mz_roles
 mz_schemas
 mz_secrets
@@ -440,6 +441,7 @@ mz_kafka_sinks                system
 mz_list_types                 system
 mz_map_types                  system
 mz_pseudo_types               system
+mz_recorded_views             system
 mz_roles                      system
 mz_schemas                    system
 mz_secrets                    system
@@ -473,6 +475,7 @@ mz_kafka_sinks
 mz_list_types
 mz_map_types
 mz_pseudo_types
+mz_recorded_views
 mz_roles
 mz_schemas
 mz_secrets
@@ -507,6 +510,7 @@ mz_kafka_sinks
 mz_list_types
 mz_map_types
 mz_pseudo_types
+mz_recorded_views
 mz_roles
 mz_schemas
 mz_secrets
@@ -521,7 +525,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-27
+28
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

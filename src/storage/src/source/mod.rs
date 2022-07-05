@@ -50,11 +50,6 @@ use tokio::time::MissedTickBehavior;
 use tracing::error;
 
 use mz_avro::types::Value;
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::connections::ConnectionContext;
-use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{MzOffset, SourceConnection};
-use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -63,6 +58,11 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
+use crate::client::connections::ConnectionContext;
+use crate::client::controller::CollectionMetadata;
+use crate::client::errors::{DecodeError, SourceError, SourceErrorDetails};
+use crate::client::sources::encoding::SourceDataEncoding;
+use crate::client::sources::{MzOffset, SourceConnection};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockOperator;
 use crate::source::util::source;
@@ -82,8 +82,6 @@ pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
 pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
-
-include!(concat!(env!("OUT_DIR"), "/mz_storage.source.rs"));
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
@@ -118,8 +116,8 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub base_metrics: &'a SourceBaseMetrics,
     /// Storage Metadata
     pub storage_metadata: CollectionMetadata,
-    /// As Of
-    pub as_of: Antichain<Timestamp>,
+    /// The upper frontier this source should resume ingestion at
+    pub resume_upper: Antichain<Timestamp>,
     /// A handle to the persist client cachce
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
 }
@@ -728,7 +726,7 @@ where
         timestamp_frequency,
         encoding,
         storage_metadata,
-        as_of,
+        resume_upper,
         base_metrics,
         now,
         persist_clients,
@@ -748,12 +746,14 @@ where
         let base_metrics = base_metrics.clone();
         let source_connection = source_connection.clone();
         let mut source_reader = Box::pin(async_stream::stream!({
+            let upper_ts = resume_upper.as_option().copied().unwrap();
+            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
             let mut timestamper = match ReclockOperator::new(
                 persist_clients,
                 storage_metadata,
                 now,
                 timestamp_frequency.clone(),
-                as_of.clone(),
+                as_of,
             )
             .await
             {
@@ -764,8 +764,11 @@ where
                 }
             };
 
-            // TODO: Use the persisted partition offsets to skip forward
-            let start_offsets = vec![];
+            let mut source_upper = timestamper.source_upper_at(upper_ts.saturating_sub(1));
+            let mut start_offsets = Vec::with_capacity(source_upper.len());
+            for (pid, offset) in source_upper.iter() {
+                start_offsets.push((pid.clone(), Some(offset.clone())));
+            }
 
             let source_reader = S::new(
                 name.clone(),
@@ -793,7 +796,6 @@ where
             timestamp_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
             let mut ts_upper = Antichain::from_elem(Timestamp::minimum());
-            let mut source_upper = HashMap::new();
             let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
             let mut non_definite_errors = vec![];
             loop {

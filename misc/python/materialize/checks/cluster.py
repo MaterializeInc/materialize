@@ -10,10 +10,10 @@ from textwrap import dedent
 from typing import List
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import CheckDisabled
 
 
-class CreateCluster(Check):
+class CreateCluster(CheckDisabled):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -62,7 +62,8 @@ class CreateCluster(Check):
         )
 
 
-class DropCluster(Check):
+# https://github.com/MaterializeInc/materialize/issues/13235
+class DropCluster(CheckDisabled):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))

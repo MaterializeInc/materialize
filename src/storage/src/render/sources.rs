@@ -15,8 +15,6 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::consolidate::ConsolidateStream;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use futures::executor::block_on;
 use serde::{Deserialize, Serialize};
@@ -24,13 +22,14 @@ use timely::dataflow::operators::{Exchange, Map, OkErr};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::sources::{encoding::*, *};
-use mz_dataflow_types::*;
 use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
+use crate::client::controller::CollectionMetadata;
+use crate::client::errors::{DataflowError, DecodeError};
+use crate::client::sources::{encoding::*, *};
+use crate::client::transforms::LinearOperator;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::persist_source;
 use crate::source::{
@@ -61,7 +60,7 @@ enum SourceType<Delimited, ByteStream, RowSource, AppendRowSource> {
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the final source and its errors
 /// as requested by the original `CREATE SOURCE` statement,
-/// encapsulated in the passed [`SourceInstanceDesc`].
+/// encapsulated in the passed `SourceInstanceDesc`.
 ///
 /// The first element in the returned tuple is the pair of [`Collection`]s,
 /// the second is a type-erased token that will keep the source
@@ -75,7 +74,7 @@ pub fn render_source<G>(
     dataflow_debug_name: &String,
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
-    as_of: Antichain<G::Timestamp>,
+    resume_upper: Antichain<G::Timestamp>,
     mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
@@ -147,7 +146,7 @@ where
         encoding: encoding.clone(),
         now: storage_state.now.clone(),
         base_metrics: &storage_state.source_metrics,
-        as_of: as_of.clone(),
+        resume_upper: resume_upper.clone(),
         storage_metadata: description.storage_metadata,
         persist_clients: Arc::clone(&storage_state.persist_clients),
     };
@@ -319,12 +318,14 @@ where
                                 .expect("dependent source missing from ingestion description")
                                 .clone();
                             let persist_clients = Arc::clone(&storage_state.persist_clients);
+                            let upper_ts = resume_upper.as_option().copied().unwrap();
+                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
                             let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                 persist_source::persist_source(
                                     scope,
                                     persist_clients,
                                     tx_storage_metadata,
-                                    as_of.clone(),
+                                    as_of,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),
@@ -356,7 +357,7 @@ where
 
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
-                        as_of.clone(),
+                        resume_upper,
                         &mut linear_operators,
                         description.typ.arity(),
                         upsert_envelope.clone(),
@@ -416,10 +417,10 @@ where
             .inner
             .flat_map_fallible("SourceLinearOperators", {
                 // Produce an executable plan reflecting the linear operators.
-                let linear_op_mfp =
-                    mz_dataflow_types::plan::linear_to_mfp(operators, &description.typ)
-                        .into_plan()
-                        .unwrap_or_else(|e| panic!("{}", e));
+                let linear_op_mfp = operators
+                    .to_mfp(&description.typ)
+                    .into_plan()
+                    .unwrap_or_else(|e| panic!("{}", e));
                 // Reusable allocation for unpacking datums.
                 let mut datum_vec = mz_repr::DatumVec::new();
                 let mut row_builder = Row::default();
@@ -436,31 +437,11 @@ where
     };
 
     // Flatten the error collections.
-    let mut err_collection = match error_collections.len() {
+    let err_collection = match error_collections.len() {
         0 => Collection::empty(scope),
         1 => error_collections.pop().unwrap(),
         _ => collection::concatenate(scope, error_collections),
     };
-
-    // Apply `as_of` to each timestamp.
-    match &envelope {
-        SourceEnvelope::Upsert(_) => {}
-        _ => {
-            let as_of_frontier1 = as_of.clone();
-            collection = collection
-                .inner
-                .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
-                .as_collection();
-
-            err_collection = err_collection
-                .inner
-                .map_in_place(move |(_, time, _)| time.advance_by(as_of.borrow()))
-                .as_collection();
-        }
-    }
-
-    // Consolidate the results, as there may now be cancellations.
-    collection = collection.consolidate_stream();
 
     let source_token = Rc::new(capability);
 

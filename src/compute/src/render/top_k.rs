@@ -21,7 +21,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
-use mz_dataflow_types::plan::top_k::{
+use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_repr::{Diff, Row};

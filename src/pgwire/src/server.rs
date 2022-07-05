@@ -27,8 +27,8 @@ use crate::protocol;
 /// Configures a [`Server`].
 #[derive(Debug)]
 pub struct Config {
-    /// A client for the coordinator with which the server will communicate.
-    pub coord_client: mz_coord::Client,
+    /// A client for the adapter with which the server will communicate.
+    pub adapter_client: mz_adapter::Client,
     /// The TLS configuration for the server.
     ///
     /// If not present, then TLS is not enabled, and clients requests to
@@ -64,7 +64,7 @@ pub enum TlsMode {
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     tls: Option<TlsConfig>,
-    coord_client: mz_coord::Client,
+    adapter_client: mz_adapter::Client,
     frontegg: Option<FronteggAuthentication>,
 }
 
@@ -73,7 +73,7 @@ impl Server {
     pub fn new(config: Config) -> Server {
         Server {
             tls: config.tls,
-            coord_client: config.coord_client,
+            adapter_client: config.adapter_client,
             frontegg: config.frontegg,
         }
     }
@@ -83,8 +83,8 @@ impl Server {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
-        let mut coord_client = self.coord_client.new_conn()?;
-        let conn_id = coord_client.conn_id();
+        let mut adapter_client = self.adapter_client.new_conn()?;
+        let conn_id = adapter_client.conn_id();
         let mut conn = Conn::Unencrypted(conn);
         loop {
             let message = codec::decode_startup(&mut conn).await?;
@@ -104,7 +104,7 @@ impl Server {
                     let mut conn = FramedConn::new(conn_id, conn);
                     protocol::run(protocol::RunParams {
                         tls_mode: self.tls.as_ref().map(|tls| tls.mode),
-                        coord_client,
+                        adapter_client,
                         conn: &mut conn,
                         version,
                         params,
@@ -119,7 +119,7 @@ impl Server {
                     conn_id,
                     secret_key,
                 }) => {
-                    coord_client.cancel_request(conn_id, secret_key).await;
+                    adapter_client.cancel_request(conn_id, secret_key).await;
                     // For security, the client is not told whether the cancel
                     // request succeeds or fails.
                     return Ok(());

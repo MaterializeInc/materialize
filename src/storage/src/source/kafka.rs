@@ -23,15 +23,14 @@ use timely::scheduling::activate::SyncActivator;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use mz_dataflow_types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
-use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, KafkaOffset, KafkaSourceConnection, MzOffset, SourceConnection,
-};
 use mz_expr::PartitionId;
 use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
+use crate::client::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use crate::client::sources::encoding::SourceDataEncoding;
+use crate::client::sources::{KafkaOffset, KafkaSourceConnection, MzOffset, SourceConnection};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -528,7 +527,7 @@ fn create_kafka_config(
 ) -> ClientConfig {
     let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
 
-    mz_dataflow_types::populate_client_config(
+    crate::client::connections::populate_client_config(
         kafka_connection.clone(),
         options,
         std::collections::HashSet::new(),

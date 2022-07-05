@@ -40,4 +40,4 @@ contains:URL scheme is not allowed
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'foo'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}/no-such-path'
   ENVELOPE NONE
-contains:fetching latest schema for subject 'foo-value' from registry: subject not found
+contains:No value schema found

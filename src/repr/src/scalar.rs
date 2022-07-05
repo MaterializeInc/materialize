@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// `EnumKind` and various macros unconditionally introduce lifetimes.
+#![allow(clippy::extra_unused_lifetimes)]
+
 use std::fmt::{self, Write};
 use std::hash::Hash;
 use std::iter;

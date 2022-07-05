@@ -16,7 +16,7 @@
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-noexist-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-contains:fetching latest schema for subject 'testdrive-noexist-${testdrive.seed}-value' from registry: subject not found
+contains:No value schema found
 
 $ set schema-v1={
     "type": "record",

@@ -1,0 +1,19 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "compute-client/src/command.proto";
+import "compute-client/src/response.proto";
+
+package mz_compute_client.service;
+
+service ProtoCompute {
+    rpc CommandResponseStream (stream command.ProtoComputeCommand) returns (stream response.ProtoComputeResponse);
+}

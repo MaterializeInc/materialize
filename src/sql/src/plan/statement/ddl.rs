@@ -14,6 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -27,25 +28,6 @@ use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::connections::{
-    Connection, KafkaConnection, SaslConfig, Security, SslConfig, StringOrSecret,
-};
-use mz_dataflow_types::sinks::{
-    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
-    PersistSinkConnectionBuilder, SinkConnectionBuilder, SinkEnvelope,
-};
-use mz_dataflow_types::sources::encoding::{
-    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
-    ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
-};
-use mz_dataflow_types::sources::{
-    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, IncludedColumnPos,
-    KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
-    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
-    Timeline, UnplannedSourceEnvelope, UpsertStyle,
-};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
@@ -55,6 +37,26 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_storage::client::connections::{
+    Connection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, SaslConfig,
+    Security, SslConfig, StringOrSecret,
+};
+use mz_storage::client::sinks::{
+    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
+    SinkConnectionBuilder, SinkEnvelope,
+};
+use mz_storage::client::sources::encoding::{
+    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
+    ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
+};
+use mz_storage::client::sources::{
+    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
+    DebeziumSourceProjection, DebeziumTransactionMetadata, IncludedColumnPos,
+    KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
+    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
+    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
+    Timeline, UnplannedSourceEnvelope, UpsertStyle,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -66,8 +68,9 @@ use crate::ast::{
     CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnection, CsrConnectionAvro, CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
-    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    CsrConnection, CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName,
+    CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
+    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
     KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
@@ -528,12 +531,12 @@ pub fn plan_create_source(
             for ks in key_sources {
                 let dtks = match ks {
                     mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        mz_dataflow_types::sources::S3KeySource::Scan {
+                        mz_storage::client::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
                     mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        mz_dataflow_types::sources::S3KeySource::SqsNotifications {
+                        mz_storage::client::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -557,8 +560,8 @@ pub fn plan_create_source(
                     .transpose()?,
                 aws,
                 compression: match compression {
-                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
-                    Compression::None => mz_dataflow_types::sources::Compression::None,
+                    Compression::Gzip => mz_storage::client::sources::Compression::Gzip,
+                    Compression::None => mz_storage::client::sources::Compression::None,
                 },
             });
             (connection, encoding)
@@ -1224,7 +1227,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_dataflow_types::connections::CsrConnection>,
+    pub csr_connection: Option<mz_storage::client::connections::CsrConnection>,
     pub confluent_wire_format: bool,
 }
 
@@ -1272,6 +1275,8 @@ fn get_encoding_inner(
                             connection,
                             seed,
                             with_options: ccsr_options,
+                            key_strategy: _,
+                            value_strategy: _,
                         },
                 } => {
                     let mut normalized_options = normalize::options(&ccsr_options)?;
@@ -1882,12 +1887,21 @@ fn kafka_sink_builder(
                 CsrConnectionAvro {
                     connection: CsrConnection::Inline { url },
                     seed,
+                    key_strategy,
+                    value_strategy,
                     with_options,
                 },
         })) => {
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
+            if key_strategy.is_some() {
+                bail!("KEY STRATEGY option does not make sense with sinks");
+            }
+            if value_strategy.is_some() {
+                bail!("VALUE STRATEGY option does not make sense with sinks");
+            }
+
             let mut normalized_with_options = normalize::options(&with_options)?;
             let csr_connection =
                 kafka_util::generate_ccsr_connection(url.parse()?, &mut normalized_with_options)?;
@@ -2048,12 +2062,21 @@ fn get_kafka_sink_consistency_config(
                     CsrConnectionAvro {
                         connection: CsrConnection::Inline { url },
                         seed,
+                        key_strategy,
+                        value_strategy,
                         with_options,
                     },
             })) => {
                 if seed.is_some() {
                     bail!("SEED option does not make sense with sinks");
                 }
+                if key_strategy.is_some() {
+                    bail!("KEY STRATEGY option does not make sense with sinks");
+                }
+                if value_strategy.is_some() {
+                    bail!("VALUE STRATEGY option does not make sense with sinks");
+                }
+
                 let csr_connection = kafka_util::generate_ccsr_connection(
                     url.parse()?,
                     &mut normalize::options(&with_options)?,
@@ -2119,24 +2142,6 @@ fn get_kafka_sink_consistency_config(
     Ok(result)
 }
 
-fn persist_sink_builder(
-    format: Option<Format<Aug>>,
-    envelope: SinkEnvelope,
-    value_desc: RelationDesc,
-) -> Result<SinkConnectionBuilder, anyhow::Error> {
-    if format.is_some() {
-        bail!("CREATE SINK ... PERSIST cannot specify a format");
-    }
-
-    if envelope != SinkEnvelope::DifferentialRow {
-        bail!("CREATE SINK ... PERSIST does not support specifying an ENVELOPE");
-    }
-
-    Ok(SinkConnectionBuilder::Persist(
-        PersistSinkConnectionBuilder { value_desc },
-    ))
-}
-
 pub fn describe_create_sink(
     scx: &StatementContext,
     _: CreateSinkStatement<Aug>,
@@ -2171,11 +2176,7 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        // The persist sink only works with its own special envelope, so make that the default.
-        None if matches!(connection, CreateSinkConnection::Persist { .. }) => {
-            SinkEnvelope::DifferentialRow
-        }
-        // Other sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
+        // Sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
         None => SinkEnvelope::Debezium,
         Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain { tx_metadata })) => {
             if !tx_metadata.is_empty() {
@@ -2247,7 +2248,6 @@ pub fn plan_create_sink(
                 None
             }
         }
-        CreateSinkConnection::Persist { .. } => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -2294,7 +2294,6 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        CreateSinkConnection::Persist => persist_sink_builder(format, envelope, desc.into_owned())?,
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
@@ -2470,7 +2469,7 @@ pub fn plan_create_index(
                     _ => "expr".to_string(),
                 })
                 .join("_");
-            idx_name.item += &format!("_{}_idx", index_name_col_suffix);
+            write!(idx_name.item, "_{index_name_col_suffix}_idx")?;
             idx_name.item = normalize::ident(Ident::new(&idx_name.item))
         }
 
@@ -2926,6 +2925,9 @@ impl KafkaConnectionOptionExtracted {
         for broker in &mut brokers {
             // Normalize Kafka addresses
             *broker = KafkaAddrs::from_str(broker)?.to_string();
+            if broker.contains(',') {
+                bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string");
+            }
         }
 
         Ok(brokers)
@@ -3020,6 +3022,49 @@ impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
     }
 }
 
+generate_extracted_config!(
+    CsrConnectionOption,
+    (Url, String),
+    (SslKey, with_options::Secret),
+    (SslCertificate, StringOrSecret),
+    (SslCertificateAuthority, StringOrSecret),
+    (Username, StringOrSecret),
+    (Password, with_options::Secret)
+);
+
+impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::CsrConnection {
+    type Error = anyhow::Error;
+    fn try_from(ccsr_options: CsrConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        let url = match ccsr_options.url {
+            Some(url) => url.parse()?,
+            None => bail!("invalid CONNECTION: must specify URL"),
+        };
+        let root_certs = match ccsr_options.ssl_certificate_authority {
+            None => vec![],
+            Some(cert) => vec![cert],
+        };
+        let cert = ccsr_options.ssl_certificate;
+        let key = ccsr_options.ssl_key.map(|secret| secret.into());
+        let tls_identity = match (cert, key) {
+            (None, None) => None,
+            (Some(cert), Some(key)) => Some(CsrConnectionTlsIdentity { cert, key }),
+            _ => bail!(
+                "invalid CONNECTION: reading from SSL-auth Confluent Schema Registry requires both SSL KEY and SSL CERTIFICATE"
+            ),
+        };
+        let http_auth = ccsr_options.username.map(|username| CsrConnectionHttpAuth {
+            username,
+            password: ccsr_options.password.map(|secret| secret.into()),
+        });
+        Ok(mz_storage::client::connections::CsrConnection {
+            url,
+            root_certs,
+            tls_identity,
+            http_auth,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -3037,11 +3082,9 @@ pub fn plan_create_connection(
             let k = KafkaConnectionOptionExtracted::try_from(with_options)?;
             Connection::Kafka(KafkaConnection::try_from(k)?)
         }
-        CreateConnection::Csr { url, with_options } => {
-            let connection = kafka_util::generate_ccsr_connection(
-                url.parse()?,
-                &mut normalize::options(&with_options)?,
-            )?;
+        CreateConnection::Csr { with_options } => {
+            let c = CsrConnectionOptionExtracted::try_from(with_options)?;
+            let connection = mz_storage::client::connections::CsrConnection::try_from(c)?;
             Connection::Csr(connection)
         }
     };
@@ -3261,9 +3304,9 @@ pub fn plan_drop_cluster(
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
                 if !cascade
-                    && (!instance.indexes().is_empty() || !instance.replica_names().is_empty())
+                    && (!instance.exports().is_empty() || !instance.replica_names().is_empty())
                 {
-                    bail!("cannot drop cluster with active indexes, sinks, or replicas");
+                    bail!("cannot drop cluster with active indexes, sinks, recorded views, or replicas");
                 }
                 out.push(name.into_string());
             }

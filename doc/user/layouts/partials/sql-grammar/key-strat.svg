@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="259" height="37">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="130" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="130"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">KEY STRATEGY</text>
+   <rect x="181" y="3" width="50" height="32"/>
+   <rect x="179" y="1" width="50" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="189" y="21">strat</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m130 0 h10 m0 0 h10 m50 0 h10 m3 0 h-3"/>
+   <polygon points="249 17 257 13 257 21"/>
+   <polygon points="249 17 241 13 241 21"/>
+</svg>

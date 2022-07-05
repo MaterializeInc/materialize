@@ -3,13 +3,13 @@ name = "mz-kafka-util"
 description = "Utilities for working with Kafka."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 
 [dependencies]
 anyhow = "1.0.58"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.2.6", features = ["derive"] }
+clap = { version = "3.2.8", features = ["derive"] }
 crossbeam = "0.8.1"
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
@@ -18,11 +18,11 @@ mz-proto = { path = "../proto" }
 num_cpus = "1.13.1"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
-prost = "0.10.1"
+prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-serde = { version = "1.0.137", features = ["derive"] }
-serde_json = "1.0.81"
+serde = { version = "1.0.138", features = ["derive"] }
+serde_json = "1.0.82"
 tokio = { version = "1.19.2", features = ["macros"] }
 thiserror = "1.0.31"
 tracing = "0.1.35"

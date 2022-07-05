@@ -1,5 +1,5 @@
 ---
-title: "Ruby Cheatsheet"
+title: "Ruby cheatsheet"
 description: "Use Ruby to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/ruby/
@@ -9,19 +9,11 @@ menu:
     name: 'Ruby'
 ---
 
-Materialize is **PostgreSQL-compatible**, which means that Ruby applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use the  [`pg` gem](https://rubygems.org/gems/pg/) to connect to Materialize and issue PostgreSQL commands.
+Materialize is **wire-compatible** with PostgreSQL, which means that Ruby applications can use common PostgreSQL clients to interact with Materialize. In this guide, we'll use the  [`pg` gem](https://rubygems.org/gems/pg/) to connect to Materialize and issue SQL commands.
 
 ## Connect
 
-You connect to Materialize the same way you [connect to PostgreSQL with `pg`](https://github.com/ged/ruby-pg). If you don't have a `pg` gem, you can install it with:
-
-```bash
-gem install pg
-```
-
-### Local Instance
-
-You can connect to a local Materialize instance just as you would connect to a PostgreSQL instance:
+To connect to a local instance of Materialize using `pg`:
 
 ```ruby
 require 'pg'
@@ -29,11 +21,17 @@ require 'pg'
 conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
 ```
 
+If you don't have a `pg` gem, you can install it with:
+
+```bash
+gem install pg
+```
+
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Ruby application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Ruby application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query.
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```ruby
 require 'pg'
@@ -52,7 +50,7 @@ while true
 end
 ```
 
-The [TAIL Output format](/sql/tail/#output) of `res.rows` is an array of view update objects. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
+Each `result` of the [TAIL output format](/sql/tail/#output) has exactly object. When a row of a tailed view is **updated,** two objects will show up:
 
 ```json
 ...
@@ -63,16 +61,16 @@ The [TAIL Output format](/sql/tail/#output) of `res.rows` is an array of view up
 ...
 ```
 
-An `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a deletion (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same `mz_timestamp`.
+An `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same `mz_timestamp`.
 
 
 ## Query
 
-Querying Materialize is identical to querying a traditional PostgreSQL database: Ruby executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+Querying Materialize is identical to querying a PostgreSQL database: Ruby executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
 Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
-Query a view `my_view` with a select statement:
+To query a view `my_view` using a `SELECT` statement:
 
 ```ruby
 require 'pg'
@@ -90,9 +88,9 @@ For more details, see the  [`exec` instance method](https://rubydoc.info/gems/pg
 
 ## Insert data into tables
 
-Most data in Materialize will stream in via a `SOURCE`, but a [`TABLE` in Materialize](https://materialize.com/docs/sql/create-table/) can be helpful for supplementary data. For example, use a table to join slower-moving reference or lookup data with a stream.
+Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
 
-**Basic Example:** [Insert a row](https://materialize.com/docs/sql/insert/) of data into a table named `countries` in Materialize.
+**Basic Example:** [Insert a row](https://materialize.com/docs/sql/insert/) of data into a table named `countries` in Materialize:
 
 ```ruby
 require 'pg'
@@ -110,7 +108,7 @@ end
 
 ## Manage sources, views, and indexes
 
-Typically, you create sources, views, and indexes when deploying Materialize, although it is possible to use a Ruby app to execute common DDL statements.
+Typically, you create sources, views, and indexes when deploying Materialize, but it's also possible to use a Ruby app to execute common DDL statements.
 
 ### Create a source from Ruby
 
@@ -165,4 +163,6 @@ For more information, see [`CREATE VIEW`](/sql/create-view/).
 
 ## Ruby ORMs
 
-Materialize doesn't currently support the full catalog of PostgreSQL system metadata API endpoints, including the system calls that object relational mapping systems (ORMs) like **Active Record** use to introspect databases and do extra work behind the scenes. This means that ORM system attempts to interact with Materialize will currently fail. Once [full `pg_catalog` support](https://github.com/MaterializeInc/materialize/issues/2157) is implemented, the features that depend on  `pg_catalog` may work properly.
+ORM frameworks like **Active Record** tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if a tool is compatible with PostgreSQL, it’s not guaranteed that the same integration will work out-of-the-box.
+
+The level of support for these tools will improve as we extend the coverage of `pg_catalog` in Materialize {{% gh 2157 %}} and join efforts with each community to make the integrations Just Work™️.

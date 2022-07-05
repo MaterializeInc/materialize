@@ -12,10 +12,10 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
-use mz_dataflow_types::connections::StringOrSecret;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::GlobalId;
+use mz_storage::client::connections::StringOrSecret;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
 use crate::names::ResolvedObjectName;

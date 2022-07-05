@@ -3,7 +3,7 @@ name = "mz-testdrive"
 description = "Integration test driver for Materialize."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.61.0"
+rust-version = "1.62.0"
 publish = false
 
 [dependencies]
@@ -11,17 +11,17 @@ anyhow = "1.0.58"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-trait = "0.1.56"
 atty = "0.2.0"
-aws-config = { version = "0.14.0", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-s3 = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sqs = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sts = { version = "0.14.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-smithy-http = "0.44.0"
-aws-types = { version = "0.14.0", features = ["hardcoded-credentials"] }
+aws-config = { version = "0.15.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-s3 = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sqs = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sts = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-smithy-http = "0.45.0"
+aws-types = { version = "0.15.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.2.6", features = ["derive"] }
+clap = { version = "3.2.8", features = ["derive"] }
 flate2 = "1.0.24"
 futures = "0.3.21"
 globset = "0.4.9"
@@ -34,8 +34,7 @@ md-5 = "0.10.1"
 mysql_async = "0.30.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-ccsr = { path = "../ccsr" }
-mz-coord = { path = "../coord" }
-mz-dataflow-types = { path = "../dataflow-types" }
+mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
@@ -48,22 +47,22 @@ mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
-prost = "0.10.3"
+prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.8.1", features = ["serde"] }
 protobuf-src = "1.0.4"
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.5.6"
 reqwest = { version = "0.11.11", features = ["native-tls-vendored"] }
-serde = "1.0.137"
-serde_json = { version = "1.0.81", features = ["raw_value"] }
+serde = "1.0.138"
+serde_json = { version = "1.0.82", features = ["raw_value"] }
 similar = "2.1.0"
 tempfile = "3.2.0"
 termcolor = "1.1.3"
 tiberius = { version = "0.9.3", default-features = false }
 time = "0.3.11"
 tracing = "0.1.35"
-tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.14", features = ["env-filter"] }
 tokio = { version = "1.19.2", features = ["process"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.9"
