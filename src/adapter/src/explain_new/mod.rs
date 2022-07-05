@@ -22,6 +22,7 @@ pub(crate) mod common;
 pub(crate) mod hir;
 pub(crate) mod lir;
 pub(crate) mod mir;
+pub(crate) mod qgm;
 
 /// Newtype struct for wrapping types that should
 /// implement the `Explain` trait.
