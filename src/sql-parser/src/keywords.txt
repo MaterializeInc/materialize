@@ -101,6 +101,7 @@ Details
 Discard
 Discover
 Distinct
+Dot
 Double
 Drop
 Else

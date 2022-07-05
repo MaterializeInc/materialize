@@ -2239,6 +2239,7 @@ pub enum ExplainFormat {
     /// Human readable display format
     Text,
     Json,
+    Dot,
 }
 
 impl AstDisplay for ExplainFormat {
@@ -2246,6 +2247,7 @@ impl AstDisplay for ExplainFormat {
         match self {
             Self::Text => f.write_str("TEXT"),
             Self::Json => f.write_str("JSON"),
+            Self::Dot => f.write_str("DOT"),
         }
     }
 }
