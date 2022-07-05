@@ -1760,7 +1760,7 @@ impl<'a> Parser<'a> {
             };
             self.expect_keywords(&[VALUE, SCHEMA])?;
             let value_schema = self.parse_literal_string()?;
-            Some(CsrSeed {
+            Some(CsrSeedAvro {
                 key_schema,
                 value_schema,
             })
@@ -1812,7 +1812,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_csr_connection_proto(&mut self) -> Result<CsrConnectionProto<Raw>, ParserError> {
+    fn parse_csr_connection_proto(&mut self) -> Result<CsrConnectionProtobuf<Raw>, ParserError> {
         let connection = if self.parse_keyword(CONNECTION) {
             CsrConnection::Reference {
                 connection: self.parse_raw_name()?,
@@ -1824,44 +1824,29 @@ impl<'a> Parser<'a> {
         };
 
         let seed = if self.parse_keyword(SEED) {
-            if self.parse_keyword(COMPILED) {
-                let key = if self.parse_keyword(KEY) {
-                    self.expect_keyword(SCHEMA)?;
-                    let schema = self.parse_literal_string()?;
-                    self.expect_keyword(MESSAGE)?;
-                    let message_name = self.parse_literal_string()?;
-                    Some(CsrSeedCompiledEncoding {
-                        schema,
-                        message_name,
-                    })
-                } else {
-                    None
-                };
-                self.expect_keywords(&[VALUE, SCHEMA])?;
-                let value_schema = self.parse_literal_string()?;
+            let key = if self.parse_keyword(KEY) {
+                self.expect_keyword(SCHEMA)?;
+                let schema = self.parse_literal_string()?;
                 self.expect_keyword(MESSAGE)?;
-                let value_message_name = self.parse_literal_string()?;
-                Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
-                    value: CsrSeedCompiledEncoding {
-                        schema: value_schema,
-                        message_name: value_message_name,
-                    },
-                    key,
-                }))
+                let message_name = self.parse_literal_string()?;
+                Some(CsrSeedProtobufSchema {
+                    schema,
+                    message_name,
+                })
             } else {
-                let key_schema = if self.parse_keyword(KEY) {
-                    self.expect_keyword(SCHEMA)?;
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
-                self.expect_keywords(&[VALUE, SCHEMA])?;
-                let value_schema = self.parse_literal_string()?;
-                Some(CsrSeedCompiledOrLegacy::Legacy(CsrSeed {
-                    value_schema,
-                    key_schema,
-                }))
-            }
+                None
+            };
+            self.expect_keywords(&[VALUE, SCHEMA])?;
+            let value_schema = self.parse_literal_string()?;
+            self.expect_keyword(MESSAGE)?;
+            let value_message_name = self.parse_literal_string()?;
+            Some(CsrSeedProtobuf {
+                value: CsrSeedProtobufSchema {
+                    schema: value_schema,
+                    message_name: value_message_name,
+                },
+                key,
+            })
         } else {
             None
         };
@@ -1874,7 +1859,7 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(CsrConnectionProto {
+        Ok(CsrConnectionProtobuf {
             connection,
             seed,
             with_options,

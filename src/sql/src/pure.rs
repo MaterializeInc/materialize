@@ -21,7 +21,8 @@ use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
 use mz_kafka_util::KafkaAddrs;
 use mz_sql_parser::ast::{
-    CsrConnection, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy,
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConnection,
+    KafkaSourceConnection, ReaderSchemaSelectionStrategy,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -39,9 +40,8 @@ use mz_storage::client::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding,
-    CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Value,
-    WithOption, WithOptionValue,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, DbzMode, Envelope, Format, Ident,
+    ProtobufSchema, Value, WithOption, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -301,7 +301,7 @@ async fn purify_source_format_single(
 async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
-    csr_connection: &mut CsrConnectionProto<Aug>,
+    csr_connection: &mut CsrConnectionProtobuf<Aug>,
     envelope: &Option<Envelope<Aug>>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
@@ -312,7 +312,7 @@ async fn purify_csr_connection_proto(
             bail!("Confluent Schema Registry is only supported with Kafka sources")
         };
 
-    let CsrConnectionProto {
+    let CsrConnectionProtobuf {
         connection,
         seed,
         with_options: ccsr_options,
@@ -347,15 +347,9 @@ async fn purify_csr_connection_proto(
                 bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
             }
 
-            *seed = Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled {
-                value,
-                key,
-            }));
+            *seed = Some(CsrSeedProtobuf { value, key });
         }
-        Some(CsrSeedCompiledOrLegacy::Compiled(..)) => (),
-        Some(CsrSeedCompiledOrLegacy::Legacy(..)) => {
-            unreachable!("Should not be able to purify CsrSeedCompiledOrLegacy::Legacy")
-        }
+        Some(_) => (),
     }
 
     Ok(())
@@ -414,7 +408,7 @@ async fn purify_csr_connection_avro(
             bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
         }
 
-        *seed = Some(CsrSeed {
+        *seed = Some(CsrSeedAvro {
             key_schema,
             value_schema,
         })
@@ -515,7 +509,7 @@ async fn get_remote_csr_schema(
 async fn compile_proto(
     subject_name: &String,
     ccsr_client: &Client,
-) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
+) -> Result<CsrSeedProtobufSchema, anyhow::Error> {
     let (primary_subject, dependency_subjects) =
         ccsr_client.get_subject_and_references(subject_name).await?;
 
@@ -544,7 +538,7 @@ async fn compile_proto(
     let mut schema = String::new();
     strconv::format_bytes(&mut schema, &fds.serialize()?);
 
-    Ok(CsrSeedCompiledEncoding {
+    Ok(CsrSeedProtobufSchema {
         schema,
         message_name,
     })
