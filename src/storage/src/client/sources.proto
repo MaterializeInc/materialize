@@ -45,8 +45,7 @@ message ProtoKeyEnvelope {
     oneof kind {
         google.protobuf.Empty none = 1;
         google.protobuf.Empty flattened = 2;
-        google.protobuf.Empty legacy_upsert = 3;
-        string named = 4;
+        string named = 3;
     }
 }
 

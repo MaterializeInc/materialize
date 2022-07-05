@@ -75,7 +75,7 @@ $ file-append path=data-schema.json
   ENVELOPE UPSERT
 
 > select * from bytesavro
-key0          f1       f2
+key           f1       f2
 ---------------------------
 fish          fish     1000
 b\xc3\xacrd1  goose    1
@@ -89,7 +89,7 @@ mämmalmore: {"f1": "moose", "f2": 42}
 mammal1:
 
 > select * from textavro
-key0          f1       f2
+key           f1       f2
 ---------------------------
 fish          fish     1000
 birdmore      geese    56
@@ -128,7 +128,7 @@ bìrd1:
   ENVELOPE UPSERT
 
 > select * from texttext
-key0          text  mz_offset
+key           text  mz_offset
 -----------------------------
 fish          fish  1
 bírdmore      geese 3
@@ -141,7 +141,7 @@ mammal1:
 mammal1:mouse
 
 > select * from textbytes
-key0          data             mz_offset
+key           data             mz_offset
 ----------------------------------------
 fish          fish             1
 bírdmore      g\xc3\xa9ese     6
@@ -152,7 +152,7 @@ $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 mammalmore:herd
 
 > select * from bytesbytes
-key0             data             mz_offset
+key              data             mz_offset
 ----------------------------------------
 fish             fish             1
 b\xc3\xadrdmore  g\xc3\xa9ese     6
@@ -164,7 +164,7 @@ bìrd1:
 fish:
 
 > select * from bytestext
-key0             text             mz_offset
+key              text             mz_offset
 ----------------------------------------
 b\xc3\xadrdmore  géese            6
 mammal1          mouse            9
@@ -254,7 +254,7 @@ mammal1:
   ENVELOPE UPSERT
 
 > select * from nullkey
-key0          text  mz_offset
+key           text  mz_offset
 -----------------------------
 birdmore      geese 5
 mammalmore    moose 6

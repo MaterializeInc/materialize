@@ -611,7 +611,7 @@ pub fn plan_create_source(
     };
     let (key_desc, value_desc) = encoding.desc()?;
 
-    let key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
+    let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
@@ -623,9 +623,7 @@ pub fn plan_create_source(
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         // TODO: fixup key envelope
-        mz_sql_parser::ast::Envelope::None => {
-            UnplannedSourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
-        }
+        mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
             let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
@@ -794,17 +792,17 @@ pub fn plan_create_source(
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
-            if encoding.key_ref().is_none() {
-                bail_unsupported!(format!("upsert requires a key/value format: {:?}", format));
-            }
-            //TODO(petrosagg): remove this check. it will be a breaking change
-            let key_envelope = match encoding.key_ref() {
-                Some(DataEncoding {
-                    inner: DataEncodingInner::Avro(_),
-                    ..
-                }) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
-                _ => key_envelope.unwrap_or(KeyEnvelope::LegacyUpsert),
+            let key_encoding = match encoding.key_ref() {
+                None => {
+                    bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
+                }
+                Some(key_encoding) => key_encoding,
             };
+            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
+            // specified.
+            if key_envelope == KeyEnvelope::None {
+                key_envelope = get_unnamed_key_envelope(key_encoding)?;
+            }
             UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
@@ -1452,7 +1450,7 @@ fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
     envelope: &Envelope<Aug>,
     encoding: &SourceDataEncoding,
-) -> Result<Option<KeyEnvelope>, PlanError> {
+) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
         .find(|i| i.ty == SourceIncludeMetadataType::Key);
@@ -1462,32 +1460,11 @@ fn get_key_envelope(
         );
     }
     if let Some(kd) = key_definition {
-        Ok(Some(match (&kd.alias, encoding) {
+        match (&kd.alias, encoding) {
             (Some(name), SourceDataEncoding::KeyValue { .. }) => {
-                KeyEnvelope::Named(name.as_str().to_string())
+                Ok(KeyEnvelope::Named(name.as_str().to_string()))
             }
-            (None, _) if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
-            (None, SourceDataEncoding::KeyValue { key, .. }) => {
-                // If the key is requested but comes from an unnamed type then it gets the name "key"
-                //
-                // Otherwise it gets the names of the columns in the type
-                let is_composite = match key.inner {
-                    DataEncodingInner::Postgres | DataEncodingInner::RowCodec(_) => {
-                        sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
-                    }
-                    DataEncodingInner::Bytes | DataEncodingInner::Text => false,
-                    DataEncodingInner::Avro(_)
-                    | DataEncodingInner::Csv(_)
-                    | DataEncodingInner::Protobuf(_)
-                    | DataEncodingInner::Regex { .. } => true,
-                };
-
-                if is_composite {
-                    KeyEnvelope::Flattened
-                } else {
-                    KeyEnvelope::Named("key".to_string())
-                }
-            }
+            (None, SourceDataEncoding::KeyValue { key, .. }) => get_unnamed_key_envelope(key),
             (_, SourceDataEncoding::Single(_)) => {
                 // `kd.alias` == `None` means `INCLUDE KEY`
                 // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
@@ -1497,9 +1474,33 @@ fn get_key_envelope(
                         got bare FORMAT"
                 );
             }
-        }))
+        }
     } else {
-        Ok(None)
+        Ok(KeyEnvelope::None)
+    }
+}
+
+/// Gets the key envelope for a given key encoding when no name for the key has
+/// been requested by the user.
+fn get_unnamed_key_envelope(key: &DataEncoding) -> Result<KeyEnvelope, PlanError> {
+    // If the key is requested but comes from an unnamed type then it gets the name "key"
+    //
+    // Otherwise it gets the names of the columns in the type
+    let is_composite = match key.inner {
+        DataEncodingInner::Postgres | DataEncodingInner::RowCodec(_) => {
+            sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
+        }
+        DataEncodingInner::Bytes | DataEncodingInner::Text => false,
+        DataEncodingInner::Avro(_)
+        | DataEncodingInner::Csv(_)
+        | DataEncodingInner::Protobuf(_)
+        | DataEncodingInner::Regex { .. } => true,
+    };
+
+    if is_composite {
+        Ok(KeyEnvelope::Flattened)
+    } else {
+        Ok(KeyEnvelope::Named("key".to_string()))
     }
 }
 
