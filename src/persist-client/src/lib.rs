@@ -37,7 +37,7 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{retry_external, Machine};
-use crate::read::{ReadHandle, ReaderId};
+use crate::read::{ReadHandle, ReaderId, SinceHandleId};
 use crate::write::WriteHandle;
 
 pub mod batch;
@@ -390,7 +390,7 @@ impl PersistClient {
     {
         trace!("Client::open_since_handle shard_id={:?}", shard_id);
 
-        let since_handle_id = ReaderId::new();
+        let since_handle_id = SinceHandleId::new();
 
         let mut machine = Machine::new(
             shard_id,

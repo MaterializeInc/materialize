@@ -22,7 +22,7 @@ use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
-use crate::read::ReaderId;
+use crate::read::{ReaderId, SinceHandleId};
 use crate::ShardId;
 
 /// A hold on a given `SeqNo` which prevents compaction of state and removal of
@@ -51,8 +51,7 @@ pub struct HollowBatch<T> {
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 pub struct StateCollections<T> {
-    // WIP: Introduce `SinceHandleId`?
-    active_since_handle: Option<ReaderId>,
+    active_since_handle: Option<SinceHandleId>,
 
     readers: HashMap<ReaderId, SeqNoCapability>,
 
@@ -81,7 +80,7 @@ where
     pub fn fence_since_handle(
         &mut self,
         _seqno: SeqNo,
-        new_since_handle_id: &ReaderId,
+        new_since_handle_id: &SinceHandleId,
     ) -> ControlFlow<Infallible, Since<T>> {
         self.active_since_handle = Some(new_since_handle_id.clone());
         Continue(Since(self.trace.since().clone()))
@@ -144,9 +143,9 @@ where
     // WIP: Am I using Infallible and the Result correctly here? I think not.
     pub fn downgrade_since(
         &mut self,
-        since_handle_id: &ReaderId,
+        since_handle_id: &SinceHandleId,
         new_since: &Antichain<T>,
-    ) -> ControlFlow<Infallible, Result<Since<T>, Option<ReaderId>>> {
+    ) -> ControlFlow<Infallible, Result<Since<T>, Option<SinceHandleId>>> {
         if Some(since_handle_id) != self.active_since_handle.as_ref() {
             Continue(Err(self.active_since_handle.clone()))
         } else {
@@ -362,7 +361,7 @@ struct StateRollupMeta {
     diff_codec: String,
 
     seqno: SeqNo,
-    active_since_handle: Option<ReaderId>,
+    active_since_handle: Option<SinceHandleId>,
     readers: Vec<(ReaderId, SeqNo)>,
     trace: TraceMeta,
 }
@@ -609,7 +608,7 @@ mod tests {
     #[test]
     fn downgrade_since() {
         let mut state = State::<(), (), u64, i64>::new(ShardId::new());
-        let since_handle_id = ReaderId::new();
+        let since_handle_id = SinceHandleId::new();
         let _ = state
             .collections
             .fence_since_handle(SeqNo::minimum(), &since_handle_id);
@@ -646,7 +645,7 @@ mod tests {
     #[test]
     fn since_handle_fencing() {
         let mut state = State::<(), (), u64, i64>::new(ShardId::new());
-        let since_handle_id = ReaderId::new();
+        let since_handle_id = SinceHandleId::new();
 
         // Initially, there is no active since handle.
         assert_eq!(
@@ -660,7 +659,7 @@ mod tests {
             .collections
             .fence_since_handle(SeqNo::minimum(), &since_handle_id);
 
-        let since_handle_id_2 = ReaderId::new();
+        let since_handle_id_2 = SinceHandleId::new();
         let _ = state
             .collections
             .fence_since_handle(SeqNo::minimum(), &since_handle_id_2);
@@ -777,7 +776,7 @@ mod tests {
             Ok(Err(Upper(Antichain::from_elem(5))))
         );
 
-        let since_handle_id = ReaderId::new();
+        let since_handle_id = SinceHandleId::new();
         // Advance the since to 2.
         let _ = state
             .collections

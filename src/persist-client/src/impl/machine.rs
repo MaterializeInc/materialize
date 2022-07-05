@@ -32,7 +32,7 @@ use crate::r#impl::metrics::{
 };
 use crate::r#impl::state::{HollowBatch, SeqNoCapability, Since, State, StateCollections, Upper};
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
-use crate::read::ReaderId;
+use crate::read::{ReaderId, SinceHandleId};
 use crate::ShardId;
 
 #[derive(Debug)]
@@ -108,7 +108,7 @@ where
 
     /// Opens a new `SinceHandle` for this shard and fences off any previously
     /// open handles, if any.
-    pub async fn open_since_handle(&mut self, since_handle_id: &ReaderId) -> Since<T> {
+    pub async fn open_since_handle(&mut self, since_handle_id: &SinceHandleId) -> Since<T> {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, since) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
@@ -186,9 +186,9 @@ where
 
     pub async fn downgrade_since(
         &mut self,
-        reader_id: &ReaderId,
+        reader_id: &SinceHandleId,
         new_since: &Antichain<T>,
-    ) -> (SeqNo, Result<Since<T>, Option<ReaderId>>) {
+    ) -> (SeqNo, Result<Since<T>, Option<SinceHandleId>>) {
         let metrics = Arc::clone(&self.metrics);
         let res = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |_, state| {

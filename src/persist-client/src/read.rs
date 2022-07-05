@@ -734,6 +734,28 @@ fn decode_inline_desc<T: Timestamp + Codec64>(desc: &Description<u64>) -> Descri
     )
 }
 
+/// An opaque identifier for a since handle to a persist durable TVC (aka shard).
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SinceHandleId(pub(crate) [u8; 16]);
+
+impl std::fmt::Display for SinceHandleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "r{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for SinceHandleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SinceHandleIdId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl SinceHandleId {
+    pub(crate) fn new() -> Self {
+        SinceHandleId(*Uuid::new_v4().as_bytes())
+    }
+}
+
 /// A "capability" granting the ability to hold back the `since` of a persist
 /// shard and downgrade it when necessary.
 ///
@@ -769,7 +791,7 @@ where
     #[allow(unused)]
     pub(crate) metrics: Arc<Metrics>,
     // WIP: Introduce a `SinceHandleId`?
-    pub(crate) since_handle_id: ReaderId,
+    pub(crate) since_handle_id: SinceHandleId,
     pub(crate) machine: Machine<K, V, T, D>,
 
     pub(crate) since: Antichain<T>,
@@ -796,7 +818,7 @@ where
     /// system. A `new_since` of the empty antichain "finishes" this shard,
     /// promising that no more data will ever be read by this handle.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) -> Result<(), ReaderId> {
+    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) -> Result<(), SinceHandleId> {
         trace!("SinceHandle::downgrade_since new_since={:?}", new_since);
         let (_seqno, res) = self
             .machine
