@@ -3319,6 +3319,22 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.validate_timeline(depends_on.clone())?;
 
+        // Recorded views are not allowed to depend on log sources, as replicas
+        // are not producing the same definite collection for these.
+        // TODO(teskje): Remove this check once arrangement-based log sources
+        // are replaced with persist-based ones.
+        let log_names = depends_on
+            .iter()
+            .flat_map(|id| self.catalog.log_dependencies(*id))
+            .map(|id| self.catalog.get_entry(&id).name().item.clone())
+            .collect::<Vec<_>>();
+        if !log_names.is_empty() {
+            return Err(AdapterError::InvalidLogDependency {
+                object_type: "recorded view".into(),
+                log_names,
+            });
+        }
+
         // Allocate IDs for the recorded view in the catalog.
         let id = self.catalog.allocate_user_id().await?;
         let oid = self.catalog.allocate_oid().await?;

@@ -52,6 +52,12 @@ pub enum AdapterError {
     IntrospectionDisabled {
         log_names: Vec<String>,
     },
+    /// Attempted to create an object dependent on log sources that doesn't support
+    /// log dependencies.
+    InvalidLogDependency {
+        object_type: String,
+        log_names: Vec<String>,
+    },
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
     /// The value of the specified parameter is incorrect
@@ -180,6 +186,10 @@ impl AdapterError {
                 "The query references the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
+            AdapterError::InvalidLogDependency { log_names, .. } => Some(format!(
+                "The object depends on the following log sources:\n    {}",
+                log_names.join("\n    "),
+            )),
             _ => None,
         }
     }
@@ -258,6 +268,9 @@ impl fmt::Display for AdapterError {
                 f,
                 "cannot read log sources on cluster with disabled introspection"
             ),
+            AdapterError::InvalidLogDependency { object_type, .. } => {
+                write!(f, "{object_type} objects cannot depend on log sources")
+            }
             AdapterError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",

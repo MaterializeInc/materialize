@@ -345,6 +345,12 @@ cluster on_name key_name       seq_in_index column_name expression nullable
 default rv      rv_primary_idx 1            ?column?    NULL       false
 
 
+# Test: Creating recorded views that depend on log sources is forbidden.
+
+statement error recorded view objects cannot depend on log sources
+CREATE OR REPLACE RECORDED VIEW rv AS SELECT * FROM mz_dataflow_operators;
+
+
 # Cleanup
 
 statement ok

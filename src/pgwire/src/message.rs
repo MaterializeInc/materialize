@@ -380,6 +380,7 @@ impl ErrorResponse {
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidLogDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
