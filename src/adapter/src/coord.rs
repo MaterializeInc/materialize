@@ -6845,9 +6845,14 @@ mod timeline {
         /// persisted to disk.
         ///
         /// See [`TimestampOracle::read_ts`] for more details.
-        pub fn read_ts(&mut self) -> (T, Option<T>) {
+        pub fn read_ts(&mut self) -> T {
             let ts = self.timestamp_oracle.read_ts();
-            self.maybe_allocate_new_timestamps(ts)
+            let (ts, persist_ts) = self.maybe_allocate_new_timestamps(ts);
+            assert!(
+                persist_ts.is_none(),
+                "read_ts should not advance the global timestamp"
+            );
+            ts
         }
 
         /// Electively advance the tracked times. Optionally returns a timestamp that needs to be
