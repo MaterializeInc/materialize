@@ -3409,9 +3409,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(vec![id], self.logical_compaction_window_ms)
-                    .await;
-
                 self.ship_dataflow(df, compute_instance).await;
 
                 Ok(ExecuteResponse::CreatedRecordedView { existed: false })
