@@ -78,9 +78,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # remote storaged tests
     test_remote_storaged(c, args.redpanda)
 
-    # # remote cluster tests
-    # test_cluster(c, "smoke/*.td")
-    # test_github_12251(c)
+    # remote cluster tests
+    test_cluster(c, "smoke/*.td")
+    test_github_12251(c)
 
 
 def workflow_nightly(c: Composition) -> None:
