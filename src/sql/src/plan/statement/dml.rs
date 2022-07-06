@@ -21,14 +21,14 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::{AstInfo, ExplainStatementNew, ExplainStatementOld};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
-    CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateViewStatement, DeleteStatement, ExplainStageNew, ExplainStageOld, ExplainStatement,
-    Explainee, Ident, InsertStatement, Query, SelectStatement, Statement, TailOption,
-    TailOptionName, TailRelation, TailStatement, UpdateStatement, ViewDefinition,
+    AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
+    CreateRecordedViewStatement, CreateViewStatement, DeleteStatement, ExplainStageNew,
+    ExplainStageOld, ExplainStatement, ExplainStatementNew, ExplainStatementOld, Explainee, Ident,
+    InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
+    TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedObjectName};
@@ -283,8 +283,9 @@ pub fn plan_explain_old(
     let query = match explainee {
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
-            if view.item_type() != CatalogItemType::View {
-                sql_bail!("Expected {} to be a view, not a {}", name, view.item_type());
+            let item_type = view.item_type();
+            if item_type != CatalogItemType::View {
+                sql_bail!("Expected {} to be a view, not a {}", name, item_type);
             }
             let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
@@ -294,6 +295,25 @@ pub fn plan_explain_old(
                     ..
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
+            };
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            names::resolve(qcx.scx.catalog, query)?.0
+        }
+        Explainee::RecordedView(name) => {
+            let rview = scx.get_item_by_resolved_name(&name)?;
+            let item_type = rview.item_type();
+            if item_type != CatalogItemType::RecordedView {
+                sql_bail!(
+                    "Expected {} to be a recorded view, not a {}",
+                    name,
+                    item_type
+                );
+            }
+            let parsed = crate::parse::parse(rview.create_sql())
+                .expect("Sql for existing recorded view should be valid sql");
+            let query = match parsed.into_last() {
+                Statement::CreateRecordedView(CreateRecordedViewStatement { query, .. }) => query,
+                _ => panic!("Sql for existing recorded view should parse as a recorded view"),
             };
             let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             names::resolve(qcx.scx.catalog, query)?.0
@@ -339,8 +359,9 @@ pub fn plan_explain_new(
     let query = match explainee {
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
-            if view.item_type() != CatalogItemType::View {
-                sql_bail!("Expected {} to be a view, not a {}", name, view.item_type());
+            let item_type = view.item_type();
+            if item_type != CatalogItemType::View {
+                sql_bail!("Expected {} to be a view, not a {}", name, item_type);
             }
             let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
@@ -350,6 +371,25 @@ pub fn plan_explain_new(
                     ..
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
+            };
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            names::resolve(qcx.scx.catalog, query)?.0
+        }
+        Explainee::RecordedView(name) => {
+            let rview = scx.get_item_by_resolved_name(&name)?;
+            let item_type = rview.item_type();
+            if item_type != CatalogItemType::RecordedView {
+                sql_bail!(
+                    "Expected {} to be a recorded view, not a {}",
+                    name,
+                    item_type
+                );
+            }
+            let parsed = crate::parse::parse(rview.create_sql())
+                .expect("Sql for existing recorded view should be valid sql");
+            let query = match parsed.into_last() {
+                Statement::CreateRecordedView(CreateRecordedViewStatement { query, .. }) => query,
+                _ => panic!("Sql for existing recorded view should parse as a recorded view"),
             };
             let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             names::resolve(qcx.scx.catalog, query)?.0
