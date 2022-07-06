@@ -42,7 +42,7 @@ use mz_timely_util::operator::CollectionExt;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
-use crate::logging::materialized::ComputeEvent;
+use crate::logging::compute::ComputeEvent;
 use crate::sink::SinkBaseMetrics;
 
 /// Worker-local state that is maintained across dataflows.
@@ -72,7 +72,7 @@ pub struct ComputeState {
     /// Undocumented
     pub sink_metrics: SinkBaseMetrics,
     /// The logger, from Timely's logging framework, if logs are enabled.
-    pub materialized_logger: Option<logging::materialized::Logger>,
+    pub compute_logger: Option<logging::compute::Logger>,
     /// Configuration for sink connections.
     // TODO: remove when sinks move to storage.
     pub connection_context: ConnectionContext,
@@ -140,7 +140,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .insert(object_id, Antichain::from_elem(0));
 
                 // Log dataflow construction, frontier construction, and any dependencies.
-                if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(object_id, true));
                     logger.log(ComputeEvent::Frontier(object_id, 0, 1));
                     for import_id in dataflow.depends_on(collection_id) {
@@ -177,7 +177,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .reported_frontiers
                     .remove(&id)
                     .expect("Dropped compute collection with no frontier");
-                if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(id, false));
                     for time in frontier.elements().iter() {
                         logger.log(ComputeEvent::Frontier(id, *time, -1));
@@ -223,7 +223,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             span: tracing::Span::current(),
         };
         // Log the receipt of the peek.
-        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
             logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
         }
         // Attempt to fulfill the peek.
@@ -251,7 +251,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
     /// Initializes timely dataflow logging and publishes as a view.
     pub fn initialize_logging(&mut self, logging: &LoggingConfig) {
-        if self.compute_state.materialized_logger.is_some() {
+        if self.compute_state.compute_logger.is_some() {
             panic!("dataflow server has already initialized logging");
         }
 
@@ -281,14 +281,14 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let mut t_traces = HashMap::new();
         let mut r_traces = HashMap::new();
         let mut d_traces = HashMap::new();
-        let mut m_traces = HashMap::new();
+        let mut c_traces = HashMap::new();
 
         let activate_after = 128;
 
         let t_activator = RcActivator::new("t_activator".into(), activate_after);
         let r_activator = RcActivator::new("r_activator".into(), activate_after);
         let d_activator = RcActivator::new("d_activator".into(), activate_after);
-        let m_activator = RcActivator::new("m_activator".into(), activate_after);
+        let c_activator = RcActivator::new("c_activator".into(), activate_after);
 
         if !logging.log_logging {
             // Construct logging dataflows and endpoints before registering any.
@@ -310,11 +310,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
-            m_traces.extend(logging::materialized::construct(
+            c_traces.extend(logging::compute::construct(
                 &mut self.timely_worker,
                 logging,
                 Rc::clone(&c_linked),
-                m_activator.clone(),
+                c_activator.clone(),
             ));
         }
 
@@ -398,7 +398,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             ),
         );
 
-        let activator = m_activator.clone();
+        let activator = c_activator.clone();
         self.timely_worker.log_register().insert_logger(
             "materialize/compute",
             Logger::new(
@@ -447,11 +447,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 d_linked,
                 d_activator,
             ));
-            m_traces.extend(logging::materialized::construct(
+            c_traces.extend(logging::compute::construct(
                 &mut self.timely_worker,
                 logging,
                 c_linked,
-                m_activator,
+                c_activator,
             ));
         }
 
@@ -486,7 +486,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 .insert(id, Antichain::from_elem(0));
             logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
-        for (log, (trace, token)) in m_traces {
+        for (log, (trace, token)) in c_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
@@ -497,13 +497,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
 
-        self.compute_state.materialized_logger = Some(logger);
+        self.compute_state.compute_logger = Some(logger);
     }
 
     /// Disables timely dataflow logging.
     ///
     /// This does not unpublish views and is only useful to terminate logging streams to ensure that
-    /// materialized can terminate cleanly.
+    /// computed can terminate cleanly.
     pub fn shutdown_logging(&mut self) {
         self.timely_worker.log_register().remove("timely");
         self.timely_worker
@@ -515,9 +515,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         self.timely_worker
             .log_register()
             .remove("materialize/compute");
-        self.timely_worker
-            .log_register()
-            .remove("materialize/storage");
     }
 
     /// Send progress information to the coordinator.
@@ -558,7 +555,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
 
         // Log index frontier changes
-        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
             for (id, changes) in &mut progress {
                 for (time, diff) in changes.iter() {
                     logger.log(ComputeEvent::Frontier(*id, *time, *diff));
@@ -621,7 +618,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         ));
 
         // Log responding to the peek request.
-        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
             logger.log(ComputeEvent::Peek(log_event, false));
         }
     }
@@ -656,8 +653,8 @@ pub struct PendingPeek {
 
 impl PendingPeek {
     /// Produces a corresponding log event.
-    pub fn as_log_event(&self) -> crate::logging::materialized::Peek {
-        crate::logging::materialized::Peek::new(self.peek.id, self.peek.timestamp, self.peek.uuid)
+    pub fn as_log_event(&self) -> crate::logging::compute::Peek {
+        crate::logging::compute::Peek::new(self.peek.id, self.peek.timestamp, self.peek.uuid)
     }
 
     /// Attempts to fulfill the peek and reports success.

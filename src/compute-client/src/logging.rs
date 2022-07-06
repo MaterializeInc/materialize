@@ -75,7 +75,7 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoActiveLog {
 pub enum LogVariant {
     Timely(TimelyLog),
     Differential(DifferentialLog),
-    Materialized(MaterializedLog),
+    Compute(ComputeLog),
 }
 
 impl RustType<ProtoLogVariant> for LogVariant {
@@ -85,7 +85,7 @@ impl RustType<ProtoLogVariant> for LogVariant {
             kind: Some(match self {
                 LogVariant::Timely(x) => Timely(x.into_proto()),
                 LogVariant::Differential(x) => Differential(x.into_proto()),
-                LogVariant::Materialized(x) => Materialized(x.into_proto()),
+                LogVariant::Compute(x) => Compute(x.into_proto()),
             }),
         }
     }
@@ -95,7 +95,7 @@ impl RustType<ProtoLogVariant> for LogVariant {
         match proto.kind {
             Some(Timely(x)) => Ok(LogVariant::Timely(x.into_rust()?)),
             Some(Differential(x)) => Ok(LogVariant::Differential(x.into_rust()?)),
-            Some(Materialized(x)) => Ok(LogVariant::Materialized(x.into_rust()?)),
+            Some(Compute(x)) => Ok(LogVariant::Compute(x.into_rust()?)),
             None => Err(TryFromProtoError::missing_field("ProtoLogVariant::kind")),
         }
     }
@@ -182,7 +182,7 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
 }
 
 #[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
-pub enum MaterializedLog {
+pub enum ComputeLog {
     DataflowCurrent,
     DataflowDependency,
     FrontierCurrent,
@@ -190,31 +190,29 @@ pub enum MaterializedLog {
     PeekDuration,
 }
 
-impl RustType<ProtoMaterializedLog> for MaterializedLog {
-    fn into_proto(&self) -> ProtoMaterializedLog {
-        use proto_materialized_log::Kind::*;
-        ProtoMaterializedLog {
+impl RustType<ProtoComputeLog> for ComputeLog {
+    fn into_proto(&self) -> ProtoComputeLog {
+        use proto_compute_log::Kind::*;
+        ProtoComputeLog {
             kind: Some(match self {
-                MaterializedLog::DataflowCurrent => DataflowCurrent(()),
-                MaterializedLog::DataflowDependency => DataflowDependency(()),
-                MaterializedLog::FrontierCurrent => FrontierCurrent(()),
-                MaterializedLog::PeekCurrent => PeekCurrent(()),
-                MaterializedLog::PeekDuration => PeekDuration(()),
+                ComputeLog::DataflowCurrent => DataflowCurrent(()),
+                ComputeLog::DataflowDependency => DataflowDependency(()),
+                ComputeLog::FrontierCurrent => FrontierCurrent(()),
+                ComputeLog::PeekCurrent => PeekCurrent(()),
+                ComputeLog::PeekDuration => PeekDuration(()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoMaterializedLog) -> Result<Self, TryFromProtoError> {
-        use proto_materialized_log::Kind::*;
+    fn from_proto(proto: ProtoComputeLog) -> Result<Self, TryFromProtoError> {
+        use proto_compute_log::Kind::*;
         match proto.kind {
-            Some(DataflowCurrent(())) => Ok(MaterializedLog::DataflowCurrent),
-            Some(DataflowDependency(())) => Ok(MaterializedLog::DataflowDependency),
-            Some(FrontierCurrent(())) => Ok(MaterializedLog::FrontierCurrent),
-            Some(PeekCurrent(())) => Ok(MaterializedLog::PeekCurrent),
-            Some(PeekDuration(())) => Ok(MaterializedLog::PeekDuration),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoMaterializedLog::kind",
-            )),
+            Some(DataflowCurrent(())) => Ok(ComputeLog::DataflowCurrent),
+            Some(DataflowDependency(())) => Ok(ComputeLog::DataflowDependency),
+            Some(FrontierCurrent(())) => Ok(ComputeLog::FrontierCurrent),
+            Some(PeekCurrent(())) => Ok(ComputeLog::PeekCurrent),
+            Some(PeekDuration(())) => Ok(ComputeLog::PeekDuration),
+            None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
 }
@@ -309,29 +307,29 @@ impl LogVariant {
                 .with_column("operator", ScalarType::Int64.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false)),
 
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
                 .with_column("name", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
-            LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::DataflowDependency) => RelationDesc::empty()
                 .with_column("dataflow", ScalarType::String.nullable(false))
                 .with_column("source", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false)),
 
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
                 .with_column("global_id", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("id", ScalarType::Uuid.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_column("index_id", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_column("duration_ns", ScalarType::Int64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
@@ -378,11 +376,11 @@ impl LogVariant {
                 LogVariant::Timely(TimelyLog::Operates),
                 vec![(0, 0), (1, 1)],
             )],
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
+            LogVariant::Compute(ComputeLog::DataflowCurrent) => vec![],
+            LogVariant::Compute(ComputeLog::DataflowDependency) => vec![],
+            LogVariant::Compute(ComputeLog::FrontierCurrent) => vec![],
+            LogVariant::Compute(ComputeLog::PeekCurrent) => vec![],
+            LogVariant::Compute(ComputeLog::PeekDuration) => vec![],
         }
     }
 }

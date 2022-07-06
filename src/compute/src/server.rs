@@ -70,7 +70,7 @@ pub struct Server {
     _worker_guards: WorkerGuards<()>,
 }
 
-/// Initiates a timely dataflow computation, processing materialized commands.
+/// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
     config: Config,
 ) -> Result<
@@ -230,7 +230,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             pending_peeks: Vec::new(),
                             reported_frontiers: HashMap::new(),
                             sink_metrics: self.metrics_bundle.0.clone(),
-                            materialized_logger: None,
+                            compute_logger: None,
                             connection_context: self.connection_context.clone(),
                             persist_clients: Arc::clone(&self.persist_clients),
                         });
