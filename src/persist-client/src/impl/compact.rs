@@ -11,6 +11,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::anyhow;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -19,6 +20,7 @@ use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
+use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tracing::{debug_span, warn, Instrument, Span};
 
@@ -152,6 +154,8 @@ impl Compactor {
         D: Semigroup + Codec64,
     {
         let compact_blocking = move || {
+            let () = Self::validate_req(&req)?;
+
             let mut parts = BatchParts::new(
                 cfg.batch_builder_max_outstanding_parts,
                 Arc::clone(&metrics),
@@ -225,6 +229,35 @@ impl Compactor {
             move || compact_span.in_scope(compact_blocking),
         )
         .await?
+    }
+
+    fn validate_req<T: Timestamp>(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
+        let mut frontier = req.desc.lower();
+        for input in req.inputs.iter() {
+            if PartialOrder::less_than(req.desc.since(), input.desc.since()) {
+                return Err(anyhow!(
+                    "output since {:?} must be at or in advance of input since {:?}",
+                    req.desc.since(),
+                    input.desc.since()
+                ));
+            }
+            if frontier != input.desc.lower() {
+                return Err(anyhow!(
+                    "invalid merge of non-consecutive batches {:?} vs {:?}",
+                    frontier,
+                    input.desc.lower()
+                ));
+            }
+            frontier = input.desc.upper();
+        }
+        if frontier != req.desc.upper() {
+            return Err(anyhow!(
+                "invalid merge of non-consecutive batches {:?} vs {:?}",
+                frontier,
+                req.desc.upper()
+            ));
+        }
+        Ok(())
     }
 }
 
