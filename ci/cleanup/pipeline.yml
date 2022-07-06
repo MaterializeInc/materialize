@@ -15,6 +15,9 @@ steps:
     agents:
       queue: linux-x86_64
     env:
-      AWS_DEFAULT_REGION: us-east-2
+      AWS_DEFAULT_REGION: "{{matrix}}"
+    matrix:
+      - us-east-1
+      - us-east-2
     plugins:
        - ./ci/plugins/scratch-aws-access
