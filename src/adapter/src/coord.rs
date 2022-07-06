@@ -6841,11 +6841,13 @@ mod timeline {
             self.maybe_allocate_new_timestamps(ts)
         }
 
-        /// Acquire a new timestamp for reading.
+        /// Acquire a new timestamp for reading. Optionally returns a timestamp that needs to be
+        /// persisted to disk.
         ///
         /// See [`TimestampOracle::read_ts`] for more details.
-        pub fn read_ts(&mut self) -> T {
-            self.timestamp_oracle.read_ts()
+        pub fn read_ts(&mut self) -> (T, Option<T>) {
+            let ts = self.timestamp_oracle.read_ts();
+            self.maybe_allocate_new_timestamps(ts)
         }
 
         /// Electively advance the tracked times. Optionally returns a timestamp that needs to be
