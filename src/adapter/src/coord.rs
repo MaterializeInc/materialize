@@ -6863,12 +6863,17 @@ mod timeline {
             self.timestamp_oracle.should_advance_to()
         }
 
+        /// Checks to see if we can serve the timestamp from memory, or if we need to durably store
+        /// a new timestamp.
+        ///
+        /// If `ts` is less than the persisted timestamp then we can serve `ts` from memory,
+        /// otherwise we need to durably store some timestamp greater than `ts`.
         fn maybe_allocate_new_timestamps(&mut self, ts: T) -> (T, Option<T>) {
-            if self.durable_timestamp.less_than(&ts) {
+            if ts.less_than(&self.durable_timestamp) {
+                (ts, None)
+            } else {
                 self.durable_timestamp = ts.step_forward_by(&self.persist_interval);
                 (ts, Some(self.durable_timestamp.clone()))
-            } else {
-                (ts, None)
             }
         }
     }

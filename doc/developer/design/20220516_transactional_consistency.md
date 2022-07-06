@@ -120,7 +120,6 @@ Materialize (i.e. not between restarts).
   command to be made durable before returning a response to the client, additionally timestamp transitions are persisted
   to disk (See [Global Timestamp Recovery](#Global Timestamp Recovery)).
 
-
 ### Global Timestamp Recovery
 
 After a restart the Coordinator must reestablish the global timestamp to some value greater than or equal to the value
@@ -129,8 +128,9 @@ timestamp greater than or equal to all reads and writes before the restart.
 
 Proposal: Use a [Percolator](https://storage.googleapis.com/pub-tools-public-publication-data/pdf/36726.pdf) inspired
 timestamp recovery protocol (See section 2.3 Timestamps). Periodically we durably store some value greater than the
-current global timestamp. We never allocate a timestamp larger than the one durably stored, without first updating the
-durably stored timestamp. When Materialize restarts, it uses a value one larger than the value durably stored.
+current global timestamp. We never allocate a timestamp larger than or equal the one durably stored, without first
+updating the durably stored timestamp. When Materialize restarts, it uses the value durably stored as the initial
+timestamp.
 
 The properties described in this section and the [Global Timestamp](#Global Timestamp) section are sufficient to ensure
 Strict Serializability across restarts.
