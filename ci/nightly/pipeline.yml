@@ -33,6 +33,7 @@ steps:
           - { value: feature-benchmark-single-node }
           - { value: feature-benchmark-cluster }
           - { value: zippy-kafka-sources }
+          - { value: zippy-user-tables }
           - { value: checks-drop-create-default-replica }
           - { value: checks-restart-computed }
           - { value: checks-restart-entire-mz }
@@ -235,7 +236,7 @@ steps:
     skip: Persistence tests disabled
 
   - id: zippy-kafka-sources
-    label: "Zippy"
+    label: "Zippy Kafka Sources"
     timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
@@ -243,6 +244,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=KafkaSources, --actions=1000]
+
+  - id: zippy-user-tables
+    label: "Zippy User Tables"
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=UserTables, --actions=1000]
 
   - id: checks-drop-create-default-replica
     label: "Checks + DROP/CREATE replica"
