@@ -5015,9 +5015,10 @@ impl<'a> Parser<'a> {
         // TODO (#13299): Make specifying the format optional upon getting rid
         // of the old explain syntax
         self.expect_keyword(AS)?;
-        let format = match self.parse_one_of_keywords(&[TEXT, JSON]) {
+        let format = match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
             Some(TEXT) => ExplainFormat::Text,
             Some(JSON) => ExplainFormat::Json,
+            Some(DOT) => ExplainFormat::Dot,
             None => return Err(ParserError::new(self.index, "expected a format")),
             _ => unreachable!(),
         };
