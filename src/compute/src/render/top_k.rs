@@ -194,25 +194,23 @@ where
 
                         // The order in which we should produce rows.
                         let mut indexes = (0..source.len()).collect::<Vec<_>>();
-                        if !order_key.is_empty() {
-                            // We decode the datums once, into a common buffer for efficiency.
-                            // Each row should contain `arity` columns; we should check that.
-                            let mut buffer = Vec::with_capacity(arity * source.len());
-                            for (index, row) in source.iter().enumerate() {
-                                buffer.extend(row.0.iter());
-                                assert_eq!(buffer.len(), arity * (index + 1));
-                            }
-                            let width = buffer.len() / source.len();
-
-                            //todo: use arrangements or otherwise make the sort more performant?
-                            indexes.sort_by(|left, right| {
-                                let left = &buffer[left * width..][..width];
-                                let right = &buffer[right * width..][..width];
-                                mz_expr::compare_columns(&order_key, left, right, || {
-                                    left.cmp(right)
-                                })
-                            });
+                        // We decode the datums once, into a common buffer for efficiency.
+                        // Each row should contain `arity` columns; we should check that.
+                        let mut buffer = Vec::with_capacity(arity * source.len());
+                        for (index, row) in source.iter().enumerate() {
+                            buffer.extend(row.0.iter());
+                            assert_eq!(buffer.len(), arity * (index + 1));
                         }
+                        let width = buffer.len() / source.len();
+
+                        //todo: use arrangements or otherwise make the sort more performant?
+                        indexes.sort_by(|left, right| {
+                            let left = &buffer[left * width..][..width];
+                            let right = &buffer[right * width..][..width];
+                            // Note: source was originally ordered by the u8 array representation
+                            // of rows, but left.cmp(right) uses Datum::cmp.
+                            mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                        });
 
                         // We now need to lay out the data in order of `buffer`, but respecting
                         // the `offset` and `limit` constraints.
@@ -347,12 +345,6 @@ pub mod monoids {
 
     impl Semigroup for Top1Monoid {
         fn plus_equals(&mut self, rhs: &Self) {
-            // It's unclear what the semantics are of a TopK without an ordering, but match the
-            // non-monotonic impl's behavior of not doing any decoding work.
-            if self.order_key.is_empty() {
-                return;
-            }
-
             let cmp = (&*self).cmp(rhs);
             // NB: Reminder that TopK returns the _minimum_ K items.
             if cmp == Ordering::Greater {

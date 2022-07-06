@@ -137,6 +137,7 @@ impl Row {
 
 /// These implementations order first by length, and then by slice contents.
 /// This allows many comparisons to complete without dereferencing memory.
+/// Warning: These order by the u8 array representation, and NOT by Datum::cmp.
 impl PartialOrd for Row {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self.data.len().cmp(&other.data.len()) {
