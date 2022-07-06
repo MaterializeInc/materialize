@@ -28,7 +28,7 @@ use differential_dataflow::Hashable;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use mz_compute_client::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
+use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
 
@@ -871,31 +871,31 @@ pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
 pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
     name: "mz_materializations",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::DataflowCurrent),
+    variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
 };
 
 pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
     name: "mz_materialization_dependencies",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::DataflowDependency),
+    variant: LogVariant::Compute(ComputeLog::DataflowDependency),
 };
 
 pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     name: "mz_worker_materialization_frontiers",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::FrontierCurrent),
+    variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
 };
 
 pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
     name: "mz_peek_active",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::PeekCurrent),
+    variant: LogVariant::Compute(ComputeLog::PeekCurrent),
 };
 
 pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
     name: "mz_peek_durations",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::PeekDuration),
+    variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
 
 pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {

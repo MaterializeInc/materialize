@@ -42,7 +42,7 @@ message ProtoDifferentialLog {
     }
 }
 
-message ProtoMaterializedLog {
+message ProtoComputeLog {
     oneof kind {
         google.protobuf.Empty dataflow_current = 1;
         google.protobuf.Empty dataflow_dependency = 2;
@@ -55,7 +55,7 @@ message ProtoLogVariant {
     oneof kind {
         ProtoTimelyLog timely = 1;
         ProtoDifferentialLog differential = 2;
-        ProtoMaterializedLog materialized = 3;
+        ProtoComputeLog compute = 3;
     }
 }
 
