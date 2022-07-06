@@ -6209,7 +6209,9 @@ pub mod fast_path_peek {
                             // An arrangement may or may not exist. If not, nothing to be done.
                             if let Some((key, permute, thinning)) = keys.arbitrary_arrangement() {
                                 // Just grab any arrangement, but be sure to de-permute the results.
-                                for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                                for (index_id, (desc, _typ, _monotonic)) in
+                                    dataflow_plan.index_imports.iter()
+                                {
                                     if Id::Global(desc.on_id) == *id && &desc.key == key {
                                         let mut map_filter_project =
                                             mz_expr::MapFilterProject::new(_typ.arity())
@@ -6245,7 +6247,9 @@ pub mod fast_path_peek {
                                 })?;
                             // We should only get excited if we can track down an index for `id`.
                             // If `keys` is non-empty, that means we think one exists.
-                            for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                            for (index_id, (desc, _typ, _monotonic)) in
+                                dataflow_plan.index_imports.iter()
+                            {
                                 if Id::Global(desc.on_id) == *id && &desc.key == key {
                                     // Indicate an early exit with a specific index and key_val.
                                     return Ok(Plan::PeekExisting(

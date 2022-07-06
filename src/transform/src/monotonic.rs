@@ -37,32 +37,33 @@ impl CheckedRecursion for MonotonicFlag {
 
 impl MonotonicFlag {
     /// Determines if a relation is monotonic, and applies any optimizations along the way.
+    /// mon_ids should be the ids of monotonic sources and indexes involved in expr.
     pub fn apply(
         &self,
         expr: &mut MirRelationExpr,
-        sources: &HashSet<GlobalId>,
+        mon_ids: &HashSet<GlobalId>,
         locals: &mut HashSet<LocalId>,
-    ) -> Result<bool, crate::TransformError> {
+    ) -> Result<bool, crate::RecursionLimitError> {
         self.checked_recur(|_| {
             let is_monotonic = match expr {
                 MirRelationExpr::Get { id, .. } => match id {
-                    Id::Global(id) => sources.contains(id),
+                    Id::Global(id) => mon_ids.contains(id),
                     Id::Local(id) => locals.contains(id),
                 },
-                MirRelationExpr::Project { input, .. } => self.apply(input, sources, locals)?,
+                MirRelationExpr::Project { input, .. } => self.apply(input, mon_ids, locals)?,
                 MirRelationExpr::Filter { input, predicates } => {
-                    let is_monotonic = self.apply(input, sources, locals)?;
+                    let is_monotonic = self.apply(input, mon_ids, locals)?;
                     // Non-temporal predicates can introduce non-monotonicity, as they
                     // can result in the future removal of records.
                     // TODO: this could be improved to only restrict if upper bounds
                     // are present, as temporal lower bounds only delay introduction.
                     is_monotonic && !predicates.iter().any(|p| p.contains_temporal())
                 }
-                MirRelationExpr::Map { input, .. } => self.apply(input, sources, locals)?,
+                MirRelationExpr::Map { input, .. } => self.apply(input, mon_ids, locals)?,
                 MirRelationExpr::TopK {
                     input, monotonic, ..
                 } => {
-                    *monotonic = self.apply(input, sources, locals)?;
+                    *monotonic = self.apply(input, mon_ids, locals)?;
                     false
                 }
                 MirRelationExpr::Reduce {
@@ -71,29 +72,29 @@ impl MonotonicFlag {
                     monotonic,
                     ..
                 } => {
-                    *monotonic = self.apply(input, sources, locals)?;
+                    *monotonic = self.apply(input, mon_ids, locals)?;
                     // Reduce is monotonic iff its input is and it is a "distinct",
                     // with no aggregate values; otherwise it may need to retract.
                     *monotonic && aggregates.is_empty()
                 }
                 MirRelationExpr::Union { base, inputs } => {
-                    let mut monotonic = self.apply(base, sources, locals)?;
+                    let mut monotonic = self.apply(base, mon_ids, locals)?;
                     for input in inputs.iter_mut() {
-                        let monotonic_i = self.apply(input, sources, locals)?;
+                        let monotonic_i = self.apply(input, mon_ids, locals)?;
                         monotonic = monotonic && monotonic_i;
                     }
                     monotonic
                 }
-                MirRelationExpr::ArrangeBy { input, .. } => self.apply(input, sources, locals)?,
+                MirRelationExpr::ArrangeBy { input, .. } => self.apply(input, mon_ids, locals)?,
                 MirRelationExpr::FlatMap { input, func, .. } => {
-                    let is_monotonic = self.apply(input, sources, locals)?;
+                    let is_monotonic = self.apply(input, mon_ids, locals)?;
                     is_monotonic && func.preserves_monotonicity()
                 }
                 MirRelationExpr::Join { inputs, .. } => {
                     // If all inputs to the join are monotonic then so is the join.
                     let mut monotonic = true;
                     for input in inputs.iter_mut() {
-                        let monotonic_i = self.apply(input, sources, locals)?;
+                        let monotonic_i = self.apply(input, mon_ids, locals)?;
                         monotonic = monotonic && monotonic_i;
                     }
                     monotonic
@@ -101,13 +102,13 @@ impl MonotonicFlag {
                 MirRelationExpr::Constant { rows: Ok(rows), .. } => {
                     rows.iter().all(|(_, diff)| diff > &0)
                 }
-                MirRelationExpr::Threshold { input } => self.apply(input, sources, locals)?,
+                MirRelationExpr::Threshold { input } => self.apply(input, mon_ids, locals)?,
                 MirRelationExpr::Let { id, value, body } => {
                     let prior = locals.remove(id);
-                    if self.apply(value, sources, locals)? {
+                    if self.apply(value, mon_ids, locals)? {
                         locals.insert(*id);
                     }
-                    let result = self.apply(body, sources, locals)?;
+                    let result = self.apply(body, mon_ids, locals)?;
                     if prior {
                         locals.insert(*id);
                     } else {
@@ -118,7 +119,7 @@ impl MonotonicFlag {
                 // The default behavior.
                 // TODO: check that this is the behavior we want.
                 MirRelationExpr::Negate { .. } | MirRelationExpr::Constant { rows: Err(_), .. } => {
-                    expr.try_visit_mut_children(|e| self.apply(e, sources, locals).map(|_| ()))?;
+                    expr.try_visit_mut_children(|e| self.apply(e, mon_ids, locals).map(|_| ()))?;
                     false
                 }
             };
