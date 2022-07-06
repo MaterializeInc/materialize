@@ -55,6 +55,9 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
+#[allow(unused_imports)] // False positive.
+use mz_ore::fmt::FormatBuffer;
+
 use crate::r#impl::state::HollowBatch;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1105,7 +1108,8 @@ mod tests {
                         assert!(tc.input.is_empty());
                         let mut s = String::new();
                         for merge_req in trace.take_merge_reqs() {
-                            s.push_str(&format!(
+                            write!(
+                                s,
                                 "{:?}{:?}{:?} {}\n",
                                 merge_req.desc.lower().elements(),
                                 merge_req.desc.upper().elements(),
@@ -1117,7 +1121,7 @@ mod tests {
                                     .cloned()
                                     .collect::<Vec<_>>()
                                     .join(" ")
-                            ));
+                            );
                         }
                         if s.is_empty() {
                             s.push_str("<empty>\n");
