@@ -30,6 +30,7 @@ class CreateTable(Action):
 
         if len(existing_tables) == 0:
             self.new_table = True
+            self.has_index = random.choice([True, False])
             self.table = this_table
         elif len(existing_tables) == 1:
             self.new_table = False
@@ -39,9 +40,13 @@ class CreateTable(Action):
 
     def run(self, c: Composition) -> None:
         if self.new_table:
+            index = (
+                f"> CREATE DEFAULT INDEX ON {self.table.name}" if self.has_index else ""
+            )
             c.testdrive(
                 f"""
 > CREATE TABLE {self.table.name} (f1 INTEGER);
+{index}
 > INSERT INTO {self.table.name} VALUES ({self.table.watermarks.high});
 """
             )

@@ -13,6 +13,7 @@ from materialize.zippy.framework import Action, Scenario
 from materialize.zippy.kafka_actions import CreateTopic, Ingest, KafkaStart
 from materialize.zippy.mz_actions import MzStart, MzStop
 from materialize.zippy.source_actions import CreateSource
+from materialize.zippy.table_actions import DML, CreateTable, ValidateTable
 from materialize.zippy.view_actions import CreateView, ValidateView
 
 
@@ -27,4 +28,18 @@ class KafkaSources(Scenario):
             CreateView: 5,
             ValidateView: 10,
             Ingest: 90,
+        }
+
+
+class UserTables(Scenario):
+    def config(self) -> Dict[Type[Action], float]:
+        return {
+            MzStart: 1,
+            MzStop: 15,
+            KafkaStart: 1,
+            CreateTable: 10,
+            CreateView: 10,
+            ValidateTable: 20,
+            ValidateView: 20,
+            DML: 30,
         }

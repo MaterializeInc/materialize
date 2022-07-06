@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import Dict, List, Set, Type, TypeVar
+from typing import Dict, List, Set, Type, TypeVar, Union
 
 from materialize.mzcompose import Composition
 
@@ -60,7 +60,7 @@ class Action:
         pass
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(self) -> Union[Set[Type[Capability]], List[Set[Type[Capability]]]]:
         """Compute the capability classes that this action requires."""
         return set()
 
@@ -117,13 +117,22 @@ class Test:
         for action_class in self._scenario.config().keys():
             for leaf in self._leaf_subclasses(action_class):
                 # Do not pick an Action whose requirements can not be satisfied
-                if not all(self._capabilities.provides(req) for req in leaf.requires()):
-                    continue
-
-                action_classes.append(leaf)
-                class_weights.append(self._scenario.config()[action_class])
+                if self._can_run(leaf):
+                    action_classes.append(leaf)
+                    class_weights.append(self._scenario.config()[action_class])
 
         return random.choices(action_classes, weights=class_weights, k=1)[0]
+
+    def _can_run(self, action: Type[Action]) -> bool:
+        requires = action.requires()
+
+        if isinstance(requires, Set):
+            return all(self._capabilities.provides(req) for req in requires)
+        else:
+            for one_alternative in requires:
+                if all(self._capabilities.provides(req) for req in one_alternative):
+                    return True
+            return False
 
     def _leaf_subclasses(self, cls: Type[Action]) -> List[Type[Action]]:
         """Return all Actions that are a subclass of the given cls."""
