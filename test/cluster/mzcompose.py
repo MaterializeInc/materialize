@@ -77,6 +77,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # remote storaged tests
     test_remote_storaged(c, args.redpanda)
+    c.down(destroy_volumes=True)
 
     # remote cluster tests
     test_cluster(c, "smoke/*.td")

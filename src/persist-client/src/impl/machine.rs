@@ -17,11 +17,14 @@ use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use timely::progress::{Antichain, Timestamp};
+use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
+
+#[allow(unused_imports)] // False positive.
+use mz_ore::fmt::FormatBuffer;
 use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, VersionedData};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
-use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::metrics::{
@@ -719,7 +722,7 @@ mod tests {
 
                             let mut s = String::new();
                             for (idx, key) in batch.keys.iter().enumerate() {
-                                s.push_str(&format!("<part {}>\n", idx));
+                                write!(s, "<part {idx}>\n");
                                 fetch_batch_part(
                                     &shard_id,
                                     client.blob.as_ref(),
@@ -728,7 +731,7 @@ mod tests {
                                     &batch.desc,
                                     |k, _v, t, d| {
                                         let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
-                                        s.push_str(&format!("{} {} {}\n", k, t, d));
+                                        write!(s, "{k} {t} {d}\n");
                                     },
                                 )
                                 .await
@@ -828,12 +831,7 @@ mod tests {
                                     match event {
                                         ListenEvent::Updates(x) => {
                                             for ((k, _v), t, d) in x.iter() {
-                                                s.push_str(&format!(
-                                                    "{} {} {}\n",
-                                                    k.as_ref().unwrap(),
-                                                    t,
-                                                    d
-                                                ));
+                                                write!(s, "{} {} {}\n", k.as_ref().unwrap(), t, d);
                                             }
                                         }
                                         ListenEvent::Progress(x) => {
