@@ -23,20 +23,19 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
-use tokio::time;
+use differential_dataflow::lattice::Lattice;
+use timely::progress::Timestamp;
 use tracing::info;
 
 use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
 use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
 use mz_repr::GlobalId;
-use mz_service::client::Reconnect;
 
+use crate::client::controller::rehydration::RehydratingStorageClient;
 use crate::client::{
-    ProtoStorageCommand, ProtoStorageResponse, StorageClient, StorageCommand, StorageGrpcClient,
-    StorageResponse,
+    ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageGrpcClient, StorageResponse,
 };
 
 /// The network address of a storage host.
@@ -70,7 +69,7 @@ pub struct StorageHosts<T> {
 #[derive(Debug)]
 struct StorageHost<T> {
     /// The client to the storage host.
-    client: Box<dyn StorageClient<T>>,
+    client: RehydratingStorageClient<T>,
     /// The IDs of the storage objects installed on the storage host.
     objects: HashSet<GlobalId>,
     /// Whether the storage host is orchestrated.
@@ -107,9 +106,9 @@ impl<T> StorageHosts<T> {
         &mut self,
         id: GlobalId,
         host_addr: Option<StorageHostAddr>,
-    ) -> Result<&mut dyn StorageClient<T>, anyhow::Error>
+    ) -> Result<&mut RehydratingStorageClient<T>, anyhow::Error>
     where
-        T: Send + Sync + 'static,
+        T: Timestamp + Lattice,
         StorageCommand<T>: RustType<ProtoStorageCommand>,
         StorageResponse<T>: RustType<ProtoStorageResponse>,
     {
@@ -125,24 +124,13 @@ impl<T> StorageHosts<T> {
         info!("assigned storage object {id} to storage host {host_addr}");
         match self.hosts.entry(host_addr.clone()) {
             Entry::Vacant(entry) => {
-                // TODO: don't block waiting for a connection. Put a queue in the
-                // middle instead.
-                let client: Box<dyn StorageClient<T>> = Box::new({
-                    let mut client = StorageGrpcClient::new(host_addr.clone());
-                    while let Err(e) = client.reconnect().await {
-                        info!(
-                            "connecting to storage host {host_addr} failed (retrying in 1s): {e}"
-                        );
-                        time::sleep(Duration::from_secs(1)).await;
-                    }
-                    client
-                });
+                let client = RehydratingStorageClient::new(StorageGrpcClient::new(host_addr));
                 let host = entry.insert(StorageHost {
                     client,
                     objects: HashSet::from_iter([id]),
                     orchestrated,
                 });
-                Ok(&mut *host.client)
+                Ok(&mut host.client)
             }
             Entry::Occupied(entry) => {
                 let host = entry.into_mut();
@@ -151,7 +139,7 @@ impl<T> StorageHosts<T> {
                     inserted,
                     "StorageHosts internally inconsistent: ID {id} partially tracked"
                 );
-                Ok(&mut *host.client)
+                Ok(&mut host.client)
             }
         }
     }
@@ -192,20 +180,20 @@ impl<T> StorageHosts<T> {
 
     /// Retrives the client for the storage host for the given ID, if the
     /// ID is currently provisioned.
-    pub fn client(&mut self, id: GlobalId) -> Option<&mut dyn StorageClient<T>> {
+    pub fn client(&mut self, id: GlobalId) -> Option<&mut RehydratingStorageClient<T>> {
         let host_addr = self.objects.get(&id)?;
         match self.hosts.get_mut(host_addr) {
             None => panic!(
                 "StorageHosts internally inconsistent: \
                  ingestion {id} referenced missing storage host {host_addr:?}"
             ),
-            Some(host) => Some(&mut *host.client),
+            Some(host) => Some(&mut host.client),
         }
     }
 
     /// Returns an iterator over clients for all known storage hosts.
-    pub fn clients(&mut self) -> impl Iterator<Item = &mut (dyn StorageClient<T> + 'static)> {
-        self.hosts.values_mut().map(|h| &mut *h.client)
+    pub fn clients(&mut self) -> impl Iterator<Item = &mut RehydratingStorageClient<T>> {
+        self.hosts.values_mut().map(|h| &mut h.client)
     }
 
     /// Starts a orchestrated storage host for the specified ID.

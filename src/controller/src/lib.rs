@@ -500,12 +500,10 @@ where
                         self.stashed_response = Some(UnderlyingControllerResponse::Compute(instance, response));
                         return Ok(());
                     }
-                    response = self.storage_controller.recv() => {
-                        if let Some(response) = response? {
-                            assert!(self.stashed_response.is_none());
-                            self.stashed_response = Some(UnderlyingControllerResponse::Storage(response));
-                            return Ok(());
-                        }
+                    Some(response) = self.storage_controller.recv() => {
+                        assert!(self.stashed_response.is_none());
+                        self.stashed_response = Some(UnderlyingControllerResponse::Storage(response));
+                        return Ok(());
                     }
                 }
             }
