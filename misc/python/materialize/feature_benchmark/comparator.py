@@ -40,6 +40,11 @@ class Comparator(Generic[T]):
         return str(self)
 
 
+class SuccessComparator(Comparator[float]):
+    def is_regression(self) -> bool:
+        return False
+
+
 class RelativeThresholdComparator(Comparator[float]):
     def ratio(self) -> float:
         return self._points[0] / self._points[1]
