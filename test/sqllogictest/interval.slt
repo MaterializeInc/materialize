@@ -797,10 +797,10 @@ SELECT INTERVAL '768614336404564651 year';
 statement error Overflows maximum months;
 SELECT INTERVAL '768614336404564650.7 year';
 
-statement error Unable to parse value as a number at index 19: number too large to fit in target type
+statement error Unable to parse value 9223372036854775808 as a number: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 months';
 
-statement error Unable to parse value as a number at index 20: number too large to fit in target type
+statement error Overflows maximum months;
 SELECT INTERVAL '-9223372036854775808 months';
 
 statement error Overflows maximum days;
@@ -824,10 +824,10 @@ SELECT INTERVAL '9223372036854775807 seconds 1 minute';
 statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
 
-statement error Unable to parse value as a number at index 19: number too large to fit in target type
+statement error Unable to parse value 9223372036854775808 as a number: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 seconds';
 
-statement error Unable to parse value as a number at index 20: number too large to fit in target type
+statement error Overflows maximum microseconds;
 SELECT INTERVAL '-9223372036854775808 seconds';
 
 # 0 interval equality

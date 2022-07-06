@@ -1196,9 +1196,9 @@ fn fill_pdt_date(
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
         Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
-            pdt.day = Some(DateTimeFieldValue::new(val % 100, 0));
+            pdt.day = Some(DateTimeFieldValue::new(i64::try_from(val % 100).unwrap(), 0));
             val /= 100;
-            pdt.month = Some(DateTimeFieldValue::new(val % 100, 0));
+            pdt.month = Some(DateTimeFieldValue::new(i64::try_from(val % 100).unwrap(), 0));
             val /= 100;
             // Handle 2 digit year case
             if *digits == 6 {
@@ -1208,7 +1208,7 @@ fn fill_pdt_date(
                     val += 1900;
                 }
             }
-            pdt.year = Some(DateTimeFieldValue::new(val, 0));
+            pdt.year = Some(DateTimeFieldValue::new(val as i64, 0));
             actual.pop_front();
             // Trim remaining optional tokens, but never an immediately
             // following colon
@@ -1490,10 +1490,20 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                     )
                 }
                 None => {
-                    unit_buf = Some(DateTimeFieldValue {
-                        unit: *val * sign,
-                        fraction: 0,
-                    });
+                    let runit  = i64::try_from(i128::from(*val) * i128::from(sign));
+                    match runit {
+                        Ok(num) => {
+                            unit_buf = Some(DateTimeFieldValue {
+                                unit: num,
+                                fraction: 0,
+                            });
+                        }
+                        Err(_) => {
+                            return Err(format!(
+                                "Unable to parse value {} as a number: number too large to fit in target type", *val)
+                            )
+                        }
+                    }
                 }
             },
             (Nanos(val), Nanos(_)) => match unit_buf {
@@ -1525,23 +1535,34 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
 
                 if width > precision {
                     // Trim n to its 9 most significant digits.
-                    n /= 10_i64.pow(width - precision);
+                    n /= 10_u64.pow(width - precision);
                 } else {
                     // Right-pad n with 0s.
-                    n *= 10_i64.pow(precision - width);
+                    n *= 10_u64.pow(precision - width);
                 }
 
-                match unit_buf {
-                    Some(ref mut u) => {
-                        u.fraction = n * sign;
+                let rfraction  = i64::try_from(i128::from(n) * i128::from(sign));
+
+                match rfraction {
+                    Ok(num) => {
+                        match unit_buf {                  
+                            Some(ref mut u) => {
+                                u.fraction = num;
+                            }
+                            None => {
+                                unit_buf = Some(DateTimeFieldValue {
+                                    unit: 0,
+                                    fraction: num,
+                                });
+                            }
+                        }        
                     }
-                    None => {
-                        unit_buf = Some(DateTimeFieldValue {
-                            unit: 0,
-                            fraction: n * sign,
-                        });
+                    Err(_) => {
+                        return Err(format!(
+                            "Unable to parse value {} as a number: number too large to fit in target type", n)
+                        )
                     }
-                }
+                }                    
             }
             // Allow skipping expected spaces (Delim), numbers, dots, and nanoseconds.
             (_, Num(_, _)) | (_, Dot) | (_, Nanos(_)) | (_, Delim) => {
@@ -1754,7 +1775,7 @@ pub(crate) enum TimeStrToken {
     Plus,
     Zulu,
     // Holds the parsed number and the number of digits in the original string
-    Num(i64, usize),
+    Num(u64, usize),
     Nanos(i64),
     // String representation of a named timezone e.g. 'EST'
     TzName(String),
@@ -2049,7 +2070,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         (None, None, None) => {
                             // Postgres allows timezones in the range -15:59:59..15:59:59
                             if val <= 15 {
-                                hour_offset = Some(val);
+                                hour_offset = Some(i64::try_from(val).unwrap());
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone hour invalid {}",
@@ -2059,7 +2080,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         }
                         (Some(_), None, None) => {
                             if val < 60 {
-                                minute_offset = Some(val);
+                                minute_offset = Some(i64::try_from(val).unwrap());
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone minute invalid {}",
@@ -2069,7 +2090,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         }
                         (Some(_), Some(_), None) => {
                             if val < 60 {
-                                second_offset = Some(val);
+                                second_offset = Some(i64::try_from(val).unwrap());
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone second invalid {}",
