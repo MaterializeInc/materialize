@@ -23,16 +23,18 @@ use tokio::sync::mpsc;
 
 use mz_compute_client::command::ComputeCommand;
 use mz_compute_client::response::ComputeResponse;
-use mz_compute_client::service::ComputeClient;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
+use mz_service::client::GenericClient;
+use mz_service::grpc::GrpcServerCommand;
 use mz_service::local::LocalClient;
 use mz_storage::client::connections::ConnectionContext;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
+use crate::reconciliation::ComputeCommandReconcile;
 use crate::SinkBaseMetrics;
 use crate::{TraceManager, TraceMetrics};
 
@@ -69,7 +71,15 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<(Server, Box<dyn ComputeClient>), anyhow::Error> {
+pub fn serve(
+    config: Config,
+) -> Result<
+    (
+        Server,
+        Box<dyn GenericClient<GrpcServerCommand<ComputeCommand>, ComputeResponse>>,
+    ),
+    anyhow::Error,
+> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -138,6 +148,7 @@ pub fn serve(config: Config) -> Result<(Server, Box<dyn ComputeClient>), anyhow:
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
     let client = LocalClient::new_partitioned(compute_response_rxs, command_txs, worker_threads);
+    let client = ComputeCommandReconcile::new(client);
     let server = Server {
         _worker_guards: worker_guards,
     };

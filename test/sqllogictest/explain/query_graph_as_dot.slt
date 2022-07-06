@@ -1,0 +1,101 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+)
+
+statement ok
+CREATE MATERIALIZED VIEW v AS
+SELECT * FROM t WHERE a IS NOT NULL
+
+mode cockroach
+
+query T multiline
+EXPLAIN QUERY GRAPH AS DOT FOR
+SELECT
+  *
+FROM
+  T as X
+WHERE
+  NOT EXISTS (SELECT * FROM T as Y WHERE X.a = Y.b)
+LIMIT 10
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| !(Q2.C0) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+            Q2 [ label = "Q2(E)" ]
+            Q2 -> Q0 [ label = "correlation", style = filled, color = red ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0| 1: C1 }" ]
+        {
+            rank = same
+        }
+    }
+    subgraph cluster2 {
+        label = "Box2:Select"
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0| 1: Q1.C1| (Q0.C0 = Q1.C1) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q1 [ label = "Q1(F)" ]
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+    Q2 -> boxhead2 [ lhead = cluster2 ]
+    Q1 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN QUERY GRAPH WITH (TYPES) AS DOT FOR
+VIEW v
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer)| 1: Q0.C1 (integer?)| !(isnull(Q0.C0)) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer?) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF

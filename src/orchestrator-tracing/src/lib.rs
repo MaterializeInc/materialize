@@ -31,10 +31,12 @@ use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
 };
-use mz_ore::cli::KeyValueArg;
+use mz_ore::cli::{DefaultTrue, KeyValueArg};
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
-use mz_ore::tracing::{OpenTelemetryConfig, StderrLogConfig, TracingConfig};
+use mz_ore::tracing::{
+    OpenTelemetryConfig, OpenTelemetryEnableCallback, StderrLogConfig, TracingConfig,
+};
 
 /// Command line arguments for application tracing.
 ///
@@ -129,6 +131,17 @@ pub struct TracingCliArgs {
         use_value_delimiter = true
     )]
     pub opentelemetry_resource: Vec<KeyValueArg<String, String>>,
+    /// Default the OpenTelemetry tracing collector to off, but allow it to be
+    /// dynamically turned on.
+    ///
+    /// Requires that the `--opentelemetry-endpoint` option is specified.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_ENABLED",
+        default_value_t = DefaultTrue::default(),
+        requires = "opentelemetry-endpoint"
+    )]
+    pub opentelemetry_enabled: DefaultTrue,
     /// The address on which to listen for Tokio console connections.
     ///
     /// For details about Tokio console, see: <https://github.com/tokio-rs/console>
@@ -193,6 +206,7 @@ impl From<&TracingCliArgs> for TracingConfig {
                             .cloned()
                             .map(|kv| KeyValue::new(kv.key, kv.value)),
                     ),
+                    start_enabled: args.opentelemetry_enabled.value,
                 }
             }),
             #[cfg(feature = "tokio-console")]
@@ -212,6 +226,7 @@ impl From<&TracingCliArgs> for TracingConfig {
 pub struct TracingOrchestrator {
     inner: Box<dyn Orchestrator>,
     tracing_args: TracingCliArgs,
+    otel_enable_callback: OpenTelemetryEnableCallback,
 }
 
 impl TracingOrchestrator {
@@ -223,10 +238,15 @@ impl TracingOrchestrator {
     ///
     /// All services created by the orchestrator **must** embed the
     /// [`TracingCliArgs`] in their command-line argument parser.
-    pub fn new(inner: Box<dyn Orchestrator>, tracing_args: TracingCliArgs) -> TracingOrchestrator {
+    pub fn new(
+        inner: Box<dyn Orchestrator>,
+        tracing_args: TracingCliArgs,
+        otel_enable_callback: OpenTelemetryEnableCallback,
+    ) -> TracingOrchestrator {
         TracingOrchestrator {
             inner,
             tracing_args,
+            otel_enable_callback,
         }
     }
 }
@@ -237,6 +257,7 @@ impl Orchestrator for TracingOrchestrator {
             namespace: namespace.to_string(),
             inner: self.inner.namespace(namespace),
             tracing_args: self.tracing_args.clone(),
+            otel_enable_callback: self.otel_enable_callback.clone(),
         })
     }
 }
@@ -246,6 +267,7 @@ struct NamespacedTracingOrchestrator {
     namespace: String,
     inner: Arc<dyn NamespacedOrchestrator>,
     tracing_args: TracingCliArgs,
+    otel_enable_callback: OpenTelemetryEnableCallback,
 }
 
 #[async_trait]
@@ -266,6 +288,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 opentelemetry_header,
                 opentelemetry_filter,
                 opentelemetry_resource,
+                opentelemetry_enabled: _,
                 #[cfg(feature = "tokio-console")]
                     tokio_console_listen_addr: _,
                 #[cfg(feature = "tokio-console")]
@@ -292,6 +315,11 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 for kv in opentelemetry_resource {
                     args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
+
+                args.push(format!(
+                    "--opentelemetry-enabled={}",
+                    self.otel_enable_callback.current_enabled()
+                ));
             }
             #[cfg(feature = "tokio-console")]
             if let Some(port) = tokio_console_port {

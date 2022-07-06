@@ -1989,13 +1989,7 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
             SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
-                KEY => {
-                    if self.parse_keyword(PASSWORD) {
-                        KafkaConnectionOptionName::SslKeyPassword
-                    } else {
-                        KafkaConnectionOptionName::SslKey
-                    }
-                }
+                KEY => KafkaConnectionOptionName::SslKey,
                 CERTIFICATE => {
                     if self.parse_keyword(AUTHORITY) {
                         KafkaConnectionOptionName::SslCertificateAuthority
@@ -2050,9 +2044,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
         let connection = self.parse_create_source_connection()?;
         let with_options = self.parse_opt_with_options()?;
-        // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
-        // may mutate this variable in the next block
-        let mut format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
+        let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
                 self.expect_keyword(FORMAT)?;
                 let key = self.parse_format()?;
@@ -2067,23 +2059,7 @@ impl<'a> Parser<'a> {
         let include_metadata = self.parse_source_include_metadata()?;
 
         let envelope = if self.parse_keyword(ENVELOPE) {
-            let envelope = self.parse_envelope()?;
-            if matches!(envelope, Envelope::Upsert) {
-                // TODO: remove support for explicit UPSERT FORMAT after a period of deprecation
-                if self.parse_keyword(FORMAT) {
-                    warn!("UPSERT FORMAT has been deprecated, use the new KEY FORMAT syntax");
-                    if let CreateSourceFormat::Bare(value) = format {
-                        let key = self.parse_format()?;
-                        format = CreateSourceFormat::KeyValue { key, value };
-                    } else {
-                        self.error(
-                            self.index,
-                            "ENVELOPE UPSERT FORMAT conflicts with earlier KEY FORMAT specification".into(),
-                        );
-                    }
-                }
-            }
-            Some(envelope)
+            Some(self.parse_envelope()?)
         } else {
             None
         };
@@ -5039,9 +5015,10 @@ impl<'a> Parser<'a> {
         // TODO (#13299): Make specifying the format optional upon getting rid
         // of the old explain syntax
         self.expect_keyword(AS)?;
-        let format = match self.parse_one_of_keywords(&[TEXT, JSON]) {
+        let format = match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
             Some(TEXT) => ExplainFormat::Text,
             Some(JSON) => ExplainFormat::Json,
+            Some(DOT) => ExplainFormat::Dot,
             None => return Err(ParserError::new(self.index, "expected a format")),
             _ => unreachable!(),
         };

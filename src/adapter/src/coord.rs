@@ -80,6 +80,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_repr::explain_new::Explain;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
@@ -121,9 +122,9 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSourceStatement, ExplainStageOld, FetchStatement, Ident,
-    IndexOptionName, InsertSource, ObjectType, Query, Raw, RawClusterName, RawObjectName, SetExpr,
-    Statement,
+    CreateIndexStatement, CreateSourceStatement, ExplainStageNew, ExplainStageOld, FetchStatement,
+    Ident, IndexOptionName, InsertSource, ObjectType, Query, Raw, RawClusterName, RawObjectName,
+    SetExpr, Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog as _,
@@ -165,6 +166,7 @@ use crate::command::{
 use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::AdapterError;
+use crate::explain_new::{ExplainContext, Explainable};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -745,6 +747,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
 
+        // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
+        let mut storage_policies_to_set = Vec::new();
+        let mut compute_policies_to_set = BTreeMap::new();
+
         for entry in &entries {
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
@@ -779,11 +785,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         )])
                         .await
                         .unwrap();
-                    self.initialize_storage_read_policies(
-                        vec![entry.id()],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+
+                    storage_policies_to_set.push(entry.id());
                 }
                 CatalogItem::Table(table) => {
                     self.dataflow_client
@@ -799,34 +802,32 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    let since_ts = self.get_local_write_ts().await?;
-                    let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
-                    self.dataflow_client
-                        .storage_mut()
-                        .set_read_policy(vec![(entry.id(), policy)])
-                        .await
-                        .unwrap();
-
-                    self.initialize_storage_read_policies(
-                        vec![entry.id()],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+                    storage_policies_to_set.push(entry.id());
                 }
                 CatalogItem::Index(idx) => {
                     if logs.contains(&idx.on) {
-                        // TODO: make this one call, not many.
-                        self.initialize_compute_read_policies(
-                            vec![entry.id()],
-                            idx.compute_instance,
-                            self.logical_compaction_window_ms,
-                        )
-                        .await;
+                        compute_policies_to_set
+                            .entry(idx.compute_instance)
+                            .or_insert_with(Vec::new)
+                            .push(entry.id());
                     } else {
-                        let df = self
+                        let dataflow = self
                             .dataflow_builder(idx.compute_instance)
                             .build_index_dataflow(entry.id())?;
-                        self.ship_dataflow(df, idx.compute_instance).await;
+                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.compute_instance)`,
+                        // but we cannot call that as it will also downgrade the read hold on the index.
+                        compute_policies_to_set
+                            .entry(idx.compute_instance)
+                            .or_insert_with(Vec::new)
+                            .extend(dataflow.export_ids());
+                        let dataflow_plan =
+                            vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
+                        self.dataflow_client
+                            .compute_mut(idx.compute_instance)
+                            .unwrap()
+                            .create_dataflows(dataflow_plan)
+                            .await
+                            .unwrap();
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -845,11 +846,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    self.initialize_storage_read_policies(
-                        vec![entry.id()],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+                    storage_policies_to_set.push(entry.id());
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
@@ -904,6 +901,22 @@ impl<S: Append + 'static> Coordinator<S> {
                 | CatalogItem::Connection(_) => {}
             }
         }
+
+        // Having installed all entries, creating all constraints, we can now relax read policies.
+        // We do compute first, and they may result in additional storage policy effects.
+        for (instance, mut ids) in compute_policies_to_set.into_iter() {
+            ids.sort();
+            ids.dedup();
+            self.initialize_compute_read_policies(ids, instance, self.logical_compaction_window_ms)
+                .await;
+        }
+        storage_policies_to_set.sort();
+        storage_policies_to_set.dedup();
+        self.initialize_storage_read_policies(
+            storage_policies_to_set,
+            self.logical_compaction_window_ms,
+        )
+        .await;
 
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
@@ -2279,7 +2292,8 @@ impl<S: Append + 'static> Coordinator<S> {
         match plan {
             Plan::CreateConnection(plan) => {
                 tx.send(
-                    self.sequence_create_connection(&session, plan).await,
+                    self.sequence_create_connection(&session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
@@ -2587,6 +2601,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateConnectionPlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
@@ -2597,6 +2612,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
                 connection: plan.connection.connection,
+                depends_on,
             }),
         }];
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
@@ -3328,6 +3344,22 @@ impl<S: Append + 'static> Coordinator<S> {
         } = plan;
 
         self.validate_timeline(depends_on.clone())?;
+
+        // Recorded views are not allowed to depend on log sources, as replicas
+        // are not producing the same definite collection for these.
+        // TODO(teskje): Remove this check once arrangement-based log sources
+        // are replaced with persist-based ones.
+        let log_names = depends_on
+            .iter()
+            .flat_map(|id| self.catalog.log_dependencies(*id))
+            .map(|id| self.catalog.get_entry(&id).name().item.clone())
+            .collect::<Vec<_>>();
+        if !log_names.is_empty() {
+            return Err(AdapterError::InvalidLogDependency {
+                object_type: "recorded view".into(),
+                log_names,
+            });
+        }
 
         // Allocate IDs for the recorded view in the catalog.
         let id = self.catalog.allocate_user_id().await?;
@@ -4452,10 +4484,141 @@ impl<S: Append + 'static> Coordinator<S> {
 
     fn sequence_explain_new(
         &mut self,
-        _session: &Session,
-        _plan: ExplainPlanNew,
+        session: &Session,
+        plan: ExplainPlanNew,
     ) -> Result<ExecuteResponse, AdapterError> {
-        unimplemented!() // TODO #13296
+        let compute_instance = self
+            .catalog
+            .resolve_compute_instance(session.vars().cluster())?
+            .id;
+
+        let ExplainPlanNew {
+            mut raw_plan,
+            row_set_finishing,
+            stage,
+            format,
+            config,
+        } = plan;
+
+        let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
+            let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
+                qgm_optimizations: session.vars().qgm_optimizations(),
+            })?;
+            Ok(decorrelated_plan)
+        };
+
+        let optimize =
+            |coord: &mut Self,
+             decorrelated_plan: MirRelationExpr|
+             -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
+                let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
+                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                coord
+                    .dataflow_builder(compute_instance)
+                    .import_view_into_dataflow(
+                        // TODO: If explaining a view, pipe the actual id of the view.
+                        &GlobalId::Explain,
+                        &optimized_plan,
+                        &mut dataflow,
+                    )?;
+                mz_transform::optimize_dataflow(
+                    &mut dataflow,
+                    &coord.index_oracle(compute_instance),
+                )?;
+                Ok(dataflow)
+            };
+
+        let explanation_string = match stage {
+            ExplainStageNew::RawPlan => {
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut raw_plan).explain(&format, &config, &context)?
+            }
+            ExplainStageNew::QueryGraph => {
+                // run partial pipeline
+                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut model).explain(&format, &config, &context)?
+            }
+            ExplainStageNew::OptimizedQueryGraph => {
+                // run partial pipeline
+                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
+                model.optimize();
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut model).explain(&format, &config, &context)?
+            }
+            ExplainStageNew::DecorrelatedPlan => {
+                // run partial pipeline
+                let decorrelated_plan = decorrelate(raw_plan)?;
+                self.validate_timeline(decorrelated_plan.depends_on())?;
+                let mut dataflow = OptimizedMirRelationExpr::declare_optimized(decorrelated_plan);
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut dataflow).explain(&format, &config, &context)?
+            }
+            ExplainStageNew::OptimizedPlan => {
+                // run partial pipeline
+                let decorrelated_plan = decorrelate(raw_plan)?;
+                self.validate_timeline(decorrelated_plan.depends_on())?;
+                let mut dataflow = optimize(self, decorrelated_plan)?;
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut dataflow).explain(&format, &config, &context)?
+            }
+            ExplainStageNew::PhysicalPlan => {
+                // run partial pipeline
+                let decorrelated_plan = decorrelate(raw_plan)?;
+                self.validate_timeline(decorrelated_plan.depends_on())?;
+                let dataflow = optimize(self, decorrelated_plan)?;
+                let mut dataflow_plan =
+                    mz_compute_client::plan::Plan::<mz_repr::Timestamp>::finalize_dataflow(
+                        dataflow,
+                    )
+                    .expect("Dataflow planning failed; unrecoverable error");
+                // construct explanation context
+                let catalog = self.catalog.for_session(session);
+                let context = ExplainContext {
+                    humanizer: &catalog,
+                    finishing: row_set_finishing,
+                };
+                // explain plan
+                Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
+            }
+            ExplainStageNew::Trace => {
+                let feature = "ExplainStageNew::Trace";
+                Err(AdapterError::Unsupported(feature))?
+            }
+        };
+
+        let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
+        Ok(send_immediate_rows(rows))
     }
 
     fn sequence_explain_old(
@@ -6066,7 +6229,9 @@ pub mod fast_path_peek {
                             // An arrangement may or may not exist. If not, nothing to be done.
                             if let Some((key, permute, thinning)) = keys.arbitrary_arrangement() {
                                 // Just grab any arrangement, but be sure to de-permute the results.
-                                for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                                for (index_id, (desc, _typ, _monotonic)) in
+                                    dataflow_plan.index_imports.iter()
+                                {
                                     if Id::Global(desc.on_id) == *id && &desc.key == key {
                                         let mut map_filter_project =
                                             mz_expr::MapFilterProject::new(_typ.arity())
@@ -6102,7 +6267,9 @@ pub mod fast_path_peek {
                                 })?;
                             // We should only get excited if we can track down an index for `id`.
                             // If `keys` is non-empty, that means we think one exists.
-                            for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                            for (index_id, (desc, _typ, _monotonic)) in
+                                dataflow_plan.index_imports.iter()
+                            {
                                 if Id::Global(desc.on_id) == *id && &desc.key == key {
                                     // Indicate an early exit with a specific index and key_val.
                                     return Ok(Plan::PeekExisting(

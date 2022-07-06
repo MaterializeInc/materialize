@@ -35,6 +35,7 @@ use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
+use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
@@ -49,9 +50,11 @@ pub use crate::r#impl::state::{Since, Upper};
 
 /// An implementation of the public crate interface.
 pub(crate) mod r#impl {
+    pub mod compact;
     pub mod machine;
     pub mod metrics;
     pub mod state;
+    pub mod trace;
 }
 
 // TODO: Remove this in favor of making it possible for all PersistClients to be
@@ -187,6 +190,16 @@ pub struct PersistConfig {
     /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
     /// calls on previous ones finishing.
     pub batch_builder_max_outstanding_parts: usize,
+    /// Whether to physically and logically compact batches in blob storage.
+    pub compaction_enabled: bool,
+    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
+    /// if the number of inputs is at least this many. Compaction is performed
+    /// if any of the heuristic criteria are met (they are OR'd).
+    pub compaction_heuristic_min_inputs: usize,
+    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
+    /// if the number of updates is at least this many. Compaction is performed
+    /// if any of the heuristic criteria are met (they are OR'd).
+    pub compaction_heuristic_min_updates: usize,
 }
 
 // Tuning inputs:
@@ -205,6 +218,13 @@ pub struct PersistConfig {
 //   point).
 // - A smaller batch_builder_max_outstanding_parts provides a bound on the
 //   amount of memory used by a writer.
+// - A larger compaction_heuristic_min_inputs means state size is larger.
+// - A smaller compaction_heuristic_min_inputs means more compactions happen
+//   (higher write amp).
+// - A larger compaction_heuristic_min_updates means more consolidations are
+//   discovered while reading a snapshot (higher read amp and higher space amp).
+// - A smaller compaction_heuristic_min_updates means more compactions happen
+//   (higher write amp).
 //
 // Tuning logic:
 // - blob_target_size was initially selected to be an exact multiple of 8MiB
@@ -214,12 +234,27 @@ pub struct PersistConfig {
 //   as possible without harming pipelining. 0 means no pipelining, 1 is full
 //   pipelining as long as generating data takes less time than writing to s3
 //   (hopefully a fair assumption), 2 is a little extra slop on top of 1.
+// - compaction_heuristic_min_inputs was set by running the open-loop benchmark
+//   with batches of size 10,240 bytes (selected to be small but such that the
+//   overhead of our columnar encoding format was less than 10%) and manually
+//   increased until the write amp stopped going down. This becomes much less
+//   important once we have incremental state. The initial value is a
+//   placeholder and should be revisited at some point.
+// - compaction_heuristic_min_updates was set via a thought experiment. This is
+//   an `O(n*log(n))` upper bound on the number of unconsolidated updates that
+//   would be consolidated if we compacted as the in-mem Spine does. The initial
+//   value is a placeholder and should be revisited at some point.
 impl Default for PersistConfig {
     fn default() -> Self {
+        // Escape hatch in case we need to disable compaction.
+        let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         const MB: usize = 1024 * 1024;
         Self {
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
+            compaction_enabled: !compaction_disabled,
+            compaction_heuristic_min_inputs: 8,
+            compaction_heuristic_min_updates: 1024,
         }
     }
 }
@@ -302,12 +337,20 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         )
         .await?;
+        let compactor = self.cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                self.cfg.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+            )
+        });
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             machine: machine.clone(),
+            compactor,
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
         };
@@ -368,11 +411,19 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         )
         .await?;
+        let compactor = self.cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                self.cfg.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+            )
+        });
         let shard_upper = machine.fetch_upper().await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             machine,
+            compactor,
             blob: Arc::clone(&self.blob),
             upper: shard_upper,
         };
@@ -394,6 +445,13 @@ impl PersistClient {
     {
         self.open(shard_id).await.expect("codec mismatch")
     }
+
+    /// Return the metrics being used by this client.
+    ///
+    /// Only exposed for tests, persistcli, and benchmarks.
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
+    }
 }
 
 #[cfg(test)]
@@ -403,8 +461,11 @@ mod tests {
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
+    use std::time::{Duration, Instant};
 
+    use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
+    use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_proto::protobuf_roundtrip;
     use timely::progress::Antichain;
@@ -426,6 +487,9 @@ mod tests {
         cache.cfg.blob_target_size = 10;
         cache.cfg.batch_builder_max_outstanding_parts = 1;
 
+        // Enable compaction in tests to ensure we get coverage.
+        cache.cfg.compaction_enabled = true;
+
         cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
@@ -440,20 +504,52 @@ mod tests {
         as_of: T,
     ) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
     where
-        K: Clone + 'a,
-        V: Clone + 'a,
-        T: Lattice + Clone + 'a,
-        D: Clone + 'a,
+        K: Ord + Clone + 'a,
+        V: Ord + Clone + 'a,
+        T: Timestamp + Lattice + Clone + 'a,
+        D: Semigroup + Clone + 'a,
         I: IntoIterator<Item = &'a ((K, V), T, D)>,
     {
         let as_of = Antichain::from_elem(as_of);
-        iter.into_iter()
+        let mut ret = iter
+            .into_iter()
             .map(|((k, v), t, d)| {
                 let mut t = t.clone();
                 t.advance_by(as_of.borrow());
                 ((Ok(k.clone()), Ok(v.clone())), t, d.clone())
             })
-            .collect()
+            .collect();
+        consolidate_updates(&mut ret);
+        ret
+    }
+
+    pub async fn expect_fetch_part<K, V, T, D>(
+        blob: &(dyn Blob + Send + Sync),
+        key: &str,
+    ) -> (
+        BlobTraceBatchPart,
+        Vec<((Result<K, String>, Result<V, String>), T, D)>,
+    )
+    where
+        K: Codec,
+        V: Codec,
+        T: Codec64,
+        D: Codec64,
+    {
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+        let value = blob
+            .get(deadline, key)
+            .await
+            .expect("failed to fetch part")
+            .expect("missing part");
+        let part = BlobTraceBatchPart::decode(&value).expect("failed to decode part");
+        let mut updates = Vec::new();
+        for chunk in part.updates.iter() {
+            for ((k, v), t, d) in chunk.iter() {
+                updates.push(((K::decode(k), V::decode(v)), T::decode(t), D::decode(d)));
+            }
+        }
+        (part, updates)
     }
 
     #[tokio::test]
@@ -493,13 +589,10 @@ mod tests {
         assert_eq!(write.upper(), &Antichain::from_elem(4));
 
         // Listen should have part of the initial write plus the new one.
-        let expected_events = vec![
-            ListenEvent::Updates(all_ok(&data[1..2], 1)),
-            ListenEvent::Progress(Antichain::from_elem(3)),
-            ListenEvent::Updates(all_ok(&data[2..], 1)),
-            ListenEvent::Progress(Antichain::from_elem(4)),
-        ];
-        assert_eq!(listen.read_until(&4).await, expected_events);
+        assert_eq!(
+            listen.read_until(&4).await,
+            (all_ok(&data[1..], 1), Antichain::from_elem(4))
+        );
 
         // Downgrading the since is tracked locally (but otherwise is a no-op).
         read.downgrade_since(Antichain::from_elem(2)).await;
@@ -987,15 +1080,10 @@ mod tests {
         let mut snap = read.expect_snapshot(5).await;
         assert_eq!(snap.read_all().await, all_ok(&data, 5));
 
-        let expected_events = vec![
-            ListenEvent::Updates(all_ok(&data[0..2], 1)),
-            ListenEvent::Progress(Antichain::from_elem(3)),
-            ListenEvent::Updates(all_ok(&data[2..4], 1)),
-            ListenEvent::Progress(Antichain::from_elem(5)),
-            ListenEvent::Updates(all_ok(&data[4..5], 1)),
-            ListenEvent::Progress(Antichain::from_elem(6)),
-        ];
-        assert_eq!(listen.read_until(&6).await, expected_events);
+        assert_eq!(
+            listen.read_until(&6).await,
+            (all_ok(&data[..], 1), Antichain::from_elem(6))
+        );
     }
 
     // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not

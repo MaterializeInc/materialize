@@ -1302,7 +1302,7 @@ impl SourceDesc {
     // TODO(guswynn): consider enforcing this more completely at the
     // parsing/typechecking level, by not using an `envelope`
     // for sources like pg
-    pub fn append_only(&self) -> bool {
+    pub fn monotonic(&self) -> bool {
         match self {
             // Postgres can produce retractions (deletes)
             SourceDesc {

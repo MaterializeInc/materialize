@@ -1050,7 +1050,7 @@ where
             }
             (FuncSpec::Op(_), [..]) => unreachable!("non-unary non-binary operator"),
         };
-        PlanError::Unstructured(format!("{}: {}", context, e))
+        sql_err!("{}: {}", context, e)
     })
 }
 
@@ -2857,7 +2857,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                 let regex = match regex.into_literal_string() {
                     None => sql_bail!("regex_extract requires a string literal as its first argument"),
-                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex).map_err(|e| PlanError::Unstructured(format!("analyzing regex: {}", e)))?,
+                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex).map_err(|e| sql_err!("analyzing regex: {}", e))?,
                 };
                 let column_names = regex
                     .capture_groups_iter()

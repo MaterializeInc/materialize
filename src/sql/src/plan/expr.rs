@@ -16,7 +16,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::mem;
 
-use anyhow::bail;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
@@ -1341,7 +1340,7 @@ impl HirRelationExpr {
 
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `params`.
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
         self.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _: usize| {
             e.bind_parameters(params)
         })
@@ -1391,11 +1390,11 @@ impl HirRelationExpr {
 impl HirScalarExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
         self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
             if let HirScalarExpr::Parameter(n) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
-                    None => bail!("there is no parameter ${}", n),
+                    None => sql_bail!("there is no parameter ${}", n),
                     Some(datum) => datum,
                 };
                 let scalar_type = &params.types[*n - 1];
@@ -1459,22 +1458,24 @@ impl HirScalarExpr {
     pub fn literal_1d_array(
         datums: Vec<Datum>,
         element_scalar_type: ScalarType,
-    ) -> Result<HirScalarExpr, anyhow::Error> {
+    ) -> Result<HirScalarExpr, PlanError> {
         let scalar_type = match element_scalar_type {
             ScalarType::Array(_) => {
-                return Err(anyhow::anyhow!("cannot build array from array type"))
+                sql_bail!("cannot build array from array type");
             }
             typ => ScalarType::Array(Box::new(typ)).nullable(false),
         };
 
         let mut row = Row::default();
-        row.packer().push_array(
-            &[ArrayDimension {
-                lower_bound: 1,
-                length: datums.len(),
-            }],
-            datums,
-        )?;
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: datums.len(),
+                }],
+                datums,
+            )
+            .expect("array constructed to be valid");
 
         Ok(HirScalarExpr::Literal(row, scalar_type))
     }
@@ -1817,7 +1818,7 @@ impl AbstractExpr for HirScalarExpr {
 impl AggregateExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `parameters`.
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
         self.expr.bind_parameters(params)
     }
 

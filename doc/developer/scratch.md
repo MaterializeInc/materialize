@@ -83,9 +83,24 @@ If you need to, you can install and use the `mssh` command provided by the
 underlying [EC2 connect CLI] directly, but it's usually much easier to go
 through `bin/scratch ssh`.
 
-To use Visual Studio Code Remote development with the instance, you need to install an SSH key on it.
-Use `bin/scratch ssh INSTANCE-ID`, then append to the `.ssh/authorized_keys` file your public SSH key (should be a local file like `~/.ssh/something.pub`).
-Then use the [guide](https://code.visualstudio.com/docs/remote/ssh) to connect with VS Code.
+#### Visual Studo Code Remote Development
+
+VS Code Remote development allows us to configure common settings and an environment in which materialize can be developed from inside a docker container.
+To use:
+
+1. Create a scratch instance: `bin/scratch create remote-dev`
+2. Log in with `bin/scratch ssh INSTANCE-ID`
+3. Append a local ssh public key (should be a file like `~/.ssh/id_ed25519.pub` on your laptop) to the `.ssh/authorized_keys` file on the remote instance. If you want to push code to github, you must also install a private key on the instance, in which case it *must* have a passphrase (so that no one is able to impersonate you should they gain access to the EC2 instance).
+4. From your laptop, ensure ssh works and the fingerprint is correct: `ssh ubuntu@INSTANCE-IP-ADDRESS`
+5. Open VS Code on your laptop, and open `Remote-SSH: Connect to Host...` from the command palatte.
+6. Click to add a new ssh host and enter `ssh ubuntu@INSTANCE-IP-ADDRESS` and add it to your local ssh config.
+7. Click `Connect` in the `Host added!` dialog.
+8. Open the `materialize` folder (which is automatically created by the scratch command), then `Reopen in Container` from the dialog.
+
+This will take a few minutes to build your dev container.
+See the [guide](https://code.visualstudio.com/docs/remote/ssh) for more details.
+Because this is in scratch, it may be deleted after a week.
+If you need a longer term enviroment, use `--max-age-days` when creating the scratch instance.
 
 ### `bin/scratch mine`
 

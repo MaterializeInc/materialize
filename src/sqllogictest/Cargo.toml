@@ -18,7 +18,7 @@ once_cell = "1.12.0"
 md-5 = "0.10.1"
 mz-controller = { path = "../controller" }
 mz-environmentd = { path = "../environmentd", default-features = false }
-mz-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }

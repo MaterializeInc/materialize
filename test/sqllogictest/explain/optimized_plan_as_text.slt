@@ -1,0 +1,93 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+)
+
+statement ok
+CREATE MATERIALIZED VIEW v AS
+SELECT * FROM t WHERE a IS NOT NULL
+
+mode cockroach
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT
+  *
+FROM
+  T as X
+WHERE
+  NOT EXISTS (SELECT * FROM T as Y WHERE X.a = Y.b)
+LIMIT 10
+----
+Source materialize.public.t (u1):
+| Project (#0, #1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.t (u1)
+| Project (#0)
+| Distinct group=(#0)
+
+%1 =
+| Get materialize.public.t (u1)
+| ArrangeBy (#0)
+
+%2 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%3 =
+| Get materialize.public.t (u1)
+| Filter !(isnull(#1))
+| Project (#1)
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%4 =
+| Join %2 %3 (= #0 #1)
+| | implementation = DeltaQuery
+| |   delta %2 %3.(#0)
+| |   delta %3 %2.(#0)
+| Project (#0)
+| Negate
+
+%5 =
+| Union %4 %0
+
+%6 =
+| Join %1 %5 (= #0 #2)
+| | implementation = Differential %5 %1.(#0)
+| Project (#0, #1)
+
+Finish order_by=() limit=10 offset=0 project=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS TEXT FOR
+VIEW v
+----
+Source materialize.public.t (u1):
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.t (u1)
+| | types = (integer?, integer?)
+| | keys = ()
+| Filter !(isnull(#0))
+| | types = (integer, integer?)
+| | keys = ()
+
+EOF

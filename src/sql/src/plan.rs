@@ -31,6 +31,7 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use serde::{Deserialize, Serialize};
 
 use mz_compute_client::controller::ComputeInstanceId;
@@ -42,8 +43,8 @@ use mz_storage::client::sinks::{SinkConnectionBuilder, SinkEnvelope};
 use mz_storage::client::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
-    ExplainOptions, ExplainStageOld, Expr, FetchDirection, IndexOptionName, NoticeSeverity,
-    ObjectType, Raw, SetVariableValue, Statement, TransactionAccessMode,
+    ExplainOptions, ExplainStageNew, ExplainStageOld, Expr, FetchDirection, IndexOptionName,
+    NoticeSeverity, ObjectType, Raw, SetVariableValue, Statement, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
@@ -64,7 +65,7 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
-pub use self::expr::{HirRelationExpr, HirScalarExpr};
+pub use self::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 pub use error::PlanError;
 pub use explain::Explanation;
 pub use optimize::OptimizerConfig;
@@ -361,6 +362,9 @@ pub enum ExplainPlan {
 pub struct ExplainPlanNew {
     pub raw_plan: HirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
+    pub stage: ExplainStageNew,
+    pub format: ExplainFormat,
+    pub config: ExplainConfig,
 }
 
 #[derive(Debug)]

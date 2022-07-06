@@ -1,0 +1,69 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for a bug during the initial compaction implementation where a
+# Listen would emit a batch, then the batch would get compacted, then the Listen
+# would emit the entire merged batch, which double emitted the first batch.
+
+# Write a batch and emit it from a Listen
+write-batch output=b0 lower=0 upper=2
+one 1 1
+----
+parts=1 len=1
+
+compare-and-append input=b0
+----
+ok
+
+register-listen output=l0 as-of=0
+----
+ok
+
+listen-through input=l0 frontier=2
+----
+one 1 1
+
+# Write another batch and compact it with the one we've emitted from the Listen
+write-batch output=b1 lower=2 upper=3
+two 2 1
+----
+parts=1 len=1
+
+compare-and-append input=b1
+----
+ok
+
+compact output=b0_1 inputs=(b0,b1)  lower=0 upper=3 since=0
+----
+parts=1 len=2
+
+# Give enough fuel to the Spine that we generate a merge req for b0 and b1
+# (unfortuante implementation detail).
+write-batch output=b2 lower=3 upper=4
+threeA 3 1
+threeB 3 1
+threeC 3 1
+threeD 3 1
+----
+parts=1 len=4
+
+compare-and-append input=b2
+----
+ok
+
+# Now apply the merged batch.
+apply-merge-res input=b0_1
+----
+true
+
+# Finally, verify that the listener correctly skips [1, 2) when it grabs the
+# merged batch. Without the fix, this also gets a "one 1 1" line.
+listen-through input=l0 frontier=2
+----
+two 2 1

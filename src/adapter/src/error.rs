@@ -17,6 +17,7 @@ use tokio::sync::oneshot;
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_repr::explain_new::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
 use mz_sql::query_model::QGMError;
@@ -42,6 +43,8 @@ pub enum AdapterError {
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// An error occurred while planning the statement.
+    Explain(ExplainError),
     /// The specified parameter is fixed to a single specific value.
     FixedValueParameter(&'static (dyn Var + Send + Sync)),
     /// The ID allocator exhausted all valid IDs.
@@ -50,6 +53,12 @@ pub enum AdapterError {
     Internal(String),
     /// Attempted to read from log sources on a cluster with disabled introspection.
     IntrospectionDisabled {
+        log_names: Vec<String>,
+    },
+    /// Attempted to create an object dependent on log sources that doesn't support
+    /// log dependencies.
+    InvalidLogDependency {
+        object_type: String,
         log_names: Vec<String>,
     },
     /// The value for the specified parameter does not have the right type.
@@ -180,6 +189,11 @@ impl AdapterError {
                 "The query references the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
+            AdapterError::InvalidLogDependency { log_names, .. } => Some(format!(
+                "The object depends on the following log sources:\n    {}",
+                log_names.join("\n    "),
+            )),
+            AdapterError::PlanError(e) => e.detail(),
             _ => None,
         }
     }
@@ -224,6 +238,7 @@ impl AdapterError {
                  selection, use `RESET cluster_replica`."
                     .into(),
             ),
+            AdapterError::PlanError(e) => e.hint(),
             _ => None,
         }
     }
@@ -246,6 +261,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             AdapterError::Eval(e) => e.fmt(f),
+            AdapterError::Explain(e) => e.fmt(f),
             AdapterError::FixedValueParameter(p) => write!(
                 f,
                 "parameter {} can only be set to {}",
@@ -258,6 +274,9 @@ impl fmt::Display for AdapterError {
                 f,
                 "cannot read log sources on cluster with disabled introspection"
             ),
+            AdapterError::InvalidLogDependency { object_type, .. } => {
+                write!(f, "{object_type} objects cannot depend on log sources")
+            }
             AdapterError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",
@@ -393,6 +412,12 @@ impl From<catalog::Error> for AdapterError {
 impl From<EvalError> for AdapterError {
     fn from(e: EvalError) -> AdapterError {
         AdapterError::Eval(e)
+    }
+}
+
+impl From<ExplainError> for AdapterError {
+    fn from(e: ExplainError) -> AdapterError {
+        AdapterError::Explain(e)
     }
 }
 

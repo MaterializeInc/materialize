@@ -34,10 +34,21 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 1}}}
 
 > CREATE SECRET ssl_key_kafka AS '${arg.materialized-kafka-key}'
-> CREATE SECRET ssl_key_password_kafka AS 'mzmzmz'
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
 > CREATE SECRET password_csr AS 'sekurity'
 
+# Ensure connections track their dependencies
+> CREATE CONNECTION kafka_ssl
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    SSL KEY = SECRET ssl_key_kafka,
+    SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
+
+! DROP SECRET ssl_key_kafka;
+contains: cannot drop
+
+# Ensure non-secrets cannot be used as secrets
 > CREATE TABLE not_a_secret (a int);
 
 ! CREATE MATERIALIZED SOURCE data
@@ -55,8 +66,7 @@ contains: materialize.public.not_a_secret is not a secret
       security_protocol = 'SSL',
       ssl_key_pem = SECRET ssl_key_kafka,
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      ssl_key_password = SECRET ssl_key_password_kafka
+      ssl_ca_pem = '${arg.ca-crt}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
@@ -88,8 +98,7 @@ a
       security_protocol = 'SSL',
       ssl_key_pem = SECRET ssl_key_kafka,
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      ssl_key_password = SECRET ssl_key_password_kafka
+      ssl_ca_pem = '${arg.ca-crt}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
@@ -111,7 +120,6 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
   WITH (
       security_protocol = 'SSL',
       ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_key_password = SECRET ssl_key_password_kafka,
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
       ssl_ca_pem = '${arg.ca-crt}'
   )
@@ -136,8 +144,7 @@ $ kafka-verify format=avro sink=materialize.public.env_pw_snk sort-messages=true
       security_protocol = 'SSL',
       ssl_key_pem = SECRET ssl_key_kafka,
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      ssl_key_password = SECRET ssl_key_password_kafka
+      ssl_ca_pem = '${arg.ca-crt}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
@@ -155,8 +162,7 @@ contains:error publishing kafka schemas for sink: unable to publish value schema
       security_protocol = 'SSL',
       ssl_key_pem = SECRET ssl_key_kafka,
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      ssl_key_password = SECRET ssl_key_password_kafka
+      ssl_ca_pem = '${arg.ca-crt}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
@@ -168,21 +174,11 @@ contains:self signed certificate in certificate chain
   WITH (
       security_protocol = 'SSL',
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      ssl_key_password = SECRET ssl_key_password_kafka
+      ssl_ca_pem = '${arg.ca-crt}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 contains:missing SSL KEY (ssl.key.pem)
-
-# Ensure that connectors work with SSL basic_auth
-> CREATE CONNECTION kafka_ssl
-  FOR KAFKA
-    BROKER 'kafka:9092',
-    SSL KEY = SECRET ssl_key_kafka,
-    SSL KEY PASSWORD = SECRET ssl_key_password_kafka,
-    SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
-    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
 
 > CREATE MATERIALIZED SOURCE kafka_connector_source
   FROM KAFKA CONNECTION kafka_ssl

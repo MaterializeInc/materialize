@@ -136,3 +136,12 @@ class Report:
             print(
                 f"{comparison.name():<25} | {comparison.this():>11.3f} | {comparison.other():>11.3f} | {regression:^13} | {comparison.human_readable()}"
             )
+
+
+class SingleReport(Report):
+    def dump(self) -> None:
+        print(f"{'NAME':<25} | {'THIS':^11}")
+        print("-" * 50)
+
+        for comparison in self._comparisons:
+            print(f"{comparison.name():<25} | {comparison.this():>11.3f}")

@@ -1,0 +1,30 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Sanity check for the "normal" case
+
+write-batch output=b0 lower=0 upper=1
+zero 0 1
+----
+parts=1 len=1
+
+write-batch output=b1 lower=1 upper=2
+zero 1 -1
+one 1 1
+----
+parts=1 len=2
+
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=2 since=10
+----
+parts=1 len=1
+
+fetch-batch input=b0_1
+----
+<part 0>
+one 10 1

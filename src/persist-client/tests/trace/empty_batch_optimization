@@ -1,0 +1,58 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test an optimization that, even without compaction, we merge together
+# completely empty batches to save space in the state.
+
+# Batches start empty
+batches
+----
+
+# Insert a bunch of empty batches. These happen to all get merged, even without
+# compaction.
+insert
+0 1 0 0
+1 2 0 0
+2 3 0 0
+----
+ok
+
+batches
+----
+[0][3][0] 0
+
+# Now insert a non-empty batch to fence off the optimization.
+insert
+3 4 0 10 k0
+----
+ok
+
+batches
+----
+[0][3][0] 0
+[3][4][0] 10 k0
+
+# Insert some more empty batches, they again get merged together.
+insert
+4 5 0 0
+5 6 0 0
+6 7 0 0
+----
+ok
+
+batches
+----
+[0][3][0] 0
+[3][4][0] 10 k0
+[4][7][0] 0
+
+# All this happens without needing/generating an external merge req (compaction)
+take-merge-reqs
+----
+<empty>

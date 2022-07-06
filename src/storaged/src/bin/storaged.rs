@@ -25,7 +25,6 @@ use mz_pid_file::PidFile;
 use mz_service::grpc::GrpcServer;
 use mz_storage::client::connections::ConnectionContext;
 use mz_storage::client::proto_storage_server::ProtoStorageServer;
-use mz_storage::client::StorageClient;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -114,7 +113,7 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-    mz_ore::tracing::configure("storaged", &args.tracing).await?;
+    let otel_enable_callback = mz_ore::tracing::configure("storaged", &args.tracing).await?;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
@@ -149,6 +148,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                             mz_http_util::handle_prometheus(&metrics_registry).await
                         }),
                     )
+                    .route(
+                        "/api/opentelemetry/config",
+                        routing::put(move |payload| async move {
+                            mz_http_util::handle_enable_otel(otel_enable_callback, payload).await
+                        }),
+                    )
                     .into_make_service(),
             ),
         );
@@ -167,7 +172,5 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     let (_server, client) = mz_storage::serve(config)?;
-    let client: Box<dyn StorageClient> = Box::new(client);
-
     GrpcServer::serve(args.listen_addr, client, ProtoStorageServer::new).await
 }

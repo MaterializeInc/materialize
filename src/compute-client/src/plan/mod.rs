@@ -1440,7 +1440,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
         let mut arrangements = BTreeMap::new();
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
-        for (index_desc, r#type) in desc.index_imports.values() {
+        for (index_desc, r#type, _monotonic) in desc.index_imports.values() {
             let key = index_desc.key.clone();
             // TODO[btv] - We should be told the permutation by
             // `index_desc`, and it should have been generated

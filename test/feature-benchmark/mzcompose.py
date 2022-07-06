@@ -21,12 +21,13 @@ from scenarios import Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
-from materialize.feature_benchmark.benchmark import Benchmark, Report
+from materialize.feature_benchmark.benchmark import Benchmark, Report, SingleReport
 from materialize.feature_benchmark.comparator import (
     Comparator,
     RelativeThresholdComparator,
+    SuccessComparator,
 )
-from materialize.feature_benchmark.executor import Docker
+from materialize.feature_benchmark.executor import Docker, MzCloud
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
@@ -363,3 +364,128 @@ root_scenario: {args.root_scenario}"""
             f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
         )
         sys.exit(1)
+
+
+def workflow_mzcloud(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--mzcloud-url",
+        type=str,
+        help="The postgres connection url to the mzcloud deployment to benchmark.",
+    )
+
+    parser.add_argument(
+        "--kafka-addr",
+        type=str,
+        help="The kafka address for testdrive to use.",
+    )
+
+    parser.add_argument(
+        "--schema-registry-url",
+        type=str,
+        help="The schema registry url for testdrive to use.",
+    )
+
+    parser.add_argument(
+        "--root-scenario",
+        "--scenario",
+        metavar="SCENARIO",
+        type=str,
+        default="Scenario",
+        help="Scenario or scenario family to benchmark. See scenarios.py for available scenarios.",
+    )
+
+    parser.add_argument(
+        "--scale",
+        metavar="+N | -N | N",
+        type=str,
+        default=None,
+        help="Absolute or relative scale to apply.",
+    )
+
+    parser.add_argument(
+        "--max-measurements",
+        metavar="N",
+        type=int,
+        default=99,
+        help="Limit the number of measurements to N.",
+    )
+
+    parser.add_argument(
+        "--max-retries",
+        metavar="N",
+        type=int,
+        default=3,
+        help="Retry any potential performance regressions up to N times.",
+    )
+
+    args = parser.parse_args()
+
+    assert args.mzcloud_url
+    assert args.kafka_addr
+    assert args.schema_registry_url
+
+    print(
+        f"""
+mzcloud url: {args.mzcloud_url}
+kafka addr: {args.kafka_addr}
+schema registry url: {args.schema_registry_url}
+
+root_scenario: {args.root_scenario}"""
+    )
+
+    # Build the list of scenarios to run
+    root_scenario = globals()[args.root_scenario]
+    initial_scenarios = {}
+
+    if root_scenario.__subclasses__():
+        for scenario in root_scenario.__subclasses__():
+            has_children = False
+            for s in scenario.__subclasses__():
+                has_children = True
+                initial_scenarios[s] = 1
+
+            if not has_children:
+                initial_scenarios[scenario] = 1
+    else:
+        initial_scenarios[root_scenario] = 1
+
+    scenarios = initial_scenarios.copy()
+
+    for cycle in range(0, args.max_retries):
+        print(
+            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+        )
+
+        report = SingleReport()
+
+        for scenario in list(scenarios.keys()):
+            name = scenario.__name__
+            print(f"--- Now benchmarking {name} ...")
+            comparator = SuccessComparator(name, threshold=0)
+            common_seed = round(time.time())
+            executor = MzCloud(
+                composition=c,
+                mzcloud_url=args.mzcloud_url,
+                seed=common_seed,
+                kafka_addr=args.kafka_addr,
+                schema_registry_url=args.schema_registry_url,
+            )
+            executor.Reset()
+            mz_id = 0
+
+            benchmark = Benchmark(
+                mz_id=mz_id,
+                scenario=scenario,
+                scale=args.scale,
+                executor=executor,
+                filter=make_filter(args),
+                termination_conditions=make_termination_conditions(args),
+                aggregation=make_aggregation(),
+            )
+
+            outcome, iterations = benchmark.run()
+            comparator.append(outcome)
+            report.append(comparator)
+
+            print(f"+++ Benchmark Report for cycle {cycle+1}:")
+            report.dump()

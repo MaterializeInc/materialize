@@ -7,18 +7,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ kafka-create-topic topic=remoted
+# Verify that the data ingested while `environmentd` was offline is present,
+# then try ingesting more data.
 
-$ kafka-ingest format=bytes topic=remoted
-whatever
+> SELECT * from remote1
+one  1
+> SELECT * from remote2
+one  1
 
-> CREATE MATERIALIZED SOURCE remoted
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-remoted-${testdrive.seed}'
-  FORMAT TEXT
-  REMOTE 'storaged:2100'
+$ kafka-ingest format=bytes topic=remote1
+two
+$ kafka-ingest format=bytes topic=remote2
+two
 
-> SELECT * from remoted
-text     mz_offset
-------------------
-whatever 1
+> SELECT * from remote1
+one   1
+two   2
+> SELECT * from remote2
+one  1
+two  2

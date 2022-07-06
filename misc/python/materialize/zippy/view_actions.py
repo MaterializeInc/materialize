@@ -22,8 +22,8 @@ WatermarkedObjects = List[Union[TableExists, SourceExists]]
 
 class CreateView(Action):
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, SourceExists}
+    def requires(self) -> List[Set[Type[Capability]]]:
+        return [{MzIsRunning, SourceExists}, {MzIsRunning, TableExists}]
 
     def __init__(self, capabilities: Capabilities) -> None:
         view_name = "view" + str(random.randint(1, 10))

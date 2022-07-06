@@ -276,19 +276,16 @@ impl<B: Blob + Send + Sync + 'static> Maintainer<B> {
                 builder.push(((key, val), u64::encode(time), i64::encode(diff)));
 
                 // Move data from builder into storage as we fill up ColumnarRecords.
-                if let Some(filled) = builder.take_filled() {
-                    for part in filled {
-                        debug_assert!(part.len() > 0);
-                        let (key, part_size_bytes) =
-                            handle.block_on(Self::write_trace_batch_part(
-                                &blob,
-                                desc.clone(),
-                                part,
-                                u64::cast_from(keys.len()),
-                            ))?;
-                        keys.push(key);
-                        new_size_bytes += part_size_bytes;
-                    }
+                for part in builder.take_filled() {
+                    debug_assert!(part.len() > 0);
+                    let (key, part_size_bytes) = handle.block_on(Self::write_trace_batch_part(
+                        &blob,
+                        desc.clone(),
+                        part,
+                        u64::cast_from(keys.len()),
+                    ))?;
+                    keys.push(key);
+                    new_size_bytes += part_size_bytes;
                 }
             }
 
@@ -647,6 +644,7 @@ mod tests {
         };
 
         let test_cases = vec![
+            // "Normal" case
             CompactionTestCase {
                 b0: vec![vec![
                     (("k".as_bytes(), "v".as_bytes()), 0, 1),
@@ -683,6 +681,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // One of the inputs has multiple parts
             CompactionTestCase {
                 b0: vec![
                     vec![(("k".as_bytes(), "v".as_bytes()), 0, 1)],
@@ -719,6 +718,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // Both of the inputs have multiple parts
             CompactionTestCase {
                 b0: vec![
                     vec![(("k".as_bytes(), "v".as_bytes()), 0, 1)],
@@ -755,6 +755,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // One of the inputs has empty parts
             CompactionTestCase {
                 b0: vec![
                     vec![],
@@ -794,6 +795,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // One of the inputs has only empty parts
             CompactionTestCase {
                 b0: vec![vec![], vec![], vec![]],
                 b0_desc: desc_from(0, 1, 0),
@@ -828,6 +830,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // One of the inputs has no parts
             CompactionTestCase {
                 b0: vec![],
                 b0_desc: desc_from(0, 1, 0),

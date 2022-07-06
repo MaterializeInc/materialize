@@ -17,19 +17,19 @@ use crate::ast::{
     TransactionAccessMode, TransactionMode,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::{Plan, StartTransactionPlan};
+use crate::plan::{Plan, PlanError, StartTransactionPlan};
 
 pub fn describe_start_transaction(
     _: &StatementContext,
     _: StartTransactionStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_start_transaction(
     _: &StatementContext,
     StartTransactionStatement { modes }: StartTransactionStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     let access = verify_transaction_modes(modes)?;
     Ok(Plan::StartTransaction(StartTransactionPlan { access }))
 }
@@ -37,20 +37,20 @@ pub fn plan_start_transaction(
 pub fn describe_set_transaction(
     _: &StatementContext,
     _: SetTransactionStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     bail_unsupported!("SET TRANSACTION")
 }
 
 pub fn plan_set_transaction(
     _: &StatementContext,
     _: SetTransactionStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     bail_unsupported!("SET TRANSACTION")
 }
 
 fn verify_transaction_modes(
     modes: Vec<TransactionMode>,
-) -> Result<Option<TransactionAccessMode>, anyhow::Error> {
+) -> Result<Option<TransactionAccessMode>, PlanError> {
     let mut access = None;
     for mode in modes {
         match mode {
@@ -68,14 +68,14 @@ fn verify_transaction_modes(
 pub fn describe_rollback(
     _: &StatementContext,
     _: RollbackStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_rollback(
     _: &StatementContext,
     RollbackStatement { chain }: RollbackStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     verify_chain(chain)?;
     Ok(Plan::AbortTransaction)
 }
@@ -83,19 +83,19 @@ pub fn plan_rollback(
 pub fn describe_commit(
     _: &StatementContext,
     _: CommitStatement,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_commit(
     _: &StatementContext,
     CommitStatement { chain }: CommitStatement,
-) -> Result<Plan, anyhow::Error> {
+) -> Result<Plan, PlanError> {
     verify_chain(chain)?;
     Ok(Plan::CommitTransaction)
 }
 
-fn verify_chain(chain: bool) -> Result<(), anyhow::Error> {
+fn verify_chain(chain: bool) -> Result<(), PlanError> {
     if chain {
         bail_unsupported!("CHAIN");
     }

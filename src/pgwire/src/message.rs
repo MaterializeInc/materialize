@@ -376,10 +376,12 @@ impl ErrorResponse {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
             }
             AdapterError::Eval(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
             AdapterError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidLogDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,

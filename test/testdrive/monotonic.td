@@ -58,3 +58,389 @@ a min max
 ---
 1 2 1048577
 2 3 5
+
+# Propagating monotonicity analysis through materialized views
+# TODO: After https://github.com/MaterializeInc/materialize/pull/13238 is merged, modify these tests to dig into
+# the plans with `jq` and just check for `MonotonicTopK` being present.
+
+> CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data
+
+> CREATE VIEW v2 AS SELECT * FROM m1 ORDER BY b LIMIT 3
+
+$ set-regex match=.User.:\s\d+ replacement=UID
+
+? EXPLAIN PHYSICAL PLAN FOR VIEW v2
+{
+  "TopK": {
+    "input": {
+      "ArrangeBy": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                UID
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  {
+                    "0": 0
+                  },
+                  []
+                ]
+              ]
+            },
+            "plan": "PassArrangements"
+          }
+        },
+        "forms": {
+          "raw": true,
+          "arranged": []
+        },
+        "input_key": [
+          {
+            "Column": 0
+          }
+        ],
+        "input_mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0
+          ],
+          "input_arity": 1
+        }
+      }
+    },
+    "top_k_plan": {
+      "MonotonicTopK": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 0,
+            "desc": false,
+            "nulls_last": true
+          }
+        ],
+        "limit": 3,
+        "arity": 1
+      }
+    }
+  }
+}
+
+
+> CREATE MATERIALIZED SOURCE non_dbz_data_materialized
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  ENVELOPE NONE
+
+# Propagating monotonicity analysis from a materialized source
+
+> CREATE VIEW v3 AS SELECT * FROM non_dbz_data_materialized ORDER BY b LIMIT 3
+
+? EXPLAIN PHYSICAL PLAN FOR VIEW v3
+{
+  "TopK": {
+    "input": {
+      "ArrangeBy": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                UID
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": 0
+                    },
+                    {
+                      "Column": 1
+                    }
+                  ],
+                  {
+                    "0": 0,
+                    "1": 1
+                  },
+                  []
+                ]
+              ]
+            },
+            "plan": "PassArrangements"
+          }
+        },
+        "forms": {
+          "raw": true,
+          "arranged": []
+        },
+        "input_key": [
+          {
+            "Column": 0
+          },
+          {
+            "Column": 1
+          }
+        ],
+        "input_mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0,
+            1
+          ],
+          "input_arity": 2
+        }
+      }
+    },
+    "top_k_plan": {
+      "MonotonicTopK": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false,
+            "nulls_last": true
+          }
+        ],
+        "limit": 3,
+        "arity": 2
+      }
+    }
+  }
+}
+
+
+> CREATE MATERIALIZED VIEW m4 AS SELECT b+1 as c FROM m1
+
+# Propagating monotonicity analysis through 2 materialized views (m1 and m4)
+
+> CREATE VIEW v5 AS SELECT * from m4 ORDER BY c LIMIT 2
+
+? EXPLAIN PHYSICAL PLAN FOR VIEW v5
+{
+  "TopK": {
+    "input": {
+      "ArrangeBy": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                UID
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  {
+                    "0": 0
+                  },
+                  []
+                ]
+              ]
+            },
+            "plan": "PassArrangements"
+          }
+        },
+        "forms": {
+          "raw": true,
+          "arranged": []
+        },
+        "input_key": [
+          {
+            "Column": 0
+          }
+        ],
+        "input_mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0
+          ],
+          "input_arity": 1
+        }
+      }
+    },
+    "top_k_plan": {
+      "MonotonicTopK": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 0,
+            "desc": false,
+            "nulls_last": true
+          }
+        ],
+        "limit": 2,
+        "arity": 1
+      }
+    }
+  }
+}
+
+> CREATE MATERIALIZED VIEW m6 AS SELECT c FROM v5
+
+# Non-monotonic materialized view -- v7 can't use a monotonic TopK plan, because m6 and v5 are not monotonic
+
+> CREATE VIEW v7 AS SELECT * from m6 ORDER BY c LIMIT 2
+
+? EXPLAIN PHYSICAL PLAN FOR VIEW v7
+{
+  "TopK": {
+    "input": {
+      "ArrangeBy": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                UID
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  {
+                    "0": 0
+                  },
+                  []
+                ]
+              ]
+            },
+            "plan": "PassArrangements"
+          }
+        },
+        "forms": {
+          "raw": true,
+          "arranged": []
+        },
+        "input_key": [
+          {
+            "Column": 0
+          }
+        ],
+        "input_mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0
+          ],
+          "input_arity": 1
+        }
+      }
+    },
+    "top_k_plan": {
+      "Basic": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 0,
+            "desc": false,
+            "nulls_last": true
+          }
+        ],
+        "limit": 2,
+        "offset": 0,
+        "arity": 1
+      }
+    }
+  }
+}
+
+
+> CREATE MATERIALIZED VIEW m8 AS SELECT * from (SELECT * FROM m1 UNION ALL SELECT * FROM m1)
+
+> CREATE MATERIALIZED VIEW m9 AS SELECT * from (SELECT * FROM m1 UNION ALL SELECT * FROM m8)
+
+> CREATE VIEW v10 as SELECT b FROM m9 ORDER BY b LIMIT 2;
+
+# Propagating monotonicity analysis in a complex situation: (m1, m1) -> m8; (m1, m8) -> m9
+
+? EXPLAIN PHYSICAL PLAN FOR VIEW v10;
+{
+  "TopK": {
+    "input": {
+      "ArrangeBy": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                UID
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  {
+                    "0": 0
+                  },
+                  []
+                ]
+              ]
+            },
+            "plan": "PassArrangements"
+          }
+        },
+        "forms": {
+          "raw": true,
+          "arranged": []
+        },
+        "input_key": [
+          {
+            "Column": 0
+          }
+        ],
+        "input_mfp": {
+          "expressions": [],
+          "predicates": [],
+          "projection": [
+            0
+          ],
+          "input_arity": 1
+        }
+      }
+    },
+    "top_k_plan": {
+      "MonotonicTopK": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 0,
+            "desc": false,
+            "nulls_last": true
+          }
+        ],
+        "limit": 2,
+        "arity": 1
+      }
+    }
+  }
+}

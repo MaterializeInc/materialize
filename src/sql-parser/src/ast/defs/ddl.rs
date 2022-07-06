@@ -318,8 +318,6 @@ pub enum CreateSourceFormat<T: AstInfo> {
     /// `CREATE SOURCE .. FORMAT`
     Bare(Format<T>),
     /// `CREATE SOURCE .. KEY FORMAT .. VALUE FORMAT`
-    ///
-    /// Also the destination for the legacy `ENVELOPE UPSERT FORMAT ...`
     KeyValue {
         key: Format<T>,
         value: Format<T>,
@@ -559,7 +557,6 @@ pub enum KafkaConnectionOptionName {
     Broker,
     Brokers,
     SslKey,
-    SslKeyPassword,
     SslCertificate,
     SslCertificateAuthority,
     SaslMechanisms,
@@ -573,7 +570,6 @@ impl AstDisplay for KafkaConnectionOptionName {
             KafkaConnectionOptionName::Broker => "BROKER",
             KafkaConnectionOptionName::Brokers => "BROKERS",
             KafkaConnectionOptionName::SslKey => "SSL KEY",
-            KafkaConnectionOptionName::SslKeyPassword => "SSL KEY PASSWORD",
             KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
             KafkaConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",

@@ -9,7 +9,6 @@
 
 //! Structured name types for SQL objects.
 
-use anyhow::Error;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
@@ -616,7 +615,7 @@ impl fmt::Display for SchemaId {
 }
 
 impl FromStr for SchemaId {
-    type Err = Error;
+    type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let val: u64 = s.parse()?;
@@ -643,7 +642,7 @@ impl fmt::Display for DatabaseId {
 }
 
 impl FromStr for DatabaseId {
-    type Err = Error;
+    type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let val: u64 = s.parse()?;
@@ -769,10 +768,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             let cte_name = normalize::ident(cte.alias.name.clone());
 
             if used_names.contains(&cte_name) {
-                self.status = Err(PlanError::Unstructured(format!(
+                self.status = Err(sql_err!(
                     "WITH query name \"{}\" specified more than once",
                     cte_name
-                )));
+                ));
             }
             used_names.insert(cte_name.clone());
 
@@ -879,8 +878,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     Some(item) => item,
                     None => {
                         if self.status.is_ok() {
-                            self.status =
-                                Err(PlanError::Unstructured(format!("invalid id {}", &gid)));
+                            self.status = Err(sql_err!("invalid id {}", &gid));
                         }
                         return ResolvedObjectName::Error;
                     }
@@ -891,7 +889,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     Ok(full_name) => full_name,
                     Err(e) => {
                         if self.status.is_ok() {
-                            self.status = Err(e.into());
+                            self.status = Err(e);
                         }
                         return ResolvedObjectName::Error;
                     }

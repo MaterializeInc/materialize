@@ -212,26 +212,6 @@ async fn purify_source_format(
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 
-    // For backwards compatibility, using ENVELOPE UPSERT with a bare FORMAT
-    // BYTES or FORMAT TEXT uses the specified format for both the key and the
-    // value.
-    //
-    // TODO(bwm): We should either make these semantics apply everywhere, or
-    // deprecate this.
-    match (&connection, &envelope, &*format) {
-        (
-            CreateSourceConnection::Kafka { .. },
-            Some(Envelope::Upsert),
-            CreateSourceFormat::Bare(f @ Format::Bytes | f @ Format::Text),
-        ) => {
-            *format = CreateSourceFormat::KeyValue {
-                key: f.clone(),
-                value: f.clone(),
-            };
-        }
-        _ => (),
-    }
-
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
