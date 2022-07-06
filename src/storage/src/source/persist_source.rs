@@ -45,6 +45,7 @@ use crate::source::{SourceStatus, YIELD_INTERVAL};
 // upper frontier from all shards.
 pub fn persist_source<G>(
     scope: &G,
+    name: String,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
     as_of: Antichain<Timestamp>,
@@ -86,10 +87,17 @@ where
             .await
             .expect("could not open persist shard");
 
+        let as_of_1 = as_of.clone();
         let mut snapshot_iter = read
             .snapshot(as_of.clone())
             .await
-            .expect("cannot serve requested as_of");
+            .map_err(|e| {
+                format!(
+                    "persist_source({}) cannot snapshot at requested as_of ({:?}): {:?}",
+                    name, as_of_1, e
+                )
+            })
+            .unwrap();
 
         // First, yield all the updates from the snapshot.
         while let Some(next) = snapshot_iter.next().await {
@@ -98,10 +106,17 @@ where
 
         // Then, listen continously and yield any new updates. This loop is expected to never
         // finish.
+        let as_of_1 = as_of.clone();
         let mut listen = read
             .listen(as_of)
             .await
-            .expect("cannot serve requested as_of");
+            .map_err(|e| {
+                format!(
+                    "persist_source({}) cannot listen from requested as_of ({:?}): {:?}",
+                    name, as_of_1, e
+                )
+            })
+            .unwrap();
 
         loop {
             for event in listen.next().await {

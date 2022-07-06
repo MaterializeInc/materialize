@@ -134,7 +134,7 @@ where
 
     let source_name = format!("{}-{}", connection.name(), id);
     let base_source_config = RawSourceCreationConfig {
-        name: source_name,
+        name: source_name.clone(),
         upstream_name: connection.upstream_name().map(ToOwned::to_owned),
         id,
         scope,
@@ -323,6 +323,7 @@ where
                             let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                 persist_source::persist_source(
                                     scope,
+                                    format!("debezium_tx-{}", source_name),
                                     persist_clients,
                                     tx_storage_metadata,
                                     as_of,
