@@ -16,22 +16,22 @@ Representations:
 * [`AST`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan.rs) — a parsed version of a SQL query.
 * [`HIR`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/expr.rs) — high-level intermediate representation.
 * [`MIR`](https://github.com/MaterializeInc/materialize/blob/main/src/expr/src/relation/mod.rs) — mid-level intermediate representation.
-* [`LIR`](https://github.com/MaterializeInc/materialize/blob/main/src/dataflow-types/src/plan/mod.rs) — low-level intermediate representation.
+* [`LIR`](https://github.com/MaterializeInc/materialize/blob/main/src/compute-client/src/plan/mod.rs) — low-level intermediate representation.
 * `TDO` — target language (timely & differential operators).
 
 Transformations in the compile-time lifecycle of a SQL statement.
 
 * [`SQL ⇒ AST`](https://github.com/materializeinc/materialize/blob/main/src/sql-parser/src/parser.rs#L55).
     * Parsing the SQL query.
-* [`AST ⇒ AST`](https://github.com/MaterializeInc/materialize/blob/main/src/coord/src/coord.rs#L1876)
-    * [Resolving names against the catalog.](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/names.rs#L1009-L1021)
+* [`AST ⇒ AST`](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/coord.rs#L1876)
+    * [Resolving names against the catalog.](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/names.rs#L1035-L1053)
         * [`CatalogItemType`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/catalog.rs#L336)
             lists the kinds of objects that can be resolved against the catalog.
 * [`AST ⇒ HIR`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/query.rs#L90-L129).
     * [Resolving column references, column aliases, and table aliases](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/scope.rs)
     * If the SQL query is a one-off, the outermost `TopK` is converted to a
       RowSetFinishing at this point.
-    * `EXPLAIN RAW` returns the result of transformations up to this point.
+    * `EXPLAIN RAW PLAN` returns the result of transformations up to this point.
 * [`HIR ⇒ HIR`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/lowering.rs#L149-L150)
     * Predecorrelation rewrites:
         * [Split out subquery conditions out as a separate predicate.](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/transform_expr.rs#L54)
@@ -43,13 +43,13 @@ Transformations in the compile-time lifecycle of a SQL statement.
         * Outer joins are decomposed into multiple inner joins ([see README.md](https://github.com/aalexandrov/mzt-repos/blob/main/simplify_outer_joins/README.md)).
         * Machinery for introducing defaults in empty global aggregates.
         * Machinery for introducing errors for `SELECT` subqueries with more than one return value.
-    * `EXPLAIN DECORRELATED` returns the result of transformations up to this point.
+    * `EXPLAIN DECORRELATED PLAN` returns the result of transformations up to this point.
 * [`MIR ⇒ MIR`](https://github.com/MaterializeInc/materialize/blob/main/src/transform).
     * [If the query is a view
-      definition](https://github.com/MaterializeInc/materialize/blob/main/src/coord/src/catalog.rs#L3325),
+      definition](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/catalog.rs#L3325),
       run per-view logical optimizations against the SQL query. The catalog
       stores the result of transformations up to this point.
-    * [Construct a dataflow for the query](https://github.com/MaterializeInc/materialize/blob/main/src/coord/src/coord/dataflow_builder.rs):
+    * [Construct a dataflow for the query](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/coord/dataflow_builder.rs):
         * If the query depends on not-materialized views, the definitions of the
           not-materialized views get inlined.
         * For each materialized view that a query depends on, import all of its
@@ -66,13 +66,13 @@ Transformations in the compile-time lifecycle of a SQL statement.
             * Theoretically supports producing more than one index/sink in the same dataflow.
         * [Per-view logical](https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/lib.rs#L281-L337) (second round).
         * [Per-view physical](https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/lib.rs#L345-L367).
-    * `EXPLAIN OPTIMIZED` returns the result of transformations up to this point.
-* [`MIR ⇒ LIR`](https://github.com/MaterializeInc/materialize/blob/main/src/dataflow-types/src/plan/mod.rs#L882-L897).
+    * `EXPLAIN OPTIMIZED PLAN` returns the result of transformations up to this point.
+* [`MIR ⇒ LIR`](https://github.com/MaterializeInc/materialize/blob/main/src/compute-client/src/plan/mod.rs#L882-L897).
     * Decisions are made regarding rendering.
-        * All aggregations are created equal in MIR, but from the rendering perspective, [aggregations are evaluated differently according to what data needs to be kept to recalculate the aggregation after receiving a diff](https://github.com/MaterializeInc/materialize/blob/main/src/dataflow-types/src/plan/reduce.rs). A pictorial version can be found [here](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/arrangements.md).
-        * [Joins are broken down into multiple stages](https://github.com/MaterializeInc/materialize/blob/main/src/dataflow-types/src/plan/join/linear_join.rs), and filters + projects run between each stage to shrink the intermediate result.
+        * All aggregations are created equal in MIR, but from the rendering perspective, [aggregations are evaluated differently according to what data needs to be kept to recalculate the aggregation after receiving a diff](https://github.com/MaterializeInc/materialize/blob/main/src/compute-client/src/plan/reduce.rs). A pictorial version can be found [here](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/arrangements.md).
+        * [Joins are broken down into multiple stages](https://github.com/MaterializeInc/materialize/blob/main/src/compute-client/src/plan/join/linear_join.rs), and filters + projects run between each stage to shrink the intermediate result.
     * RelationTypes (column types + unique keys) are discarded since we do no key or type of validation at render time.
-    * `EXPLAIN PHYSICAL` returns the result of transformations up to this point.
+    * `EXPLAIN PHYSICAL PLAN` returns the result of transformations up to this point.
 * [`LIR ⇒ TDO`](https://github.com/MaterializeInc/materialize/blob/main/src/compute/src/render/mod.rs).
 
 Currently, the optimization team is mostly concerned with the `HIR ⇒ MIR` and `MIR ⇒ MIR` stages.
