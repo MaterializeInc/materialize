@@ -15,12 +15,14 @@
 //! communicating with the underlying client, it will reconnect the client and
 //! replay the command stream.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use anyhow::anyhow;
+use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
-use timely::progress::Timestamp;
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::{pin, select};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -43,7 +45,7 @@ pub struct RehydratingStorageClient<T> {
 
 impl<T> RehydratingStorageClient<T>
 where
-    T: Timestamp,
+    T: Timestamp + Lattice,
 {
     /// Creates a `RehydratingStorageClient` that wraps a reconnectable
     /// [`StorageClient`].
@@ -57,6 +59,7 @@ where
             command_rx,
             response_tx,
             ingestions: BTreeMap::new(),
+            uppers: HashMap::new(),
             client,
         };
         mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
@@ -87,6 +90,8 @@ struct RehydrationTask<C, T> {
     response_tx: UnboundedSender<StorageResponse<T>>,
     /// The ingestions that have been observed.
     ingestions: BTreeMap<GlobalId, IngestSourceCommand<T>>,
+    /// The upper frontier information received.
+    uppers: HashMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>,
     /// The underlying client that communicates with the storage host.
     client: C,
 }
@@ -105,7 +110,7 @@ enum RehydrationTaskState {
 impl<C, T> RehydrationTask<C, T>
 where
     C: StorageClient<T> + Reconnect + 'static,
-    T: Timestamp,
+    T: Timestamp + Lattice,
 {
     async fn run(&mut self) {
         let mut state = RehydrationTaskState::Rehydrate;
@@ -119,6 +124,11 @@ where
     }
 
     async fn step_rehydrate(&mut self) -> RehydrationTaskState {
+        // Zero out frontiers.
+        for (_id, (_, frontiers)) in self.uppers.iter_mut() {
+            *frontiers = MutableAntichain::new_bottom(T::minimum());
+        }
+
         // Reconnect to the storage host.
         let retry = Retry::default()
             .clamp_backoff(Duration::from_secs(32))
@@ -163,6 +173,7 @@ where
                     }
                     Some(response) => response,
                 };
+
                 self.send_response(response).await
             }
         }
@@ -181,8 +192,12 @@ where
     ) -> RehydrationTaskState {
         match response {
             Ok(response) => {
-                if self.response_tx.send(response).is_err() {
-                    RehydrationTaskState::Done
+                if let Some(response) = self.absorb_response(response) {
+                    if self.response_tx.send(response).is_err() {
+                        RehydrationTaskState::Done
+                    } else {
+                        RehydrationTaskState::Pump
+                    }
                 } else {
                     RehydrationTaskState::Pump
                 }
@@ -199,15 +214,60 @@ where
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
                     self.ingestions.insert(ingestion.id, ingestion.clone());
+                    // Initialize the uppers we are tracking
+                    self.uppers.insert(
+                        ingestion.id,
+                        (
+                            Antichain::from_elem(T::minimum()),
+                            MutableAntichain::new_bottom(T::minimum()),
+                        ),
+                    );
                 }
             }
             StorageCommand::AllowCompaction(frontiers) => {
                 for (id, frontier) in frontiers {
                     if frontier.is_empty() {
                         self.ingestions.remove(id);
+                        self.uppers.remove(id);
                     }
                 }
             }
+        }
+    }
+
+    fn absorb_response(&mut self, response: StorageResponse<T>) -> Option<StorageResponse<T>> {
+        match response {
+            StorageResponse::FrontierUppers(mut list) => {
+                for (id, changes) in list.iter_mut() {
+                    if let Some((reported, tracked)) = self.uppers.get_mut(id) {
+                        // Apply changes to `tracked` frontier.
+                        tracked.update_iter(changes.drain());
+                        // We can swap `reported` into `changes`, negated, and then use that to repopulate `reported`.
+                        changes.extend(reported.iter().map(|t| (t.clone(), -1)));
+                        reported.clear();
+                        for (time1, _neg_one) in changes.iter() {
+                            for time2 in tracked.frontier().iter() {
+                                reported.insert(time1.join(time2));
+                            }
+                        }
+                        changes.extend(reported.iter().map(|t| (t.clone(), 1)));
+                        changes.compact();
+                    } else {
+                        // We should have initialized the uppers when we first absorbed
+                        // a command, if storaged has restarted since then.
+                        //
+                        // If the controller has restarted since then, we should have
+                        // initialized them in the initial `step_rehydrate`.
+                        panic!("RehydratingStorageClient received FrontierUppers response for absent identifier {id}");
+                    }
+                }
+                if !list.is_empty() {
+                    Some(StorageResponse::FrontierUppers(list))
+                } else {
+                    None
+                }
+            }
+            other => Some(other),
         }
     }
 }

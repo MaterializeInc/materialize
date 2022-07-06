@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 use tracing::info;
 
@@ -107,7 +108,7 @@ impl<T> StorageHosts<T> {
         host_addr: Option<StorageHostAddr>,
     ) -> Result<&mut RehydratingStorageClient<T>, anyhow::Error>
     where
-        T: Timestamp,
+        T: Timestamp + Lattice,
         StorageCommand<T>: RustType<ProtoStorageCommand>,
         StorageResponse<T>: RustType<ProtoStorageResponse>,
     {
@@ -123,8 +124,7 @@ impl<T> StorageHosts<T> {
         info!("assigned storage object {id} to storage host {host_addr}");
         match self.hosts.entry(host_addr.clone()) {
             Entry::Vacant(entry) => {
-                let client =
-                    RehydratingStorageClient::new(StorageGrpcClient::new(host_addr.clone()));
+                let client = RehydratingStorageClient::new(StorageGrpcClient::new(host_addr));
                 let host = entry.insert(StorageHost {
                     client,
                     objects: HashSet::from_iter([id]),
