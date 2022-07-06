@@ -3562,7 +3562,7 @@ pub fn plan_alter_object_rename(
             let full_name = scx.catalog.resolve_full_name(entry.name());
             let item_type = entry.item_type();
 
-            // Return a more helpful error on `DROP VIEW <recorded-view>`.
+            // Return a more helpful error on `ALTER VIEW <recorded-view>`.
             if object_type == ObjectType::View && item_type == CatalogItemType::RecordedView {
                 return Err(PlanError::AlterViewOnRecordedView(full_name.to_string()));
             } else if object_type != item_type {
