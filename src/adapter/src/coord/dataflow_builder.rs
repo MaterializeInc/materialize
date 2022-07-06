@@ -20,15 +20,17 @@ use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
 use mz_expr::visit::Visit;
 use mz_expr::{
-    CollectionPlan, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
-    UnmaterializableFunc,
+    CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    UnmaterializableFunc, RECURSION_LIMIT,
 };
-use mz_ore::stack::maybe_grow;
+use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
 use mz_storage::client::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
+use std::collections::{HashMap, HashSet};
+use tracing::warn;
 
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};
@@ -43,6 +45,7 @@ pub struct DataflowBuilder<'a, T> {
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
     pub compute: ComputeController<'a, T>,
+    recursion_guard: RecursionGuard,
 }
 
 /// The styles in which an expression can be prepared for use in a dataflow.
@@ -70,6 +73,7 @@ impl<S: Append> Coordinator<S> {
         DataflowBuilder {
             catalog: self.catalog.state(),
             compute,
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
 }
@@ -84,6 +88,7 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         DataflowBuilder {
             catalog: self.catalog,
             compute,
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
 }
@@ -130,7 +135,17 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                                 .resolve_full_name(entry.name(), entry.conn_id()),
                         )
                         .expect("indexes can only be built on items with descs");
-                    dataflow.import_index(index_id, index_desc, desc.typ().clone());
+                    let monotonic = self
+                        .monotonic_source_or_view(
+                            &entry.id(),
+                            &mut HashMap::<GlobalId, bool>::new(),
+                        )
+                        .unwrap_or_else(|e| {
+                            warn!("Recursion limit reached while inspecting view {} for monotonicity: {}",
+                                entry.id(), e);
+                            false // Let's continue and treat it as non-monotonic
+                        });
+                    dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
                 }
             } else {
                 drop(valid_indexes);
@@ -143,7 +158,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         dataflow.import_source(
                             *id,
                             source.desc.typ().clone(),
-                            source.source_desc.append_only(),
+                            source.source_desc.monotonic(),
                         );
                     }
                     CatalogItem::View(view) => {
@@ -300,6 +315,75 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
 
         Ok(dataflow)
+    }
+
+    /// This recursively traverses the expressions of all (materialized) views involved in the expr
+    /// of a (materialized) view. If this becomes a performance problem, we could add the
+    /// monotonicity information of views into the catalog instead.
+    fn monotonic_source_or_view(
+        &self,
+        gid: &GlobalId,
+        memo: &mut HashMap<GlobalId, bool>,
+    ) -> Result<bool, RecursionLimitError> {
+        self.checked_recur(|_| {
+            match self.catalog.get_entry(gid).item() {
+                CatalogItem::Source(source) => Ok(source.source_desc.monotonic()),
+                CatalogItem::View(view) => {
+                    let mut view_expr = view.optimized_expr.clone();
+
+                    // Inspect global ids that occur in the Gets in view_expr, and collect the ids
+                    // of monotonic views and sources (but not indexes).
+                    let mut monotonic_ids = HashSet::<GlobalId>::new();
+                    let recursion_result: Result<(), RecursionLimitError> =
+                        view_expr.as_inner_mut().try_visit_post(&mut |e| match e {
+                            MirRelationExpr::Get {
+                                id: Id::Global(got_gid),
+                                ..
+                            } => {
+                                // A view might be reached multiple times. If we already computed
+                                // the monotonicity of the gid, then use that. If not, then compute
+                                // it now.
+                                if memo.contains_key(got_gid) {
+                                    if *memo.get(got_gid).unwrap() {
+                                        monotonic_ids.insert(*got_gid);
+                                    }
+                                } else {
+                                    let monotonic = self.monotonic_source_or_view(
+                                        got_gid,
+                                        memo,
+                                    )?;
+                                    memo.insert(got_gid.clone(), monotonic);
+                                    if monotonic {
+                                        monotonic_ids.insert(*got_gid);
+                                    }
+                                }
+                                Ok(())
+                            }
+                            _ => Ok(()),
+                        });
+                    if recursion_result.is_err() {
+                        // We still might have got some of the IDs, so just log and continue. Now
+                        // the subsequent monotonicity analysis can have false negatives.
+                        warn!("Recursion limit reached while inspecting view {} for monotonicity (too deep view expression tree): {}",
+                            gid, recursion_result.unwrap_err());
+                    }
+
+                    // Use `monotonic_ids` as a starting point for propagating monotonicity info.
+                    mz_transform::monotonic::MonotonicFlag::default().apply(
+                        view_expr.as_inner_mut(),
+                        &monotonic_ids,
+                        &mut HashSet::new(),
+                    )
+                }
+                _ => Ok(false),
+            }
+        })
+    }
+}
+
+impl<'a, T> CheckedRecursion for DataflowBuilder<'a, T> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
     }
 }
 

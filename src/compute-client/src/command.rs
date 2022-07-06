@@ -34,7 +34,9 @@ use mz_storage::client::sinks::SinkDesc;
 use mz_storage::client::transforms::LinearOperator;
 use mz_storage::client::ProtoAllowCompaction;
 
-use crate::command::proto_dataflow_description::{ProtoIndex, ProtoSinkExport, ProtoSourceImport};
+use crate::command::proto_dataflow_description::{
+    ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
+};
 use crate::logging::LoggingConfig;
 use crate::plan::Plan;
 
@@ -321,7 +323,8 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
     pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
     /// Indexes made available to the dataflow.
-    pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
+    /// (id of new index, description of index, relationtype of base source/view, monotonic)
+    pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType, bool)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order, as there may be
     /// dependencies of later objects on prior identifiers.
@@ -353,10 +356,21 @@ fn any_source_import(
 }
 
 proptest::prop_compose! {
-    fn any_dataflow_index()(
+    fn any_dataflow_index_import()(
         id in any::<GlobalId>(),
         index in any::<IndexDesc>(),
-        typ in any::<RelationType>()
+        typ in any::<RelationType>(),
+        monotonic in any::<bool>(),
+    ) -> (GlobalId, (IndexDesc, RelationType, bool)) {
+        (id, (index, typ, monotonic))
+    }
+}
+
+proptest::prop_compose! {
+    fn any_dataflow_index_export()(
+        id in any::<GlobalId>(),
+        index in any::<IndexDesc>(),
+        typ in any::<RelationType>(),
     ) -> (GlobalId, (IndexDesc, RelationType)) {
         (id, (index, typ))
     }
@@ -365,9 +379,9 @@ proptest::prop_compose! {
 proptest::prop_compose! {
     fn any_dataflow_description()(
         source_imports in proptest::collection::vec(any_source_import(), 1..3),
-        index_imports in proptest::collection::vec(any_dataflow_index(), 1..3),
+        index_imports in proptest::collection::vec(any_dataflow_index_import(), 1..3),
         objects_to_build in proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
-        index_exports in proptest::collection::vec(any_dataflow_index(), 1..3),
+        index_exports in proptest::collection::vec(any_dataflow_index_export(), 1..3),
         sink_descs in proptest::collection::vec(
             any::<(GlobalId, SinkDesc<CollectionMetadata, mz_repr::Timestamp>)>(),
             1..3,
@@ -425,8 +439,14 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// This method makes available an index previously exported as `id`, identified
     /// to the query by `description` (which names the view the index arranges, and
     /// the keys by which it is arranged).
-    pub fn import_index(&mut self, id: GlobalId, description: IndexDesc, typ: RelationType) {
-        self.index_imports.insert(id, (description, typ));
+    pub fn import_index(
+        &mut self,
+        id: GlobalId,
+        description: IndexDesc,
+        typ: RelationType,
+        monotonic: bool,
+    ) {
+        self.index_imports.insert(id, (description, typ, monotonic));
     }
 
     /// Imports a source and makes it available as `id`.
@@ -516,7 +536,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                 return source.typ.arity();
             }
         }
-        for (desc, typ) in self.index_imports.values() {
+        for (desc, typ, _monotonic) in self.index_imports.values() {
             if &desc.on_id == id {
                 return typ.arity();
             }
@@ -580,7 +600,7 @@ where
         // for the collection will be used, if one exists, so we have to report
         // the dependency on all of them.
         let mut found_index = false;
-        for (index_id, (desc, _typ)) in &self.index_imports {
+        for (index_id, (desc, _typ, _monotonic)) in &self.index_imports {
             if desc.on_id == collection_id {
                 // The collection is provided by an imported index. Report the
                 // dependency on the index.
@@ -693,11 +713,36 @@ impl ProtoMapEntry<GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)> for
     }
 }
 
-impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndex {
+impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType, bool)> for ProtoIndexImport {
+    fn from_rust<'a>(
+        (id, (index_desc, typ, monotonic)): (&'a GlobalId, &'a (IndexDesc, RelationType, bool)),
+    ) -> Self {
+        ProtoIndexImport {
+            id: Some(id.into_proto()),
+            index_desc: Some(index_desc.into_proto()),
+            typ: Some(typ.into_proto()),
+            monotonic: monotonic.into_proto(),
+        }
+    }
+
+    fn into_rust(self) -> Result<(GlobalId, (IndexDesc, RelationType, bool)), TryFromProtoError> {
+        Ok((
+            self.id.into_rust_if_some("ProtoIndex::id")?,
+            (
+                self.index_desc
+                    .into_rust_if_some("ProtoIndexImport::index_desc")?,
+                self.typ.into_rust_if_some("ProtoIndexImport::typ")?,
+                self.monotonic.into_rust()?,
+            ),
+        ))
+    }
+}
+
+impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndexExport {
     fn from_rust<'a>(
         (id, (index_desc, typ)): (&'a GlobalId, &'a (IndexDesc, RelationType)),
     ) -> Self {
-        ProtoIndex {
+        ProtoIndexExport {
             id: Some(id.into_proto()),
             index_desc: Some(index_desc.into_proto()),
             typ: Some(typ.into_proto()),
@@ -706,11 +751,11 @@ impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndex {
 
     fn into_rust(self) -> Result<(GlobalId, (IndexDesc, RelationType)), TryFromProtoError> {
         Ok((
-            self.id.into_rust_if_some("ProtoIndex::id")?,
+            self.id.into_rust_if_some("ProtoIndexExport::id")?,
             (
                 self.index_desc
-                    .into_rust_if_some("ProtoIndex::index_desc")?,
-                self.typ.into_rust_if_some("ProtoIndex::typ")?,
+                    .into_rust_if_some("ProtoIndexExport::index_desc")?,
+                self.typ.into_rust_if_some("ProtoIndexExport::typ")?,
             ),
         ))
     }
