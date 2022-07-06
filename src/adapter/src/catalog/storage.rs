@@ -650,9 +650,12 @@ impl<S: Append> Connection<S> {
             id: EPOCH_MILLIS_TIMESTAMP_KEY.to_string(),
         };
         let value = TimestampValue { ts: timestamp };
-        COLLECTION_TIMESTAMP
+        let old_value = COLLECTION_TIMESTAMP
             .upsert_key(&mut self.stash, &key, &value)
             .await?;
+        if let Some(old_value) = old_value {
+            assert!(value >= old_value);
+        }
         Ok(())
     }
 

@@ -677,7 +677,14 @@ where
     }
 
     /// Sets the given k,v pair.
-    pub async fn upsert_key<S>(&self, stash: &mut S, key: &K, value: &V) -> Result<(), StashError>
+    ///
+    /// Returns the old value if one existed.
+    pub async fn upsert_key<S>(
+        &self,
+        stash: &mut S,
+        key: &K,
+        value: &V,
+    ) -> Result<Option<V>, StashError>
     where
         S: Append,
     {
@@ -701,7 +708,7 @@ where
         }
         collection.append_to_batch(&mut batch, &key, &value, 1);
         stash.append(once(batch)).await?;
-        Ok(())
+        Ok(prev)
     }
 
     /// Sets the given key value pairs, removing existing entries match any key.
