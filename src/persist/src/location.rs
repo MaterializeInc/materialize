@@ -16,7 +16,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use mz_persist_types::Codec;
-use serde::{Deserialize, Serialize};
+use mz_proto::RustType;
 use tokio_postgres::error::SqlState;
 
 use crate::error::Error;
@@ -34,7 +34,7 @@ use crate::error::Error;
 /// Read-only requests are assigned the SeqNo of a write, indicating that all
 /// mutating requests up to and including that one are reflected in the read
 /// state.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SeqNo(pub u64);
 
 impl std::fmt::Display for SeqNo {
@@ -58,6 +58,16 @@ impl SeqNo {
     /// A minimum value suitable as a default.
     pub fn minimum() -> Self {
         SeqNo(0)
+    }
+}
+
+impl RustType<u64> for SeqNo {
+    fn into_proto(&self) -> u64 {
+        self.0
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(SeqNo(proto))
     }
 }
 

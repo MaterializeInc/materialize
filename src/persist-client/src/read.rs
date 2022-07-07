@@ -34,14 +34,14 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
-use crate::r#impl::encoding::DescriptionMeta;
+use crate::r#impl::encoding::SerdeSnapshotSplit;
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::Since;
 use crate::ShardId;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ReaderId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for ReaderId {
@@ -70,11 +70,16 @@ impl ReaderId {
 /// receive the relevant data.
 ///
 /// See [ReadHandle::snapshot] for details.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SnapshotSplit {
-    shard_id: ShardId,
-    as_of: Vec<[u8; 8]>,
-    batches: Vec<(String, DescriptionMeta)>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "T: Timestamp + Codec64",
+    deserialize = "T: Timestamp + Codec64"
+))]
+#[serde(into = "SerdeSnapshotSplit", from = "SerdeSnapshotSplit")]
+pub struct SnapshotSplit<T> {
+    pub(crate) shard_id: ShardId,
+    pub(crate) as_of: Antichain<T>,
+    pub(crate) batches: Vec<(String, Description<T>)>,
 }
 
 /// An iterator over one split of a "snapshot" (the contents of a shard as of
@@ -457,7 +462,7 @@ where
         &self,
         as_of: Antichain<T>,
         num_splits: NonZeroUsize,
-    ) -> Result<Vec<SnapshotSplit>, Since<T>> {
+    ) -> Result<Vec<SnapshotSplit<T>>, Since<T>> {
         trace!(
             "ReadHandle::snapshot as_of={:?} num_splits={:?}",
             as_of,
@@ -474,14 +479,14 @@ where
         let mut splits = (0..num_splits.get())
             .map(|_| SnapshotSplit {
                 shard_id: self.machine.shard_id(),
-                as_of: as_of.iter().map(|x| T::encode(x)).collect(),
+                as_of: as_of.clone(),
                 batches: Vec::new(),
             })
             .collect::<Vec<_>>();
         for (idx, (batch_key, desc)) in batches.into_iter().enumerate() {
             splits[idx % num_splits.get()]
                 .batches
-                .push((batch_key, (&desc).into()));
+                .push((batch_key, desc.clone()));
         }
         return Ok(splits);
     }
@@ -491,7 +496,7 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot_iter(
         &self,
-        split: SnapshotSplit,
+        split: SnapshotSplit<T>,
     ) -> Result<SnapshotIter<K, V, T, D>, InvalidUsage<T>> {
         trace!("ReadHandle::snapshot split={:?}", split);
         if split.shard_id != self.machine.shard_id() {
@@ -500,29 +505,14 @@ where
                 handle_shard: self.machine.shard_id(),
             });
         }
-        let shard_id = split.shard_id;
-
-        let batches = split
-            .batches
-            .into_iter()
-            .map(|(key, desc)| (key, (&desc).into()))
-            .collect();
-
         let iter = SnapshotIter {
             metrics: Arc::clone(&self.metrics),
-            shard_id,
-            as_of: Antichain::from(
-                split
-                    .as_of
-                    .iter()
-                    .map(|x| T::decode(*x))
-                    .collect::<Vec<_>>(),
-            ),
-            batches,
+            shard_id: split.shard_id,
+            as_of: split.as_of,
+            batches: split.batches,
             blob: Arc::clone(&self.blob),
             _phantom: PhantomData,
         };
-
         Ok(iter)
     }
 
@@ -768,6 +758,7 @@ mod tests {
     use mz_persist::location::Consensus;
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
+    use timely::ExchangeData;
 
     use crate::r#impl::metrics::Metrics;
     use crate::tests::all_ok;
@@ -824,5 +815,15 @@ mod tests {
             listen.read_until(&3).await,
             (all_ok(&data[1..], 1), Antichain::from_elem(3))
         );
+    }
+
+    #[test]
+    fn snapshot_split_exchange_data() {
+        // The whole point of SnapshotSplit is that it can be exchanged between
+        // timely workers, including over the network. Enforce then that it
+        // implements ExchangeData.
+        fn is_exchange_data<T: ExchangeData>() {}
+        is_exchange_data::<SnapshotSplit<u64>>();
+        is_exchange_data::<SnapshotSplit<i64>>();
     }
 }

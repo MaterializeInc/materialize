@@ -24,6 +24,11 @@ use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::ShardId;
 
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_persist_client.r#impl.state.rs"
+));
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadCapability<T> {
     pub seqno: SeqNo,

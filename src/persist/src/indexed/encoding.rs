@@ -28,8 +28,7 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::gen::persist::{
-    proto_batch_inline, ProtoBatchFormat, ProtoBatchInline, ProtoTraceBatchMeta,
-    ProtoTraceBatchPartInline, ProtoU64Antichain, ProtoU64Description,
+    ProtoBatchFormat, ProtoBatchPartInline, ProtoU64Antichain, ProtoU64Description,
 };
 use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
 use crate::indexed::columnar::ColumnarRecords;
@@ -276,27 +275,6 @@ where
     }
 }
 
-impl From<ProtoTraceBatchMeta> for TraceBatchMeta {
-    fn from(x: ProtoTraceBatchMeta) -> Self {
-        TraceBatchMeta {
-            format: x.format(),
-            keys: x.keys.clone(),
-            desc: x.desc.map_or_else(
-                || {
-                    Description::new(
-                        Antichain::from_elem(u64::minimum()),
-                        Antichain::from_elem(u64::minimum()),
-                        Antichain::from_elem(u64::minimum()),
-                    )
-                },
-                |x| x.into(),
-            ),
-            level: x.level,
-            size_bytes: x.size_bytes,
-        }
-    }
-}
-
 impl From<ProtoU64Description> for Description<u64> {
     fn from(x: ProtoU64Description) -> Self {
         Description::new(
@@ -313,18 +291,6 @@ impl From<ProtoU64Description> for Description<u64> {
 impl From<ProtoU64Antichain> for Antichain<u64> {
     fn from(x: ProtoU64Antichain) -> Self {
         Antichain::from(x.elements)
-    }
-}
-
-impl From<&TraceBatchMeta> for ProtoTraceBatchMeta {
-    fn from(x: &TraceBatchMeta) -> Self {
-        ProtoTraceBatchMeta {
-            keys: x.keys.clone(),
-            format: x.format.into(),
-            desc: Some((&x.desc).into()),
-            level: x.level,
-            size_bytes: x.size_bytes,
-        }
     }
 }
 
@@ -348,14 +314,10 @@ impl From<&Description<u64>> for ProtoU64Description {
 
 /// Encodes the inline metadata for a trace batch into a base64 string.
 pub fn encode_trace_inline_meta(batch: &BlobTraceBatchPart, format: ProtoBatchFormat) -> String {
-    let inline = ProtoBatchInline {
-        batch_type: Some(proto_batch_inline::BatchType::Trace(
-            ProtoTraceBatchPartInline {
-                format: format.into(),
-                desc: Some((&batch.desc).into()),
-                index: batch.index,
-            },
-        )),
+    let inline = ProtoBatchPartInline {
+        format: format.into(),
+        desc: Some((&batch.desc).into()),
+        index: batch.index,
     };
     let inline_encoded = inline.encode_to_vec();
     base64::encode(inline_encoded)
@@ -364,18 +326,13 @@ pub fn encode_trace_inline_meta(batch: &BlobTraceBatchPart, format: ProtoBatchFo
 /// Decodes the inline metadata for a trace batch from a base64 string.
 pub fn decode_trace_inline_meta(
     inline_base64: Option<&String>,
-) -> Result<(ProtoBatchFormat, ProtoTraceBatchPartInline), Error> {
+) -> Result<(ProtoBatchFormat, ProtoBatchPartInline), Error> {
     let inline_base64 = inline_base64.ok_or("missing batch metadata")?;
     let inline_encoded = base64::decode(&inline_base64).map_err(|err| err.to_string())?;
-    let inline = ProtoBatchInline::decode(&*inline_encoded).map_err(|err| err.to_string())?;
-    match inline.batch_type {
-        Some(proto_batch_inline::BatchType::Trace(x)) => {
-            let format = ProtoBatchFormat::from_i32(x.format)
-                .ok_or_else(|| Error::from(format!("unknown format: {}", x.format)))?;
-            Ok((format, x))
-        }
-        x => return Err(format!("incorrect batch type: {:?}", x).into()),
-    }
+    let inline = ProtoBatchPartInline::decode(&*inline_encoded).map_err(|err| err.to_string())?;
+    let format = ProtoBatchFormat::from_i32(inline.format)
+        .ok_or_else(|| Error::from(format!("unknown format: {}", inline.format)))?;
+    Ok((format, inline))
 }
 
 #[cfg(test)]

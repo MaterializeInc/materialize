@@ -7,10 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Generated protobuf code and companion impls.
-
-#![allow(missing_docs)]
-
-pub mod persist {
-    include!(concat!(env!("OUT_DIR"), "/mz_persist.gen.persist.rs"));
+fn main() {
+    prost_build::Config::new()
+        .compile_protos(&["persist-client/src/impl/state.proto"], &[".."])
+        .unwrap();
 }

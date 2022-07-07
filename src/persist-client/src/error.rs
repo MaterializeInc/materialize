@@ -109,12 +109,7 @@ pub enum InvalidUsage<T> {
         handle_shard: ShardId,
     },
     /// The requested codecs don't match the actual ones in durable storage.
-    CodecMismatch {
-        /// The requested (K, V, T, D) codecs.
-        requested: (String, String, String, String),
-        /// The actual (K, V, T, D) codecs in durable storage.
-        actual: (String, String, String, String),
-    },
+    CodecMismatch(CodecMismatch),
 }
 
 impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
@@ -165,11 +160,7 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                 batch_shard,
                 handle_shard,
             } => write!(f, "batch was from {} not {}", batch_shard, handle_shard),
-            InvalidUsage::CodecMismatch { requested, actual } => write!(
-                f,
-                "requested codecs {:?} did not match ones in durable storage {:?}",
-                requested, actual
-            ),
+            InvalidUsage::CodecMismatch(err) => std::fmt::Display::fmt(err, f),
         }
     }
 }
@@ -178,4 +169,36 @@ impl<T: Debug> std::error::Error for InvalidUsage<T> {}
 
 impl<T> Determinacy for InvalidUsage<T> {
     const DETERMINANT: bool = true;
+}
+
+/// The requested codecs don't match the actual ones in durable storage.
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
+pub struct CodecMismatch {
+    /// The requested (K, V, T, D) codecs.
+    pub(crate) requested: (String, String, String, String),
+    /// The actual (K, V, T, D) codecs in durable storage.
+    pub(crate) actual: (String, String, String, String),
+}
+
+impl std::error::Error for CodecMismatch {}
+
+impl Determinacy for CodecMismatch {
+    const DETERMINANT: bool = true;
+}
+
+impl std::fmt::Display for CodecMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "requested codecs {:?} did not match ones in durable storage {:?}",
+            self.requested, self.actual
+        )
+    }
+}
+
+impl<T> From<CodecMismatch> for InvalidUsage<T> {
+    fn from(x: CodecMismatch) -> Self {
+        InvalidUsage::CodecMismatch(x)
+    }
 }
