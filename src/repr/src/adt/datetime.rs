@@ -1196,9 +1196,15 @@ fn fill_pdt_date(
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
         Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
-            pdt.day = Some(DateTimeFieldValue::new(i64::try_from(val % 100).unwrap(), 0));
+            pdt.day = Some(DateTimeFieldValue::new(
+                i64::try_from(val % 100).unwrap(),
+                0,
+            ));
             val /= 100;
-            pdt.month = Some(DateTimeFieldValue::new(i64::try_from(val % 100).unwrap(), 0));
+            pdt.month = Some(DateTimeFieldValue::new(
+                i64::try_from(val % 100).unwrap(),
+                0,
+            ));
             val /= 100;
             // Handle 2 digit year case
             if *digits == 6 {
