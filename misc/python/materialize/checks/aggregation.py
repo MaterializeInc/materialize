@@ -93,7 +93,7 @@ class Aggregation(Check):
                 <null> <null> <null>
 
                 > SELECT * FROM limit_one1;
-                <null> <null> <null>
+                1 1 1
 
                 > SELECT * FROM limit_many1;
                 1 1 1
@@ -138,7 +138,7 @@ class Aggregation(Check):
                 <null> <null> <null>
 
                 > SELECT * FROM limit_one2;
-                <null> <null> <null>
+                1 1 1
 
                 > SELECT * FROM limit_many2;
                 1 1 1
