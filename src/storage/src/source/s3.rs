@@ -262,7 +262,7 @@ async fn scan_bucket_task(
     // dance.
     //
     // This isn't a meaningful performance optimization, it just makes it easy for folks to import a
-    // single object without granting materialized the ListObjects IAM permission
+    // single object without granting storaged the ListObjects IAM permission
     let is_literal_object = glob.is_some() && prefix.as_deref() == glob.map(|g| g.glob().glob());
     if is_literal_object {
         let key = glob.unwrap().glob().glob();

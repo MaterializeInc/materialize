@@ -5760,7 +5760,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> DataflowDescription<mz_compute_client::plan::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
-        // operations if this function fails, and materialized will be in an unsafe
+        // operations if this function fails, and environmentd will be in an unsafe
         // state if we do not correctly clean up the catalog.
 
         let storage_ids = dataflow

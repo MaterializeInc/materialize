@@ -560,7 +560,7 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::Version => {
             let build_info = state.config().build_info;
             let version = format!(
-                "PostgreSQL {}.{} on {} (materialized {})",
+                "PostgreSQL {}.{} on {} (Materialize {})",
                 SERVER_MAJOR_VERSION,
                 SERVER_MINOR_VERSION,
                 mz_build_info::TARGET_TRIPLE,
