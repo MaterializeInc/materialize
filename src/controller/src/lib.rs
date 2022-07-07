@@ -484,10 +484,8 @@ where
     /// future at any await point and restarting from the beginning is fine.
     // This method's correctness relies on the assumption that the _underlying_
     // clients are _also_ cancel-safe, since it introduces its own `select` call.
-    pub async fn ready(&mut self) -> Result<(), anyhow::Error> {
-        if self.stashed_response.is_some() {
-            Ok(())
-        } else {
+    pub async fn ready(&mut self) {
+        if !self.stashed_response.is_some() {
             let mut compute_stream: StreamMap<_, _> = self
                 .compute
                 .iter_mut()
@@ -498,12 +496,12 @@ where
                     Some((instance, response)) = compute_stream.next() => {
                         assert!(self.stashed_response.is_none());
                         self.stashed_response = Some(UnderlyingControllerResponse::Compute(instance, response));
-                        return Ok(());
+                        return;
                     }
                     Some(response) = self.storage_controller.recv() => {
                         assert!(self.stashed_response.is_none());
                         self.stashed_response = Some(UnderlyingControllerResponse::Storage(response));
-                        return Ok(());
+                        return;
                     }
                 }
             }

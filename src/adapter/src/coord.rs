@@ -1049,8 +1049,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 _ = advance_local_inputs_interval.tick() => Message::AdvanceLocalInputs,
                 // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
-                m = self.dataflow_client.ready() => {
-                    let () = m.unwrap();
+                () = self.dataflow_client.ready() => {
                     Message::ControllerReady
                 }
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
