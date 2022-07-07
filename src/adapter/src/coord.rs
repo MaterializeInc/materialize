@@ -5974,9 +5974,6 @@ pub async fn serve<S: Append + 'static>(
     let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
     let handle = TokioHandle::current();
 
-    let mut initial_timestamp = catalog.get_persisted_timestamp().await?;
-    initial_timestamp = initial_timestamp.step_forward();
-    catalog.persist_timestamp(initial_timestamp).await?;
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -5984,6 +5981,17 @@ pub async fn serve<S: Append + 'static>(
         .stack_size(2 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
+            let initial_timestamp = handle
+                .block_on(catalog.get_persisted_timestamp())
+                .expect("can't start without an initial timestamp");
+            let (timestamp_oracle, persist_timestamp) = timeline::DurableTimestampOracle::new(
+                initial_timestamp,
+                move || (&*now)(),
+                *timeline::TIMESTAMP_PERSIST_INTERVAL,
+            );
+            handle
+                .block_on(catalog.persist_timestamp(persist_timestamp))
+                .expect("can't start without persisting the new timestamp");
             let mut coord = Coordinator {
                 dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
@@ -5991,11 +5999,7 @@ pub async fn serve<S: Append + 'static>(
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
                 internal_cmd_tx,
-                global_timeline: timeline::DurableTimestampOracle::new(
-                    initial_timestamp,
-                    move || (&*now)(),
-                    *timeline::TIMESTAMP_PERSIST_INTERVAL,
-                ),
+                global_timeline: timestamp_oracle,
                 advance_tables: AdvanceTables::new(),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
@@ -6811,18 +6815,23 @@ mod timeline {
 
     impl<T: super::CoordTimestamp> DurableTimestampOracle<T> {
         /// Create a new durable timeline, starting at the indicated time. Timestamps will be
-        /// allocated in groups of size `persist_interval`.
+        /// allocated in groups of size `persist_interval`. Also returns the new timestamp that
+        /// needs to be persisted to disk.
         ///
         /// See [`TimestampOracle::new`] for more details.
-        pub fn new<F>(initially: T, next: F, persist_interval: T) -> Self
+        pub fn new<F>(initially: T, next: F, persist_interval: T) -> (Self, T)
         where
             F: Fn() -> T + 'static,
         {
-            Self {
-                timestamp_oracle: TimestampOracle::new(initially.clone(), next),
-                durable_timestamp: initially,
-                persist_interval,
-            }
+            let persist_ts = initially.step_forward_by(&persist_interval);
+            (
+                Self {
+                    timestamp_oracle: TimestampOracle::new(initially.clone(), next),
+                    durable_timestamp: initially,
+                    persist_interval,
+                },
+                persist_ts,
+            )
         }
 
         /// Peek the current value of the timestamp.
