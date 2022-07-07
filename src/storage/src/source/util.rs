@@ -12,7 +12,7 @@ use std::rc::Rc;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
@@ -56,7 +56,7 @@ where
     D: Data,
     B: FnOnce(OperatorInfo) -> L,
     L: FnMut(
-            &mut Capability<Timestamp>,
+            &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
         ) -> SourceStatus
         + 'static,
@@ -70,7 +70,8 @@ where
     builder.set_notify(false);
 
     builder.build(|capabilities| {
-        let mut capability = Some(capabilities.into_element());
+        let cap_set = CapabilitySet::from_elem(capabilities.into_element());
+        let mut capability = Some(cap_set);
 
         let drop_activator = Rc::new(ActivateOnDrop::new(
             (),
