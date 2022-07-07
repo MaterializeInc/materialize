@@ -2967,7 +2967,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|
         },
         // This ought to be exposed in `mz_catalog`, but its name is rather
         // confusing. It does not identify the SQL session, but the
-        // invocation of this `materialized` process.
+        // invocation of this `environmentd` process.
         "mz_session_id" => Scalar {
             params!() => UnmaterializableFunc::MzSessionId, oid::FUNC_MZ_SESSION_ID_OID;
         },
