@@ -491,18 +491,14 @@ where
                 .iter_mut()
                 .map(|(id, compute)| (*id, compute.client.as_stream()))
                 .collect();
-            loop {
-                tokio::select! {
-                    Some((instance, response)) = compute_stream.next() => {
-                        assert!(self.stashed_response.is_none());
-                        self.stashed_response = Some(UnderlyingControllerResponse::Compute(instance, response));
-                        return;
-                    }
-                    Some(response) = self.storage_controller.recv() => {
-                        assert!(self.stashed_response.is_none());
-                        self.stashed_response = Some(UnderlyingControllerResponse::Storage(response));
-                        return;
-                    }
+            tokio::select! {
+                Some((instance, response)) = compute_stream.next() => {
+                    assert!(self.stashed_response.is_none());
+                    self.stashed_response = Some(UnderlyingControllerResponse::Compute(instance, response));
+                }
+                Some(response) = self.storage_controller.recv() => {
+                    assert!(self.stashed_response.is_none());
+                    self.stashed_response = Some(UnderlyingControllerResponse::Storage(response));
                 }
             }
         }
