@@ -69,7 +69,7 @@ impl<S: Append> Coordinator<S> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.dataflow_client.compute(instance).unwrap();
+        let compute = self.controller.compute(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
             compute,

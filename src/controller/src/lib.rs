@@ -253,10 +253,6 @@ enum Readiness {
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
-///
-/// NOTE(benesch): I find the fact that this type is called `Controller` but is
-/// referred to as the `dataflow_client` in the coordinator to be very
-/// confusing. We should find the one correct name, and use it everywhere!
 pub struct Controller<T = mz_repr::Timestamp> {
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
