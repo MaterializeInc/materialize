@@ -28,7 +28,6 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use futures::Stream;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 use tokio::select;
@@ -584,21 +583,6 @@ where
             }
         }
     }
-
-    /// Returns an adapter that treats the client as a stream.
-    ///
-    /// The stream produces the responses that would be produced by repeated
-    /// calls to `recv`.
-    pub fn as_stream<'a>(&'a mut self) -> impl Stream<Item = ActiveReplicationResponse<T>> + 'a {
-        Box::pin(async_stream::stream!({
-            loop {
-                match self.recv().await {
-                    Some(response) => yield response,
-                    None => return,
-                }
-            }
-        }))
-    }
 }
 
 /// A response from the ActiveReplication client:
@@ -606,10 +590,10 @@ where
 /// that we heard from a given replica and should update its recency status.
 #[derive(Debug, Clone)]
 pub enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
-    /// A response from the compute layer.
+    /// A response from the underlying compute replica.
     ComputeResponse(ComputeResponse<T>),
-    /// A notification that we heard a response
-    /// from the given replica at the given time.
+    /// A notification that we heard a response from the given replica at the
+    /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 

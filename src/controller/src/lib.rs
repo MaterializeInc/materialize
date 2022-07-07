@@ -22,12 +22,14 @@
 //! about each of these interfaces.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::mem;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use futures::future::{self, FutureExt};
 use futures::stream::{BoxStream, StreamExt};
 use maplit::hashmap;
 use once_cell::sync::Lazy;
@@ -36,17 +38,16 @@ use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
-use tokio_stream::StreamMap;
 use uuid::Uuid;
 
 use mz_compute_client::command::{ComputeCommand, ProcessId, ProtoComputeCommand, ReplicaId};
 use mz_compute_client::controller::{
-    ActiveReplicationResponse, ComputeController, ComputeControllerMut, ComputeControllerState,
+    ComputeController, ComputeControllerMut, ComputeControllerResponse, ComputeControllerState,
     ComputeInstanceId,
 };
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::response::{
-    ComputeResponse, PeekResponse, ProtoComputeResponse, TailBatch, TailResponse,
+    ComputeResponse, PeekResponse, ProtoComputeResponse, TailResponse,
 };
 use mz_compute_client::service::ComputeGrpcClient;
 use mz_orchestrator::{
@@ -61,8 +62,7 @@ use mz_proto::RustType;
 use mz_repr::GlobalId;
 use mz_storage::client::controller::StorageController;
 use mz_storage::client::{
-    LinearizedTimestampBindingFeedback, ProtoStorageCommand, ProtoStorageResponse, StorageCommand,
-    StorageResponse,
+    ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
@@ -207,7 +207,7 @@ pub struct ComputeInstanceEvent {
     pub time: DateTime<Utc>,
 }
 
-/// Responses that the controller can provide back to the coordinator.
+/// Responses that [`Controller`] can produce.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// The worker's response to a specified (by connection id) peek.
@@ -218,18 +218,38 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
-    /// Data about timestamp bindings, sent to the coordinator, in service
-    /// of a specific "linearized" read request.
-    // TODO(benesch,gus): update language to avoid the term "linearizability".
-    LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
     /// Notification that we have received a message from the given compute replica
     /// at the given time.
     ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
-enum UnderlyingControllerResponse<T> {
-    Storage(StorageResponse<T>),
-    Compute(ComputeInstanceId, ActiveReplicationResponse<T>),
+impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
+    fn from(r: ComputeControllerResponse<T>) -> ControllerResponse<T> {
+        match r {
+            ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
+                ControllerResponse::PeekResponse(uuid, peek, otel_ctx)
+            }
+            ComputeControllerResponse::TailResponse(id, tail) => {
+                ControllerResponse::TailResponse(id, tail)
+            }
+            ComputeControllerResponse::ReplicaHeartbeat(id, when) => {
+                ControllerResponse::ComputeReplicaHeartbeat(id, when)
+            }
+        }
+    }
+}
+
+/// Whether one of the underlying controllers is ready for their `process`
+/// method to be called.
+#[derive(Default)]
+enum Readiness {
+    /// No underlying controllers are ready.
+    #[default]
+    NotReady,
+    /// The storage controller is ready.
+    Storage,
+    /// The compute controller is ready.
+    Compute(ComputeInstanceId),
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -242,7 +262,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
     compute: BTreeMap<ComputeInstanceId, ComputeControllerState<T>>,
-    stashed_response: Option<UnderlyingControllerResponse<T>>,
+    readiness: Readiness,
 }
 
 impl<T> Controller<T>
@@ -476,108 +496,56 @@ impl<T> Controller<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    /// Wait until the controller is ready to process a response.
+    /// Waits until the controller is ready to process a response.
     ///
-    /// This method may await indefinitely.
+    /// This method may block for an arbitrarily long time.
     ///
-    /// This method is intended to be cancel-safe: dropping the returned
-    /// future at any await point and restarting from the beginning is fine.
-    // This method's correctness relies on the assumption that the _underlying_
-    // clients are _also_ cancel-safe, since it introduces its own `select` call.
+    /// When the method returns, the owner should call [`Controller::ready`] to
+    /// process the ready message.
+    ///
+    /// This method is cancellation safe.
     pub async fn ready(&mut self) {
-        if !self.stashed_response.is_some() {
-            let mut compute_stream: StreamMap<_, _> = self
-                .compute
-                .iter_mut()
-                .map(|(id, compute)| (*id, compute.client.as_stream()))
-                .collect();
+        if let Readiness::NotReady = self.readiness {
+            // The underlying `ready` methods are cancellation safe, so it is
+            // safe to construct this `select!`.
+            let computes = future::select_all(
+                self.compute
+                    .iter_mut()
+                    .map(|(id, compute)| Box::pin(compute.ready().map(|()| *id))),
+            );
             tokio::select! {
-                Some((instance, response)) = compute_stream.next() => {
-                    assert!(self.stashed_response.is_none());
-                    self.stashed_response = Some(UnderlyingControllerResponse::Compute(instance, response));
+                (id, _index, _remaining) = computes => {
+                    self.readiness = Readiness::Compute(id);
                 }
-                Some(response) = self.storage_controller.recv() => {
-                    assert!(self.stashed_response.is_none());
-                    self.stashed_response = Some(UnderlyingControllerResponse::Storage(response));
+                () = self.storage_controller.ready() => {
+                    self.readiness = Readiness::Storage;
                 }
             }
         }
     }
 
-    /// Process any queued messages.
+    /// Processes the work queued by [`Controller::ready`].
     ///
-    /// This method is _not_ known to be cancel-safe, and should _not_ be called
-    /// in the receiver of a `tokio::select` branch. Calling it in the handler of
-    /// such a branch is fine.
+    /// This method is guaranteed to return "quickly" unless doing so would
+    /// compromise the correctness of the system.
     ///
-    /// This method is _not_ intended to await indefinitely for reconnections and such;
-    /// the coordinator relies on this property in order to not hang.
+    /// This method is **not** guaranteed to be cancellation safe. It **must**
+    /// be awaited to completion.
     pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let stashed = self.stashed_response.take().expect("`process` is not allowed to block indefinitely -- `ready` should be polled to completion first.");
-        match stashed {
-            UnderlyingControllerResponse::Storage(response) => match response {
-                StorageResponse::FrontierUppers(updates) => {
-                    self.storage_controller
-                        .update_write_frontiers(&updates)
-                        .await?;
-                    Ok(None)
-                }
-                StorageResponse::LinearizedTimestamps(res) => {
-                    Ok(Some(ControllerResponse::LinearizedTimestamps(res)))
-                }
-            },
-            UnderlyingControllerResponse::Compute(
-                instance,
-                ActiveReplicationResponse::ComputeResponse(response),
-            ) => {
-                match response {
-                    ComputeResponse::FrontierUppers(updates) => {
-                        self.compute_mut(instance)
-                            // TODO: determine if this is an error, or perhaps just a late
-                            // response about a terminated instance.
-                            .expect("Reference to absent instance")
-                            .update_write_frontiers(&updates)
-                            .await?;
-                        Ok(None)
-                    }
-                    ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
-                        self.compute_mut(instance)
-                            .expect("Reference to absent instance")
-                            .remove_peeks(std::iter::once(uuid))
-                            .await?;
-                        Ok(Some(ControllerResponse::PeekResponse(
-                            uuid,
-                            peek_response,
-                            otel_ctx,
-                        )))
-                    }
-                    ComputeResponse::TailResponse(global_id, response) => {
-                        let mut changes = timely::progress::ChangeBatch::new();
-                        match &response {
-                            TailResponse::Batch(TailBatch { lower, upper, .. }) => {
-                                changes.extend(upper.iter().map(|time| (time.clone(), 1)));
-                                changes.extend(lower.iter().map(|time| (time.clone(), -1)));
-                            }
-                            TailResponse::DroppedAt(frontier) => {
-                                // The tail will not be written to again, but we should not confuse that
-                                // with the source of the TAIL being complete through this time.
-                                changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                            }
-                        }
-                        self.compute_mut(instance)
-                            .expect("Reference to absent instance")
-                            .update_write_frontiers(&[(global_id, changes)])
-                            .await?;
-                        Ok(Some(ControllerResponse::TailResponse(global_id, response)))
-                    }
-                }
+        match mem::take(&mut self.readiness) {
+            Readiness::NotReady => Ok(None),
+            Readiness::Storage => {
+                self.storage_mut().process().await?;
+                Ok(None)
             }
-            UnderlyingControllerResponse::Compute(
-                _instance,
-                ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when),
-            ) => Ok(Some(ControllerResponse::ComputeReplicaHeartbeat(
-                replica_id, when,
-            ))),
+            Readiness::Compute(id) => {
+                let response = self
+                    .compute_mut(id)
+                    .expect("reference to absent compute instance")
+                    .process()
+                    .await?;
+                Ok(response.map(|r| r.into()))
+            }
         }
     }
 }
@@ -605,7 +573,7 @@ where
             compute_orchestrator: config.orchestrator.namespace("compute"),
             computed_image: config.computed_image,
             compute: BTreeMap::default(),
-            stashed_response: None,
+            readiness: Readiness::NotReady,
         }
     }
 }
