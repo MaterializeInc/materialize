@@ -284,8 +284,15 @@ pub fn plan_explain_old(
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
             let item_type = view.item_type();
-            if item_type != CatalogItemType::View {
-                sql_bail!("Expected {} to be a view, not a {}", name, item_type);
+            // Return a more helpful error on `EXPLAIN [...] VIEW <recorded-view>`.
+            if item_type == CatalogItemType::RecordedView {
+                return Err(PlanError::ExplainViewOnRecordedView(name.full_name_str()));
+            } else if item_type != CatalogItemType::View {
+                sql_bail!(
+                    "Expected {} to be a view, not a {}",
+                    name.full_name_str(),
+                    item_type
+                );
             }
             let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
@@ -360,8 +367,15 @@ pub fn plan_explain_new(
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
             let item_type = view.item_type();
-            if item_type != CatalogItemType::View {
-                sql_bail!("Expected {} to be a view, not a {}", name, item_type);
+            // Return a more helpful error on `EXPLAIN [...] VIEW <recorded-view>`.
+            if item_type == CatalogItemType::RecordedView {
+                return Err(PlanError::ExplainViewOnRecordedView(name.full_name_str()));
+            } else if item_type != CatalogItemType::View {
+                sql_bail!(
+                    "Expected {} to be a view, not a {}",
+                    name.full_name_str(),
+                    item_type
+                );
             }
             let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
