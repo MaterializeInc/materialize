@@ -35,6 +35,7 @@ message ProtoIngestSourceCommand {
     mz_repr.global_id.ProtoGlobalId id = 1;
     sources.ProtoIngestionDescription description = 2;
     mz_persist.gen.persist.ProtoU64Antichain resume_upper = 3;
+    mz_persist.gen.persist.ProtoU64Antichain dependency_since = 4;
 }
 
 message ProtoIngestSources {

@@ -131,6 +131,9 @@ pub struct IngestSourceCommand<T> {
     pub description: IngestionDescription<CollectionMetadata>,
     /// The upper frontier that this ingestion should resume at
     pub resume_upper: Antichain<T>,
+    /// The frontier at which we are guaranteed to be able to read from storage
+    /// dependencies, if any.
+    pub dependency_since: Antichain<T>,
 }
 
 impl Arbitrary for IngestSourceCommand<mz_repr::Timestamp> {
@@ -142,11 +145,13 @@ impl Arbitrary for IngestSourceCommand<mz_repr::Timestamp> {
             any::<GlobalId>(),
             any::<IngestionDescription<CollectionMetadata>>(),
             proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4).prop_map(Antichain::from),
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4).prop_map(Antichain::from),
         )
-            .prop_map(|(id, description, resume_upper)| Self {
+            .prop_map(|(id, description, resume_upper, dependency_since)| Self {
                 id,
                 description,
                 resume_upper,
+                dependency_since,
             })
             .boxed()
     }
@@ -158,6 +163,7 @@ impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand<mz_repr::Timesta
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
             resume_upper: Some((&self.resume_upper).into()),
+            dependency_since: Some((&self.dependency_since).into()),
         }
     }
 
@@ -171,6 +177,9 @@ impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand<mz_repr::Timesta
                 .resume_upper
                 .map(Into::into)
                 .ok_or_else(|| TryFromProtoError::missing_field("ProtoCompaction::resume_upper"))?,
+            dependency_since: proto.dependency_since.map(Into::into).ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoCompaction::dependency_since")
+            })?,
         })
     }
 }
