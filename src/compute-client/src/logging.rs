@@ -35,10 +35,9 @@ pub struct LoggingConfig {
 impl LoggingConfig {
     /// Announce the identifiers the logging config will populate.
     pub fn log_identifiers<'a>(&'a self) -> impl Iterator<Item = GlobalId> + 'a {
-        let mut ids = vec![];
-        ids.extend(self.active_logs.values().cloned());
-        ids.extend(self.sink_logs.values().map(|(id, _)| id));
-        ids.into_iter()
+        let it1 = self.active_logs.values().cloned();
+        let it2 = self.sink_logs.values().map(|(id, _)| *id);
+        it1.chain(it2)
     }
 }
 
@@ -65,11 +64,13 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
 }
 
 impl ProtoMapEntry<LogVariant, (GlobalId, CollectionMetadata)> for ProtoSinkLog {
-    fn from_rust<'a>(entry: (&'a LogVariant, &'a (GlobalId, CollectionMetadata))) -> Self {
+    fn from_rust<'a>(
+        (variant, (id, meta)): (&'a LogVariant, &'a (GlobalId, CollectionMetadata)),
+    ) -> Self {
         Self {
-            key: Some(entry.0.into_proto()),
-            value_id: Some(entry.1 .0.into_proto()),
-            value_meta: Some(entry.1 .1.into_proto()),
+            key: Some(variant.into_proto()),
+            value_id: Some(id.into_proto()),
+            value_meta: Some(meta.into_proto()),
         }
     }
 

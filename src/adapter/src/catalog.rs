@@ -505,16 +505,7 @@ impl CatalogState {
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
-            self.insert_item(
-                source_id,
-                oid,
-                source_name,
-                CatalogItem::Log(BuiltinLog {
-                    variant: log.variant.clone(),
-                    name: log.name,
-                    schema: "mz_catalog",
-                }),
-            );
+            self.insert_item(source_id, oid, source_name, CatalogItem::Log(log));
 
             log_collections_by_variant.insert(log.variant.clone(), source_id);
         }
@@ -979,7 +970,7 @@ pub struct CatalogEntry {
 pub enum CatalogItem {
     Table(Table),
     Source(Source),
-    Log(BuiltinLog),
+    Log(&'static BuiltinLog),
     View(View),
     RecordedView(RecordedView),
     Sink(Sink),
@@ -1230,7 +1221,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Table(i))
             }
-            CatalogItem::Log(i) => Ok(CatalogItem::Log((*i).clone())),
+            CatalogItem::Log(i) => Ok(CatalogItem::Log(i)),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
@@ -1546,12 +1537,9 @@ impl<S: Append> Catalog<S> {
             match builtin {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid().await?;
-                    catalog.state.insert_item(
-                        id,
-                        oid,
-                        name.clone(),
-                        CatalogItem::Log((*log).clone()),
-                    );
+                    catalog
+                        .state
+                        .insert_item(id, oid, name.clone(), CatalogItem::Log(log));
                 }
 
                 Builtin::Table(table) => {

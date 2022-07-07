@@ -69,6 +69,6 @@ message ProtoLogVariant {
 message ProtoLoggingConfig {
     mz_proto.ProtoU128 granularity_ns = 1;
     repeated ProtoActiveLog active_logs = 2;
-    repeated ProtoSinkLog sink_logs = 3;
-    bool log_logging = 4;
+    bool log_logging = 3;
+    repeated ProtoSinkLog sink_logs = 4;
 }

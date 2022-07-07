@@ -2677,13 +2677,6 @@ impl<S: Append + 'static> Coordinator<S> {
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    fn enable_experimental_recorded_logs(&self) -> bool {
-        // TODO(lh): Remove this once recorded logs have stabilized
-        // This switch enables that computeds introspection data will be written to
-        // a persist sink
-        return false;
-    }
-
     async fn sequence_create_compute_instance(
         &mut self,
         session: &Session,
@@ -2719,12 +2712,11 @@ impl<S: Append + 'static> Coordinator<S> {
             )?;
 
             // These are the persisted, per replica log collections
-            let log_collections =
-                if compute_instance_config.is_some() && self.enable_experimental_recorded_logs() {
-                    self.catalog.allocate_introspection_source_indexes().await
-                } else {
-                    Vec::new()
-                };
+            let log_collections = if compute_instance_config.is_some() {
+                self.catalog.allocate_introspection_source_indexes().await
+            } else {
+                Vec::new()
+            };
 
             introspection_collections.extend(log_collections.iter().map(|(log, id)| {
                 (
@@ -2763,8 +2755,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance = self
             .catalog
             .resolve_compute_instance(&name)
-            .expect("compute instance must exist after creation")
-            .clone();
+            .expect("compute instance must exist after creation");
 
         self.dataflow_client
             .create_instance(instance.id, instance.logging.clone())
@@ -2784,7 +2775,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Some(c) = compute_instance_config {
             self.initialize_compute_read_policies(
                 introspection_collection_ids,
-                instance.id(),
+                instance.id,
                 Some(c.granularity.as_millis() as u64),
             )
             .await;
@@ -2812,12 +2803,11 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
 
         // This vector collects introspection sources of all replicas of this compute instance
-        let log_collections =
-            if instance.logging.is_some() && self.enable_experimental_recorded_logs() {
-                self.catalog.allocate_introspection_source_indexes().await
-            } else {
-                Vec::new()
-            };
+        let log_collections = if instance.logging.is_some() {
+            self.catalog.allocate_introspection_source_indexes().await
+        } else {
+            Vec::new()
+        };
         let introspection_collection_ids: Vec<_> =
             log_collections.iter().map(|(_, id)| *id).collect();
         let introspection_collections = log_collections
@@ -2851,22 +2841,23 @@ impl<S: Append + 'static> Coordinator<S> {
             .await
             .unwrap();
 
-        let instance = self.catalog.resolve_compute_instance(&of_cluster)?.clone();
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let instance_id = instance.id;
         let replica_id = instance.replica_id_by_name[&name];
         let replica = instance.replicas_by_id[&replica_id].clone();
 
-        if let Some(c) = &instance.logging {
+        if instance.logging.is_some() {
             self.initialize_compute_read_policies(
                 introspection_collection_ids,
-                instance.id(),
-                Some((c.granularity_ns / 1000) as u64),
+                instance_id,
+                self.logical_compaction_window_ms,
             )
             .await;
         }
 
         self.dataflow_client
             .add_replica_to_instance(
-                instance.id,
+                instance_id,
                 replica_id,
                 replica.config,
                 replica.log_collections,

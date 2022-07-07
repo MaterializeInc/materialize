@@ -23,12 +23,11 @@ use timely::logging::WorkerIdentifier;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
-
-use crate::compute_state::ComputeState;
-use crate::logging::persist::persist_sink;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
+use crate::compute_state::ComputeState;
+use crate::logging::persist::persist_sink;
 use crate::logging::{ConsolidateBuffer, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -172,13 +171,13 @@ pub fn construct<A: Allocate>(
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
 
-            if let Some(target) = config.sink_logs.get(&variant) {
-                tracing::debug!("Persisting {:?} to {:?}", &variant, &target);
+            if let Some((id, meta)) = config.sink_logs.get(&variant) {
+                tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
                 let updates = construct_reachability_unarranged();
                 let mut row_buf = Row::default();
                 persist_sink(
-                    target.0,
-                    &target.1,
+                    *id,
+                    meta,
                     compute_state,
                     &updates.as_collection(
                         move |(update_type, addr, source, port, worker, ts), _| {

@@ -192,9 +192,9 @@ pub fn construct<A: Allocate>(
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
 
-            if let Some(target) = config.sink_logs.get(&variant) {
-                tracing::debug!("Persisting {:?} to {:?}", &variant, &target);
-                persist_sink(target.0, &target.1, compute_state, &collection);
+            if let Some((id, meta)) = config.sink_logs.get(&variant) {
+                tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
+                persist_sink(*id, meta, compute_state, &collection);
             }
         }
         result

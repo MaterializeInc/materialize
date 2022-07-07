@@ -25,7 +25,7 @@ mz-compute-client = { path = "../compute-client" }
 mz-controller = { path = "../controller" }
 mz-expr = { path = "../expr" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
