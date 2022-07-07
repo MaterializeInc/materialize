@@ -34,9 +34,10 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
+use crate::r#impl::encoding::DescriptionMeta;
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
 use crate::r#impl::metrics::Metrics;
-use crate::r#impl::state::{DescriptionMeta, Since};
+use crate::r#impl::state::Since;
 use crate::ShardId;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).

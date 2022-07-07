@@ -51,6 +51,7 @@ pub use crate::r#impl::state::{Since, Upper};
 /// An implementation of the public crate interface.
 pub(crate) mod r#impl {
     pub mod compact;
+    pub mod encoding;
     pub mod machine;
     pub mod metrics;
     pub mod state;
