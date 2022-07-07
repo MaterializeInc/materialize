@@ -35,7 +35,7 @@ impl<S: Append> Coordinator<S> {
     ) -> ComputeInstanceIndexOracle<mz_repr::Timestamp> {
         ComputeInstanceIndexOracle {
             catalog: self.catalog.state(),
-            compute: self.dataflow_client.compute(instance).unwrap(),
+            compute: self.controller.compute(instance).unwrap(),
         }
     }
 }

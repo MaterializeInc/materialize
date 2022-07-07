@@ -453,14 +453,8 @@ pub struct ReplicaMetadata {
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
-    /// A client to a running dataflow cluster.
-    ///
-    /// This component offers:
-    /// - Sufficient isolation from COMPUTE, so long as communication with
-    ///   COMPUTE replicas is non-blocking.
-    /// - Insufficient isolation from STORAGE. The ADAPTER cannot tolerate
-    ///   failure of STORAGE services.
-    dataflow_client: mz_controller::Controller,
+    /// The controller for the storage and compute layers.
+    controller: mz_controller::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog<S>,
@@ -670,7 +664,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.read_capability.insert(id, policy.clone().into());
             policy_updates.push((id, self.read_capability[&id].policy()));
         }
-        self.dataflow_client
+        self.controller
             .storage_mut()
             .set_read_policy(policy_updates)
             .await
@@ -697,7 +691,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.read_capability.insert(id, policy.clone().into());
             policy_updates.push((id, self.read_capability[&id].policy()));
         }
-        self.dataflow_client
+        self.controller
             .compute_mut(instance)
             .unwrap()
             .set_read_policy(policy_updates)
@@ -714,11 +708,11 @@ impl<S: Append + 'static> Coordinator<S> {
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         for instance in self.catalog.compute_instances() {
-            self.dataflow_client
+            self.controller
                 .create_instance(instance.id, instance.logging.clone())
                 .await;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
-                self.dataflow_client
+                self.controller
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
@@ -768,7 +762,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         }
                     }
 
-                    self.dataflow_client
+                    self.controller
                         .storage_mut()
                         .create_collections(vec![(
                             entry.id(),
@@ -784,7 +778,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     storage_policies_to_set.push(entry.id());
                 }
                 CatalogItem::Table(table) => {
-                    self.dataflow_client
+                    self.controller
                         .storage_mut()
                         .create_collections(vec![(
                             entry.id(),
@@ -817,7 +811,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             .extend(dataflow.export_ids());
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
-                        self.dataflow_client
+                        self.controller
                             .compute_mut(idx.compute_instance)
                             .unwrap()
                             .create_dataflows(dataflow_plan)
@@ -828,7 +822,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::View(_) => (),
                 CatalogItem::RecordedView(rview) => {
                     // Re-create the storage collection.
-                    self.dataflow_client
+                    self.controller
                         .storage_mut()
                         .create_collections(vec![(
                             entry.id(),
@@ -976,11 +970,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .filter(|entry| entry.is_table())
             .map(|entry| (entry.id(), Vec::new(), advance_to))
             .collect();
-        self.dataflow_client
-            .storage_mut()
-            .append(appends)
-            .await
-            .unwrap();
+        self.controller.storage_mut().append(appends).await.unwrap();
 
         // Add builtin table updates the clear the contents of all system tables
         let read_ts = self.get_local_read_ts();
@@ -989,7 +979,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .filter(|entry| entry.is_table() && entry.id().is_system())
         {
             let current_contents = self
-                .dataflow_client
+                .controller
                 .storage_mut()
                 .snapshot(system_table.id(), read_ts)
                 .await
@@ -1027,7 +1017,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut advance_local_inputs_interval =
             tokio::time::interval(self.catalog.config().timestamp_frequency);
         // Watcher that listens for and reports compute service status changes.
-        let mut compute_events = self.dataflow_client.watch_compute_services();
+        let mut compute_events = self.controller.watch_compute_services();
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1049,7 +1039,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 _ = advance_local_inputs_interval.tick() => Message::AdvanceLocalInputs,
                 // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
-                () = self.dataflow_client.ready() => {
+                () = self.controller.ready() => {
                     Message::ControllerReady
                 }
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
@@ -1075,7 +1065,7 @@ impl<S: Append + 'static> Coordinator<S> {
             match msg {
                 Message::Command(cmd) => self.message_command(cmd).await,
                 Message::ControllerReady => {
-                    if let Some(m) = self.dataflow_client.process().await.unwrap() {
+                    if let Some(m) = self.controller.process().await.unwrap() {
                         self.message_controller(m).await
                     }
                 }
@@ -1185,7 +1175,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // change the batch size.
         const WINDOW: Duration = Duration::from_millis(10);
         let start = Instant::now();
-        let storage = self.dataflow_client.storage();
+        let storage = self.controller.storage();
         let appends = inputs
             .ids
             .into_iter()
@@ -1208,11 +1198,7 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .collect::<Vec<_>>();
         let num_updates = appends.len();
-        self.dataflow_client
-            .storage_mut()
-            .append(appends)
-            .await
-            .unwrap();
+        self.controller.storage_mut().append(appends).await.unwrap();
         let elapsed = start.elapsed();
         trace!(
             "advance_local_inputs for {} tables to {} took: {} ms",
@@ -1338,11 +1324,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_iter()
             .map(|(id, updates)| (id, updates, advance_to))
             .collect();
-        self.dataflow_client
-            .storage_mut()
-            .append(appends)
-            .await
-            .unwrap();
+        self.controller.storage_mut().append(appends).await.unwrap();
         for (client_transmitter, response, mut session, action) in responses {
             session.vars_mut().end_transaction(action);
             client_transmitter.send(response, session);
@@ -1586,7 +1568,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 inverse.entry(*compute_instance).or_default().insert(*uuid);
             }
             for (compute_instance, uuids) in inverse {
-                self.dataflow_client
+                self.controller
                     .compute_mut(compute_instance)
                     .unwrap()
                     .cancel_peeks(&uuids)
@@ -2719,11 +2701,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
-        self.dataflow_client
+        self.controller
             .create_instance(instance.id, instance.logging.clone())
             .await;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
-            self.dataflow_client
+            self.controller
                 .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
@@ -2758,7 +2740,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
         let replica_id = instance.replica_id_by_name[&name];
-        self.dataflow_client
+        self.controller
             .add_replica_to_instance(instance.id, replica_id, config)
             .await
             .unwrap();
@@ -2861,7 +2843,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Determine the initial validity for the table.
                 let since_ts = self.get_local_write_ts().await;
 
-                self.dataflow_client
+                self.controller
                     .storage_mut()
                     .create_collections(vec![(
                         table_id,
@@ -2875,7 +2857,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .unwrap();
 
                 let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
-                self.dataflow_client
+                self.controller
                     .storage_mut()
                     .set_read_policy(vec![(table_id, policy)])
                     .await
@@ -2986,7 +2968,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
 
-                self.dataflow_client
+                self.controller
                     .storage_mut()
                     .create_collections(vec![(
                         source_id,
@@ -3401,7 +3383,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             Ok(df) => {
                 // Announce the creation of the recorded view source.
-                self.dataflow_client
+                self.controller
                     .storage_mut()
                     .create_collections(vec![(
                         id,
@@ -3565,7 +3547,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .pack_replica_heartbeat_update(replica_id, metadata, -1);
             self.send_builtin_table_updates(vec![retraction]).await;
         }
-        self.dataflow_client
+        self.controller
             .drop_replica(instance_id, replica_id, replica_config)
             .await
     }
@@ -3599,10 +3581,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
             }
-            self.dataflow_client
-                .drop_instance(instance_id)
-                .await
-                .unwrap();
+            self.controller.drop_instance(instance_id).await.unwrap();
         }
 
         Ok(ExecuteResponse::DroppedComputeInstance)
@@ -4270,13 +4249,13 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::from_elem(Timestamp::minimum());
         {
-            let storage = self.dataflow_client.storage();
+            let storage = self.controller.storage();
             for id in id_bundle.storage_ids.iter() {
                 since.join_assign(&storage.collection(*id).unwrap().implied_capability)
             }
         }
         {
-            let compute = self.dataflow_client.compute(instance).unwrap();
+            let compute = self.controller.compute(instance).unwrap();
             for id in id_bundle.compute_ids.iter() {
                 since.join_assign(&compute.collection(*id).unwrap().implied_capability)
             }
@@ -4295,7 +4274,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::new();
         {
-            let storage = self.dataflow_client.storage();
+            let storage = self.controller.storage();
             for id in id_bundle.storage_ids.iter() {
                 since.extend(
                     storage
@@ -4309,7 +4288,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
         {
-            let compute = self.dataflow_client.compute(instance).unwrap();
+            let compute = self.controller.compute(instance).unwrap();
             for id in id_bundle.compute_ids.iter() {
                 since.extend(
                     compute
@@ -4421,7 +4400,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .iter()
                 .filter_map(|id| {
                     let since = self
-                        .dataflow_client
+                        .controller
                         .compute(compute_instance)
                         .unwrap()
                         .collection(*id)
@@ -4438,7 +4417,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .collect::<Vec<_>>();
             let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
                 let since = self
-                    .dataflow_client
+                    .controller
                     .storage()
                     .collection(*id)
                     .unwrap()
@@ -4774,7 +4753,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
                 let mut sources = Vec::new();
                 {
-                    let storage = self.dataflow_client.storage();
+                    let storage = self.controller.storage();
                     for id in id_bundle.storage_ids.iter() {
                         let state = storage.collection(*id).unwrap();
                         let name = self
@@ -4800,7 +4779,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
                 {
-                    let compute = self.dataflow_client.compute(compute_instance).unwrap();
+                    let compute = self.controller.compute(compute_instance).unwrap();
                     for id in id_bundle.compute_ids.iter() {
                         let state = compute.collection(*id).unwrap();
                         let name = self
@@ -5487,7 +5466,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .transact(session, ops, |catalog| {
                 f(CatalogTxn {
-                    dataflow_client: &self.dataflow_client,
+                    dataflow_client: &self.controller,
                     catalog,
                 })
             })
@@ -5502,7 +5481,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 for id in &sources_to_drop {
                     self.read_capability.remove(id);
                 }
-                self.dataflow_client
+                self.controller
                     .storage_mut()
                     .drop_sources(sources_to_drop)
                     .await
@@ -5512,7 +5491,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 for id in &tables_to_drop {
                     self.read_capability.remove(id);
                 }
-                self.dataflow_client
+                self.controller
                     .storage_mut()
                     .drop_sources(tables_to_drop)
                     .await
@@ -5594,18 +5573,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 (id, updates, advance_to)
             })
             .collect();
-        self.dataflow_client
-            .storage_mut()
-            .append(appends)
-            .await
-            .unwrap();
+        self.controller.storage_mut().append(appends).await.unwrap();
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
         let by_compute_instance = sinks.into_iter().into_group_map();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.dataflow_client.compute_mut(compute_instance) {
+            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
                 compute.drop_sinks(ids).await.unwrap();
             }
         }
@@ -5624,7 +5599,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
         for (compute_instance, ids) in by_compute_instance {
-            self.dataflow_client
+            self.controller
                 .compute_mut(compute_instance)
                 .unwrap()
                 .drop_indexes(ids)
@@ -5651,13 +5626,13 @@ impl<S: Append + 'static> Coordinator<S> {
         // Drop compute sinks.
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.dataflow_client.compute_mut(compute_instance) {
+            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
                 compute.drop_sinks(ids).await.unwrap();
             }
         }
 
         // Drop storage sources.
-        self.dataflow_client
+        self.controller
             .storage_mut()
             .drop_sources(source_ids)
             .await
@@ -5690,7 +5665,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
                     needs.base_policy = policy;
-                    self.dataflow_client
+                    self.controller
                         .compute_mut(compute_instance)
                         .unwrap()
                         .set_read_policy(vec![(id, needs.policy())])
@@ -5730,7 +5705,7 @@ impl<S: Append + 'static> Coordinator<S> {
             output_ids.extend(dataflow.export_ids());
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
-        self.dataflow_client
+        self.controller
             .compute_mut(instance)
             .unwrap()
             .create_dataflows(dataflow_plans)
@@ -5981,7 +5956,7 @@ pub async fn serve<S: Append + 'static>(
                 |ts| catalog.persist_timestamp(ts),
             ));
             let mut coord = Coordinator {
-                dataflow_client,
+                controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 logical_compaction_window_ms: logical_compaction_window
@@ -6363,7 +6338,7 @@ pub mod fast_path_peek {
                     let output_ids = dataflow.export_ids().collect();
 
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    self.dataflow_client
+                    self.controller
                         .compute_mut(compute_instance)
                         .unwrap()
                         .create_dataflows(vec![dataflow])
@@ -6432,7 +6407,7 @@ pub mod fast_path_peek {
                 .insert(uuid, compute_instance);
             let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
 
-            self.dataflow_client
+            self.controller
                 .compute_mut(compute_instance)
                 .unwrap()
                 .peek(
@@ -6514,7 +6489,7 @@ pub mod read_holds {
         ) {
             // Update STORAGE read policies.
             let mut policy_changes = Vec::new();
-            let storage = self.dataflow_client.storage_mut();
+            let storage = self.controller.storage_mut();
             for id in read_holds.id_bundle.storage_ids.iter() {
                 let collection = storage.collection(*id).unwrap();
                 assert!(collection
@@ -6529,7 +6504,7 @@ pub mod read_holds {
             // Update COMPUTE read policies
             let mut policy_changes = Vec::new();
             let mut compute = self
-                .dataflow_client
+                .controller
                 .compute_mut(read_holds.compute_instance)
                 .unwrap();
             for id in read_holds.id_bundle.compute_ids.iter() {
@@ -6572,7 +6547,7 @@ pub mod read_holds {
                     policy_changes.push((*id, read_needs.policy()));
                 }
             }
-            self.dataflow_client
+            self.controller
                 .storage_mut()
                 .set_read_policy(policy_changes)
                 .await
@@ -6586,7 +6561,7 @@ pub mod read_holds {
                     policy_changes.push((*id, read_needs.policy()));
                 }
             }
-            if let Some(mut compute) = self.dataflow_client.compute_mut(compute_instance) {
+            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
                 compute.set_read_policy(policy_changes).await.unwrap();
             }
         }
