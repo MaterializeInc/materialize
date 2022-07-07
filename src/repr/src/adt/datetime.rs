@@ -1490,20 +1490,14 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                     )
                 }
                 None => {
-                    let runit  = i64::try_from(i128::from(*val) * i128::from(sign));
-                    match runit {
-                        Ok(num) => {
-                            unit_buf = Some(DateTimeFieldValue {
-                                unit: num,
-                                fraction: 0,
-                            });
-                        }
-                        Err(_) => {
-                            return Err(format!(
-                                "Unable to parse value {} as a number: number too large to fit in target type", *val)
-                            )
-                        }
-                    }
+                    // create signed copy of *val
+                    let sval = i64::try_from(i128::from(*val) * i128::from(sign))
+                        .map_err(|_| String::from(format!("Unable to parse value {} as a number: number too large to fit in target type", *val)))?;
+
+                    unit_buf = Some(DateTimeFieldValue {
+                        unit: sval,
+                        fraction: 0,
+                    });
                 }
             },
             (Nanos(val), Nanos(_)) => match unit_buf {
@@ -1541,28 +1535,21 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                     n *= 10_u64.pow(precision - width);
                 }
 
-                let rfraction  = i64::try_from(i128::from(n) * i128::from(sign));
+                // create signed copy of n
+                let sn  = i64::try_from(i128::from(n) * i128::from(sign))
+                    .map_err(|_| String::from(format!("Unable to parse value {} as a number: number too large to fit in target type", n)))?;
 
-                match rfraction {
-                    Ok(num) => {
-                        match unit_buf {                  
-                            Some(ref mut u) => {
-                                u.fraction = num;
-                            }
-                            None => {
-                                unit_buf = Some(DateTimeFieldValue {
-                                    unit: 0,
-                                    fraction: num,
-                                });
-                            }
-                        }        
+                match unit_buf {                  
+                    Some(ref mut u) => {
+                        u.fraction = sn;
                     }
-                    Err(_) => {
-                        return Err(format!(
-                            "Unable to parse value {} as a number: number too large to fit in target type", n)
-                        )
+                    None => {
+                        unit_buf = Some(DateTimeFieldValue {
+                            unit: 0,
+                            fraction: sn,
+                        });
                     }
-                }                    
+                }        
             }
             // Allow skipping expected spaces (Delim), numbers, dots, and nanoseconds.
             (_, Num(_, _)) | (_, Dot) | (_, Nanos(_)) | (_, Delim) => {

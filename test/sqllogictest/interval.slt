@@ -740,14 +740,14 @@ SELECT INTERVAL '2147483647 days 2562047788 hours 54.775807 seconds'
 2147483647 days 2562047788:00:54.775807
 
 query T
-SELECT INTERVAL '2147483647 days 2562047787 hours 59 minutes 59.999999 seconds'
-----
-2147483647 days 2562047787:59:59.999999
-
-query T
 SELECT INTERVAL '-2147483648 days -2562047788 hours -54.775808 seconds'
 ----
 -2147483648 days -2562047788:00:54.775808
+
+query T
+SELECT INTERVAL '2147483647 days 2562047787 hours 59 minutes 59.999999 seconds'
+----
+2147483647 days 2562047787:59:59.999999
 
 query T
 SELECT INTERVAL '-2147483648 days -2562047787 hours -59 minutes -59.999999 seconds'
@@ -777,6 +777,11 @@ SELECT INTERVAL '2147483647' MONTH / 0.99
 
 statement error interval out of range
 SELECT INTERVAL '-2147483647' MONTH * 1.01
+
+# Largest number of cumulative nanoseconds
+SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.999999999 minutes 0.999999999 seconds';
+----
+29 days 49:01:00.997318
 
 # Largest and smallest numbers of cumulative microseconds
 query T
