@@ -132,6 +132,24 @@ SET does_not_exist = DEFAULT
 statement error unrecognized configuration parameter
 RESET does_not_exist
 
+# Test transaction isolation
+
+query T
+SHOW transaction_isolation
+----
+SERIALIZABLE
+
+statement ok
+SET transaction_isolation = STRICT_SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+STRICT_SERIALIZABLE
+
+statement error invalid value for parameter "transaction_isolation": "read_committed"
+SET transaction_isolation = READ_COMMITTED
+
 # Test that a failed transaction will not commit var changes.
 
 statement ok

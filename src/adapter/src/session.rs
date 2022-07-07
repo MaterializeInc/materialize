@@ -30,7 +30,7 @@ use crate::client::ConnectionId;
 use crate::coord::{CoordTimestamp, PeekResponseUnary};
 use crate::error::AdapterError;
 
-mod vars;
+pub(crate) mod vars;
 
 pub use self::vars::{
     ClientSeverity, Var, Vars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,

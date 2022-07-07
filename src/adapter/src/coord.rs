@@ -169,7 +169,8 @@ use crate::coord::read_holds::ReadHolds;
 use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    vars, EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus,
+    WriteOp,
 };
 use crate::sink_connection;
 use crate::tail::PendingTail;
@@ -4494,16 +4495,34 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&ts);
         }
 
-        if when.advance_to_since() {
+        let strict_serializable =
+            session.vars().transaction_isolation() == &vars::IsolationLevel::StrictSerializable;
+        if when.advance_to_since(strict_serializable) {
             candidate.advance_by(since.borrow());
         }
         let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-        if when.advance_to_table_ts(uses_tables) {
-            candidate.join_assign(&self.get_local_read_ts());
+        if when.advance_to_global_ts(uses_tables, strict_serializable) {
+            let timeline = self.validate_timeline(id_bundle.iter())?;
+            if let Some(timeline) = timeline {
+                let timestamp_oracle = &mut self
+                    .global_timelines
+                    .get_mut(&timeline)
+                    .expect("all timelines have a timestamp oracle")
+                    .oracle;
+                candidate.join_assign(&timestamp_oracle.read_ts());
+            }
         }
-        if when.advance_to_upper(uses_tables) {
+        if when.advance_to_upper(uses_tables, strict_serializable) {
             let upper = self.largest_not_in_advance_of_upper(&id_bundle);
             candidate.join_assign(&upper);
+        }
+
+        if strict_serializable {
+            assert!(
+                since.less_equal(&candidate),
+                "the strict serializable isolation level guarantees that the timestamp chosen is \
+                greater than or equal to since via read holds"
+            )
         }
 
         // If the timestamp is greater or equal to some element in `since` we are

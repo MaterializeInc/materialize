@@ -1326,12 +1326,14 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(config).unwrap();
     let mut mz_client = server.connect(postgres::NoTls)?;
 
+    let view_name = "v_hold";
+    let source_name = "source_hold";
     let (pg_client, cleanup_fn) = create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
-        "v",
+        view_name,
         "(a INT)",
-        "mz_source",
+        source_name,
     )?;
 
     // Create user table in Materialize.
@@ -1344,14 +1346,15 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     for _ in 0..source_rows {
         let _ = server
             .runtime
-            .block_on(pg_client.execute("INSERT INTO v VALUES (42);", &[]))?;
+            .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
     }
 
     // Wait for view to be populated.
     Retry::default()
+        .max_duration(Duration::from_secs(10))
         .retry(|_| {
             let rows = mz_client
-                .query_one("SELECT COUNT(*) FROM v;", &[])
+                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
                 .unwrap()
                 .get::<_, i64>(0);
             if rows == source_rows {
@@ -1368,9 +1371,88 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     let mut mz_join_client = server.connect(postgres::NoTls)?;
     let _ = mz_ore::test::timeout(Duration::from_millis(1_000), move || {
         Ok(mz_join_client
-            .query_one("SELECT COUNT(t.a) FROM t, v;", &[])?
+            .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])?
             .get::<_, i64>(0))
     })?;
+
+    cleanup_fn(&mut mz_client)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_linearizability() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default()
+        .with_now(NOW_ZERO.clone())
+        .unsafe_mode();
+    let server = util::start_server(config)?;
+    let mut mz_client = server.connect(postgres::NoTls)?;
+
+    let view_name = "v_lin";
+    let source_name = "source_lin";
+    let (pg_client, cleanup_fn) = create_postgres_source_with_table(
+        &server.runtime,
+        &mut mz_client,
+        view_name,
+        "(a INT)",
+        source_name,
+    )?;
+    // Insert value into postgres table.
+    let _ = server
+        .runtime
+        .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
+
+    // Create user table in Materialize.
+    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
+    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
+
+    // Wait for view to be populated.
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let rows = mz_client
+                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
+                .unwrap()
+                .get::<_, i64>(0);
+            if rows == 1 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Waiting for 1 row to be ingested. Currently at {rows}."
+                ))
+            }
+        })
+        .unwrap();
+
+    // The user table's write frontier will be close to zero because we use a deterministic
+    // now function in this test. It may be slightly higher than zero because bootstrapping
+    // and background tasks push the global timestamp forward.
+    // The materialized view's write frontier will be close to the system time because it uses
+    // the system clock to close timestamps.
+    // Therefor queries that only involve the view will normally happen at a higher timestamp
+    // than queries that involve the user table. However, we prevent this when in strict
+    // serializable mode.
+
+    mz_client.batch_execute(&"SET transaction_isolation = SERIALIZABLE")?;
+    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    // In serializable transaction isolation, read timestamps can go backwards.
+    assert!(join_ts < view_ts);
+
+    mz_client.batch_execute(&"SET transaction_isolation = STRICT_SERIALIZABLE")?;
+    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    // Since the query on the join was done after the query on the view, it should have a higher or
+    // equal timestamp in strict serializable mode.
+    assert!(join_ts >= view_ts);
+
+    mz_client.batch_execute(&"SET transaction_isolation = SERIALIZABLE")?;
+    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    // If we go back to serializable, then timestamps can revert again.
+    assert!(join_ts < view_ts);
 
     cleanup_fn(&mut mz_client)?;
 
@@ -1420,6 +1502,10 @@ fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMil
 ///
 /// IMPORTANT: Make sure to call closure that is returned at
 /// the end of the test to clean up Postgres state.
+///
+/// WARNING: If multiple tests use this, and the tests are run
+/// in parallel, then make sure the test use different postgres
+/// tables.
 fn create_postgres_source_with_table(
     runtime: &Arc<Runtime>,
     mz_client: &mut postgres::Client,
@@ -1467,6 +1553,10 @@ fn create_postgres_source_with_table(
         runtime.block_on(pg_client.execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[]))?;
     let _ = runtime
         .block_on(pg_client.execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[]))?;
+    let _ = runtime.block_on(pg_client.execute(
+        &format!("SELECT pg_drop_replication_slot(slot_name) from pg_replication_slots;"),
+        &[],
+    ))?;
     let _ = runtime
         .block_on(pg_client.execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[]))?;
     let _ = runtime.block_on(pg_client.execute(

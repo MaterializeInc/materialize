@@ -166,9 +166,9 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
-const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
+const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     name: UncasedStr::new("transaction_isolation"),
-    value: "serializable",
+    value: &IsolationLevel::Serializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
 
@@ -217,7 +217,7 @@ pub struct Vars {
     standard_conforming_strings: ServerVar<bool>,
     statement_timeout: SessionVar<Duration>,
     timezone: SessionVar<TimeZone>,
-    transaction_isolation: ServerVar<str>,
+    transaction_isolation: SessionVar<IsolationLevel>,
 }
 
 impl Default for Vars {
@@ -242,7 +242,7 @@ impl Default for Vars {
             standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
             statement_timeout: SessionVar::new(&STATEMENT_TIMEOUT),
             timezone: SessionVar::new(&TIMEZONE),
-            transaction_isolation: TRANSACTION_ISOLATION,
+            transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
         }
     }
 }
@@ -467,7 +467,15 @@ impl Vars {
                 });
             }
         } else if name == TRANSACTION_ISOLATION.name {
-            Err(AdapterError::ReadOnlyParameter(&TRANSACTION_ISOLATION))
+            if let Ok(_) = IsolationLevel::parse(value) {
+                self.transaction_isolation.set(value, local)
+            } else {
+                return Err(AdapterError::ConstrainedParameter {
+                    parameter: &TRANSACTION_ISOLATION,
+                    value: value.into(),
+                    valid_values: Some(IsolationLevel::valid_values()),
+                });
+            }
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -657,8 +665,8 @@ impl Vars {
 
     /// Returns the value of the `transaction_isolation` configuration
     /// parameter.
-    pub fn transaction_isolation(&self) -> &'static str {
-        self.transaction_isolation.value
+    pub fn transaction_isolation(&self) -> &IsolationLevel {
+        self.transaction_isolation.value()
     }
 }
 
@@ -1165,6 +1173,49 @@ impl Value for TimeZone {
             Ok(TimeZone::UTC)
         } else if s == "+00:00" {
             Ok(TimeZone::FixedOffset("+00:00"))
+        } else {
+            Err(())
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
+    }
+}
+
+/// List of valid isolation levels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsolationLevel {
+    Serializable,
+    StrictSerializable,
+}
+
+impl IsolationLevel {
+    fn as_str(&self) -> &'static str {
+        match self {
+            IsolationLevel::Serializable => "SERIALIZABLE",
+            IsolationLevel::StrictSerializable => "STRICT_SERIALIZABLE",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![
+            IsolationLevel::Serializable.as_str(),
+            IsolationLevel::StrictSerializable.as_str(),
+        ]
+    }
+}
+
+impl Value for IsolationLevel {
+    const TYPE_NAME: &'static str = "string";
+
+    fn parse(s: &str) -> Result<Self::Owned, ()> {
+        let s = UncasedStr::new(s);
+
+        if s == IsolationLevel::Serializable.as_str() {
+            Ok(IsolationLevel::Serializable)
+        } else if s == IsolationLevel::StrictSerializable.as_str() {
+            Ok(IsolationLevel::StrictSerializable)
         } else {
             Err(())
         }
