@@ -3036,8 +3036,9 @@ impl<S: Append> Catalog<S> {
                     log_collections,
                 } => {
                     info!("create replica {} of instance {}", name, on_cluster_name);
-                    let source_ids: Vec<GlobalId> =
-                        log_collections.iter().map(|(_, id)| *id).collect();
+                    for (_log, id) in &log_collections {
+                        builtin_table_updates.extend(state.pack_item_update(*id, 1));
+                    }
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
                     state.insert_compute_instance_replica(
                         compute_instance_id,
@@ -3051,9 +3052,6 @@ impl<S: Append> Catalog<S> {
                         &name,
                         1,
                     ));
-                    for id in source_ids {
-                        builtin_table_updates.extend(state.pack_item_update(id, 1));
-                    }
                 }
 
                 Action::CreateItem {
