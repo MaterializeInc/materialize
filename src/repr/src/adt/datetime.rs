@@ -1492,7 +1492,7 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                 None => {
                     // create signed copy of *val
                     let sval = i64::try_from(i128::from(*val) * i128::from(sign))
-                        .map_err(|_| String::from(format!("Unable to parse value {} as a number: number too large to fit in target type", *val)))?;
+                        .map_err(|_| format!("Unable to parse value {} as a number: number too large to fit in target type", *val))?;
 
                     unit_buf = Some(DateTimeFieldValue {
                         unit: sval,
@@ -1537,9 +1537,9 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
 
                 // create signed copy of n
                 let sn  = i64::try_from(i128::from(n) * i128::from(sign))
-                    .map_err(|_| String::from(format!("Unable to parse value {} as a number: number too large to fit in target type", n)))?;
+                    .map_err(|_| format!("Unable to parse value {} as a number: number too large to fit in target type", n))?;
 
-                match unit_buf {                  
+                match unit_buf {
                     Some(ref mut u) => {
                         u.fraction = sn;
                     }
@@ -1549,7 +1549,7 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                             fraction: sn,
                         });
                     }
-                }        
+                }
             }
             // Allow skipping expected spaces (Delim), numbers, dots, and nanoseconds.
             (_, Num(_, _)) | (_, Dot) | (_, Nanos(_)) | (_, Delim) => {
