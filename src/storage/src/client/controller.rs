@@ -490,8 +490,37 @@ where
                 .await
                 .expect("invalid persist usage");
 
-            let collection_state =
-                CollectionState::new(description.clone(), since_handle.since().clone(), metadata);
+            let mut collection_since = since_handle.since().to_owned();
+
+            let mut storage_dependencies = self.get_storage_dependencies(&description);
+            // Canonicalize dependencies.
+            // Probably redundant based on key structure, but doing for sanity.
+            storage_dependencies.sort();
+            storage_dependencies.dedup();
+
+            // Install read holds for our dependencies, if any, and get the
+            // frontier at which we can read from all dependencies.
+            let dependency_since = self
+                .install_read_capabilities(&storage_dependencies)
+                .await?;
+
+            if !storage_dependencies.is_empty() {
+                println!(
+                    "{:?} depends on {:?}, forwarding since {:?} to {:?}",
+                    id, storage_dependencies, collection_since, dependency_since
+                );
+            }
+
+            // Advance the collection since to the since of dependencies, if
+            // any.
+            collection_since.join_assign(&dependency_since);
+
+            let collection_state = CollectionState::new(
+                description.clone(),
+                collection_since.clone(),
+                storage_dependencies,
+                metadata,
+            );
 
             self.state.persist_handles.insert(
                 id,
@@ -553,6 +582,7 @@ where
                         typ: description.desc.typ().clone(),
                     },
                     resume_upper,
+                    dependency_since,
                 };
 
                 // Provision a storage host for the ingestion.
@@ -772,6 +802,13 @@ where
                 let changes = collection.read_capabilities.update_iter(update.drain());
                 update.extend(changes);
 
+                for id in collection.storage_dependencies.iter() {
+                    updates
+                        .entry(*id)
+                        .or_insert_with(ChangeBatch::new)
+                        .extend(update.iter().cloned());
+                }
+
                 let (changes, frontier) = storage_net
                     .entry(key)
                     .or_insert_with(|| (ChangeBatch::new(), Antichain::new()));
@@ -913,6 +950,66 @@ where
         }
         Ok(())
     }
+
+    /// Returns IDs for all storage collections that the given
+    /// `collection_description` depends on.
+    fn get_storage_dependencies(
+        &self,
+        collection_description: &CollectionDescription,
+    ) -> Vec<GlobalId> {
+        let mut result = Vec::new();
+
+        if let Some(ingestion) = &collection_description.ingestion {
+            match &ingestion.desc.envelope {
+                SourceEnvelope::Debezium(envelope_debezium) => {
+                    let tx_metadata_topic = envelope_debezium.mode.tx_metadata();
+                    if let Some(tx_input) = tx_metadata_topic {
+                        result.push(tx_input.tx_metadata_global_id);
+                    }
+                }
+                // NOTE: We explicitly list envelopes instead of using a catch all to
+                // make sure that we change this when adding/removing and envelope.
+                SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2 => {
+                    // No storage dependencies.
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Install read capabilities on the given `storage_dependencies` and return
+    /// the frontier at which we are guaranteed to be able to read from all
+    /// dependencies.
+    async fn install_read_capabilities(
+        &mut self,
+        storage_dependencies: &[GlobalId],
+    ) -> Result<Antichain<T>, StorageError> {
+        // First, determine the since frontier at which we can read from all
+        // dependencies.
+        let mut dependency_since = Antichain::from_elem(T::minimum());
+        for id in storage_dependencies {
+            let collection = self.collection(*id)?;
+            let since = collection.implied_capability.clone();
+            dependency_since.join_assign(&since);
+        }
+
+        let mut changes = ChangeBatch::new();
+        for time in dependency_since.iter() {
+            changes.update(time.clone(), 1);
+        }
+
+        // Then install holds for all dependencies at the determined since.
+        let mut storage_read_updates = storage_dependencies
+            .iter()
+            .map(|id| (*id, changes.clone()))
+            .collect();
+
+        self.update_read_capabilities(&mut storage_read_updates)
+            .await?;
+
+        Ok(dependency_since)
+    }
 }
 
 /// State maintained about individual collections.
@@ -930,6 +1027,9 @@ pub struct CollectionState<T> {
     pub implied_capability: Antichain<T>,
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
+
+    /// Storage identifiers on which this collection depends.
+    pub storage_dependencies: Vec<GlobalId>,
 
     /// Reported progress in the write capabilities.
     ///
@@ -954,6 +1054,7 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: CollectionDescription,
         since: Antichain<T>,
+        storage_dependencies: Vec<GlobalId>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -962,6 +1063,7 @@ impl<T: Timestamp> CollectionState<T> {
             description,
             read_capabilities,
             implied_capability: since.clone(),
+            storage_dependencies,
             read_policy: ReadPolicy::ValidFrom(since),
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             collection_metadata: metadata,

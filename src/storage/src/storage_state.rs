@@ -126,6 +126,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ingestion.id,
                         ingestion.description,
                         ingestion.resume_upper,
+                        ingestion.dependency_since,
                     );
 
                     self.storage_state.reported_frontiers.insert(

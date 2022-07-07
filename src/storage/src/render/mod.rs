@@ -128,6 +128,7 @@ pub fn build_storage_dataflow<A: Allocate>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<mz_repr::Timestamp>,
+    dependency_since: Antichain<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
@@ -146,6 +147,7 @@ pub fn build_storage_dataflow<A: Allocate>(
                 id,
                 description.clone(),
                 resume_upper,
+                dependency_since,
                 // NOTE: For now sources never have LinearOperators but might have in the future
                 None,
                 storage_state,

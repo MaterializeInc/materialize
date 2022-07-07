@@ -62,6 +62,9 @@ enum SourceType<Delimited, ByteStream, RowSource, AppendRowSource> {
 /// as requested by the original `CREATE SOURCE` statement,
 /// encapsulated in the passed `SourceInstanceDesc`.
 ///
+/// The given `dependency_since` is the frontier at which we are guaranteed to
+/// be able to read from storage dependencies, if any.
+///
 /// The first element in the returned tuple is the pair of [`Collection`]s,
 /// the second is a type-erased token that will keep the source
 /// alive as long as it is not dropped.
@@ -75,6 +78,7 @@ pub fn render_source<G>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<G::Timestamp>,
+    dependency_since: Antichain<G::Timestamp>,
     mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
@@ -318,15 +322,13 @@ where
                                 .expect("dependent source missing from ingestion description")
                                 .clone();
                             let persist_clients = Arc::clone(&storage_state.persist_clients);
-                            let upper_ts = resume_upper.as_option().copied().unwrap();
-                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
                             let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                 persist_source::persist_source(
                                     scope,
                                     format!("debezium_tx-{}", source_name),
                                     persist_clients,
                                     tx_storage_metadata,
-                                    as_of,
+                                    dependency_since,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),
