@@ -1020,6 +1020,14 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false)),
 });
+pub static MZ_SSH_TUNNEL_CONNECTORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_ssh_tunnel_connectors",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("public_key", ScalarType::String.nullable(false)),
+});
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
     schema: MZ_CATALOG_SCHEMA,
@@ -2113,6 +2121,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
+        Builtin::Table(&MZ_SSH_TUNNEL_CONNECTORS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS_BASE),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),

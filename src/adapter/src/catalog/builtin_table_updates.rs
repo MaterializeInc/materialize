@@ -29,7 +29,7 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_RECORDED_VIEWS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS,
-    MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTORS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, RecordedView,
@@ -298,7 +298,7 @@ impl CatalogState {
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        vec![BuiltinTableUpdate {
+        let mut updates = vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CONNECTIONS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
@@ -312,7 +312,30 @@ impl CatalogState {
                         "confluent-schema-registry"
                     }
                     mz_storage::client::connections::Connection::Postgres { .. } => "postgres",
+                    mz_storage::client::connections::Connection::Ssh { .. } => "ssh",
                 }),
+            ]),
+            diff,
+        }];
+        if let mz_storage::client::connections::Connection::Ssh(ssh) = &connection.connection {
+            updates.extend(self.pack_ssh_tunnel_connection_update(id, name, &ssh.public_key, diff));
+        }
+        updates
+    }
+
+    fn pack_ssh_tunnel_connection_update(
+        &self,
+        id: GlobalId,
+        name: &str,
+        public_key: &str,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SSH_TUNNEL_CONNECTORS),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(name),
+                Datum::String(public_key),
             ]),
             diff,
         }]

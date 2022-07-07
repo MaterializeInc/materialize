@@ -150,6 +150,7 @@ pub enum Connection {
     Kafka(KafkaConnection),
     Csr(CsrConnection),
     Postgres(PostgresConnection),
+    Ssh(SshConnection),
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -597,7 +598,6 @@ pub trait PopulateClientConfig {
 
 /// A connection to a PostgreSQL server.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-
 pub struct PostgresConnection {
     /// The hostname of the server.
     pub host: String,
@@ -711,4 +711,14 @@ impl Arbitrary for PostgresConnection {
             )
             .boxed()
     }
+}
+
+/// A connection to a SSH tunnel.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SshConnection {
+    pub host: String,
+    pub port: i32,
+    pub user: String,
+    pub public_key: String,
+    pub private_key: String,
 }

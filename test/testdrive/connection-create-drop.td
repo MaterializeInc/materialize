@@ -243,6 +243,19 @@ importee1  importee2
 --------------------------------
 (f)        "(\"(1234,5678)\")"
 
+# SSH
+
+> CREATE CONNECTION ssh_conn
+  FOR SSH TUNNEL
+    HOST 'host',
+    USER 'user',
+    PORT 1
+
+> SELECT * from mz_ssh_tunnel_connectors
+id creature
+-----------
+1  lizard
+
 # Test invalid connection parameter combinations
 
 ## Kafka
@@ -316,3 +329,9 @@ contains: requires both SSL KEY and SSL CERTIFICATE
      URL 'http://localhost',
     SSL CERTIFICATE = ''
 contains: requires both SSL KEY and SSL CERTIFICATE
+
+## SSH
+! CREATE CONNECTION missing_user
+    FOR SSH TUNNEL
+    USER 'foo'
+contains: HOST option is required
