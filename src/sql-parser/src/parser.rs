@@ -5025,9 +5025,11 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(FOR)?;
 
-        // VIEW view_name | query
+        // VIEW name | RECORDED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[RECORDED, VIEW]) {
+            Explainee::RecordedView(self.parse_raw_name()?)
         } else {
             Explainee::Query(self.parse_query()?)
         };
@@ -5116,9 +5118,11 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
 
-        // VIEW view_name | query
+        // VIEW name | RECORDED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[RECORDED, VIEW]) {
+            Explainee::RecordedView(self.parse_raw_name()?)
         } else {
             Explainee::Query(self.parse_query()?)
         };

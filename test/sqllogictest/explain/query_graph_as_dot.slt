@@ -17,6 +17,10 @@ statement ok
 CREATE MATERIALIZED VIEW v AS
 SELECT * FROM t WHERE a IS NOT NULL
 
+statement ok
+CREATE RECORDED VIEW rv AS
+SELECT * FROM t WHERE a IS NOT NULL
+
 mode cockroach
 
 query T multiline
@@ -72,6 +76,37 @@ EOF
 query T multiline
 EXPLAIN QUERY GRAPH WITH (TYPES) AS DOT FOR
 VIEW v
+----
+digraph G {
+    compound = true
+    labeljust = l
+    label = ""
+    node [ shape = box ]
+    subgraph cluster1 {
+        label = "Box1:Select"
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer)| 1: Q0.C1 (integer?)| !(isnull(Q0.C0)) }" ]
+        {
+            rank = same
+            node [ shape = circle ]
+            Q0 [ label = "Q0(F)" ]
+        }
+    }
+    subgraph cluster0 {
+        label = "Box0:Get"
+        boxhead0 [ shape = record, label = "{ Distinct: Preserve| 0: C0 (integer?)| 1: C1 (integer?) }" ]
+        {
+            rank = same
+        }
+    }
+    edge [ arrowhead = none, style = dashed ]
+    Q0 -> boxhead0 [ lhead = cluster0 ]
+}
+
+EOF
+
+query T multiline
+EXPLAIN QUERY GRAPH WITH (TYPES) AS DOT FOR
+RECORDED VIEW rv
 ----
 digraph G {
     compound = true

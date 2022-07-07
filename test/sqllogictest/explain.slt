@@ -547,3 +547,14 @@ Query:
 Finish order_by=(#1 asc nulls_last, #0 desc nulls_first) limit=5 offset=0 project=(#0, #1)
 
 EOF
+
+statement ok
+CREATE RECORDED VIEW rv AS SELECT * FROM (SELECT 1)
+
+query T multiline
+EXPLAIN PLAN FOR RECORDED VIEW rv
+----
+%0 =
+| Constant (1)
+
+EOF

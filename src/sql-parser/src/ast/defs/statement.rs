@@ -2212,6 +2212,7 @@ impl_display!(ExplainStageNew);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee<T: AstInfo> {
     View(T::ObjectName),
+    RecordedView(T::ObjectName),
     Query(Query<T>),
 }
 
@@ -2226,6 +2227,10 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
         match self {
             Self::View(name) => {
                 f.write_str("VIEW ");
+                f.write_node(name);
+            }
+            Self::RecordedView(name) => {
+                f.write_str("RECORDED VIEW ");
                 f.write_node(name);
             }
             Self::Query(query) => f.write_node(query),
