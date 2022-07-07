@@ -1015,6 +1015,8 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write;
+
     use super::*;
 
     #[test]
@@ -1105,7 +1107,8 @@ mod tests {
                         assert!(tc.input.is_empty());
                         let mut s = String::new();
                         for merge_req in trace.take_merge_reqs() {
-                            s.push_str(&format!(
+                            let _ = write!(
+                                &mut s,
                                 "{:?}{:?}{:?} {}\n",
                                 merge_req.desc.lower().elements(),
                                 merge_req.desc.upper().elements(),
@@ -1117,7 +1120,7 @@ mod tests {
                                     .cloned()
                                     .collect::<Vec<_>>()
                                     .join(" ")
-                            ));
+                            );
                         }
                         if s.is_empty() {
                             s.push_str("<empty>\n");

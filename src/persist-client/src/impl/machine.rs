@@ -612,6 +612,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::fmt::Write;
 
     use differential_dataflow::trace::Description;
     use mz_ore::cast::CastFrom;
@@ -719,7 +720,7 @@ mod tests {
 
                             let mut s = String::new();
                             for (idx, key) in batch.keys.iter().enumerate() {
-                                s.push_str(&format!("<part {}>\n", idx));
+                                let _ = write!(&mut s, "<part {}>\n", idx);
                                 fetch_batch_part(
                                     &shard_id,
                                     client.blob.as_ref(),
@@ -728,7 +729,7 @@ mod tests {
                                     &batch.desc,
                                     |k, _v, t, d| {
                                         let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
-                                        s.push_str(&format!("{} {} {}\n", k, t, d));
+                                        let _ = write!(&mut s, "{} {} {}\n", k, t, d);
                                     },
                                 )
                                 .await
@@ -828,12 +829,13 @@ mod tests {
                                     match event {
                                         ListenEvent::Updates(x) => {
                                             for ((k, _v), t, d) in x.iter() {
-                                                s.push_str(&format!(
+                                                let _ = write!(
+                                                    &mut s,
                                                     "{} {} {}\n",
                                                     k.as_ref().unwrap(),
                                                     t,
                                                     d
-                                                ));
+                                                );
                                             }
                                         }
                                         ListenEvent::Progress(x) => {
