@@ -14,7 +14,7 @@ use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::location::SeqNo;
+use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -228,17 +228,6 @@ where
         }
     }
 
-    pub fn decode(buf: &[u8]) -> Result<Self, InvalidUsage<T>> {
-        let state: StateRollupMeta = bincode::deserialize(buf)
-            .map_err(|err| format!("unable to decode state: {}", err))
-            // We received a State that we couldn't decode. This could happen if
-            // persist messes up backward/forward compatibility, if the durable
-            // data was corrupted, or if operations messes up deployment. In any
-            // case, fail loudly.
-            .expect("internal error: invalid encoded state");
-        Self::try_from(&state)
-    }
-
     pub fn shard_id(&self) -> ShardId {
         self.shard_id
     }
@@ -363,7 +352,7 @@ pub struct TraceMeta {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-struct StateRollupMeta {
+pub struct StateRollupMeta {
     shard_id: ShardId,
     key_codec: String,
     val_codec: String,
@@ -373,6 +362,51 @@ struct StateRollupMeta {
     seqno: SeqNo,
     readers: Vec<(ReaderId, AntichainMeta, SeqNo)>,
     trace: TraceMeta,
+}
+
+impl StateRollupMeta {
+    pub fn decode(current: &VersionedData) -> Self {
+        let state: StateRollupMeta = bincode::deserialize(&current.data)
+            .map_err(|err| format!("unable to decode state: {}", err))
+            // We received a State that we couldn't decode. This could happen if
+            // persist messes up backward/forward compatibility, if the durable
+            // data was corrupted, or if operations messes up deployment. In any
+            // case, fail loudly.
+            .expect("internal error: invalid encoded state");
+        debug_assert_eq!(current.seqno, state.seqno);
+        state
+    }
+
+    pub fn since<T: Timestamp + Lattice + Codec64>(&self) -> Antichain<T> {
+        // WIP return an error instead of this assert
+        assert_eq!(self.ts_codec, T::codec_name());
+        let elements = self
+            .trace
+            .since
+            .0
+            .iter()
+            .map(|x| T::decode(*x))
+            .collect::<Vec<_>>();
+        Antichain::from(elements)
+    }
+
+    pub fn upper<T: Timestamp + Lattice + Codec64>(&self) -> Antichain<T> {
+        // WIP return an error instead of this assert
+        assert_eq!(self.ts_codec, T::codec_name());
+        match self.trace.spine.last() {
+            Some(b) => {
+                let elements = b
+                    .desc
+                    .upper
+                    .0
+                    .iter()
+                    .map(|x| T::decode(*x))
+                    .collect::<Vec<_>>();
+                Antichain::from(elements)
+            }
+            None => Antichain::from_elem(T::minimum()),
+        }
+    }
 }
 
 mod codec_impls {

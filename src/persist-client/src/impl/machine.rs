@@ -27,7 +27,9 @@ use crate::error::InvalidUsage;
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
-use crate::r#impl::state::{HollowBatch, ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::state::{
+    HollowBatch, ReadCapability, Since, State, StateCollections, StateRollupMeta, Upper,
+};
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
 use crate::ShardId;
@@ -427,57 +429,47 @@ where
     ) -> Result<State<K, V, T, D>, InvalidUsage<T>> {
         debug!("Machine::maybe_init_state shard_id={}", shard_id);
 
+        let current = fetch_raw_state(consensus, retry_metrics, shard_id).await;
+
+        // First, check if the shard has already been initialized.
+        if let Some(current) = current {
+            return State::try_from(&current);
+        }
+
+        // It hasn't been initialized, try initializing it.
+        let state = State::new(shard_id);
+        let new = VersionedData::from((state.seqno(), &state));
+        trace!(
+            "maybe_init_state attempting {}\n  state={:?}",
+            new.seqno,
+            state
+        );
         let path = shard_id.to_string();
-        let mut current = retry_external(&retry_metrics.external.maybe_init_state_head, || async {
-            consensus.head(Instant::now() + FOREVER, &path).await
+        let cas_res = retry_external(&retry_metrics.external.maybe_init_state_cas, || async {
+            consensus
+                .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
+                .await
         })
         .await;
-
-        loop {
-            // First, check if the shard has already been initialized.
-            if let Some(current) = current.as_ref() {
-                let current_state = match State::decode(&current.data) {
-                    Ok(x) => x,
-                    Err(err) => return Err(err),
-                };
-                debug_assert_eq!(current.seqno, current_state.seqno());
-                return Ok(current_state);
+        match cas_res {
+            Ok(()) => {
+                trace!(
+                    "maybe_init_state succeeded {}\n  state={:?}",
+                    state.seqno(),
+                    state
+                );
+                Ok(state)
             }
-
-            // It hasn't been initialized, try initializing it.
-            let state = State::new(shard_id);
-            let new = VersionedData::from((state.seqno(), &state));
-            trace!(
-                "maybe_init_state attempting {}\n  state={:?}",
-                new.seqno,
-                state
-            );
-            let cas_res = retry_external(&retry_metrics.external.maybe_init_state_cas, || async {
-                consensus
-                    .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
-                    .await
-            })
-            .await;
-            match cas_res {
-                Ok(()) => {
-                    trace!(
-                        "maybe_init_state succeeded {}\n  state={:?}",
-                        state.seqno(),
-                        state
-                    );
-                    return Ok(state);
-                }
-                Err(x) => {
-                    // We lost a CaS race, use the value included in the CaS
-                    // expectation error. Because we used None for expected,
-                    // this should never be None.
-                    debug!(
-                        "maybe_init_state lost the CaS race, using current value: {:?}",
-                        x.as_ref().map(|x| x.seqno)
-                    );
-                    debug_assert!(x.is_some());
-                    current = x
-                }
+            Err(current) => {
+                // We lost a CaS race, use the value included in the CaS
+                // expectation error. Because we used None for expected,
+                // this should never be None.
+                debug!(
+                    "maybe_init_state lost the CaS race, using current value: {:?}",
+                    current.as_ref().map(|x| x.seqno)
+                );
+                let current = current.expect("None incorrectly returned as current");
+                State::try_from(&StateRollupMeta::decode(&current))
             }
         }
     }
@@ -607,6 +599,21 @@ where
             Err(ExternalError::Indeterminate(x)) => return Err(x),
         }
     }
+}
+
+pub(crate) async fn fetch_raw_state(
+    consensus: &(dyn Consensus + Send + Sync),
+    retry_metrics: &RetriesMetrics,
+    shard_id: ShardId,
+) -> Option<StateRollupMeta> {
+    debug!("Machine::fetch_raw_state shard_id={}", shard_id);
+
+    let path = shard_id.to_string();
+    let current = retry_external(&retry_metrics.external.maybe_init_state_head, || async {
+        consensus.head(Instant::now() + FOREVER, &path).await
+    })
+    .await;
+    current.as_ref().map(StateRollupMeta::decode)
 }
 
 #[cfg(test)]

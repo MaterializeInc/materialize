@@ -30,13 +30,13 @@ use mz_persist_types::{Codec, Codec64};
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
-use crate::r#impl::machine::{retry_external, Machine};
+use crate::r#impl::machine::{fetch_raw_state, retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
 
@@ -428,6 +428,38 @@ impl PersistClient {
             upper: shard_upper,
         };
         Ok(writer)
+    }
+
+    /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is not
+    /// linearized with any other operations.
+    ///
+    /// This requires fetching the latest state from consensus and is therefore a potentially
+    /// expensive operation.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn fetch_recent_upper<T: Timestamp + Lattice + Codec64>(
+        &self,
+        shard_id: ShardId,
+    ) -> Option<Antichain<T>> {
+        trace!("PersistClient::fetch_recent_upper");
+        fetch_raw_state(self.consensus.as_ref(), &self.metrics.retries, shard_id)
+            .await
+            .map(|x| x.upper())
+    }
+
+    /// Fetches and returns a recent shard-global `since`. Importantly, this operation is not
+    /// linearized with any other operations.
+    ///
+    /// This requires fetching the latest state from consensus and is therefore
+    /// a potentially expensive operation.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn fetch_recent_since<T: Timestamp + Lattice + Codec64>(
+        &self,
+        shard_id: ShardId,
+    ) -> Option<Antichain<T>> {
+        trace!("PersistClient::fetch_recent_since");
+        fetch_raw_state(self.consensus.as_ref(), &self.metrics.retries, shard_id)
+            .await
+            .map(|x| x.since())
     }
 
     /// Test helper for a [Self::open] call that is expected to succeed.
@@ -912,7 +944,7 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
-        let (mut write2, _read2) = client
+        let (write2, _read2) = client
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
@@ -921,7 +953,10 @@ mod tests {
             .await;
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
-        assert_eq!(write2.fetch_recent_upper().await, Antichain::from_elem(3));
+        assert_eq!(
+            client.fetch_recent_upper::<u64>(shard_id).await,
+            Some(Antichain::from_elem(3))
+        );
 
         // The writer-local upper should not advance if another writer advances the frontier.
         assert_eq!(write2.upper().clone(), Antichain::from_elem(0));
