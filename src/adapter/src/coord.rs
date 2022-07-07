@@ -151,7 +151,7 @@ use mz_storage::client::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConn
 use mz_storage::client::sources::{
     IngestionDescription, PostgresSourceConnection, SourceConnection, Timeline,
 };
-use mz_storage::client::{LinearizedTimestampBindingFeedback, Update};
+use mz_storage::client::Update;
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -1392,12 +1392,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.pending_tails.remove(&sink_id);
                     }
                 }
-            }
-            ControllerResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
-                timestamp: _,
-                peek_id: _,
-            }) => {
-                // TODO(guswynn): communicate `bindings` to `sequence_peek`
             }
             ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
                 let replica_status_granularity = chrono::Duration::seconds(60);

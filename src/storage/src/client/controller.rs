@@ -40,7 +40,6 @@ use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
-use uuid::Uuid;
 
 use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
@@ -152,14 +151,24 @@ pub trait StorageController: Debug + Send {
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     ) -> Result<(), StorageError>;
 
-    /// Send a request to obtain "linearized" timestamps for the given sources.
-    async fn linearize_sources(
-        &mut self,
-        peek_id: Uuid,
-        source_ids: Vec<GlobalId>,
-    ) -> Result<(), anyhow::Error>;
+    /// Waits until the controller is ready to process a response.
+    ///
+    /// This method may block for an arbitrarily long time.
+    ///
+    /// When the method returns, the owner should call
+    /// [`StorageController::process`] to process the ready message.
+    ///
+    /// This method is cancellation safe.
+    async fn ready(&mut self);
 
-    async fn recv(&mut self) -> Option<StorageResponse<Self::Timestamp>>;
+    /// Processes the work queued by [`StorageController::ready`].
+    ///
+    /// This method is guaranteed to return "quickly" unless doing so would
+    /// compromise the correctness of the system.
+    ///
+    /// This method is **not** guaranteed to be cancellation safe. It **must**
+    /// be awaited to completion.
+    async fn process(&mut self) -> Result<(), anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -295,6 +304,7 @@ pub struct StorageControllerState<
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) stash: S,
     pub(super) persist_handles: BTreeMap<GlobalId, PersistHandles<T>>,
+    stashed_response: Option<StorageResponse<T>>,
 }
 
 /// A storage controller for a storage instance.
@@ -409,6 +419,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             collections: BTreeMap::default(),
             stash,
             persist_handles: BTreeMap::default(),
+            stashed_response: None,
         }
     }
 }
@@ -801,7 +812,7 @@ where
         Ok(())
     }
 
-    async fn recv(&mut self) -> Option<StorageResponse<Self::Timestamp>> {
+    async fn ready(&mut self) {
         let mut clients = self
             .hosts
             .clients()
@@ -816,24 +827,17 @@ where
             // of the stream.
             return future::pending().await;
         }
-        clients.next().await.map(|(_id, res)| res)
+        self.state.stashed_response = clients.next().await.map(|(_id, res)| res)
     }
 
-    /// "Linearize" the listed sources.
-    ///
-    /// If these sources are valid and "linearizable", then the response
-    /// will respond with timestamps that are guaranteed to be up-to-date
-    /// with the max offset found at the time of the command issuance.
-    ///
-    /// Note: "linearizable" in this context may not represent
-    /// true linearizability in all cases.
-    async fn linearize_sources(
-        &mut self,
-        _peek_id: Uuid,
-        _source_ids: Vec<GlobalId>,
-    ) -> Result<(), anyhow::Error> {
-        // TODO(guswynn): implement this function
-        Ok(())
+    async fn process(&mut self) -> Result<(), anyhow::Error> {
+        match self.state.stashed_response.take() {
+            None => Ok(()),
+            Some(StorageResponse::FrontierUppers(updates)) => {
+                self.update_write_frontiers(&updates).await?;
+                Ok(())
+            }
+        }
     }
 }
 

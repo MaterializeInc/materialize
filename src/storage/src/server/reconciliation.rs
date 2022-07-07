@@ -125,9 +125,6 @@ where
                 self.responses
                     .push_back(StorageResponse::FrontierUppers(list));
             }
-            StorageResponse::LinearizedTimestamps(_) => {
-                unreachable!("storaged processes never produce this response type");
-            }
         }
     }
 

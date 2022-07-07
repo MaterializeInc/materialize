@@ -63,12 +63,7 @@ message ProtoStorageCommand {
 }
 
 message ProtoStorageResponse {
-    message ProtoLinearizedTimestampBindingFeedback {
-        uint64 timestamp = 1;
-        mz_proto.ProtoU128 peek_id = 3;
-    }
     oneof kind {
         ProtoFrontierUppersKind frontier_uppers = 1;
-        ProtoLinearizedTimestampBindingFeedback linearized_timestamps = 2;
     }
 }
