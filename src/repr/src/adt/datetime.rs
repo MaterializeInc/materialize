@@ -1208,7 +1208,7 @@ fn fill_pdt_date(
                     val += 1900;
                 }
             }
-            pdt.year = Some(DateTimeFieldValue::new(val as i64, 0));
+            pdt.year = Some(DateTimeFieldValue::new(i64::try_from(val).unwrap(), 0));
             actual.pop_front();
             // Trim remaining optional tokens, but never an immediately
             // following colon

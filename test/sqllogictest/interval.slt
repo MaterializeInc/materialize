@@ -948,7 +948,7 @@ query error interval out of range
 SELECT INTERVAL '-1 day' - INTERVAL '-2147483648 days';
 
 query error interval out of range
-SELECT INTERVAL '-1 hours' - INTERVAL '-2562047788 hours';
+SELECT INTERVAL '-1 hours' + INTERVAL '-2562047788 hours';
 
 query error interval out of range
 SELECT -INTERVAL '-2147483648 days -2562047787 hours -59 minutes -59.999999 seconds';
