@@ -10,13 +10,11 @@
 //! Types and traits related to the *decoding* of data for sources.
 
 use anyhow::Context;
-use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_interchange::{avro, protobuf};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::regex::any_regex;
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
 use crate::client::connections::CsrConnection;
@@ -440,20 +438,9 @@ impl ColumnSpec {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RegexEncoding {
     pub regex: mz_repr::adt::regex::Regex,
-}
-
-impl Arbitrary for RegexEncoding {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_regex()
-            .prop_map(|regex| RegexEncoding { regex })
-            .boxed()
-    }
 }
 
 impl RustType<ProtoRegexEncoding> for RegexEncoding {

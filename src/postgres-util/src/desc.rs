@@ -9,8 +9,7 @@
 
 //! Descriptions of PostgreSQL objects.
 
-use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{RustType, TryFromProtoError};
@@ -18,7 +17,7 @@ use mz_proto::{RustType, TryFromProtoError};
 include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.desc.rs"));
 
 /// Describes a table in a PostgreSQL database.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresTableDesc {
     /// The OID of the table.
     pub oid: u32,
@@ -54,29 +53,8 @@ impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
     }
 }
 
-impl Arbitrary for PostgresTableDesc {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<String>(),
-            any::<String>(),
-            any::<u32>(),
-            any::<Vec<PostgresColumnDesc>>(),
-        )
-            .prop_map(|(name, namespace, oid, columns)| PostgresTableDesc {
-                name,
-                namespace,
-                oid,
-                columns,
-            })
-            .boxed()
-    }
-}
-
 /// Describes a column in a [`PostgresTableDesc`].
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresColumnDesc {
     /// The name of the column.
     pub name: String,
@@ -112,30 +90,5 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
             nullable: proto.nullable,
             primary_key: proto.primary_key,
         })
-    }
-}
-
-impl Arbitrary for PostgresColumnDesc {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<String>(),
-            any::<u32>(),
-            any::<i32>(),
-            any::<bool>(),
-            any::<bool>(),
-        )
-            .prop_map(
-                |(name, type_oid, type_mod, nullable, primary_key)| PostgresColumnDesc {
-                    name,
-                    type_oid,
-                    type_mod,
-                    nullable,
-                    primary_key,
-                },
-            )
-            .boxed()
     }
 }

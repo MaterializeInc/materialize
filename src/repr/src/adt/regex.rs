@@ -14,6 +14,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use proptest::prop_compose;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -44,13 +45,15 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 ///
 /// This type also implements [`Serialize`] and [`Deserialize`] via the
 /// [`serde_regex`] crate.
-#[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
+#[derive(Arbitrary, Debug, Clone, Deserialize, Serialize, MzReflect)]
 pub struct Regex(
     // TODO(benesch): watch for a more efficient binary serialization for
     // [`regex::Regex`] (https://github.com/rust-lang/regex/issues/258). The
     // `serde_regex` crate serializes to a string and is forced to recompile the
     // regex during deserialization.
-    #[serde(with = "serde_regex")] pub regex::Regex,
+    #[serde(with = "serde_regex")]
+    #[proptest(strategy(any_regex))]
+    pub regex::Regex,
 );
 
 impl PartialEq<Regex> for Regex {
@@ -112,9 +115,9 @@ prop_compose! {
     pub fn any_regex()
                 (b in BEGINNING_SYMBOLS, c in CHARACTERS,
                  r in REPETITIONS, e in END_SYMBOLS)
-                -> Regex {
+                -> regex::Regex {
         let string = format!("{}{}{}{}", b, c, r, e);
-        Regex(regex::Regex::new(&string).unwrap())
+        regex::Regex::new(&string).unwrap()
     }
 }
 
@@ -127,7 +130,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn regex_protobuf_roundtrip( expect in any_regex() ) {
+        fn regex_protobuf_roundtrip( expect in any::<Regex>() ) {
             let actual =  protobuf_roundtrip::<_, ProtoRegex>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);

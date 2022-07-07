@@ -15,7 +15,6 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail};
 use futures::executor::block_on;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -404,9 +403,10 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
 }
 
 /// A connection to a Confluent Schema Registry.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CsrConnection {
     /// The URL of the schema registry.
+    #[proptest(strategy(any_url))]
     pub url: Url,
     /// Trusted root TLS certificates in PEM format.
     pub root_certs: Vec<StringOrSecret>,
@@ -473,27 +473,6 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
             tls_identity: proto.tls_identity.into_rust()?,
             http_auth: proto.http_auth.into_rust()?,
         })
-    }
-}
-
-impl Arbitrary for CsrConnection {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any_url(),
-            any::<Vec<StringOrSecret>>(),
-            any::<Option<CsrConnectionTlsIdentity>>(),
-            any::<Option<CsrConnectionHttpAuth>>(),
-        )
-            .prop_map(|(url, root_certs, tls_identity, http_auth)| CsrConnection {
-                url,
-                root_certs,
-                tls_identity,
-                http_auth,
-            })
-            .boxed()
     }
 }
 

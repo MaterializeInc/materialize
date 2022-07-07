@@ -3752,6 +3752,7 @@ dependencies = [
  "openssl",
  "postgres-openssl",
  "proptest",
+ "proptest-derive",
  "prost",
  "serde",
  "tokio-postgres",

@@ -19,8 +19,7 @@ use bytes::BufMut;
 use chrono::NaiveDateTime;
 
 use globset::{Glob, GlobBuilder};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Just, Strategy};
-use proptest::prop_oneof;
+use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -663,7 +662,7 @@ impl RustType<ProtoDebeziumTransactionMetadata> for DebeziumTransactionMetadata 
 /// instances pointing at the same Kafka topic that mean that the Debezium guarantees do
 /// not hold, in which case we are required to track individual messages, instead of just
 /// the highest-ever-seen message.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum DebeziumMode {
     /// Do not perform any deduplication
     None,
@@ -673,43 +672,13 @@ pub enum DebeziumMode {
     Full(DebeziumDedupProjection),
     FullInRange {
         projection: DebeziumDedupProjection,
+        #[proptest(strategy = "proptest::option::of(any_naive_datetime())")]
         pad_start: Option<NaiveDateTime>,
+        #[proptest(strategy(any_naive_datetime))]
         start: NaiveDateTime,
+        #[proptest(strategy(any_naive_datetime))]
         end: NaiveDateTime,
     },
-}
-
-impl Arbitrary for DebeziumMode {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            Just(DebeziumMode::None),
-            any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Ordered),
-            any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Full),
-            (
-                any::<DebeziumDedupProjection>(),
-                any::<bool>(),
-                any_naive_datetime(),
-                any_naive_datetime(),
-                any_naive_datetime(),
-            )
-                .prop_map(|(projection, pad_start_option, pad_start, start, end)| {
-                    DebeziumMode::FullInRange {
-                        projection,
-                        pad_start: if pad_start_option {
-                            Some(pad_start)
-                        } else {
-                            None
-                        },
-                        start,
-                        end,
-                    }
-                }),
-        ]
-        .boxed()
-    }
 }
 
 impl RustType<ProtoDebeziumMode> for DebeziumMode {
@@ -1066,7 +1035,7 @@ impl UnplannedSourceEnvelope {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnection {
     pub connection: KafkaConnection,
     pub options: BTreeMap<String, StringOrSecret>,
@@ -1074,6 +1043,7 @@ pub struct KafkaSourceConnection {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, MzOffset>,
     pub group_id_prefix: Option<String>,
+    #[proptest(strategy(any_uuid))]
     pub cluster_id: Uuid,
     /// If present, include the timestamp as an output column of the source with the given name
     pub include_timestamp: Option<IncludedColumnPos>,
@@ -1084,55 +1054,6 @@ pub struct KafkaSourceConnection {
     /// If present, include the offset as an output column of the source with the given name.
     pub include_offset: Option<IncludedColumnPos>,
     pub include_headers: Option<IncludedColumnPos>,
-}
-
-impl Arbitrary for KafkaSourceConnection {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<KafkaConnection>(),
-            any::<BTreeMap<String, StringOrSecret>>(),
-            any::<String>(),
-            any::<HashMap<i32, MzOffset>>(),
-            any::<Option<String>>(),
-            any_uuid(),
-            any::<Option<IncludedColumnPos>>(),
-            any::<Option<IncludedColumnPos>>(),
-            any::<Option<IncludedColumnPos>>(),
-            any::<Option<IncludedColumnPos>>(),
-            any::<Option<IncludedColumnPos>>(),
-        )
-            .prop_map(
-                |(
-                    connection,
-                    options,
-                    topic,
-                    start_offsets,
-                    group_id_prefix,
-                    cluster_id,
-                    include_timestamp,
-                    include_partition,
-                    include_topic,
-                    include_offset,
-                    include_headers,
-                )| KafkaSourceConnection {
-                    connection,
-                    options,
-                    topic,
-                    start_offsets,
-                    group_id_prefix,
-                    cluster_id,
-                    include_timestamp,
-                    include_partition,
-                    include_topic,
-                    include_offset,
-                    include_headers,
-                },
-            )
-            .boxed()
-    }
 }
 
 impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
@@ -1650,9 +1571,10 @@ impl RustType<ProtoPubNubSourceConnection> for PubNubSourceConnection {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct S3SourceConnection {
     pub key_sources: Vec<S3KeySource>,
+    #[proptest(strategy = "proptest::option::of(any_glob())")]
     pub pattern: Option<Glob>,
     pub aws: AwsConfig,
     pub compression: Compression,
@@ -1666,29 +1588,6 @@ fn any_glob() -> impl Strategy<Value = Glob> {
             .build()
             .unwrap()
     })
-}
-
-impl Arbitrary for S3SourceConnection {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<Vec<S3KeySource>>(),
-            proptest::option::of(any_glob()),
-            any::<AwsConfig>(),
-            any::<Compression>(),
-        )
-            .prop_map(
-                |(key_sources, pattern, aws, compression)| S3SourceConnection {
-                    key_sources,
-                    pattern,
-                    aws,
-                    compression,
-                },
-            )
-            .boxed()
-    }
 }
 
 impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
