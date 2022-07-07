@@ -35,7 +35,10 @@ pub struct LoggingConfig {
 impl LoggingConfig {
     /// Announce the identifiers the logging config will populate.
     pub fn log_identifiers<'a>(&'a self) -> impl Iterator<Item = GlobalId> + 'a {
-        self.active_logs.values().cloned()
+        let mut ids = vec![];
+        ids.extend(self.active_logs.values().cloned());
+        ids.extend(self.sink_logs.values().map(|(id, _)| id));
+        ids.into_iter()
     }
 }
 

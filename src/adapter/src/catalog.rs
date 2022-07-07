@@ -27,7 +27,7 @@ use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEve
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_compute_client::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_compute_client::logging::{LogVariant, LoggingConfig as DataflowLoggingConfig};
 use mz_controller::{ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -493,9 +493,35 @@ impl CatalogState {
         replica_name: String,
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
+        log_collections: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
+        let mut log_collections_by_variant = HashMap::new();
+        for (log, source_id) in log_collections {
+            let oid = self.allocate_oid().expect("cannot return error here");
+            let source_name = QualifiedObjectName {
+                qualifiers: ObjectQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                },
+                item: format!("{}_{}", log.name, replica_id),
+            };
+            self.insert_item(
+                source_id,
+                oid,
+                source_name,
+                CatalogItem::Log(BuiltinLog {
+                    variant: log.variant.clone(),
+                    name: log.name,
+                    schema: "mz_catalog",
+                }),
+            );
+
+            log_collections_by_variant.insert(log.variant.clone(), source_id);
+        }
+
         let replica = ComputeInstanceReplica {
             config,
+            log_collections: log_collections_by_variant,
             process_status: HashMap::new(),
         };
         let compute_instance = self.compute_instances_by_id.get_mut(&on_instance).unwrap();
@@ -936,6 +962,7 @@ pub struct ComputeInstance {
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeInstanceReplica {
     pub config: ConcreteComputeInstanceReplicaConfig,
+    pub log_collections: HashMap<LogVariant, GlobalId>,
     pub process_status: HashMap<ProcessId, ComputeInstanceEvent>,
 }
 
@@ -952,7 +979,7 @@ pub struct CatalogEntry {
 pub enum CatalogItem {
     Table(Table),
     Source(Source),
-    Log(&'static BuiltinLog),
+    Log(BuiltinLog),
     View(View),
     RecordedView(RecordedView),
     Sink(Sink),
@@ -1005,7 +1032,7 @@ pub struct Sink {
 #[derive(Debug, Clone, Serialize)]
 pub enum SinkConnectionState {
     Pending(SinkConnectionBuilder),
-    Ready(SinkConnection),
+    Ready(SinkConnection<()>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1203,7 +1230,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Table(i))
             }
-            CatalogItem::Log(i) => Ok(CatalogItem::Log(i)),
+            CatalogItem::Log(i) => Ok(CatalogItem::Log((*i).clone())),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
@@ -1519,9 +1546,12 @@ impl<S: Append> Catalog<S> {
             match builtin {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid().await?;
-                    catalog
-                        .state
-                        .insert_item(id, oid, name.clone(), CatalogItem::Log(log));
+                    catalog.state.insert_item(
+                        id,
+                        oid,
+                        name.clone(),
+                        CatalogItem::Log((*log).clone()),
+                    );
                 }
 
                 Builtin::Table(table) => {
@@ -1644,9 +1674,16 @@ impl<S: Append> Catalog<S> {
             .load_compute_instance_replicas()
             .await?;
         for (instance_id, replica_id, name, config) in replicas {
-            catalog
-                .state
-                .insert_compute_instance_replica(instance_id, name, replica_id, config);
+            // TODO(teskje): Here we reload the data from postgres catalog
+            let log_collections = Vec::new();
+
+            catalog.state.insert_compute_instance_replica(
+                instance_id,
+                name,
+                replica_id,
+                config,
+                log_collections,
+            );
         }
 
         if !config.skip_migrations {
@@ -2424,6 +2461,7 @@ impl<S: Append> Catalog<S> {
                 name: String,
                 on_cluster_name: String,
                 config: ConcreteComputeInstanceReplicaConfig,
+                log_collections: Vec<(&'static BuiltinLog, GlobalId)>,
             },
             CreateItem {
                 id: GlobalId,
@@ -2584,6 +2622,7 @@ impl<S: Append> Catalog<S> {
                     name,
                     on_cluster_name,
                     config,
+                    log_collections,
                     logical_size,
                 } => {
                     if is_reserved_name(&name) {
@@ -2613,6 +2652,7 @@ impl<S: Append> Catalog<S> {
                         name,
                         on_cluster_name,
                         config,
+                        log_collections,
                     }]
                 }
                 Op::CreateItem {
@@ -2993,20 +3033,27 @@ impl<S: Append> Catalog<S> {
                     name,
                     on_cluster_name,
                     config,
+                    log_collections,
                 } => {
                     info!("create replica {} of instance {}", name, on_cluster_name);
+                    let source_ids: Vec<GlobalId> =
+                        log_collections.iter().map(|(_, id)| *id).collect();
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
                     state.insert_compute_instance_replica(
                         compute_instance_id,
                         name.clone(),
                         id,
                         config,
+                        log_collections,
                     );
                     builtin_table_updates.push(state.pack_compute_instance_replica_update(
                         compute_instance_id,
                         &name,
                         1,
                     ));
+                    for id in source_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
                 }
 
                 Action::CreateItem {
@@ -3418,6 +3465,7 @@ pub enum Op {
         name: String,
         config: ConcreteComputeInstanceReplicaConfig,
         on_cluster_name: String,
+        log_collections: Vec<(&'static BuiltinLog, GlobalId)>,
         logical_size: Option<String>,
     },
     CreateItem {

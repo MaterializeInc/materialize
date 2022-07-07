@@ -22,7 +22,7 @@
 //! compaction of each of its outputs, ensuring that we can recover each dataflow to its current state in case of
 //! failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
 
@@ -43,7 +43,7 @@ use crate::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
 };
 use crate::controller::replicated::ActiveReplication;
-use crate::logging::LoggingConfig;
+use crate::logging::{LogVariant, LoggingConfig};
 use crate::service::ComputeClient;
 
 // NOTE(benesch): this should be a private implementation detail of the compute
@@ -230,11 +230,38 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub fn add_replica<C>(&mut self, id: ReplicaId, client: C)
-    where
+    pub fn add_replica<C>(
+        &mut self,
+        id: ReplicaId,
+        client: C,
+        log_collections: HashMap<LogVariant, GlobalId>,
+    ) where
         C: ComputeClient<T> + Reconnect + 'static,
     {
-        self.compute.client.add_replica(id, client);
+        // Create ComputeState entries in ComputeController
+        for id in log_collections.values() {
+            self.compute.collections.insert(
+                *id,
+                CollectionState::new(Antichain::from_elem(T::minimum()), Vec::new(), Vec::new()),
+            );
+        }
+
+        // Enrich log collections with metadata such that they can be sent over to computed
+        let log_collections = log_collections
+            .into_iter()
+            .map(|(variant, id)| {
+                let meta = self
+                    .storage_controller
+                    .collection(id)
+                    .expect("cannot get collection metadata")
+                    .collection_metadata
+                    .clone();
+                (variant, (id, meta))
+            })
+            .collect();
+
+        // Add the replica
+        self.compute.client.add_replica(id, client, log_collections);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {

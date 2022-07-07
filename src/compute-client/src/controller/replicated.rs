@@ -29,6 +29,7 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
+use mz_storage::client::controller::CollectionMetadata;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 use tokio::select;
@@ -42,6 +43,7 @@ use mz_repr::GlobalId;
 use mz_service::client::Reconnect;
 
 use crate::command::{ComputeCommand, Peek, ReplicaId};
+use crate::logging::LogVariant;
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::ComputeClient;
 
@@ -207,6 +209,13 @@ where
             next_state
         }
     }
+}
+
+#[derive(Debug)]
+struct Replica<T> {
+    tx: UnboundedSender<ComputeCommand<T>>,
+    rx: UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
+    log_collections: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
 /// Additional information to store with pening peeks.
@@ -423,13 +432,7 @@ where
 #[derive(Debug)]
 pub struct ActiveReplication<T> {
     /// Handles to the replicas themselves.
-    replicas: HashMap<
-        ReplicaId,
-        (
-            UnboundedSender<ComputeCommand<T>>,
-            UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
-        ),
-    >,
+    replicas: HashMap<ReplicaId, Replica<T>>,
     /// All other internal state of the client
     state: ActiveReplicationState<T>,
 }
@@ -457,8 +460,12 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub fn add_replica<C>(&mut self, id: ReplicaId, client: C)
-    where
+    pub fn add_replica<C>(
+        &mut self,
+        id: ReplicaId,
+        client: C,
+        log_collections: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    ) where
         C: ComputeClient<T> + Reconnect + 'static,
     {
         for (_, frontiers) in self.state.uppers.values_mut() {
@@ -469,7 +476,14 @@ where
             });
         }
         let (cmd_tx, resp_rx) = ReplicaTask::spawn(id, client);
-        self.replicas.insert(id, (cmd_tx, resp_rx.into()));
+        self.replicas.insert(
+            id,
+            Replica {
+                tx: cmd_tx,
+                rx: resp_rx.into(),
+                log_collections,
+            },
+        );
         self.hydrate_replica(id);
     }
 
@@ -500,12 +514,13 @@ where
         self.state.last_command_count = self.state.history.reduce(&self.state.peeks);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        let (cmd_tx, _) = self.replicas.get_mut(&replica_id).unwrap();
+        let replica = self.replicas.get_mut(&replica_id).unwrap();
         for command in self.state.history.iter() {
             let mut command = command.clone();
-            specialize_command(&mut command, replica_id);
+            specialize_command(&mut command, replica_id, replica);
 
-            cmd_tx
+            replica
+                .tx
                 .send(command)
                 .expect("Channel to client has gone away!")
         }
@@ -534,16 +549,16 @@ where
         self.state.handle_command(&cmd, frontiers);
 
         // Clone the command for each active replica.
-        for (id, (tx, _)) in self.replicas.iter_mut() {
+        for (id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
-            specialize_command(&mut command, *id);
+            specialize_command(&mut command, *id, replica);
 
             // NOTE: Broadcasting commands to replicas irrespective of their
             // presence or health is part of the isolation contract between
             // ADAPTER and COMPUTE. If this changes (e.g. awaiting responses
             // from replicas), ADAPTER needs to handle its interactions with
             // COMPUTE differently.
-            let _ = tx.send(command);
+            let _ = replica.tx.send(command);
         }
     }
 
@@ -564,7 +579,7 @@ where
             let mut stream: tokio_stream::StreamMap<_, _> = self
                 .replicas
                 .iter_mut()
-                .map(|(id, (_, rx))| (id.clone(), rx))
+                .map(|(id, replica)| (id.clone(), &mut replica.rx))
                 .collect();
 
             use futures::StreamExt;
@@ -768,9 +783,24 @@ impl<T> Default for ComputeCommandHistory<T> {
 ///
 /// Most `ComputeCommand`s are independent of the target replica, but some
 /// contain replica-specific fields that must be adjusted before sending.
-fn specialize_command<T>(command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
+fn specialize_command<T>(
+    command: &mut ComputeCommand<T>,
+    replica_id: ReplicaId,
+    replica: &Replica<T>,
+) {
     // Tell new instances their replica ID.
     if let ComputeCommand::CreateInstance(config) = command {
+        // Set sink_logs
+        if let Some(logging) = &mut config.logging {
+            logging.sink_logs = replica.log_collections.clone();
+            tracing::debug!(
+                "Enabling sink_logs at replica {:?}: {:?}",
+                replica_id,
+                &logging.sink_logs
+            );
+        };
+
+        // Set replica id
         config.replica_id = replica_id;
     }
 
