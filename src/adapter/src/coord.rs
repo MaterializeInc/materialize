@@ -599,19 +599,20 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
-    async fn get_local_write_ts(&mut self) -> Result<Timestamp, AdapterError> {
-        let (timestamp, persist_timestamp) = self.global_timeline.write_ts();
-        if let Some(persist_timestamp) = persist_timestamp {
-            self.catalog.persist_timestamp(persist_timestamp).await?;
-        }
-        Ok(timestamp)
+    async fn get_local_write_ts(&mut self) -> Timestamp {
+        self.global_timeline
+            .write_ts(|ts| self.catalog.persist_timestamp(ts))
+            .await
     }
 
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
-    async fn get_and_step_local_write_ts(&mut self) -> Result<WriteTimestamp, AdapterError> {
-        let (timestamp, persist_timestamp) = self.global_timeline.write_ts();
+    async fn get_and_step_local_write_ts(&mut self) -> WriteTimestamp {
+        let timestamp = self
+            .global_timeline
+            .write_ts(|ts| self.catalog.persist_timestamp(ts))
+            .await;
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
          * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
          * timestamp will go up for the next write.
@@ -622,13 +623,10 @@ impl<S: Append + 'static> Coordinator<S> {
          */
         let _ = self.global_timeline.read_ts();
         let advance_to = timestamp.step_forward();
-        if let Some(persist_timestamp) = persist_timestamp {
-            self.catalog.persist_timestamp(persist_timestamp).await?;
-        }
-        Ok(WriteTimestamp {
+        WriteTimestamp {
             timestamp,
             advance_to,
-        })
+        }
     }
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
@@ -639,12 +637,10 @@ impl<S: Append + 'static> Coordinator<S> {
         self.global_timeline.peek_ts()
     }
 
-    async fn local_fast_forward(&mut self, lower_bound: Timestamp) -> Result<(), AdapterError> {
-        let persist_timestamp = self.global_timeline.fast_forward(lower_bound);
-        if let Some(persist_timestamp) = persist_timestamp {
-            self.catalog.persist_timestamp(persist_timestamp).await?;
-        }
-        Ok(())
+    async fn local_fast_forward(&mut self, lower_bound: Timestamp) {
+        self.global_timeline
+            .fast_forward(lower_bound, |ts| self.catalog.persist_timestamp(ts))
+            .await;
     }
 
     fn now(&self) -> EpochMillis {
@@ -975,7 +971,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let WriteTimestamp {
             timestamp: _,
             advance_to,
-        } = self.get_and_step_local_write_ts().await?;
+        } = self.get_and_step_local_write_ts().await;
         let appends = entries
             .iter()
             .filter(|entry| entry.is_table())
@@ -1124,8 +1120,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     // `now()`
                     let now = self.now();
                     self.local_fast_forward(now.step_back().unwrap_or(now))
-                        .await
-                        .unwrap();
+                        .await;
                     let _ = self.get_local_read_ts();
                 }
                 Message::AdvanceLocalInput(inputs) => {
@@ -1308,7 +1303,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let WriteTimestamp {
             timestamp,
             advance_to,
-        } = self.get_and_step_local_write_ts().await.unwrap();
+        } = self.get_and_step_local_write_ts().await;
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
             HashMap::with_capacity(self.pending_writes.len());
         let mut responses = Vec::with_capacity(self.pending_writes.len());
@@ -2867,7 +2862,7 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
-                let since_ts = self.get_local_write_ts().await?;
+                let since_ts = self.get_local_write_ts().await;
 
                 self.dataflow_client
                     .storage_mut()
@@ -5580,7 +5575,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let WriteTimestamp {
             timestamp,
             advance_to,
-        } = self.get_and_step_local_write_ts().await.unwrap();
+        } = self.get_and_step_local_write_ts().await;
         let mut appends: HashMap<GlobalId, Vec<(Row, Diff)>> = HashMap::new();
         for u in updates {
             appends.entry(u.id).or_default().push((u.row, u.diff));
@@ -5974,6 +5969,7 @@ pub async fn serve<S: Append + 'static>(
     let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
     let handle = TokioHandle::current();
 
+    let initial_timestamp = catalog.get_persisted_timestamp().await?;
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -5981,17 +5977,12 @@ pub async fn serve<S: Append + 'static>(
         .stack_size(2 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
-            let initial_timestamp = handle
-                .block_on(catalog.get_persisted_timestamp())
-                .expect("can't start without an initial timestamp");
-            let (timestamp_oracle, persist_timestamp) = timeline::DurableTimestampOracle::new(
+            let timestamp_oracle = handle.block_on(timeline::DurableTimestampOracle::new(
                 initial_timestamp,
                 move || (&*now)(),
                 *timeline::TIMESTAMP_PERSIST_INTERVAL,
-            );
-            handle
-                .block_on(catalog.persist_timestamp(persist_timestamp))
-                .expect("can't start without persisting the new timestamp");
+                |ts| catalog.persist_timestamp(ts),
+            ));
             let mut coord = Coordinator {
                 dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
@@ -6665,6 +6656,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
 /// A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 mod timeline {
+    use std::future::Future;
     use std::time::Duration;
 
     use once_cell::sync::Lazy;
@@ -6819,19 +6811,23 @@ mod timeline {
         /// needs to be persisted to disk.
         ///
         /// See [`TimestampOracle::new`] for more details.
-        pub fn new<F>(initially: T, next: F, persist_interval: T) -> (Self, T)
+        pub async fn new<F, Fut>(
+            initially: T,
+            next: F,
+            persist_interval: T,
+            persist_fn: impl FnOnce(T) -> Fut,
+        ) -> Self
         where
             F: Fn() -> T + 'static,
+            Fut: Future<Output = Result<(), crate::catalog::Error>>,
         {
-            let persist_ts = initially.step_forward_by(&persist_interval);
-            (
-                Self {
-                    timestamp_oracle: TimestampOracle::new(initially.clone(), next),
-                    durable_timestamp: initially,
-                    persist_interval,
-                },
-                persist_ts,
-            )
+            let durable_timestamp = initially.step_forward_by(&persist_interval);
+            persist_fn(durable_timestamp.clone()).await.unwrap();
+            Self {
+                timestamp_oracle: TimestampOracle::new(initially.clone(), next),
+                durable_timestamp,
+                persist_interval,
+            }
         }
 
         /// Peek the current value of the timestamp.
@@ -6845,9 +6841,13 @@ mod timeline {
         /// persisted to disk.
         ///
         /// See [`TimestampOracle::write_ts`] for more details.
-        pub fn write_ts(&mut self) -> (T, Option<T>) {
+        pub async fn write_ts<Fut>(&mut self, persist_fn: impl FnOnce(T) -> Fut) -> T
+        where
+            Fut: Future<Output = Result<(), crate::catalog::Error>>,
+        {
             let ts = self.timestamp_oracle.write_ts();
-            self.maybe_allocate_new_timestamps(ts)
+            self.maybe_allocate_new_timestamps(&ts, persist_fn).await;
+            ts
         }
 
         /// Acquire a new timestamp for reading. Optionally returns a timestamp that needs to be
@@ -6856,9 +6856,8 @@ mod timeline {
         /// See [`TimestampOracle::read_ts`] for more details.
         pub fn read_ts(&mut self) -> T {
             let ts = self.timestamp_oracle.read_ts();
-            let (ts, persist_ts) = self.maybe_allocate_new_timestamps(ts);
             assert!(
-                persist_ts.is_none(),
+                ts.less_than(&self.durable_timestamp),
                 "read_ts should not advance the global timestamp"
             );
             ts
@@ -6868,10 +6867,13 @@ mod timeline {
         /// persisted to disk.
         ///
         /// See [`TimestampOracle::fast_forward`] for more details.
-        pub fn fast_forward(&mut self, lower_bound: T) -> Option<T> {
+        pub async fn fast_forward<Fut>(&mut self, lower_bound: T, persist_fn: impl FnOnce(T) -> Fut)
+        where
+            Fut: Future<Output = Result<(), crate::catalog::Error>>,
+        {
             self.timestamp_oracle.fast_forward(lower_bound.clone());
-            let (_, persist_ts) = self.maybe_allocate_new_timestamps(lower_bound);
-            persist_ts
+            self.maybe_allocate_new_timestamps(&lower_bound, persist_fn)
+                .await;
         }
 
         /// See [`TimestampOracle::should_advance_to`] for more details.
@@ -6884,12 +6886,18 @@ mod timeline {
         ///
         /// If `ts` is less than the persisted timestamp then we can serve `ts` from memory,
         /// otherwise we need to durably store some timestamp greater than `ts`.
-        fn maybe_allocate_new_timestamps(&mut self, ts: T) -> (T, Option<T>) {
-            if ts.less_than(&self.durable_timestamp) {
-                (ts, None)
-            } else {
+        async fn maybe_allocate_new_timestamps<Fut>(
+            &mut self,
+            ts: &T,
+            persist_fn: impl FnOnce(T) -> Fut,
+        ) where
+            Fut: Future<Output = Result<(), crate::catalog::Error>>,
+        {
+            if self.durable_timestamp.less_equal(ts) {
                 self.durable_timestamp = ts.step_forward_by(&self.persist_interval);
-                (ts, Some(self.durable_timestamp.clone()))
+                persist_fn(self.durable_timestamp.clone())
+                    .await
+                    .expect("can't persist timestamp");
             }
         }
     }
