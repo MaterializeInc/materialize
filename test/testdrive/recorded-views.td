@@ -44,6 +44,9 @@ $ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish
 $ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
 {"f1": "345"}
 
+> SELECT * FROM v1;
+3
+
 > CREATE SINK sink1 FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'recorded-view-sink'
@@ -58,8 +61,8 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 4
 
 $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
-{"before": null, "after": {"row": {"c1": 2}}}
-{"before": {"row": {"c1": 2}}, "after": {"row": {"c1": 4}}}
+{"before": null, "after": {"row": {"c1": 3}}}
+{"before": {"row": {"c1": 3}}, "after": {"row": {"c1": 4}}}
 
 > BEGIN
 
