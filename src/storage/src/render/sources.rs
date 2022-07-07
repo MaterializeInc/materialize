@@ -77,6 +77,7 @@ pub fn render_source<G>(
     resume_upper: Antichain<G::Timestamp>,
     mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
+    timely_span: tracing::Span,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
     Rc<dyn Any>,
@@ -188,6 +189,7 @@ where
             ((SourceType::AppendRow(ok), err), cap)
         }
         SourceConnection::Postgres(_) => {
+            let _g = timely_span.enter();
             let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader>(
                 base_source_config,
                 &connection,

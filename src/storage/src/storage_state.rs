@@ -43,6 +43,8 @@ pub struct Worker<'w, A: Allocate> {
     pub response_tx: mpsc::UnboundedSender<StorageResponse>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
+    /// lalala
+    pub worker_span: Option<tracing::Span>,
 }
 
 /// Worker-local state related to the ingress or egress of collections of data.
@@ -126,6 +128,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ingestion.id,
                         ingestion.description,
                         ingestion.resume_upper,
+                        // WARNING: we can only create ONE dataflow per timely worker here
+                        self.worker_span.take().unwrap(),
                     );
 
                     self.storage_state.reported_frontiers.insert(

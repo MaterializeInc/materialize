@@ -93,6 +93,7 @@ pub fn serve(
     let persist_clients = PersistClientCache::new(&config.metrics_registry);
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
 
+    let root_span = tracing::info_span!("root_of_timely");
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let timely_worker_index = timely_worker.index();
         let timely_worker_peers = timely_worker.peers();
@@ -109,6 +110,7 @@ pub fn serve(
             .unwrap();
         let (source_metrics, decode_metrics) = metrics_bundle.clone();
         let persist_clients = Arc::clone(&persist_clients);
+        let index = timely_worker.index();
         Worker {
             timely_worker,
             command_rx,
@@ -125,6 +127,11 @@ pub fn serve(
                 persist_clients,
             },
             response_tx,
+            worker_span: Some(tracing::info_span!(
+                parent: &root_span,
+                "worker_span",
+                %index,
+            )),
         }
         .run()
     })

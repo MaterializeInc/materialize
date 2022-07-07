@@ -128,6 +128,7 @@ pub fn build_storage_dataflow<A: Allocate>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<mz_repr::Timestamp>,
+    timely_span: tracing::Span,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
@@ -149,6 +150,7 @@ pub fn build_storage_dataflow<A: Allocate>(
                 // NOTE: For now sources never have LinearOperators but might have in the future
                 None,
                 storage_state,
+                timely_span.clone(),
             );
 
             let source_data = ok.map(Ok).concat(&err.map(Err));
@@ -160,6 +162,7 @@ pub fn build_storage_dataflow<A: Allocate>(
                 source_data,
                 storage_state,
                 Rc::clone(&token),
+                timely_span,
             );
 
             storage_state.source_tokens.insert(id, token);

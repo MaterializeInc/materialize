@@ -149,6 +149,7 @@ struct PostgresTaskInfo {
     source_tables: HashMap<u32, PostgresTableDesc>,
     row_sender: RowSender,
     sender: Sender<InternalMessage>,
+    postgres_span: Option<tracing::Span>,
 }
 
 impl SourceReader for PostgresSourceReader {
@@ -175,6 +176,9 @@ impl SourceReader for PostgresSourceReader {
                 panic!("Postgres is the only legitimate SourceConnection for PostgresSourceReader")
             }
         };
+
+        // parent should be from the entered span somewhere above
+        let postgres_span = tracing::info_span!("postgres_span");
 
         // TODO: figure out the best default here; currently this is optimized
         // for the speed to pass pg-cdc-resumption tests on a local machine.
@@ -205,6 +209,7 @@ impl SourceReader for PostgresSourceReader {
             ),
             row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
             sender: dataflow_tx,
+            postgres_span: Some(postgres_span),
         };
 
         task::spawn(
@@ -291,7 +296,12 @@ async fn postgres_replication_loop_inner(
     if task_info.lsn == PgLsn::from(0) {
         // Buffer rows from snapshot to retract and retry, if initial snapshot fails.
         // Postgres sources cannot proceed without a successful snapshot.
-        match task_info.produce_snapshot().await {
+        use tracing::Instrument;
+        match task_info
+            .produce_snapshot()
+            .instrument(task_info.postgres_span.take().unwrap())
+            .await
+        {
             Ok(_) => {
                 info!(
                     "replication snapshot for source {} succeeded",

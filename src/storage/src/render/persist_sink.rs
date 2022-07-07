@@ -35,6 +35,7 @@ pub fn render<G>(
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &mut StorageState,
     token: Rc<dyn Any>,
+    timely_span: tracing::Span,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -59,132 +60,147 @@ pub fn render<G>(
     let weak_token = Rc::downgrade(&token);
 
     let persist_clients = Arc::clone(&storage_state.persist_clients);
+
+    use tracing::Instrument;
+    let persist_sink_span = tracing::info_span!(parent: &timely_span, "persist_sink_span");
+    // Drop span so only the child copies live on
+    drop(timely_span);
     persist_op.build_async(
         scope.clone(),
-        move |mut capabilities, frontiers, scheduler| async move {
-            capabilities.clear();
-            let mut buffer = Vec::new();
-            let mut stashed_batches = HashMap::new();
+        move |mut capabilities, frontiers, scheduler| {
+            async move {
+                capabilities.clear();
+                let mut buffer = Vec::new();
+                let mut stashed_batches = HashMap::new();
 
-            let mut write = persist_clients
-                .lock()
-                .await
-                .open(metadata.persist_location)
-                .await
-                .expect("could not open persist client")
-                .open_writer::<SourceData, (), Timestamp, Diff>(metadata.data_shard)
-                .await
-                .expect("could not open persist shard");
+                let mut write = persist_clients
+                    .lock()
+                    .await
+                    .open(metadata.persist_location)
+                    .await
+                    .expect("could not open persist client")
+                    .open_writer::<SourceData, (), Timestamp, Diff>(metadata.data_shard)
+                    .await
+                    .expect("could not open persist shard");
 
-            // Initialize this sink's `upper` to the `upper` of the persist shard we are writing
-            // to. Data from the source not beyond this time will be dropped, as it has already
-            // been persisted.
-            // In the future, sources will avoid passing through data not beyond this upper
-            *current_upper.borrow_mut() = write.upper().clone();
+                // Initialize this sink's `upper` to the `upper` of the persist shard we are writing
+                // to. Data from the source not beyond this time will be dropped, as it has already
+                // been persisted.
+                // In the future, sources will avoid passing through data not beyond this upper
+                *current_upper.borrow_mut() = write.upper().clone();
 
-            while scheduler.notified().await {
-                let input_upper = frontiers.borrow()[0].clone();
+                while scheduler.notified().await {
+                    let input_upper = frontiers.borrow()[0].clone();
 
-                if !active_write_worker
-                    || weak_token.upgrade().is_none()
-                    || current_upper.borrow().is_empty()
-                {
-                    return;
-                }
+                    if !active_write_worker
+                        || weak_token.upgrade().is_none()
+                        || current_upper.borrow().is_empty()
+                    {
+                        return;
+                    }
 
-                while let Some((_cap, data)) = input.next() {
-                    data.swap(&mut buffer);
+                    while let Some((_cap, data)) = input.next() {
+                        data.swap(&mut buffer);
 
-                    // TODO: come up with a better default batch size here
-                    // (100 was chosen arbitrarily), and avoid having to make a batch
-                    // per-timestamp.
-                    for (row, ts, diff) in buffer.drain(..) {
-                        if write.upper().less_equal(&ts) {
-                            stashed_batches
-                                .entry(ts)
-                                .or_insert_with(|| {
-                                    // TODO: the lower has to be the min because we don't know
-                                    // what the minimum ts of data we will see is. In the future,
-                                    // this lower should be declared in `finish` instead.
-                                    write.builder(100, Antichain::from_elem(Timestamp::minimum()))
-                                })
-                                .add(&SourceData(row), &(), &ts, &diff)
-                                .await
-                                .expect("invalid usage");
+                        // TODO: come up with a better default batch size here
+                        // (100 was chosen arbitrarily), and avoid having to make a batch
+                        // per-timestamp.
+                        for (row, ts, diff) in buffer.drain(..) {
+                            if write.upper().less_equal(&ts) {
+                                stashed_batches
+                                    .entry(ts)
+                                    .or_insert_with(|| {
+                                        // TODO: the lower has to be the min because we don't know
+                                        // what the minimum ts of data we will see is. In the future,
+                                        // this lower should be declared in `finish` instead.
+                                        write.builder(
+                                            100,
+                                            Antichain::from_elem(Timestamp::minimum()),
+                                        )
+                                    })
+                                    .add(&SourceData(row), &(), &ts, &diff)
+                                    .await
+                                    .expect("invalid usage");
+                            }
                         }
                     }
-                }
 
-                // See if any timestamps are done!
-                // TODO(guswynn/petrosagg): remove this additional allocation
-                let mut finalized_timestamps: Vec<_> = stashed_batches
-                    .keys()
-                    .filter(|ts| !input_upper.less_equal(ts))
-                    .copied()
-                    .collect();
-                finalized_timestamps.sort_unstable();
+                    // See if any timestamps are done!
+                    // TODO(guswynn/petrosagg): remove this additional allocation
+                    let mut finalized_timestamps: Vec<_> = stashed_batches
+                        .keys()
+                        .filter(|ts| !input_upper.less_equal(ts))
+                        .copied()
+                        .collect();
+                    finalized_timestamps.sort_unstable();
 
-                // If the frontier has advanced, we need to finalize data being written to persist
-                if PartialOrder::less_than(&*current_upper.borrow(), &input_upper) {
-                    // We always append, even in case we don't have any updates, because appending
-                    // also advances the frontier.
-                    if finalized_timestamps.is_empty() {
-                        let expected_upper = current_upper.borrow().clone();
-                        write
-                            .append(
-                                Vec::<((SourceData, ()), Timestamp, Diff)>::new(),
-                                expected_upper,
-                                input_upper.clone(),
-                            )
-                            .await
-                            .expect("cannot append updates")
-                            .expect("invalid/outdated upper");
+                    // If the frontier has advanced, we need to finalize data being written to persist
+                    if PartialOrder::less_than(&*current_upper.borrow(), &input_upper) {
+                        // We always append, even in case we don't have any updates, because appending
+                        // also advances the frontier.
+                        if finalized_timestamps.is_empty() {
+                            let expected_upper = current_upper.borrow().clone();
+                            write
+                                .append(
+                                    Vec::<((SourceData, ()), Timestamp, Diff)>::new(),
+                                    expected_upper,
+                                    input_upper.clone(),
+                                )
+                                .await
+                                .expect("cannot append updates")
+                                .expect("invalid/outdated upper");
 
+                            // advance our stashed frontier
+                            *current_upper.borrow_mut() = input_upper.clone();
+                            // wait for more data or a new input frontier
+                            continue;
+                        }
+
+                        // `current_upper` tracks the last known upper
+                        let mut expected_upper = current_upper.borrow().clone();
+                        let finalized_batch_count = finalized_timestamps.len();
+
+                        for (i, ts) in finalized_timestamps.into_iter().enumerate() {
+                            // TODO(aljoscha): Figure out how errors from this should be reported.
+
+                            // Set the upper to the upper of the batch (which is 1 past the ts it
+                            // manages) OR the new frontier if we are appending the final batch
+                            let new_upper = if i == finalized_batch_count - 1 {
+                                input_upper.clone()
+                            } else {
+                                Antichain::from_elem(ts + 1)
+                            };
+
+                            let mut batch = stashed_batches
+                                .remove(&ts)
+                                .expect("batch for timestamp to still be there")
+                                .finish(new_upper.clone())
+                                .await
+                                .expect("invalid usage");
+
+                            write
+                                .compare_and_append_batch(
+                                    &mut batch,
+                                    expected_upper,
+                                    new_upper.clone(),
+                                )
+                                .await
+                                .expect("cannot append updates")
+                                .expect("cannot append updates")
+                                .expect("invalid/outdated upper");
+
+                            // next `expected_upper` is the one we just successfully appended
+                            expected_upper = new_upper;
+                        }
                         // advance our stashed frontier
                         *current_upper.borrow_mut() = input_upper.clone();
-                        // wait for more data or a new input frontier
-                        continue;
+                    } else {
+                        // We cannot have updates without the frontier advancing
+                        assert!(finalized_timestamps.is_empty());
                     }
-
-                    // `current_upper` tracks the last known upper
-                    let mut expected_upper = current_upper.borrow().clone();
-                    let finalized_batch_count = finalized_timestamps.len();
-
-                    for (i, ts) in finalized_timestamps.into_iter().enumerate() {
-                        // TODO(aljoscha): Figure out how errors from this should be reported.
-
-                        // Set the upper to the upper of the batch (which is 1 past the ts it
-                        // manages) OR the new frontier if we are appending the final batch
-                        let new_upper = if i == finalized_batch_count - 1 {
-                            input_upper.clone()
-                        } else {
-                            Antichain::from_elem(ts + 1)
-                        };
-
-                        let mut batch = stashed_batches
-                            .remove(&ts)
-                            .expect("batch for timestamp to still be there")
-                            .finish(new_upper.clone())
-                            .await
-                            .expect("invalid usage");
-
-                        write
-                            .compare_and_append_batch(&mut batch, expected_upper, new_upper.clone())
-                            .await
-                            .expect("cannot append updates")
-                            .expect("cannot append updates")
-                            .expect("invalid/outdated upper");
-
-                        // next `expected_upper` is the one we just successfully appended
-                        expected_upper = new_upper;
-                    }
-                    // advance our stashed frontier
-                    *current_upper.borrow_mut() = input_upper.clone();
-                } else {
-                    // We cannot have updates without the frontier advancing
-                    assert!(finalized_timestamps.is_empty());
                 }
             }
+            .instrument(persist_sink_span)
         },
     )
 }
