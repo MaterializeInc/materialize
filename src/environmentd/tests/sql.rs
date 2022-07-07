@@ -17,6 +17,7 @@ use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
@@ -32,7 +33,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
 use mz_ore::assert_contains;
-use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
@@ -1268,4 +1269,75 @@ fn test_read_then_write_serializability() {
             2u128.pow(num_loops * num_threads)
         );
     }
+}
+
+#[test]
+fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+    let now = Arc::new(Mutex::new(1_000_000_000));
+    let now_fn = {
+        let timestamp = Arc::clone(&now);
+        NowFn::from(move || *timestamp.lock().unwrap())
+    };
+    let data_dir = tempfile::tempdir()?;
+    let config = util::Config::default()
+        .with_now(now_fn)
+        .data_directory(data_dir.path());
+
+    // Start a server and insert some data to establish the current global timestamp
+    let global_timestamp = {
+        let server = util::start_server(config.clone())?;
+        let mut client = server.connect(postgres::NoTls)?;
+
+        client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
+        insert_with_deterministic_timestamps("t1", "(42)", &server, Arc::clone(&now))?;
+        get_explain_timestamp("t1", &mut client)
+    };
+
+    // Rollback the current time and ensure that a value larger than the old global timestamp is
+    // recovered
+    {
+        *now.lock().expect("lock poisoned") = 0;
+        let server = util::start_server(config)?;
+        let mut client = server.connect(postgres::NoTls)?;
+        let recovered_timestamp = get_explain_timestamp("t1", &mut client);
+        assert!(recovered_timestamp > global_timestamp);
+    }
+
+    Ok(())
+}
+
+/// Group commit will block writes until the current time has advanced. This can make
+/// performing inserts while using deterministic time difficult. This is a helper
+/// method to perform writes and advance the current time.
+fn insert_with_deterministic_timestamps(
+    table: &'static str,
+    values: &'static str,
+    server: &util::Server,
+    now: Arc<Mutex<EpochMillis>>,
+) -> Result<(), Box<dyn Error>> {
+    let mut client_write = server.connect(postgres::NoTls)?;
+    let mut client_read = server.connect(postgres::NoTls)?;
+
+    let current_ts = get_explain_timestamp(table, &mut client_read);
+    let write_thread = thread::spawn(move || {
+        client_write
+            .execute(&format!("INSERT INTO {table} VALUES {values}"), &[])
+            .unwrap();
+    });
+    // Bump `now` by enough for the write to succeed. Table advancements may have increased
+    // the global timestamp by an unknown amount so we bump `now` by a large amount to be safe.
+    *now.lock().expect("lock poisoned") = current_ts + 1_000;
+    write_thread.join().unwrap();
+    Ok(())
+}
+
+fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMillis {
+    let row = client
+        .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
+        .unwrap();
+    let explain: String = row.get(0);
+    let timestamp_re = Regex::new(r"^\s+timestamp:\s+(\d+)\n").unwrap();
+    let timestamp_caps = timestamp_re.captures(&explain).unwrap();
+    timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
 }

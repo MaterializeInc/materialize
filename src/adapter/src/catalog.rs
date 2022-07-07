@@ -2054,6 +2054,16 @@ impl<S: Append> Catalog<S> {
         self.state.allocate_oid()
     }
 
+    /// Get the global timestamp that has been persisted to disk.
+    pub async fn get_persisted_timestamp(&mut self) -> Result<mz_repr::Timestamp, Error> {
+        self.storage().await.get_persisted_timestamp().await
+    }
+
+    /// Persist new global timestamp to disk.
+    pub async fn persist_timestamp(&mut self, timestamp: mz_repr::Timestamp) -> Result<(), Error> {
+        self.storage().await.persist_timestamp(timestamp).await
+    }
+
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
         self.state.resolve_database(database_name)
     }

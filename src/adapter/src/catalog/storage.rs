@@ -15,6 +15,7 @@ use bytes::BufMut;
 use futures::future::BoxFuture;
 use itertools::max;
 use prost::{self, Message};
+use timely::progress::Timestamp;
 use uuid::Uuid;
 
 use mz_audit_log::VersionedEvent;
@@ -56,6 +57,8 @@ const ROLE_ID_ALLOC_KEY: &str = "role";
 const COMPUTE_ID_ALLOC_KEY: &str = "compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
+
+const EPOCH_MILLIS_TIMESTAMP_KEY: &str = "epoch_millis";
 
 async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
     // Initial state.
@@ -253,6 +256,19 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                                     } \
                                 }"
                                 .into(),
+                            },
+                        )],
+                    )
+                    .await?;
+                COLLECTION_TIMESTAMP
+                    .upsert(
+                        stash,
+                        vec![(
+                            TimestampKey {
+                                id: EPOCH_MILLIS_TIMESTAMP_KEY.into(),
+                            },
+                            TimestampValue {
+                                ts: mz_repr::Timestamp::minimum(),
                             },
                         )],
                     )
@@ -614,6 +630,33 @@ impl<S: Append> Connection<S> {
             .upsert_key(&mut self.stash, &key, &next)
             .await?;
         Ok((id..next.next_id).collect())
+    }
+
+    /// Get the global timestamp that has been persisted to disk.
+    pub async fn get_persisted_timestamp(&mut self) -> Result<mz_repr::Timestamp, Error> {
+        let key = TimestampKey {
+            id: EPOCH_MILLIS_TIMESTAMP_KEY.to_string(),
+        };
+        Ok(COLLECTION_TIMESTAMP
+            .peek_key_one(&mut self.stash, &key)
+            .await?
+            .expect("must have a persisted timestamp")
+            .ts)
+    }
+
+    /// Persist new global timestamp to disk.
+    pub async fn persist_timestamp(&mut self, timestamp: mz_repr::Timestamp) -> Result<(), Error> {
+        let key = TimestampKey {
+            id: EPOCH_MILLIS_TIMESTAMP_KEY.to_string(),
+        };
+        let value = TimestampValue { ts: timestamp };
+        let old_value = COLLECTION_TIMESTAMP
+            .upsert_key(&mut self.stash, &key, &value)
+            .await?;
+        if let Some(old_value) = old_value {
+            assert!(value >= old_value);
+        }
+        Ok(())
     }
 
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
@@ -1306,6 +1349,20 @@ struct AuditLogKey {
 }
 impl_codec!(AuditLogKey);
 
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct TimestampKey {
+    #[prost(string)]
+    id: String,
+}
+impl_codec!(TimestampKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct TimestampValue {
+    #[prost(uint64)]
+    ts: u64,
+}
+impl_codec!(TimestampValue);
+
 static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
     TypedCollection::new("setting");
@@ -1329,3 +1386,5 @@ static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollect
 static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
 static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
 static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
+static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
+    TypedCollection::new("timestamp");
