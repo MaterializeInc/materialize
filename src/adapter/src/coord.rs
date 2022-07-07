@@ -164,6 +164,7 @@ use crate::command::{
 };
 use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::read_holds::ReadHolds;
 use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable};
 use crate::session::{
@@ -193,6 +194,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks { conn_id: ConnectionId },
+    UpdateReadHolds,
 }
 
 #[derive(Debug)]
@@ -415,7 +417,7 @@ pub struct Coordinator<S> {
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
-    global_timelines: BTreeMap<Timeline, timeline::DurableTimestampOracle<Timestamp>>,
+    global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
 
     /// Tracks tables needing advancement, which can be processed at a low priority
     /// in the biased select loop.
@@ -468,6 +470,16 @@ pub struct Coordinator<S> {
     /// `None` is used as a tombstone value for replicas that have been
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
+}
+
+/// Global state for a single timeline.
+///
+/// For each timeline we maintain a timestamp oracle, which is responsible for
+/// providing read (and sometimes write) timestamps, and a set of read holds which
+/// guarantee that those read timestamps are valid.
+struct TimelineState<T> {
+    oracle: timeline::DurableTimestampOracle<T>,
+    read_holds: ReadHolds<T>,
 }
 
 /// Metadata about an active connection.
@@ -531,9 +543,11 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
     fn get_local_timestamp_oracle(&self) -> &timeline::DurableTimestampOracle<Timestamp> {
-        self.global_timelines
+        &self
+            .global_timelines
             .get(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
+            .oracle
     }
 
     /// Returns a mutable reference to the timestamp oracle used for reads and writes
@@ -541,9 +555,11 @@ impl<S: Append + 'static> Coordinator<S> {
     fn get_local_timestamp_oracle_mut(
         &mut self,
     ) -> &mut timeline::DurableTimestampOracle<Timestamp> {
-        self.global_timelines
+        &mut self
+            .global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
+            .oracle
     }
 
     /// Assign a timestamp for a read from a local input. Reads following writes
@@ -560,6 +576,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
+            .oracle
             .write_ts(|ts| {
                 self.catalog
                     .persist_timestamp(&Timeline::EpochMilliseconds, ts)
@@ -575,6 +592,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
+            .oracle
             .write_ts(|ts| {
                 self.catalog
                     .persist_timestamp(&Timeline::EpochMilliseconds, ts)
@@ -622,20 +640,14 @@ impl<S: Append + 'static> Coordinator<S> {
         ids: Vec<GlobalId>,
         compaction_window_ms: Option<Timestamp>,
     ) {
-        let mut policy_updates = Vec::new();
-        for id in ids.into_iter() {
-            let policy = match compaction_window_ms {
-                Some(time) => ReadPolicy::lag_writes_by(time),
-                None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-            };
-            self.read_capability.insert(id, policy.clone().into());
-            policy_updates.push((id, self.read_capability[&id].policy()));
-        }
-        self.controller
-            .storage_mut()
-            .set_read_policy(policy_updates)
-            .await
-            .unwrap();
+        self.initialize_read_policies(
+            CollectionIdBundle {
+                storage_ids: ids.into_iter().collect(),
+                compute_ids: BTreeMap::new(),
+            },
+            compaction_window_ms,
+        )
+        .await;
     }
 
     /// Initialize the compute read policies.
@@ -649,21 +661,111 @@ impl<S: Append + 'static> Coordinator<S> {
         instance: ComputeInstanceId,
         compaction_window_ms: Option<Timestamp>,
     ) {
-        let mut policy_updates = Vec::new();
-        for id in ids.into_iter() {
+        let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        compute_ids.insert(instance, ids.into_iter().collect());
+        self.initialize_read_policies(
+            CollectionIdBundle {
+                storage_ids: BTreeSet::new(),
+                compute_ids,
+            },
+            compaction_window_ms,
+        )
+        .await;
+    }
+
+    /// Initialize the storage and compute read policies.
+    ///
+    /// This should be called only after a collection is created, and
+    /// ideally very soon afterwards. The collection is otherwise initialized
+    /// with a read policy that allows no compaction.
+    async fn initialize_read_policies(
+        &mut self,
+        id_bundle: CollectionIdBundle,
+        compaction_window_ms: Option<Timestamp>,
+    ) {
+        // We do compute first, and they may result in additional storage policy effects.
+        for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
+            let mut compute_policy_updates = Vec::new();
+            for id in compute_ids.iter() {
+                let policy = match compaction_window_ms {
+                    Some(time) => ReadPolicy::lag_writes_by(time),
+                    None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
+                };
+
+                let mut read_capability: ReadCapability<_> = policy.into();
+
+                if let Some(timeline) = self.get_timeline(*id) {
+                    let TimelineState { read_holds, .. } =
+                        self.ensure_timeline_state(timeline).await;
+                    read_capability
+                        .holds
+                        .update_iter(Some((read_holds.time, 1)));
+                    read_holds
+                        .id_bundle
+                        .compute_ids
+                        .entry(*compute_instance)
+                        .or_default()
+                        .insert(*id);
+                }
+
+                self.read_capability.insert(*id, read_capability);
+                compute_policy_updates.push((*id, self.read_capability[&id].policy()));
+            }
+            self.controller
+                .compute_mut(*compute_instance)
+                .unwrap()
+                .set_read_policy(compute_policy_updates)
+                .await
+                .unwrap();
+        }
+
+        let mut storage_policy_updates = Vec::new();
+        for id in id_bundle.storage_ids.iter() {
             let policy = match compaction_window_ms {
                 Some(time) => ReadPolicy::lag_writes_by(time),
                 None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
             };
-            self.read_capability.insert(id, policy.clone().into());
-            policy_updates.push((id, self.read_capability[&id].policy()));
+
+            let mut read_capability: ReadCapability<_> = policy.into();
+
+            if let Some(timeline) = self.get_timeline(*id) {
+                let TimelineState { read_holds, .. } = self.ensure_timeline_state(timeline).await;
+                read_capability
+                    .holds
+                    .update_iter(Some((read_holds.time, 1)));
+                read_holds.id_bundle.storage_ids.insert(*id);
+            }
+
+            self.read_capability.insert(*id, read_capability);
+            storage_policy_updates.push((*id, self.read_capability[&id].policy()));
         }
         self.controller
-            .compute_mut(instance)
-            .unwrap()
-            .set_read_policy(policy_updates)
+            .storage_mut()
+            .set_read_policy(storage_policy_updates)
             .await
             .unwrap();
+    }
+
+    /// Ensures that a global timeline state exists for `timeline`.
+    async fn ensure_timeline_state(&mut self, timeline: Timeline) -> &mut TimelineState<Timestamp> {
+        if !self.global_timelines.contains_key(&timeline) {
+            self.global_timelines.insert(
+                timeline.clone(),
+                TimelineState {
+                    oracle: timeline::DurableTimestampOracle::new(
+                        Timestamp::minimum(),
+                        Timestamp::minimum,
+                        *timeline::TIMESTAMP_PERSIST_INTERVAL,
+                        |ts| self.catalog.persist_timestamp(&timeline, ts),
+                    )
+                    .await,
+                    read_holds: ReadHolds::new(Timestamp::minimum()),
+                },
+            );
+        }
+        self.global_timelines
+            .get_mut(&timeline)
+            .expect("inserted above")
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be
@@ -704,8 +806,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
-        let mut storage_policies_to_set = Vec::new();
-        let mut compute_policies_to_set = BTreeMap::new();
+        let mut policies_to_set: CollectionIdBundle = Default::default();
 
         for entry in &entries {
             match entry.item() {
@@ -742,7 +843,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
                 }
                 CatalogItem::Table(table) => {
                     self.controller
@@ -758,23 +859,25 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
                 }
                 CatalogItem::Index(idx) => {
                     if logs.contains(&idx.on) {
-                        compute_policies_to_set
+                        policies_to_set
+                            .compute_ids
                             .entry(idx.compute_instance)
-                            .or_insert_with(Vec::new)
-                            .push(entry.id());
+                            .or_insert_with(BTreeSet::new)
+                            .insert(entry.id());
                     } else {
                         let dataflow = self
                             .dataflow_builder(idx.compute_instance)
                             .build_index_dataflow(entry.id())?;
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.compute_instance)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
-                        compute_policies_to_set
+                        policies_to_set
+                            .compute_ids
                             .entry(idx.compute_instance)
-                            .or_insert_with(Vec::new)
+                            .or_insert_with(BTreeSet::new)
                             .extend(dataflow.export_ids());
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
@@ -802,7 +905,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
@@ -859,24 +962,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
-        // We do compute first, and they may result in additional storage policy effects.
-        for (instance, mut ids) in compute_policies_to_set.into_iter() {
-            ids.sort();
-            ids.dedup();
-            self.initialize_compute_read_policies(
-                ids,
-                instance,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-            )
+        self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
             .await;
-        }
-        storage_policies_to_set.sort();
-        storage_policies_to_set.dedup();
-        self.initialize_storage_read_policies(
-            storage_policies_to_set,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-        )
-        .await;
 
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
@@ -992,6 +1079,9 @@ impl<S: Append + 'static> Coordinator<S> {
             tokio::time::interval(self.catalog.config().timestamp_frequency);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
+        // Interval for updating read holds on all objects
+        let mut update_read_holds =
+            tokio::time::interval(self.catalog.config().timestamp_frequency);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1022,6 +1112,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
+                // `tick()` on `Interval` is cancel-safe:
+                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                _ = update_read_holds.tick() => Message::UpdateReadHolds,
 
                 // At the lowest priority, process table advancements. This is a blocking
                 // HashMap instead of a channel so that we can delay the determination of
@@ -1086,6 +1179,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 // path that responds to the client (e.g. reporting an error).
                 Message::RemovePendingPeeks { conn_id } => {
                     self.remove_pending_peeks(conn_id).await;
+                }
+                Message::UpdateReadHolds => {
+                    self.message_update_read_holds().await;
                 }
             }
 
@@ -1545,12 +1641,12 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .collect();
 
-        for (timeline, timestamp_oracle) in &mut self.global_timelines {
+        for (timeline, TimelineState { oracle, .. }) in &mut self.global_timelines {
             let now = nows[timeline];
-            timestamp_oracle
+            oracle
                 .fast_forward(now, |ts| self.catalog.persist_timestamp(timeline, ts))
                 .await;
-            let _ = timestamp_oracle.read_ts();
+            let _ = oracle.read_ts();
         }
     }
 
@@ -1802,6 +1898,24 @@ impl<S: Append + 'static> Coordinator<S> {
         )
         .await
         .expect("updating compute instance status cannot fail");
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn message_update_read_holds(&mut self) {
+        let global_timelines = std::mem::take(&mut self.global_timelines);
+        for (
+            timeline,
+            TimelineState {
+                mut oracle,
+                read_holds,
+            },
+        ) in global_timelines
+        {
+            let new_time = oracle.read_ts();
+            let read_holds = self.update_read_hold(read_holds, new_time).await;
+            self.global_timelines
+                .insert(timeline, TimelineState { oracle, read_holds });
+        }
     }
 
     async fn handle_statement(
@@ -2213,7 +2327,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
-            self.release_read_hold(txn_reads.read_holds).await;
+            self.release_read_hold(&txn_reads.read_holds).await;
         }
         txn
     }
@@ -5491,6 +5605,21 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        self.remove_global_read_holds_storage(
+            sources_to_drop
+                .iter()
+                .chain(tables_to_drop.iter())
+                .chain(recorded_views_to_drop.iter().map(|(_, id)| id))
+                .cloned(),
+        );
+        self.remove_global_read_holds_compute(
+            sinks_to_drop
+                .iter()
+                .chain(indexes_to_drop.iter())
+                .chain(recorded_views_to_drop.iter())
+                .cloned(),
+        );
+
         let (builtin_table_updates, result) = self
             .catalog
             .transact(session, ops, |catalog| {
@@ -5507,24 +5636,10 @@ impl<S: Append + 'static> Coordinator<S> {
             self.send_builtin_table_updates(builtin_table_updates).await;
 
             if !sources_to_drop.is_empty() {
-                for id in &sources_to_drop {
-                    self.read_capability.remove(id);
-                }
-                self.controller
-                    .storage_mut()
-                    .drop_sources(sources_to_drop)
-                    .await
-                    .unwrap();
+                self.drop_sources(sources_to_drop).await;
             }
             if !tables_to_drop.is_empty() {
-                for id in &tables_to_drop {
-                    self.read_capability.remove(id);
-                }
-                self.controller
-                    .storage_mut()
-                    .drop_sources(tables_to_drop)
-                    .await
-                    .unwrap();
+                self.drop_sources(tables_to_drop).await;
             }
             if !sinks_to_drop.is_empty() {
                 self.drop_sinks(sinks_to_drop).await;
@@ -5609,6 +5724,17 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller.storage_mut().append(appends).await.unwrap();
     }
 
+    async fn drop_sources(&mut self, sources: Vec<GlobalId>) {
+        for id in &sources {
+            self.read_capability.remove(id);
+        }
+        self.controller
+            .storage_mut()
+            .drop_sources(sources)
+            .await
+            .unwrap();
+    }
+
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
         let by_compute_instance = sinks.into_iter().into_group_map();
         for (compute_instance, ids) in by_compute_instance {
@@ -5670,6 +5796,47 @@ impl<S: Append + 'static> Coordinator<S> {
             .drop_sources(source_ids)
             .await
             .unwrap();
+    }
+
+    fn remove_global_read_holds_storage<I>(&mut self, ids: I)
+    where
+        I: IntoIterator<Item = GlobalId>,
+    {
+        for id in ids {
+            if let Some(timeline) = self.get_timeline(id) {
+                let TimelineState { read_holds, .. } = self
+                    .global_timelines
+                    .get_mut(&timeline)
+                    .expect("all timelines have a timestamp oracle");
+                read_holds.id_bundle.storage_ids.remove(&id);
+                if read_holds.id_bundle.is_empty() {
+                    self.global_timelines.remove(&timeline);
+                }
+            }
+        }
+    }
+
+    fn remove_global_read_holds_compute<I>(&mut self, ids: I)
+    where
+        I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
+    {
+        for (compute_instance, id) in ids {
+            if let Some(timeline) = self.get_timeline(id) {
+                let TimelineState { read_holds, .. } = self
+                    .global_timelines
+                    .get_mut(&timeline)
+                    .expect("all timelines have a timestamp oracle");
+                if let Some(ids) = read_holds.id_bundle.compute_ids.get_mut(&compute_instance) {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        read_holds.id_bundle.compute_ids.remove(&compute_instance);
+                    }
+                    if read_holds.id_bundle.is_empty() {
+                        self.global_timelines.remove(&timeline);
+                    }
+                }
+            }
+        }
     }
 
     async fn set_index_options(
@@ -5827,7 +5994,6 @@ impl<S: Append + 'static> Coordinator<S> {
         I: IntoIterator<Item = GlobalId>,
     {
         let timelines = self.get_timelines(ids);
-
         // If there's more than one timeline, we will not produce meaningful
         // data to a user. Take, for example, some realtime source and a debezium
         // consistency topic source. The realtime source uses something close to now
@@ -5854,12 +6020,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Return the timeline belonging to a GlobalId, if one exists.
     fn get_timeline(&self, id: GlobalId) -> Option<Timeline> {
         let timelines = self.get_timelines(vec![id]);
-
         assert!(
             timelines.len() <= 1,
             "impossible for a single object to belong to two timelines"
         );
-
         timelines.into_iter().next()
     }
 
@@ -5880,24 +6044,25 @@ impl<S: Append + 'static> Coordinator<S> {
             if timelines.contains_key(&id) {
                 continue;
             }
-            let entry = self.catalog.get_entry(&id);
-            match entry.item() {
-                CatalogItem::Source(source) => {
-                    timelines.insert(id, source.timeline.clone());
+            if let Some(entry) = self.catalog.try_get_entry(&id) {
+                match entry.item() {
+                    CatalogItem::Source(source) => {
+                        timelines.insert(id, source.timeline.clone());
+                    }
+                    CatalogItem::Index(index) => {
+                        ids.push(index.on);
+                    }
+                    CatalogItem::View(view) => {
+                        ids.extend(view.optimized_expr.depends_on());
+                    }
+                    CatalogItem::RecordedView(rview) => {
+                        ids.extend(rview.optimized_expr.depends_on());
+                    }
+                    CatalogItem::Table(table) => {
+                        timelines.insert(id, table.timeline());
+                    }
+                    _ => {}
                 }
-                CatalogItem::Index(index) => {
-                    ids.push(index.on);
-                }
-                CatalogItem::View(view) => {
-                    ids.extend(view.optimized_expr.depends_on());
-                }
-                CatalogItem::RecordedView(rview) => {
-                    ids.extend(rview.optimized_expr.depends_on());
-                }
-                CatalogItem::Table(table) => {
-                    timelines.insert(id, table.timeline());
-                }
-                _ => {}
             }
         }
 
@@ -5995,7 +6160,7 @@ pub async fn serve<S: Append + 'static>(
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
             for (timeline, initial_timestamp) in initial_timestamps {
-                let timestamp_oracle = if timeline == Timeline::EpochMilliseconds {
+                let oracle = if timeline == Timeline::EpochMilliseconds {
                     let now = now.clone();
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
@@ -6011,7 +6176,13 @@ pub async fn serve<S: Append + 'static>(
                         |ts| catalog.persist_timestamp(&timeline, ts),
                     ))
                 };
-                timestamp_oracles.insert(timeline, timestamp_oracle);
+                timestamp_oracles.insert(
+                    timeline,
+                    TimelineState {
+                        oracle,
+                        read_holds: ReadHolds::new(initial_timestamp),
+                    },
+                );
             }
 
             let mut coord = Coordinator {
@@ -6503,6 +6674,7 @@ pub mod fast_path_peek {
 
             // If it was created, drop the dataflow once the peek command is sent.
             if let Some(index_id) = drop_dataflow {
+                self.remove_global_read_holds_compute(vec![(compute_instance, index_id)]);
                 self.drop_indexes(vec![(compute_instance, index_id)]).await;
             }
 
@@ -6527,9 +6699,20 @@ pub mod read_holds {
     use crate::coord::id_bundle::CollectionIdBundle;
 
     /// Relevant information for acquiring or releasing a bundle of read holds.
+    #[derive(Clone)]
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
         pub(super) id_bundle: CollectionIdBundle,
+    }
+
+    impl<T> ReadHolds<T> {
+        /// Return empty `ReadHolds` at `time`.
+        pub fn new(time: T) -> Self {
+            ReadHolds {
+                time,
+                id_bundle: CollectionIdBundle::default(),
+            }
+        }
     }
 
     impl<S> crate::coord::Coordinator<S> {
@@ -6572,6 +6755,62 @@ pub mod read_holds {
                 compute.set_read_policy(policy_changes).await.unwrap();
             }
         }
+        /// Update the timestamp of the read holds on the indicated collections from the
+        /// indicated time within `read_holds` to `new_time`.
+        ///
+        /// This method relies on a previous call to `acquire_read_holds` with the same
+        /// `read_holds` argument or a previous call to `update_read_hold` that returned
+        /// `read_holds`, and its behavior will be erratic if called on anything else.
+        pub(super) async fn update_read_hold(
+            &mut self,
+            mut read_holds: ReadHolds<mz_repr::Timestamp>,
+            new_time: mz_repr::Timestamp,
+        ) -> ReadHolds<mz_repr::Timestamp> {
+            let ReadHolds {
+                time: old_time,
+                id_bundle:
+                    CollectionIdBundle {
+                        storage_ids,
+                        compute_ids,
+                    },
+            } = &read_holds;
+
+            // Update STORAGE read policies.
+            let mut policy_changes = Vec::new();
+            let storage = self.controller.storage_mut();
+            for id in storage_ids.iter() {
+                let collection = storage.collection(*id).unwrap();
+                assert!(collection
+                    .read_capabilities
+                    .frontier()
+                    .less_equal(&new_time));
+                let read_needs = self.read_capability.get_mut(id).unwrap();
+                read_needs.holds.update_iter(Some((new_time, 1)));
+                read_needs.holds.update_iter(Some((*old_time, -1)));
+                policy_changes.push((*id, read_needs.policy()));
+            }
+            storage.set_read_policy(policy_changes).await.unwrap();
+            // Update COMPUTE read policies
+            for (compute_instance, compute_ids) in compute_ids.iter() {
+                let mut policy_changes = Vec::new();
+                let mut compute = self.controller.compute_mut(*compute_instance).unwrap();
+                for id in compute_ids.iter() {
+                    let collection = compute.as_ref().collection(*id).unwrap();
+                    assert!(collection
+                        .read_capabilities
+                        .frontier()
+                        .less_equal(&new_time));
+                    let read_needs = self.read_capability.get_mut(id).unwrap();
+                    read_needs.holds.update_iter(Some((new_time, 1)));
+                    read_needs.holds.update_iter(Some((*old_time, -1)));
+                    policy_changes.push((*id, read_needs.policy()));
+                }
+                compute.set_read_policy(policy_changes).await.unwrap();
+            }
+
+            read_holds.time = new_time;
+            read_holds
+        }
         /// Release read holds on the indicated collections at the indicated time.
         ///
         /// This method relies on a previous call to `acquire_read_holds` with the same
@@ -6579,7 +6818,7 @@ pub mod read_holds {
         /// called more than once on the same bundle of read holds.
         pub(super) async fn release_read_hold(
             &mut self,
-            read_holds: ReadHolds<mz_repr::Timestamp>,
+            read_holds: &ReadHolds<mz_repr::Timestamp>,
         ) {
             let ReadHolds {
                 time,
@@ -6595,7 +6834,7 @@ pub mod read_holds {
             for id in storage_ids.iter() {
                 // It's possible that a concurrent DDL statement has already dropped this GlobalId
                 if let Some(read_needs) = self.read_capability.get_mut(id) {
-                    read_needs.holds.update_iter(Some((time, -1)));
+                    read_needs.holds.update_iter(Some((*time, -1)));
                     policy_changes.push((*id, read_needs.policy()));
                 }
             }
@@ -6610,7 +6849,7 @@ pub mod read_holds {
                 for id in compute_ids.iter() {
                     // It's possible that a concurrent DDL statement has already dropped this GlobalId
                     if let Some(read_needs) = self.read_capability.get_mut(id) {
-                        read_needs.holds.update_iter(Some((time, -1)));
+                        read_needs.holds.update_iter(Some((*time, -1)));
                         policy_changes.push((*id, read_needs.policy()));
                     }
                 }
