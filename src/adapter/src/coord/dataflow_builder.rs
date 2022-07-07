@@ -315,8 +315,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     /// view's query expression. If this becomes a performance problem, we could add the
     /// monotonicity information of views into the catalog instead.
     fn monotonic_view(&self, id: GlobalId) -> bool {
-        let mut memo = HashMap::new();
-        self.monotonic_view_inner(id, &mut memo)
+        self.monotonic_view_inner(id, &mut HashMap::new())
             .unwrap_or_else(|e| {
                 warn!("Error inspecting view {id} for monotonicity: {e}");
                 false
