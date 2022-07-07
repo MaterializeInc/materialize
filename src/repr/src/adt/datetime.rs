@@ -3640,22 +3640,22 @@ mod tests {
             (
                 "9223372036854775808 months",
                 Day,
-                "Unable to parse value as a number at index 19: number too large to fit in target type",
+                "Unable to parse value 9223372036854775808 as a number: number too large to fit in target type",
             ),
             (
-                "-9223372036854775808 months",
+                "-9223372036854775809 months",
                 Day,
-                "Unable to parse value as a number at index 20: number too large to fit in target type",
+                "Unable to parse value 9223372036854775809 as a number: number too large to fit in target type",
             ),
             (
                 "9223372036854775808 seconds",
                 Day,
-                "Unable to parse value as a number at index 19: number too large to fit in target type",
+                "Unable to parse value 9223372036854775808 as a number: number too large to fit in target type",
             ),
             (
-                "-9223372036854775808 seconds",
+                "-9223372036854775809 seconds",
                 Day,
-                "Unable to parse value as a number at index 20: number too large to fit in target type",
+                "Unable to parse value 9223372036854775809 as a number: number too large to fit in target type",
             ),
             (
                 "1.234 second 5 ms",
