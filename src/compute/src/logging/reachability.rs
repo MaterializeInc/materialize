@@ -23,6 +23,9 @@ use timely::logging::WorkerIdentifier;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
+
+use crate::compute_state::ComputeState;
+use crate::logging::persist::persist_sink;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
@@ -42,6 +45,7 @@ use crate::typedefs::{KeysValsHandle, RowSpine};
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
+    compute_state: &mut ComputeState,
     linked: std::rc::Rc<
         EventLink<
             Timestamp,
@@ -72,7 +76,7 @@ pub fn construct<A: Allocate>(
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-        let construct_reachability = |key: Vec<_>, value: Vec<_>| {
+        let construct_reachability_unarranged = || {
             let mut flatten = OperatorBuilder::new(
                 "Timely Reachability Logging Flatten ".to_string(),
                 scope.clone(),
@@ -111,14 +115,18 @@ pub fn construct<A: Allocate>(
                 }
             });
 
-            let mut row_buf = Row::default();
             updates
                 .as_collection()
                 .arrange_core::<_, RowSpine<_, _, _, _>>(
                     Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
                     "PreArrange Timely reachability",
                 )
-                .as_collection(move |(update_type, addr, source, port, worker, ts), _| {
+        };
+
+        let construct_reachability = |key: Vec<_>, value: Vec<_>| {
+            let mut row_buf = Row::default();
+            construct_reachability_unarranged().as_collection(
+                move |(update_type, addr, source, port, worker, ts), _| {
                     let row_arena = RowArena::default();
                     let update_type = if *update_type { "source" } else { "target" };
                     row_buf.packer().push_list(
@@ -138,7 +146,8 @@ pub fn construct<A: Allocate>(
                     row_buf.packer().extend(value.iter().map(|k| datums[*k]));
                     let value_row = row_buf.clone();
                     (key_row, value_row)
-                })
+                },
+            )
         };
 
         // Restrict results by those logs that are meant to be active.
@@ -155,10 +164,43 @@ pub fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let trace = construct_reachability(key.clone(), value)
+                let updates = construct_reachability(key.clone(), value);
+
+                let trace = updates
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;
-                result.insert(variant, (trace, Rc::clone(&token)));
+                result.insert(variant.clone(), (trace, Rc::clone(&token)));
+            }
+
+            if let Some(target) = config.sink_logs.get(&variant) {
+                tracing::debug!("Persisting {:?} to {:?}", &variant, &target);
+                let updates = construct_reachability_unarranged();
+                let mut row_buf = Row::default();
+                persist_sink(
+                    target.0,
+                    &target.1,
+                    compute_state,
+                    &updates.as_collection(
+                        move |(update_type, addr, source, port, worker, ts), _| {
+                            let row_arena = RowArena::default();
+                            let update_type = if *update_type { "source" } else { "target" };
+                            row_buf.packer().push_list(
+                                addr.iter()
+                                    .chain_one(&source)
+                                    .map(|id| Datum::Int64(*id as i64)),
+                            );
+                            let datums = &[
+                                row_arena.push_unary_row(row_buf.clone()),
+                                Datum::Int64(*port as i64),
+                                Datum::Int64(*worker as i64),
+                                Datum::String(&update_type),
+                                Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                            ];
+                            row_buf.packer().extend(datums);
+                            row_buf.clone()
+                        },
+                    ),
+                );
             }
         }
         result

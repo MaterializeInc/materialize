@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+use mz_storage::client::controller::CollectionMetadata;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -23,9 +24,12 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 #[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub granularity_ns: u128,
-    pub active_logs: HashMap<LogVariant, GlobalId>,
-    // Whether we should report logs for the log-processing dataflows
+    /// Whether we should report logs for the log-processing dataflows
     pub log_logging: bool,
+    /// Logs to keep in an arrangement
+    pub active_logs: HashMap<LogVariant, GlobalId>,
+    /// Logs to be written to persist
+    pub sink_logs: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
 impl LoggingConfig {
@@ -41,6 +45,7 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
             granularity_ns: Some(self.granularity_ns.into_proto()),
             active_logs: self.active_logs.into_proto(),
             log_logging: self.log_logging,
+            sink_logs: self.sink_logs.into_proto(),
         }
     }
 
@@ -51,7 +56,31 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
                 .into_rust_if_some("ProtoLoggingConfig::granularity_ns")?,
             active_logs: proto.active_logs.into_rust()?,
             log_logging: proto.log_logging,
+            sink_logs: proto.sink_logs.into_rust()?,
         })
+    }
+}
+
+impl ProtoMapEntry<LogVariant, (GlobalId, CollectionMetadata)> for ProtoSinkLog {
+    fn from_rust<'a>(entry: (&'a LogVariant, &'a (GlobalId, CollectionMetadata))) -> Self {
+        Self {
+            key: Some(entry.0.into_proto()),
+            value_id: Some(entry.1 .0.into_proto()),
+            value_meta: Some(entry.1 .1.into_proto()),
+        }
+    }
+
+    fn into_rust(
+        self,
+    ) -> std::result::Result<(LogVariant, (GlobalId, CollectionMetadata)), TryFromProtoError> {
+        Ok((
+            self.key.into_rust_if_some("ProtoSinkLog::key")?,
+            (
+                self.value_id.into_rust_if_some("ProtoSinkLog::value_id")?,
+                self.value_meta
+                    .into_rust_if_some("ProtoSinkLog::value_meta")?,
+            ),
+        ))
     }
 }
 
