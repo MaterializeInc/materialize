@@ -12,7 +12,7 @@ from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
-from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
+from materialize.zippy.kafka_capabilities import Envelope, KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 
 SCHEMA = """
@@ -20,7 +20,7 @@ $ set keyschema={
         "type" : "record",
         "name" : "test",
         "fields" : [
-            {"name":"f1", "type":"long"}
+            {"name":"key", "type":"long"}
         ]
     }
 
@@ -28,7 +28,7 @@ $ set schema={
         "type" : "record",
         "name" : "test",
         "fields" : [
-            {"name":"f2", "type":"long"}
+            {"name":"f1", "type":"long"}
         ]
     }
 """
@@ -67,6 +67,7 @@ class CreateTopic(Action):
 
         if len(existing_topics) == 0:
             self.new_topic = True
+            this_topic.envelope = random.choice([Envelope.NONE, Envelope.UPSERT])
             self.topic = this_topic
         elif len(existing_topics) == 1:
             self.new_topic = False
@@ -86,7 +87,7 @@ $ kafka-create-topic topic={self.topic.name}
 {SCHEMA}
 
 $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} publish=true repeat=1
-{{"f1": 0}} {{"f2": 0}}
+{{"key": 0}} {{"f1": 0}}
 """
             )
 
@@ -112,13 +113,16 @@ class KafkaInsert(Ingest):
 {SCHEMA}
 
 $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_high + 1} publish=true repeat={self.delta}
-{{"f1": ${{kafka-ingest.iteration}}}} {{"f2": ${{kafka-ingest.iteration}}}}
+{{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}}}
 """
         )
 
 
 class KafkaDeleteFromHead(Ingest):
     def run(self, c: Composition) -> None:
+        if self.topic.envelope is Envelope.NONE:
+            return
+
         prev_high = self.topic.watermarks.high
         self.topic.watermarks.high = max(
             prev_high - self.delta, self.topic.watermarks.low
@@ -134,13 +138,16 @@ class KafkaDeleteFromHead(Ingest):
 {SCHEMA}
 
 $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.high + 1} publish=true repeat={actual_delta}
-{{"f1": ${{kafka-ingest.iteration}}}}
+{{"key": ${{kafka-ingest.iteration}}}}
 """
             )
 
 
 class KafkaDeleteFromTail(Ingest):
     def run(self, c: Composition) -> None:
+        if self.topic.envelope is Envelope.NONE:
+            return
+
         prev_low = self.topic.watermarks.low
         self.topic.watermarks.low = min(
             prev_low + self.delta, self.topic.watermarks.high
@@ -155,6 +162,6 @@ class KafkaDeleteFromTail(Ingest):
 {SCHEMA}
 
 $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_low} publish=true repeat={actual_delta}
-{{"f1": ${{kafka-ingest.iteration}}}}
+{{"key": ${{kafka-ingest.iteration}}}}
 """
             )
