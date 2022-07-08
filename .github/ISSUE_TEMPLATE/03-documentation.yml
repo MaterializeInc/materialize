@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 name: Documentation
-description: A request for new or updated documentation. For example: "Add an integration guide for MySQL CDC".
+description: A request for new or updated documentation. For example, "Add an integration guide for MySQL CDC".
 labels: A-docs
 body:
   - type: markdown
