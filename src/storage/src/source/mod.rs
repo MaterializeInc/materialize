@@ -47,7 +47,6 @@ use timely::scheduling::ActivateOnDrop;
 use timely::{Data, PartialOrder};
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
-use tracing::error;
 
 use mz_avro::types::Value;
 use mz_expr::PartitionId;
@@ -759,8 +758,7 @@ where
             {
                 Ok(t) => t,
                 Err(e) => {
-                    error!("Failed to create source {} timestamper: {:#}", name, e);
-                    return;
+                    panic!("Failed to create source {} timestamper: {:#}", name, e);
                 }
             };
 
@@ -782,13 +780,10 @@ where
                 base_metrics,
                 connection_context.clone(),
             );
-            let source_stream = match source_reader {
-                Ok(s) => s.into_stream(timestamp_frequency).fuse(),
-                Err(e) => {
-                    error!("Failed to create source: {}", e);
-                    return;
-                }
-            };
+            let source_stream = source_reader
+                .expect("Failed to create source")
+                .into_stream(timestamp_frequency)
+                .fuse();
 
             tokio::pin!(source_stream);
 

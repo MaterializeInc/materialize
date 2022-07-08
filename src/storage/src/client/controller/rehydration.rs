@@ -267,7 +267,6 @@ where
                     None
                 }
             }
-            other => Some(other),
         }
     }
 }

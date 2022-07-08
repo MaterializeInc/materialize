@@ -27,9 +27,7 @@ use timely::progress::ChangeBatch;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
-use uuid::Uuid;
 
-use mz_proto::any_uuid;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
@@ -239,39 +237,14 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
-
-    // TODO(benesch,gus): remove this variant, because it is not produced by
-    // storaged processes.
-    /// Data about timestamp bindings, sent to the coordinator, in service
-    /// of a specific "linearized" read request
-    LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
-}
-
-/// Data about timestamp bindings, sent to the coordinator, in service
-/// of a specific "linearized" read request
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
-    /// The _minimum_ viable timestamp that will produce a "linearized" read...
-    pub timestamp: T,
-    /// ... for this peek
-    pub peek_id: Uuid,
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::*;
         ProtoStorageResponse {
             kind: Some(match self {
-                // TODO: share this impl with `ComputeResponse`
                 StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
-                StorageResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
-                    timestamp,
-                    peek_id,
-                }) => LinearizedTimestamps(ProtoLinearizedTimestampBindingFeedback {
-                    timestamp: *timestamp,
-                    peek_id: Some(peek_id.into_proto()),
-                }),
             }),
         }
     }
@@ -279,18 +252,9 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
         use proto_storage_response::Kind::*;
         match proto.kind {
-            // TODO: share this impl with `ComputeResponse`
             Some(FrontierUppers(traces)) => {
                 Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
             }
-            Some(LinearizedTimestamps(resp)) => Ok(StorageResponse::LinearizedTimestamps(
-                LinearizedTimestampBindingFeedback {
-                    timestamp: resp.timestamp,
-                    peek_id: resp
-                        .peek_id
-                        .into_rust_if_some("ProtoLinearizedTimestampBindingFeedback::peek_id")?,
-                },
-            )),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageResponse::kind",
             )),
@@ -306,12 +270,6 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
         prop_oneof![
             proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
                 .prop_map(StorageResponse::FrontierUppers),
-            (any::<u64>(), any_uuid()).prop_map(|(timestamp, peek_id)| {
-                StorageResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
-                    timestamp,
-                    peek_id,
-                })
-            }),
         ]
         .boxed()
     }
@@ -409,10 +367,6 @@ where
                     Some(Ok(StorageResponse::FrontierUppers(list)))
                 }
             }
-            // TODO(guswynn): is this the correct implementation?
-            StorageResponse::LinearizedTimestamps(feedback) => {
-                Some(Ok(StorageResponse::LinearizedTimestamps(feedback)))
-            }
         }
     }
 }
@@ -509,23 +463,17 @@ mod tests {
             let actual = protobuf_roundtrip::<_, ProtoStorageResponse>(&expect);
             assert!(actual.is_ok());
             let actual = actual.unwrap();
-            if let StorageResponse::FrontierUppers(expected_traces) = expect {
-                if let StorageResponse::FrontierUppers(actual_traces) = actual {
-                    assert_eq!(actual_traces.len(), expected_traces.len());
-                    for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
-                        assert_eq!(actual_id, expected_id);
-                        // `ChangeBatch`es representing equivalent sets of
-                        // changes could have different internal
-                        // representations, so they need to be compacted before comparing.
-                        actual_changes.compact();
-                        expected_changes.compact();
-                        assert_eq!(actual_changes, expected_changes);
-                    }
-                } else {
-                    assert_eq!(actual, StorageResponse::FrontierUppers(expected_traces));
-                }
-            } else {
-                assert_eq!(actual, expect);
+            let StorageResponse::FrontierUppers(expected_traces) = expect;
+            let StorageResponse::FrontierUppers(actual_traces) = actual;
+            assert_eq!(actual_traces.len(), expected_traces.len());
+            for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
+                assert_eq!(actual_id, expected_id);
+                // `ChangeBatch`es representing equivalent sets of
+                // changes could have different internal
+                // representations, so they need to be compacted before comparing.
+                actual_changes.compact();
+                expected_changes.compact();
+                assert_eq!(actual_changes, expected_changes);
             }
         }
     }

@@ -1034,7 +1034,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Materialized(memory="8G"),
-    Testdrive(default_timeout="60s"),
+    Testdrive(default_timeout="120s"),
 ]
 
 

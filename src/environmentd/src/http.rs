@@ -9,7 +9,7 @@
 
 //! Embedded HTTP server.
 //!
-//! materialized embeds an HTTP server for introspection into the running
+//! environmentd embeds an HTTP server for introspection into the running
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
 

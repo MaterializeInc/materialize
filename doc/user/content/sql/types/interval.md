@@ -19,8 +19,8 @@ Detail | Info
 **Size** | 20 bytes
 **Catalog name** | `pg_catalog.interval`
 **OID** | 1186
-**Min value** | -178956970 years -8 months -2147483648 days -2147483648:59:59.999999
-**Max value** | 178956970 years 7 months 2147483647 days 2147483647:59:59.999999
+**Min value** | -178956970 years -8 months -2147483648 days -2562047788:00:54.775808
+**Max value** | 178956970 years 7 months 2147483647 days 2562047788:00:54.775807
 
 ## Syntax
 

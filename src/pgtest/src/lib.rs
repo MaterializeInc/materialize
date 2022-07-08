@@ -80,7 +80,7 @@
 //! REWRITE=1 cargo run --bin mz-pgtest -- test/pgtest/test.pt --addr localhost:5432 --user postgres
 //! ```
 //! This will generate the expected output for the `until` directive.
-//! Now rerun against a running materialized server:
+//! Now rerun against a running Materialize server:
 //! ```shell
 //! cargo run --bin mz-pgtest -- test/pgtest/test.pt
 //! ```

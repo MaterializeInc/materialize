@@ -1516,7 +1516,7 @@ mod tests {
                 months: 312,
                 ..Default::default()
             }),
-            Datum::Interval(Interval::new(0, 0, 1_012_312).unwrap()),
+            Datum::Interval(Interval::new(0, 0, 1_012_312)),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1, 255]),
             Datum::String(""),

@@ -117,7 +117,7 @@ All dataflows are created ASOF a time.
 This time indicates the lower bound of correct results that the dataflow will produce.
 All updates at times not beyond the ASOF time will be zero, and all updates at times beyond the ASOF time will be exactly correct.
 The ASOF time allows us to start a dataflow only once we are sure the data are correct, and only ever present valid data.
-Most commonly, the ASOF time is used to paper over potentially disparite logical compaction in input arrangements, and bring them all to a common first time.
+Most commonly, the ASOF time is used to paper over potentially disparate logical compaction in input arrangements, and bring them all to a common first time.
 
 ## Sources and Sinks
 

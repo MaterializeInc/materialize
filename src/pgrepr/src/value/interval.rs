@@ -60,7 +60,7 @@ impl<'a> FromSql<'a> for Interval {
         let micros = raw.read_i64::<NetworkEndian>()?;
         let days = raw.read_i32::<NetworkEndian>()?;
         let months = raw.read_i32::<NetworkEndian>()?;
-        Ok(Interval(ReprInterval::new(months, days, micros).unwrap()))
+        Ok(Interval(ReprInterval::new(months, days, micros)))
     }
 
     fn accepts(ty: &Type) -> bool {

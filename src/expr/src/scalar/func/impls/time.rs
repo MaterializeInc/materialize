@@ -75,7 +75,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "timetoiv"]
     #[preserves_uniqueness = true]
-    fn cast_time_to_interval<'a>(t: NaiveTime) -> Result<Interval, EvalError> {
+    fn cast_time_to_interval<'a>(t: NaiveTime) -> Interval {
         // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us
         let micros: i64 = Interval::convert_date_time_unit(
             DateTimeField::Second,
@@ -85,7 +85,7 @@ sqlfunc!(
         .unwrap()
             + i64::from(t.nanosecond()) / i64::from(Interval::NANOSECOND_PER_MICROSECOND);
 
-        Interval::new(0, 0, micros).map_err(|_| EvalError::IntervalOutOfRange)
+        Interval::new(0, 0, micros)
     }
 );
 

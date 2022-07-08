@@ -49,7 +49,7 @@ pub mod tcp_connection;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
-/// Configuration for a `materialized` server.
+/// Configuration for an `environmentd` server.
 #[derive(Debug, Clone)]
 pub struct Config {
     // === Performance tuning options. ===
@@ -165,7 +165,7 @@ pub enum SecretsControllerConfig {
     },
 }
 
-/// Start a `materialized` server.
+/// Start an `environmentd` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.catalog_postgres_stash,
@@ -364,7 +364,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     })
 }
 
-/// A running `materialized` server.
+/// A running `environmentd` server.
 pub struct Server {
     sql_local_addr: SocketAddr,
     http_local_addr: SocketAddr,
