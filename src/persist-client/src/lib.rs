@@ -37,7 +37,7 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{retry_external, Machine};
-use crate::read::{ReadHandle, ReaderId, SinceHandleId};
+use crate::read::{ReadHandle, ReaderId, SinceHandle, SinceHandleId};
 use crate::write::WriteHandle;
 
 pub mod batch;
@@ -60,8 +60,6 @@ pub(crate) mod r#impl {
 // TODO: Remove this in favor of making it possible for all PersistClients to be
 // created by the PersistCache.
 pub use crate::r#impl::metrics::Metrics;
-
-use self::read::SinceHandle;
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
