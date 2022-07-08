@@ -32,7 +32,7 @@ use mz_storage::client::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection,
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
-use crate::catalog::{CatalogItem, CatalogState};
+use crate::catalog::{CatalogItem, CatalogState, RecordedView, View};
 use crate::coord::{CatalogTxn, Coordinator};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::AdapterError;
@@ -135,16 +135,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                                 .resolve_full_name(entry.name(), entry.conn_id()),
                         )
                         .expect("indexes can only be built on items with descs");
-                    let monotonic = self
-                        .monotonic_source_or_view(
-                            &entry.id(),
-                            &mut HashMap::<GlobalId, bool>::new(),
-                        )
-                        .unwrap_or_else(|e| {
-                            warn!("Recursion limit reached while inspecting view {} for monotonicity: {}",
-                                entry.id(), e);
-                            false // Let's continue and treat it as non-monotonic
-                        });
+                    let monotonic = self.monotonic_view(*id);
                     dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
                 }
             } else {
@@ -166,7 +157,8 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         self.import_view_into_dataflow(id, &expr, dataflow)?;
                     }
                     CatalogItem::RecordedView(rview) => {
-                        dataflow.import_source(*id, rview.desc.typ().clone(), false);
+                        let monotonic = self.monotonic_view(*id);
+                        dataflow.import_source(*id, rview.desc.typ().clone(), monotonic);
                     }
                     _ => unreachable!(),
                 }
@@ -317,60 +309,69 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         Ok(dataflow)
     }
 
-    /// This recursively traverses the expressions of all (materialized) views involved in the expr
-    /// of a (materialized) view. If this becomes a performance problem, we could add the
+    /// Determine the given view's monotonicity.
+    ///
+    /// This recursively traverses the expressions of all (recorded) views involved in the given
+    /// view's query expression. If this becomes a performance problem, we could add the
     /// monotonicity information of views into the catalog instead.
-    fn monotonic_source_or_view(
+    fn monotonic_view(&self, id: GlobalId) -> bool {
+        self.monotonic_view_inner(id, &mut HashMap::new())
+            .unwrap_or_else(|e| {
+                warn!("Error inspecting view {id} for monotonicity: {e}");
+                false
+            })
+    }
+
+    fn monotonic_view_inner(
         &self,
-        gid: &GlobalId,
+        id: GlobalId,
         memo: &mut HashMap<GlobalId, bool>,
     ) -> Result<bool, RecursionLimitError> {
         self.checked_recur(|_| {
-            match self.catalog.get_entry(gid).item() {
+            match self.catalog.get_entry(&id).item() {
                 CatalogItem::Source(source) => Ok(source.source_desc.monotonic()),
-                CatalogItem::View(view) => {
-                    let mut view_expr = view.optimized_expr.clone();
+                CatalogItem::View(View { optimized_expr, .. })
+                | CatalogItem::RecordedView(RecordedView { optimized_expr, .. }) => {
+                    let mut view_expr = optimized_expr.clone().into_inner();
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
-                    // of monotonic views and sources (but not indexes).
-                    let mut monotonic_ids = HashSet::<GlobalId>::new();
-                    let recursion_result: Result<(), RecursionLimitError> =
-                        view_expr.as_inner_mut().try_visit_post(&mut |e| match e {
-                            MirRelationExpr::Get {
-                                id: Id::Global(got_gid),
+                    // of monotonic (recorded) views and sources (but not indexes).
+                    let mut monotonic_ids = HashSet::new();
+                    let recursion_result: Result<(), RecursionLimitError> = view_expr
+                        .try_visit_post(&mut |e| {
+                            if let MirRelationExpr::Get {
+                                id: Id::Global(got_id),
                                 ..
-                            } => {
+                            } = e
+                            {
+                                let got_id = *got_id;
+
                                 // A view might be reached multiple times. If we already computed
                                 // the monotonicity of the gid, then use that. If not, then compute
                                 // it now.
-                                if memo.contains_key(got_gid) {
-                                    if *memo.get(got_gid).unwrap() {
-                                        monotonic_ids.insert(*got_gid);
+                                let monotonic = match memo.get(&got_id) {
+                                    Some(monotonic) => *monotonic,
+                                    None => {
+                                        let monotonic = self.monotonic_view_inner(got_id, memo)?;
+                                        memo.insert(got_id, monotonic);
+                                        monotonic
                                     }
-                                } else {
-                                    let monotonic = self.monotonic_source_or_view(
-                                        got_gid,
-                                        memo,
-                                    )?;
-                                    memo.insert(got_gid.clone(), monotonic);
-                                    if monotonic {
-                                        monotonic_ids.insert(*got_gid);
-                                    }
+                                };
+                                if monotonic {
+                                    monotonic_ids.insert(got_id);
                                 }
-                                Ok(())
                             }
-                            _ => Ok(()),
+                            Ok(())
                         });
-                    if recursion_result.is_err() {
+                    if let Err(error) = recursion_result {
                         // We still might have got some of the IDs, so just log and continue. Now
                         // the subsequent monotonicity analysis can have false negatives.
-                        warn!("Recursion limit reached while inspecting view {} for monotonicity (too deep view expression tree): {}",
-                            gid, recursion_result.unwrap_err());
+                        warn!("Error inspecting view {id} for monotonicity: {error}");
                     }
 
                     // Use `monotonic_ids` as a starting point for propagating monotonicity info.
                     mz_transform::monotonic::MonotonicFlag::default().apply(
-                        view_expr.as_inner_mut(),
+                        &mut view_expr,
                         &monotonic_ids,
                         &mut HashSet::new(),
                     )
