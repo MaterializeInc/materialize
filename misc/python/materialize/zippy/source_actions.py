@@ -47,13 +47,14 @@ class CreateSource(Action):
 
     def run(self, c: Composition) -> None:
         if self.new_source:
+            envelope = str(self.topic.envelope).split(".")[1]
             c.testdrive(
                 f"""
 > CREATE MATERIALIZED SOURCE {self.source.name}
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}'
   TOPIC 'testdrive-{self.topic.name}-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
-  ENVELOPE UPSERT
+  ENVELOPE {envelope}
 """
             )
 
