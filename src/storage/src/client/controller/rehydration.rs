@@ -20,19 +20,21 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
+use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::{pin, select};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 
 use mz_ore::retry::Retry;
 use mz_repr::GlobalId;
-use mz_service::client::Reconnect;
+use mz_service::client::GenericClient;
 
-use crate::client::{IngestSourceCommand, StorageClient, StorageCommand, StorageResponse};
+use crate::client::{
+    IngestSourceCommand, StorageClient, StorageCommand, StorageGrpcClient, StorageResponse,
+};
 
 /// A storage client that replays the command stream on failure.
 ///
@@ -46,21 +48,19 @@ pub struct RehydratingStorageClient<T> {
 impl<T> RehydratingStorageClient<T>
 where
     T: Timestamp + Lattice,
+    StorageGrpcClient: StorageClient<T>,
 {
-    /// Creates a `RehydratingStorageClient` that wraps a reconnectable
-    /// [`StorageClient`].
-    pub fn new<C>(client: C) -> RehydratingStorageClient<T>
-    where
-        C: StorageClient<T> + Reconnect + 'static,
-    {
+    /// Creates a `RehydratingStorageClient` for a storage host with the given
+    /// network address.
+    pub fn new(addr: String) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
         let mut task = RehydrationTask {
+            addr,
             command_rx,
             response_tx,
             ingestions: BTreeMap::new(),
             uppers: HashMap::new(),
-            client,
         };
         mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -83,7 +83,9 @@ where
 }
 
 /// A task that manages rehydration.
-struct RehydrationTask<C, T> {
+struct RehydrationTask<T> {
+    /// The network address of the storage host.
+    addr: String,
     /// A channel upon which commands intended for the storage host are delivered.
     command_rx: UnboundedReceiver<StorageCommand<T>>,
     /// A channel upon which responses from the storage host are delivered.
@@ -92,8 +94,6 @@ struct RehydrationTask<C, T> {
     ingestions: BTreeMap<GlobalId, IngestSourceCommand<T>>,
     /// The upper frontier information received.
     uppers: HashMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>,
-    /// The underlying client that communicates with the storage host.
-    client: C,
 }
 
 enum RehydrationTaskState {
@@ -101,23 +101,23 @@ enum RehydrationTaskState {
     Rehydrate,
     /// Communication with the storage host is live. Commands and responses should
     /// be forwarded until an error occurs.
-    Pump,
+    Pump { client: StorageGrpcClient },
     /// The caller has asked us to shut down communication with this storage
     /// host.
     Done,
 }
 
-impl<C, T> RehydrationTask<C, T>
+impl<T> RehydrationTask<T>
 where
-    C: StorageClient<T> + Reconnect + 'static,
     T: Timestamp + Lattice,
+    StorageGrpcClient: StorageClient<T>,
 {
     async fn run(&mut self) {
         let mut state = RehydrationTaskState::Rehydrate;
         loop {
             state = match state {
                 RehydrationTaskState::Rehydrate => self.step_rehydrate().await,
-                RehydrationTaskState::Pump => self.step_pump().await,
+                RehydrationTaskState::Pump { client } => self.step_pump(client).await,
                 RehydrationTaskState::Done => break,
             }
         }
@@ -130,39 +130,43 @@ where
         }
 
         // Reconnect to the storage host.
-        let retry = Retry::default()
+        let client = Retry::default()
             .clamp_backoff(Duration::from_secs(32))
-            .into_retry_stream();
-        pin!(retry);
-        loop {
-            match self.client.reconnect().await {
-                Ok(()) => break,
-                Err(e) => {
-                    warn!("error connecting to storage host, retrying: {e}");
-                    retry.next().await;
+            .retry_async(|_| {
+                let addr = self.addr.clone();
+                async move {
+                    match StorageGrpcClient::connect(addr).await {
+                        Ok(client) => Ok(client),
+                        Err(e) => {
+                            warn!("error connecting to storage host, retrying: {e}");
+                            Err(e)
+                        }
+                    }
                 }
-            }
-        }
+            })
+            .await
+            .expect("retry retries forever");
 
         // Rehydrate all commands.
-        self.send_command(StorageCommand::IngestSources(
-            self.ingestions.values().cloned().collect(),
-        ))
+        self.send_command(
+            client,
+            StorageCommand::IngestSources(self.ingestions.values().cloned().collect()),
+        )
         .await
     }
 
-    async fn step_pump(&mut self) -> RehydrationTaskState {
+    async fn step_pump(&mut self, mut client: StorageGrpcClient) -> RehydrationTaskState {
         select! {
             // Command from controller to forward to storage host.
             command = self.command_rx.recv() => match command {
                 None => RehydrationTaskState::Done,
                 Some(command) => {
                     self.absorb_command(&command);
-                    self.send_command(command).await
+                    self.send_command(client, command).await
                 }
             },
             // Response from storage host to forward to controller.
-            response = self.client.recv() => {
+            response = client.recv() => {
                 let response = match response.transpose() {
                     None => {
                         // In the future, if a storage host politely hangs up,
@@ -174,20 +178,25 @@ where
                     Some(response) => response,
                 };
 
-                self.send_response(response).await
+                self.send_response(client, response).await
             }
         }
     }
 
-    async fn send_command(&mut self, command: StorageCommand<T>) -> RehydrationTaskState {
-        match self.client.send(command).await {
-            Ok(()) => RehydrationTaskState::Pump,
-            Err(e) => self.send_response(Err(e)).await,
+    async fn send_command(
+        &mut self,
+        mut client: StorageGrpcClient,
+        command: StorageCommand<T>,
+    ) -> RehydrationTaskState {
+        match client.send(command).await {
+            Ok(()) => RehydrationTaskState::Pump { client },
+            Err(e) => self.send_response(client, Err(e)).await,
         }
     }
 
     async fn send_response(
         &mut self,
+        client: StorageGrpcClient,
         response: Result<StorageResponse<T>, anyhow::Error>,
     ) -> RehydrationTaskState {
         match response {
@@ -196,10 +205,10 @@ where
                     if self.response_tx.send(response).is_err() {
                         RehydrationTaskState::Done
                     } else {
-                        RehydrationTaskState::Pump
+                        RehydrationTaskState::Pump { client }
                     }
                 } else {
-                    RehydrationTaskState::Pump
+                    RehydrationTaskState::Pump { client }
                 }
             }
             Err(e) => {

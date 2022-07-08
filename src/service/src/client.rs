@@ -16,7 +16,6 @@ use std::fmt;
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::future;
 use futures::stream::{Stream, StreamExt};
 use tokio_stream::StreamMap;
 
@@ -39,9 +38,7 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     /// connection. The owner of the client should not call `recv` again.
     ///
     /// A return value of `Err(_)` indicates an unrecoverable error. After
-    /// observing an error, the owner of the client must either drop the client,
-    /// or, if the client supports reconnection, call the
-    /// [`Reconnect::reconnect`] method.
+    /// observing an error, the owner of the client must drop the client.
     ///
     /// Implementations of this method **must** be [cancellation safe]. That
     /// means that work must not be lost if the future returned by this method
@@ -85,13 +82,6 @@ where
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
         (**self).recv().await
     }
-}
-
-/// Trait for clients that can be reconnected.
-#[async_trait]
-pub trait Reconnect {
-    /// Reconnects the client.
-    async fn reconnect(&mut self) -> Result<(), anyhow::Error>;
 }
 
 /// A client whose implementation is partitioned across a number of other
@@ -161,19 +151,6 @@ where
         }
         // Indicate completion of the communication.
         Ok(None)
-    }
-}
-
-#[async_trait]
-impl<P, C, R> Reconnect for Partitioned<P, C, R>
-where
-    P: Reconnect + Send,
-    (C, R): Partitionable<C, R>,
-{
-    async fn reconnect(&mut self) -> Result<(), anyhow::Error> {
-        let reconnections = self.parts.iter_mut().map(|part| part.reconnect());
-        future::try_join_all(reconnections).await?;
-        Ok(())
     }
 }
 

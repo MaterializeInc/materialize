@@ -2831,18 +2831,18 @@ fn plan_replica_config(
         scx.require_unsafe_mode("REMOTE cluster replica option")?;
     }
 
-    let remote_replicas = remote
+    let remote_addrs = remote
         .unwrap_or_default()
         .into_iter()
         .collect::<BTreeSet<String>>();
 
-    match (remote_replicas.len() > 0, size) {
+    match (remote_addrs.len() > 0, size) {
         (true, None) => {
             if availability_zone.is_some() {
                 sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
             }
             Ok(ReplicaConfig::Remote {
-                replicas: remote_replicas,
+                addrs: remote_addrs,
             })
         }
         (false, Some(size)) => Ok(ReplicaConfig::Managed {

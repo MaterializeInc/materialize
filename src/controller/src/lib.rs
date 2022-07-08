@@ -49,7 +49,7 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, TailResponse,
 };
-use mz_compute_client::service::ComputeGrpcClient;
+use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
     CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
     ServicePort,
@@ -161,8 +161,8 @@ impl Default for ClusterReplicaSizeMap {
 pub enum ConcreteComputeInstanceReplicaConfig {
     /// Out-of-process replica
     Remote {
-        /// A map from replica name to hostnames.
-        replicas: BTreeSet<String>,
+        /// The network addresses of the processes in the replica.
+        addrs: BTreeSet<String>,
     },
     /// A remote but managed replica
     Managed {
@@ -295,10 +295,9 @@ where
 
         // Add replicas backing that instance.
         match config {
-            ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
+            ConcreteComputeInstanceReplicaConfig::Remote { addrs } => {
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
-                let client = ComputeGrpcClient::new_partitioned(replicas.into_iter().collect());
-                compute_instance.add_replica(replica_id, client);
+                compute_instance.add_replica(replica_id, addrs.into_iter().collect());
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config,
@@ -366,10 +365,9 @@ where
                         },
                     )
                     .await?;
-                let client = ComputeGrpcClient::new_partitioned(service.addresses("controller"));
                 self.compute_mut(instance_id)
                     .unwrap()
-                    .add_replica(replica_id, client);
+                    .add_replica(replica_id, service.addresses("controller"));
             }
         }
 
@@ -410,13 +408,13 @@ where
     ) -> Result<(), anyhow::Error> {
         if let Some(mut compute) = self.compute.remove(&instance) {
             assert!(
-                compute.client.get_replica_ids().next().is_none(),
+                compute.replicas.get_replica_ids().next().is_none(),
                 "cannot drop instances with provisioned replicas; call `drop_replica` first"
             );
             self.compute_orchestrator
                 .drop_service(&format!("cluster-{instance}"))
                 .await?;
-            compute.client.send(ComputeCommand::DropInstance);
+            compute.replicas.send(ComputeCommand::DropInstance);
         }
         Ok(())
     }
@@ -490,7 +488,8 @@ impl<T> Controller<T> {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Waits until the controller is ready to process a response.
     ///
