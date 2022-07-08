@@ -1047,7 +1047,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // timestamps to close on a regular interval. This roughly tracks the behavior
         // of realtime sources that close off timestamps on an interval.
         //
-        // For non-realtime timelines, noting pushes the timestamps forward, so we must do
+        // For non-realtime timelines, nothing pushes the timestamps forward, so we must do
         // it manually.
         let mut advance_timelines_interval =
             tokio::time::interval(self.catalog.config().timestamp_frequency);
