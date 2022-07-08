@@ -435,15 +435,18 @@ impl FromStr for Timeline {
         }
         let mut chars = s.chars();
         match chars.next().expect("non-empty string") {
-            Self::EPOCH_MILLISECOND_ID_CHAR => {
-                if chars.count() == 0 {
-                    Ok(Self::EpochMilliseconds)
-                } else {
-                    Err(format!("unknown timeline: {s}"))
-                }
-            }
-            Self::EXTERNAL_ID_CHAR => Ok(Self::External(chars.as_str().to_string())),
-            Self::USER_ID_CHAR => Ok(Self::User(chars.as_str().to_string())),
+            Self::EPOCH_MILLISECOND_ID_CHAR => match chars.next() {
+                None => Ok(Self::EpochMilliseconds),
+                Some(_) => Err(format!("unknown timeline: {s}")),
+            },
+            Self::EXTERNAL_ID_CHAR => match chars.next() {
+                Some('.') => Ok(Self::External(chars.as_str().to_string())),
+                _ => Err(format!("unknown timeline: {s}")),
+            },
+            Self::USER_ID_CHAR => match chars.next() {
+                Some('.') => Ok(Self::User(chars.as_str().to_string())),
+                _ => Err(format!("unknown timeline: {s}")),
+            },
             _ => Err(format!("unknown timeline: {s}")),
         }
     }
@@ -1873,4 +1876,17 @@ impl Codec for SourceData {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
     }
+}
+
+#[test]
+fn test_timeline_parsing() {
+    assert_eq!(Ok(Timeline::EpochMilliseconds), "M".parse());
+    assert_eq!(Ok(Timeline::External("JOE".to_string())), "E.JOE".parse());
+    assert_eq!(Ok(Timeline::User("MIKE".to_string())), "U.MIKE".parse());
+
+    assert!("Materialize".parse::<Timeline>().is_err());
+    assert!("Ejoe".parse::<Timeline>().is_err());
+    assert!("Umike".parse::<Timeline>().is_err());
+    assert!("Dance".parse::<Timeline>().is_err());
+    assert!("".parse::<Timeline>().is_err());
 }
