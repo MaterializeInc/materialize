@@ -418,6 +418,12 @@ def workflow_mzcloud(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Retry any potential performance regressions up to N times.",
     )
 
+    parser.add_argument(
+        "--test-filter",
+        type=str,
+        help="Filter scenario names by this string (case insensitive).",
+    )
+
     args = parser.parse_args()
 
     assert args.mzcloud_url
@@ -460,6 +466,8 @@ root_scenario: {args.root_scenario}"""
 
         for scenario in list(scenarios.keys()):
             name = scenario.__name__
+            if args.test_filter and args.test_filter.lower() not in name.lower():
+                continue
             print(f"--- Now benchmarking {name} ...")
             comparator = SuccessComparator(name, threshold=0)
             common_seed = round(time.time())
