@@ -107,7 +107,7 @@ We are finally ready to start debugging!
 ### Using rust-{gdb,lldb}
 
 First, we need to see what binaries need to be debugged. Adding `-v` to Cargo
-commands should give the neccessary info. After running for example
+commands should give the necessary info. After running for example
 `cargo test -v`
 
 ```shell
