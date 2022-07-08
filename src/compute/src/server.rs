@@ -9,7 +9,7 @@
 
 //! An interactive dataflow server.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
@@ -23,6 +23,7 @@ use timely::WorkerConfig;
 use tokio::sync::mpsc;
 
 use mz_compute_client::command::ComputeCommand;
+use mz_compute_client::controller::replicated::ComputeCommandHistory;
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_ore::metrics::MetricsRegistry;
@@ -188,26 +189,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     /// Draws commands from a single client until disconnected.
-    fn run_client(&mut self, command_rx: CommandReceiver, mut response_tx: ResponseSender) {
-        // A new client has connected. Reset state about what we have reported.
-        //
-        // TODO(benesch,mcsherry): introduce a `InitializationComplete` command
-        // and only clear the state that is missing after initialization
-        // completes.
-        if let Some(state) = self.activate_compute(&mut response_tx) {
-            state.compute_state.reported_frontiers.clear();
-            state.compute_state.pending_peeks.clear();
-            state
-                .compute_state
-                .sink_tokens
-                .retain(|_, token| !token.is_tail);
-            state
-                .compute_state
-                .tail_response_buffer
-                .borrow_mut()
-                .clear();
-        }
+    fn run_client(&mut self, mut command_rx: CommandReceiver, mut response_tx: ResponseSender) {
+        self.reconcile(&mut command_rx, &mut response_tx);
 
+        // Commence normal operation.
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -240,41 +225,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
             }
             for cmd in cmds {
-                let mut should_drop_compute = false;
-                match &cmd {
-                    ComputeCommand::CreateInstance(config) => {
-                        self.compute_state = Some(ComputeState {
-                            replica_id: config.replica_id,
-                            traces: TraceManager::new(
-                                self.metrics_bundle.1.clone(),
-                                self.timely_worker.index(),
-                            ),
-                            sink_tokens: HashMap::new(),
-                            tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(
-                                Vec::new(),
-                            )),
-                            sink_write_frontiers: HashMap::new(),
-                            pending_peeks: Vec::new(),
-                            reported_frontiers: HashMap::new(),
-                            sink_metrics: self.metrics_bundle.0.clone(),
-                            compute_logger: None,
-                            connection_context: self.connection_context.clone(),
-                            persist_clients: Arc::clone(&self.persist_clients),
-                            dataflow_descriptions: HashMap::new(),
-                        });
-                    }
-                    ComputeCommand::DropInstance => {
-                        should_drop_compute = true;
-                    }
-                    _ => (),
-                }
-
-                self.activate_compute(&mut response_tx)
-                    .unwrap()
-                    .handle_compute_command(cmd);
-                if should_drop_compute {
-                    self.compute_state = None;
-                }
+                self.handle_command(&mut response_tx, cmd);
             }
 
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
@@ -282,9 +233,48 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 compute_state.process_tails();
             }
         }
-        if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
+    }
+
+    #[allow(dead_code)]
+    fn shut_down(&mut self, response_tx: &mut ResponseSender) {
+        if let Some(mut compute_state) = self.activate_compute(response_tx) {
             compute_state.compute_state.traces.del_all_traces();
             compute_state.shutdown_logging();
+        }
+    }
+
+    fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
+        let mut should_drop_compute = false;
+        match &cmd {
+            ComputeCommand::CreateInstance(config) => {
+                self.compute_state = Some(ComputeState {
+                    replica_id: config.replica_id,
+                    traces: TraceManager::new(
+                        self.metrics_bundle.1.clone(),
+                        self.timely_worker.index(),
+                    ),
+                    sink_tokens: HashMap::new(),
+                    tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+                    sink_write_frontiers: HashMap::new(),
+                    pending_peeks: Vec::new(),
+                    reported_frontiers: HashMap::new(),
+                    sink_metrics: self.metrics_bundle.0.clone(),
+                    compute_logger: None,
+                    connection_context: self.connection_context.clone(),
+                    persist_clients: Arc::clone(&self.persist_clients),
+                    command_history: ComputeCommandHistory::default(),
+                });
+            }
+            ComputeCommand::DropInstance => {
+                should_drop_compute = true;
+            }
+            _ => (),
+        }
+        self.activate_compute(response_tx)
+            .unwrap()
+            .handle_compute_command(cmd);
+        if should_drop_compute {
+            self.compute_state = None;
         }
     }
 
@@ -300,6 +290,217 @@ impl<'w, A: Allocate> Worker<'w, A> {
             })
         } else {
             None
+        }
+    }
+
+    /// Extract commands until `InitializationComplete`, and make the worker reflect those commands.
+    /// If the worker can not be made to reflect the commands, exit the process.
+    ///
+    /// This method is meant to be a function of the commands received thus far (as recorded in the
+    /// compute state command history) and the new commands from `command_rx`. It should not be a
+    /// function of other characteristics, like whether the worker has managed to respond to a peek
+    /// or not. Some effort goes in to narrowing our view to only the existing commands we can be sure
+    /// are live at all other workers.
+    ///
+    /// The methodology here is to drain `command_rx` until an `InitializationComplete`, at which point
+    /// the prior commands are "reconciled" in. Reconciliation takes each goal dataflow and looks for an
+    /// existing "compatible" dataflow (per `compatible()`) it can repurpose, with some additional tests
+    /// to be sure that we can cut over from one to the other (no additional compaction, no tails/sinks).
+    /// With any connections established, old orphaned dataflows are allow to compact away, and any new
+    /// dataflows are created from scratch. "Kept" dataflows are allowed to compact up to any new `as_of`.
+    ///
+    /// Some additional tidying happens, cleaning up pending peeks, reported frontiers, and creating a new
+    /// tail response buffer. We will need to be vigilant with future modifications to `ComputeState` to
+    /// line up changes there with clean resets here.
+    fn reconcile(
+        &mut self,
+        command_rx: &mut CommandReceiver,
+        mut response_tx: &mut ResponseSender,
+    ) {
+        // To initialize the connection, we want to drain all commands until we receive a
+        // `ComputeCommand::InitializationComplete` command to form a target command state.
+        let mut new_commands = Vec::new();
+        while let Ok(command) = command_rx.recv() {
+            if let ComputeCommand::InitializationComplete = command {
+                break;
+            } else {
+                new_commands.push(command);
+            }
+        }
+
+        // Commands we will need to apply before entering normal service.
+        // These commands may include dropping existing dataflows, compacting existing dataflows,
+        // and creating new dataflows, in addition to standard peek and compaction commands.
+        // The result should be the same as if dropping all dataflows and running `new_commands`.
+        let mut todo_commands = Vec::new();
+        // Exported identifiers from dataflows we retain.
+        let mut retain_ids = BTreeSet::default();
+
+        // We only have a compute history if we are in an initialized state
+        // e.g. before a `CreateInstance` or after a `DropInstance`).
+        // If this is not the case, just copy `new_commands` into `todo_commands`.
+        if let Some(compute_state) = &mut self.compute_state {
+            // Reduce the installed commands.
+            // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
+            compute_state
+                .command_history
+                .reduce(&HashMap::<_, ()>::default());
+
+            // At this point, we need to sort out which of the *certainly installed* dataflows are
+            // suitable replacements for the requested dataflows. A dataflow is "certainly installed"
+            // as of a frontier if its compaction allows it to go no further. We ignore peeks for this
+            // reasoning, as we cannot be certain that peeks still exist at any other worker.
+
+            // Having reduced our installed command history retaining no peeks (above), we should be able
+            // to use track down installed dataflows we can use as surrogates for requested dataflows (which
+            // have retained all of their peeks, creating a more demainding `as_of` requirement).
+            // NB: installed dataflows may still be allowed to further compact, and we should double check
+            // this before being too confident. It should be rare without peeks, but could happen with e.g.
+            // multiple outputs of a dataflow.
+
+            // The configuration with which a prior `CreateInstance` was called, if it was.
+            let mut old_config = None;
+            // Index dataflows by `export_ids().collect()`, as this is a precondition for their compatibility.
+            let mut old_dataflows = BTreeMap::default();
+            // Maintain allowed compaction, in case installed identifiers may have been allowed to compact.
+            let mut old_frontiers = BTreeMap::default();
+            for command in compute_state.command_history.iter() {
+                match command {
+                    ComputeCommand::CreateInstance(config) => {
+                        old_config = Some(config);
+                    }
+                    ComputeCommand::CreateDataflows(dataflows) => {
+                        for dataflow in dataflows.iter() {
+                            let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
+                            old_dataflows.insert(export_ids, dataflow);
+                        }
+                    }
+                    ComputeCommand::AllowCompaction(frontiers) => {
+                        for (id, frontier) in frontiers.iter() {
+                            old_frontiers.insert(id, frontier);
+                        }
+                    }
+                    _ => {
+                        // Nothing to do in these cases.
+                    }
+                }
+            }
+
+            // Compaction commands that can be applied to existing dataflows.
+            let mut old_compaction = BTreeMap::default();
+
+            // Traverse new commands, sorting out what remediation we can do.
+            for command in new_commands.iter() {
+                match command {
+                    ComputeCommand::CreateDataflows(dataflows) => {
+                        // Track dataflow we must build anew.
+                        let mut new_dataflows = Vec::new();
+
+                        // Attempt to find an existing match for each dataflow.
+                        for dataflow in dataflows.iter() {
+                            let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
+                            if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
+                                let compatible = dataflow.compatible_with(&old_dataflow);
+                                let uncompacted = !export_ids
+                                    .iter()
+                                    .flat_map(|id| old_frontiers.get(id))
+                                    .any(|frontier| {
+                                        !timely::PartialOrder::less_equal(
+                                            *frontier,
+                                            dataflow.as_of.as_ref().unwrap(),
+                                        )
+                                    });
+                                // TODO: this can be improved to "tail with snapshot"-free, I believe.
+                                // There would need to be changes to clean-up, especially around `tail_response_buffer`.
+                                let sink_free = dataflow.sink_exports.is_empty();
+                                if compatible && uncompacted && sink_free {
+                                    // Match found; remove the match from the deletion queue,
+                                    // and compact its outputs to the dataflow's `as_of`.
+                                    old_dataflows.remove(&export_ids);
+                                    for id in export_ids.iter() {
+                                        old_compaction.insert(*id, dataflow.as_of.clone().unwrap());
+                                    }
+                                    retain_ids.extend(export_ids);
+                                } else {
+                                    new_dataflows.push(dataflow.clone());
+                                }
+                            } else {
+                                new_dataflows.push(dataflow.clone());
+                            }
+                        }
+
+                        if !new_dataflows.is_empty() {
+                            todo_commands.push(ComputeCommand::CreateDataflows(new_dataflows));
+                        }
+                    }
+                    ComputeCommand::CreateInstance(new_config) => {
+                        // Cluster creation should not be performed again!
+                        assert_eq!(old_config, Some(new_config));
+                    }
+                    // All other commands we apply as requested.
+                    command => {
+                        todo_commands.push(command.clone());
+                    }
+                }
+            }
+
+            // Issue compaction commands first to reclaim resources.
+            for (_, dataflow) in old_dataflows.iter() {
+                for id in dataflow.export_ids() {
+                    // We want to drop anything that has not yet been dropped,
+                    // and nothing that has already been dropped.
+                    if old_frontiers.get(&id) != Some(&&timely::progress::Antichain::default()) {
+                        old_compaction.insert(id, timely::progress::Antichain::default());
+                    }
+                }
+            }
+            if !old_compaction.is_empty() {
+                todo_commands.insert(
+                    0,
+                    ComputeCommand::AllowCompaction(old_compaction.into_iter().collect::<Vec<_>>()),
+                );
+            }
+
+            // Clean up worker-local state.
+            //
+            // Various aspects of `ComputeState` need to be either uninstalled, or return to a blank slate.
+            // All dropped dataflows should clean up after themselves, as we plan to install new dataflows
+            // re-using the same identifiers.
+            // All re-used dataflows should roll back any believed communicated information (e.g. frontiers)
+            // so that they recommunicate that information as if from scratch.
+
+            // Remove all pending peeks.
+            compute_state.pending_peeks.clear();
+            // We compact away removed frontiers, and so only need to reset ids we continue to use.
+            for (_, frontier) in compute_state.reported_frontiers.iter_mut() {
+                use timely::progress::Timestamp;
+                *frontier = timely::progress::Antichain::from_elem(<_>::minimum());
+            }
+            // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
+            compute_state
+                .sink_tokens
+                .retain(|id, _| retain_ids.contains(id));
+            // We must drop the tail response buffer as it is global across all tails.
+            // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
+            compute_state.tail_response_buffer =
+                std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        } else {
+            todo_commands = new_commands.clone();
+        }
+
+        // Execute the commands to bring us to `new_commands`.
+        for command in todo_commands.into_iter() {
+            self.handle_command(&mut response_tx, command);
+        }
+
+        // Overwrite `self.command_history` to reflect `new_commands`.
+        // It is possible that there still isn't a compute state yet.
+        if let Some(compute_state) = &mut self.compute_state {
+            let mut command_history = ComputeCommandHistory::default();
+            for command in new_commands.iter() {
+                command_history.push(command.clone());
+            }
+            compute_state.command_history = command_history;
         }
     }
 }

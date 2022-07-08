@@ -153,9 +153,12 @@ where
             .expect("retry retries forever");
 
         // Rehydrate all commands.
-        self.send_command(
+        self.send_commands(
             client,
-            StorageCommand::IngestSources(self.ingestions.values().cloned().collect()),
+            vec![
+                StorageCommand::IngestSources(self.ingestions.values().cloned().collect()),
+                StorageCommand::InitializationComplete,
+            ],
         )
         .await
     }
@@ -167,7 +170,7 @@ where
                 None => RehydrationTaskState::Done,
                 Some(command) => {
                     self.absorb_command(&command);
-                    self.send_command(client, command).await
+                    self.send_commands(client, vec![command]).await
                 }
             },
             // Response from storage host to forward to controller.
@@ -188,15 +191,17 @@ where
         }
     }
 
-    async fn send_command(
+    async fn send_commands(
         &mut self,
         mut client: StorageGrpcClient,
-        command: StorageCommand<T>,
+        commands: Vec<StorageCommand<T>>,
     ) -> RehydrationTaskState {
-        match client.send(command).await {
-            Ok(()) => RehydrationTaskState::Pump { client },
-            Err(e) => self.send_response(client, Err(e)).await,
+        for command in commands {
+            if let Err(e) = client.send(command).await {
+                return self.send_response(client, Err(e)).await;
+            }
         }
+        RehydrationTaskState::Pump { client }
     }
 
     async fn send_response(
@@ -225,6 +230,7 @@ where
 
     fn absorb_command(&mut self, command: &StorageCommand<T>) {
         match command {
+            StorageCommand::InitializationComplete => (),
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
                     self.ingestions.insert(ingestion.id, ingestion.clone());

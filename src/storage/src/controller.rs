@@ -102,6 +102,13 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 pub trait StorageController: Debug + Send {
     type Timestamp;
 
+    /// Marks the end of any initialization commands.
+    ///
+    /// The implementor may wait for this method to be called before implementing prior commands,
+    /// and so it is important for a user to invoke this method as soon as it is comfortable.
+    /// This method can be invoked immediately, at the potential expense of performance.
+    fn initialization_complete(&mut self);
+
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
 
@@ -452,6 +459,10 @@ where
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     type Timestamp = T;
+
+    fn initialization_complete(&mut self) {
+        // TODO(benesch)
+    }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, StorageError> {
         self.state

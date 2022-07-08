@@ -50,6 +50,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
+    /// Indicates that the controller has sent all commands reflecting its
+    /// initial state.
+    InitializationComplete,
+
     /// Create a sequence of dataflows.
     ///
     /// Each of the dataflows must contain `as_of` members that are valid
@@ -83,6 +87,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             kind: Some(match self {
                 ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::DropInstance => DropInstance(()),
+                ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
                         dataflows: dataflows.into_proto(),
@@ -107,6 +112,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         match proto.kind {
             Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
+            Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
             }

@@ -432,6 +432,22 @@ where
     T: Timestamp + Lattice + Codec64 + Copy,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    /// Marks the end of any initialization commands.
+    ///
+    /// The implementor may wait for this method to be called before implementing prior commands,
+    /// and so it is important for a user to invoke this method as soon as it is comfortable.
+    /// This method can be invoked immediately, at the potential expense of performance.
+    pub fn initialization_complete(&mut self) {
+        for (instance, compute) in self.compute.iter_mut() {
+            ComputeControllerMut {
+                instance: *instance,
+                compute,
+                storage_controller: &mut *self.storage_controller,
+            }
+            .initialization_complete();
+        }
+    }
+
     /// Waits until the controller is ready to process a response.
     ///
     /// This method may block for an arbitrarily long time.

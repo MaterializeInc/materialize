@@ -134,6 +134,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
+            StorageCommand::InitializationComplete => (),
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
                     if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {

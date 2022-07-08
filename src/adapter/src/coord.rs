@@ -955,6 +955,9 @@ impl<S: Append + 'static> Coordinator<S> {
         self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
             .await;
 
+        // Announce the completion of initialization.
+        self.controller.initialization_complete();
+
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {

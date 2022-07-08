@@ -548,7 +548,7 @@ pub enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
 }
 
 #[derive(Debug)]
-struct ComputeCommandHistory<T> {
+pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
     commands: Vec<ComputeCommand<T>>,
 }
 
@@ -579,6 +579,8 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         let mut create_command = None;
         let mut drop_command = None;
 
+        let mut initialization_complete = false;
+
         for command in self.commands.drain(..) {
             match command {
                 create @ ComputeCommand::CreateInstance(_) => {
@@ -589,6 +591,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 cmd @ ComputeCommand::DropInstance => {
                     assert!(drop_command.is_none());
                     drop_command = Some(cmd);
+                }
+                ComputeCommand::InitializationComplete => {
+                    initialization_complete = true;
                 }
                 ComputeCommand::CreateDataflows(dataflows) => {
                     live_dataflows.extend(dataflows);
@@ -685,6 +690,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             self.commands.push(ComputeCommand::AllowCompaction(
                 final_frontiers.into_iter().collect(),
             ));
+        }
+        if initialization_complete {
+            self.commands.push(ComputeCommand::InitializationComplete);
         }
         if let Some(drop_command) = drop_command {
             self.commands.push(drop_command);

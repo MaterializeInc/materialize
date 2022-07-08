@@ -98,6 +98,9 @@ where
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
+    /// Indicates that the controller has sent all commands reflecting its
+    /// initial state.
+    InitializationComplete,
     /// Create the enumerated sources, each associated with its identifier.
     IngestSources(Vec<IngestSourceCommand<T>>),
     /// Enable compaction in storage-managed collections.
@@ -166,6 +169,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         use proto_storage_command::Kind::*;
         ProtoStorageCommand {
             kind: Some(match self {
+                StorageCommand::InitializationComplete => InitializationComplete(()),
                 StorageCommand::IngestSources(ingestions) => IngestSources(ProtoIngestSources {
                     ingestions: ingestions.into_proto(),
                 }),
@@ -187,6 +191,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
+            Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
             )),
