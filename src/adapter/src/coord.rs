@@ -328,9 +328,7 @@ fn concretize_replica_config(
     availability_zones: &[String],
 ) -> Result<ConcreteComputeInstanceReplicaConfig, AdapterError> {
     let config = match config {
-        ReplicaConfig::Remote { replicas } => {
-            ConcreteComputeInstanceReplicaConfig::Remote { replicas }
-        }
+        ReplicaConfig::Remote { addrs } => ConcreteComputeInstanceReplicaConfig::Remote { addrs },
         ReplicaConfig::Managed {
             size,
             availability_zone,

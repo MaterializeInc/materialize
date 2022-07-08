@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self, Debug};
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
@@ -36,7 +36,6 @@ use uuid::Uuid;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_service::client::Reconnect;
 use mz_storage::client::controller::{ReadPolicy, StorageController, StorageError};
 use mz_storage::client::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 
@@ -46,7 +45,7 @@ use crate::command::{
 use crate::controller::replicated::{ActiveReplication, ActiveReplicationResponse};
 use crate::logging::LoggingConfig;
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
-use crate::service::ComputeClient;
+use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod replicated;
 
@@ -56,7 +55,8 @@ pub type ComputeInstanceId = u64;
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
 pub struct ComputeControllerState<T> {
-    pub client: ActiveReplication<T>,
+    /// The replicas of this compute instance.
+    pub replicas: ActiveReplication<T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
@@ -166,7 +166,8 @@ impl From<anyhow::Error> for ComputeError {
 
 impl<T> ComputeControllerState<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Debug + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     pub async fn new(logging: &Option<LoggingConfig>) -> Self {
         let mut collections = BTreeMap::default();
@@ -182,14 +183,14 @@ where
                 );
             }
         }
-        let mut client = ActiveReplication::default();
-        client.send(ComputeCommand::CreateInstance(InstanceConfig {
+        let mut replicas = ActiveReplication::default();
+        replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
             logging: logging.clone(),
         }));
 
         Self {
-            client,
+            replicas,
             collections,
             peeks: Default::default(),
             stashed_response: None,
@@ -206,7 +207,7 @@ where
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
         if self.stashed_response.is_none() {
-            self.stashed_response = self.client.recv().await;
+            self.stashed_response = Some(self.replicas.recv().await);
         }
     }
 }
@@ -238,7 +239,8 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Debug + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Constructs an immutable handle from this mutable handle.
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
@@ -256,20 +258,17 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub fn add_replica<C>(&mut self, id: ReplicaId, client: C)
-    where
-        C: ComputeClient<T> + Reconnect + 'static,
-    {
-        self.compute.client.add_replica(id, client);
+    pub fn add_replica(&mut self, id: ReplicaId, addrs: Vec<String>) {
+        self.compute.replicas.add_replica(id, addrs);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
-        self.compute.client.get_replica_ids()
+        self.compute.replicas.get_replica_ids()
     }
 
     /// Removes an existing instance replica, by name.
     pub fn remove_replica(&mut self, id: ReplicaId) {
-        self.compute.client.remove_replica(id);
+        self.compute.replicas.remove_replica(id);
     }
 
     /// Creates and maintains the described dataflows, and initializes state for their output.
@@ -431,7 +430,7 @@ where
         }
 
         self.compute
-            .client
+            .replicas
             .send(ComputeCommand::CreateDataflows(augmented_dataflows));
 
         Ok(())
@@ -484,7 +483,7 @@ where
         self.update_read_capabilities(&mut updates).await?;
         self.compute.peeks.insert(uuid, (id, timestamp.clone()));
 
-        self.compute.client.send(ComputeCommand::Peek(Peek {
+        self.compute.replicas.send(ComputeCommand::Peek(Peek {
             id,
             key,
             uuid,
@@ -513,7 +512,7 @@ where
     ///   * No `PeekResponse` at all.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
         self.remove_peeks(uuids.iter().cloned()).await?;
-        self.compute.client.send(ComputeCommand::CancelPeeks {
+        self.compute.replicas.send(ComputeCommand::CancelPeeks {
             uuids: uuids.clone(),
         });
         Ok(())
@@ -643,7 +642,8 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Acquire a mutable reference to the collection state, should it exist.
     pub fn collection_mut(
@@ -762,7 +762,7 @@ where
         }
         if !compaction_commands.is_empty() {
             self.compute
-                .client
+                .replicas
                 .send(ComputeCommand::AllowCompaction(compaction_commands));
         }
 

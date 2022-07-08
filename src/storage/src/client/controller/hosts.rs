@@ -34,9 +34,7 @@ use mz_proto::RustType;
 use mz_repr::GlobalId;
 
 use crate::client::controller::rehydration::RehydratingStorageClient;
-use crate::client::{
-    ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageGrpcClient, StorageResponse,
-};
+use crate::client::{ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse};
 
 /// The network address of a storage host.
 pub type StorageHostAddr = String;
@@ -124,7 +122,7 @@ impl<T> StorageHosts<T> {
         info!("assigned storage object {id} to storage host {host_addr}");
         match self.hosts.entry(host_addr.clone()) {
             Entry::Vacant(entry) => {
-                let client = RehydratingStorageClient::new(StorageGrpcClient::new(host_addr));
+                let client = RehydratingStorageClient::new(host_addr);
                 let host = entry.insert(StorageHost {
                     client,
                     objects: HashSet::from_iter([id]),
