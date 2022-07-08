@@ -6059,7 +6059,7 @@ pub async fn serve<S: Append + 'static>(
                     let now = now.clone();
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
-                        move || (now)(),
+                        move || (*&(now))(),
                         *timeline::TIMESTAMP_PERSIST_INTERVAL,
                         |ts| catalog.persist_timestamp(&timeline, ts),
                     ))
