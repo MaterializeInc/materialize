@@ -179,7 +179,8 @@ pub mod id_bundle;
 mod dataflow_builder;
 mod indexes;
 
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1);
+/// The default is set to a second to track the default timestamp frequency for sources.
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
