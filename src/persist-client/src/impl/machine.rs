@@ -106,8 +106,13 @@ where
         (shard_upper, read_cap)
     }
 
-    /// Opens a new `SinceHandle` for this shard and fences off any previously
-    /// open handles, if any.
+    /// Opens a new `SinceHandle` for this shard and fences off previously open
+    /// handles, if any.
+    // TODO(aljoscha): This currently mints a fresh random ID as the fencing
+    // token. We should change this to be an explicit fencing token if/when
+    // storage controller is ready for that and wants it. Also, those fencing
+    // tokens should probably be EPOCHs with ordering semantics and we don't
+    // want to allow an "older" EPOCH to fence of a "younger" one.
     pub async fn open_since_handle(&mut self, since_handle_id: &SinceHandleId) -> Since<T> {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, since) = self

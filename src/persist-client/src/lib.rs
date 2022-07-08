@@ -370,10 +370,11 @@ impl PersistClient {
     /// since handle for this shard. This will prevent `SinceHandles` with a
     /// different id from calling [`SinceHandle::downgrade_since`], that is, we
     /// are fencing them off.
-    // WIP: When would we return InvalidUsage here?
-    // TODO: This currently mints a fresh random ID as the fencing token. We can
-    // change this to be an explicit fencing token if/when storage controller is
-    // ready for that and wants it.
+    // TODO(aljoscha): This currently mints a fresh random ID as the fencing
+    // token. We should change this to be an explicit fencing token if/when
+    // storage controller is ready for that and wants it. Also, those fencing
+    // tokens should probably be EPOCHs with ordering semantics and we don't
+    // want to allow an "older" EPOCH to fence of a "younger" one.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn open_since_handle<K, V, T, D>(
         &self,
