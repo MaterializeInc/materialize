@@ -1,0 +1,61 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_persist_client.impl.state;
+
+message ProtoU64Antichain {
+    repeated int64 elements = 1;
+}
+
+message ProtoU64Description {
+    ProtoU64Antichain lower = 1;
+    ProtoU64Antichain upper = 2;
+    ProtoU64Antichain since = 3;
+}
+
+message ProtoHollowBatchPart {
+    ProtoU64Description desc = 1;
+    string key = 2;
+}
+
+message ProtoHollowBatch {
+    ProtoU64Description desc = 1;
+    repeated string keys = 2;
+    uint64 len = 3;
+}
+
+message ProtoTrace {
+    ProtoU64Antichain since = 1;
+    repeated ProtoHollowBatch spine = 2;
+}
+
+message ProtoReader {
+    string reader_id = 1;
+    ProtoU64Antichain since = 2;
+    uint64 seqno = 3;
+}
+
+message ProtoStateRollup {
+    string shard_id = 1;
+    string key_codec = 2;
+    string val_codec = 3;
+    string ts_codec = 4;
+    string diff_codec = 5;
+    uint64 seqno = 6;
+    ProtoTrace trace = 7;
+    repeated ProtoReader readers = 8;
+}
+
+message ProtoSnapshotSplit {
+    string shard_id = 1;
+    ProtoU64Antichain as_of = 2;
+    repeated ProtoHollowBatchPart batches = 3;
+}

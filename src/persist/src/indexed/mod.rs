@@ -11,8 +11,5 @@
 //! i64)` updates.
 
 // NB: These really don't need to be public, but the public doc lint is nice.
-pub mod background;
-pub mod cache;
 pub mod columnar;
 pub mod encoding;
-pub mod metrics;

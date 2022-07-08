@@ -1,0 +1,57 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Coverage of various compaction error cases.
+
+write-batch output=b02 lower=0 upper=2
+----
+parts=0 len=0
+
+write-batch output=b34 lower=3 upper=4
+----
+parts=0 len=0
+
+# Non-contiguous batch descs
+compact output=err inputs=(b02,b34) lower=0 upper=4 since=0
+----
+error: invalid merge of non-consecutive batches Antichain { elements: [2] } vs Antichain { elements: [3] }
+
+compact output=err inputs=(b34) lower=2 upper=4 since=0
+----
+error: invalid merge of non-consecutive batches Antichain { elements: [2] } vs Antichain { elements: [3] }
+
+compact output=err inputs=(b34) lower=3 upper=5 since=0
+----
+error: invalid merge of non-consecutive batches Antichain { elements: [4] } vs Antichain { elements: [5] }
+
+compact output=err inputs=(b02) lower=1 upper=2 since=0
+----
+error: invalid merge of non-consecutive batches Antichain { elements: [1] } vs Antichain { elements: [0] }
+
+compact output=err inputs=(b02) lower=0 upper=1 since=0
+----
+error: invalid merge of non-consecutive batches Antichain { elements: [2] } vs Antichain { elements: [1] }
+
+write-batch output=b14 lower=1 upper=4
+----
+parts=0 len=0
+
+# Overlapping batch descs
+compact output=err inputs=(b02,b14) lower=0 upper=4 since=0
+----
+error: invalid merge of non-consecutive batches Antichain { elements: [2] } vs Antichain { elements: [1] }
+
+# Since not at or in advance of b021's since
+compact output=b021 inputs=(b02) lower=0 upper=2 since=1
+----
+parts=0 len=0
+
+compact output=err inputs=(b021) lower=0 upper=2 since=0
+----
+error: output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }

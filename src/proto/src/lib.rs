@@ -41,6 +41,11 @@ pub enum TryFromProtoError {
     /// Indicates that the serialized ShardId value failed to deserialize, according
     /// to its custom deserialization logic.
     InvalidShardId(String),
+    /// Indicates that the serialized persist state declared a codec different
+    /// than the one declared in the state.
+    CodecMismatch(String),
+    /// Indicates that the serialized persist state being decoded was internally inconsistent.
+    InvalidPersistState(String),
     /// Failed to parse a serialized URI
     InvalidUri(http::uri::InvalidUri),
     /// Failed to read back a serialized Glob
@@ -123,6 +128,8 @@ impl std::fmt::Display for TryFromProtoError {
             RowConversionError(msg) => write!(f, "Row packing failed: `{}`", msg),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
             InvalidShardId(value) => write!(f, "Invalid value of ShardId found: `{}`", value),
+            CodecMismatch(error) => error.fmt(f),
+            InvalidPersistState(error) => error.fmt(f),
             InvalidUri(error) => error.fmt(f),
             GlobError(error) => error.fmt(f),
             InvalidUrl(error) => error.fmt(f),
@@ -150,6 +157,8 @@ impl std::error::Error for TryFromProtoError {
             RowConversionError(_) => None,
             MissingField(_) => None,
             InvalidShardId(_) => None,
+            CodecMismatch(_) => None,
+            InvalidPersistState(_) => None,
             InvalidUri(error) => Some(error),
             GlobError(error) => Some(error),
             InvalidUrl(error) => Some(error),
