@@ -17,6 +17,8 @@ WatermarkedObjects = List[Union[TableExists, SourceExists]]
 
 
 class ViewExists(Capability):
+    """A view exists in Materialize."""
+
     def __init__(self, name: str) -> None:
         self.name = name
         self.froms: WatermarkedObjects = []

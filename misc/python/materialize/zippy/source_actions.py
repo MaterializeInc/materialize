@@ -18,6 +18,8 @@ from materialize.zippy.source_capabilities import SourceExists
 
 
 class CreateSource(Action):
+    """Creates a source in Materialized."""
+
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, KafkaRunning, TopicExists}

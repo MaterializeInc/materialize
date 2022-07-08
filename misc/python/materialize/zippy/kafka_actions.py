@@ -35,6 +35,8 @@ $ set schema={
 
 
 class KafkaStart(Action):
+    """Start a Kafka instance."""
+
     def provides(self) -> List[Capability]:
         return [KafkaRunning()]
 
@@ -43,6 +45,8 @@ class KafkaStart(Action):
 
 
 class KafkaStop(Action):
+    """Stop the Kafka instance."""
+
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {KafkaRunning}
@@ -55,6 +59,8 @@ class KafkaStop(Action):
 
 
 class CreateTopic(Action):
+    """Creates a Kafka topic and decides on the envelope that will be used."""
+
     @classmethod
     def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, KafkaRunning}
@@ -93,6 +99,8 @@ $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{sch
 
 
 class Ingest(Action):
+    """Ingests data (inserts, updates or deletions) into a Kafka topic."""
+
     @classmethod
     def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, KafkaRunning, TopicExists}
@@ -103,65 +111,71 @@ class Ingest(Action):
 
 
 class KafkaInsert(Ingest):
+    """Inserts data into a Kafka topic."""
+
     def run(self, c: Composition) -> None:
-        prev_high = self.topic.watermarks.high
-        self.topic.watermarks.high = prev_high + self.delta
-        assert self.topic.watermarks.high >= 0
-        assert self.topic.watermarks.low >= 0
+        prev_max = self.topic.watermarks.max
+        self.topic.watermarks.max = prev_max + self.delta
+        assert self.topic.watermarks.max >= 0
+        assert self.topic.watermarks.min >= 0
         c.testdrive(
             f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_high + 1} publish=true repeat={self.delta}
+$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} publish=true repeat={self.delta}
 {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}}}
 """
         )
 
 
 class KafkaDeleteFromHead(Ingest):
+    """Deletes the largest values previously inserted."""
+
     def run(self, c: Composition) -> None:
         if self.topic.envelope is Envelope.NONE:
             return
 
-        prev_high = self.topic.watermarks.high
-        self.topic.watermarks.high = max(
-            prev_high - self.delta, self.topic.watermarks.low
+        prev_max = self.topic.watermarks.max
+        self.topic.watermarks.max = max(
+            prev_max - self.delta, self.topic.watermarks.min
         )
-        assert self.topic.watermarks.high >= 0
-        assert self.topic.watermarks.low >= 0
+        assert self.topic.watermarks.max >= 0
+        assert self.topic.watermarks.min >= 0
 
-        actual_delta = prev_high - self.topic.watermarks.high
+        actual_delta = prev_max - self.topic.watermarks.max
 
         if actual_delta > 0:
             c.testdrive(
                 f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.high + 1} publish=true repeat={actual_delta}
+$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} publish=true repeat={actual_delta}
 {{"key": ${{kafka-ingest.iteration}}}}
 """
             )
 
 
 class KafkaDeleteFromTail(Ingest):
+    """Deletes the smallest values previously inserted."""
+
     def run(self, c: Composition) -> None:
         if self.topic.envelope is Envelope.NONE:
             return
 
-        prev_low = self.topic.watermarks.low
-        self.topic.watermarks.low = min(
-            prev_low + self.delta, self.topic.watermarks.high
+        prev_min = self.topic.watermarks.min
+        self.topic.watermarks.min = min(
+            prev_min + self.delta, self.topic.watermarks.max
         )
-        assert self.topic.watermarks.high >= 0
-        assert self.topic.watermarks.low >= 0
-        actual_delta = self.topic.watermarks.low - prev_low
+        assert self.topic.watermarks.max >= 0
+        assert self.topic.watermarks.min >= 0
+        actual_delta = self.topic.watermarks.min - prev_min
 
         if actual_delta > 0:
             c.testdrive(
                 f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_low} publish=true repeat={actual_delta}
+$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} publish=true repeat={actual_delta}
 {{"key": ${{kafka-ingest.iteration}}}}
 """
             )
