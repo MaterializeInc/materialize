@@ -24,11 +24,16 @@ use tokio::sync::{mpsc, Mutex};
 use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
 
+use crate::controller::CollectionMetadata;
 use crate::protocol::client::{StorageCommand, StorageResponse};
 use crate::types::connections::ConnectionContext;
+use crate::types::sources::IngestionDescription;
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
+
+type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;
+type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
 /// State maintained for each worker thread.
 ///
@@ -37,10 +42,9 @@ use crate::source::metrics::SourceBaseMetrics;
 pub struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'w mut TimelyWorker<A>,
-    /// The channel from which commands are drawn.
-    pub command_rx: crossbeam_channel::Receiver<StorageCommand>,
-    /// The channel over which storage responses are reported.
-    pub response_tx: mpsc::UnboundedSender<StorageResponse>,
+    /// The channel over which communication handles for newly connected clients
+    /// are delivered.
+    pub client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -60,6 +64,8 @@ pub struct StorageState {
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Descriptions of each installed ingestion.
+    pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
@@ -76,28 +82,46 @@ pub struct StorageState {
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
-    /// Draws from `dataflow_command_receiver` until shutdown.
+    /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
         let mut shutdown = false;
         while !shutdown {
+            match self.client_rx.recv() {
+                Ok((rx, tx)) => self.run_client(rx, tx),
+                Err(_) => shutdown = true,
+            }
+        }
+    }
+
+    /// Draws commands from a single client until disconnected.
+    fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
+        // A new client has connected. Reset state about what we have reported.
+        //
+        // TODO(benesch,mcsherry): introduce a `InitializationComplete` command
+        // and only clear the state that is missing after initialization
+        // completes.
+        self.storage_state.reported_frontiers.clear();
+
+        let mut disconnected = false;
+        while !disconnected {
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
             // unparking us when there's new work to be done, e.g., when sending
             // a command or when new Kafka messages have arrived.
             self.timely_worker.step_or_park(None);
 
-            self.report_frontier_progress();
+            self.report_frontier_progress(&response_tx);
 
             // Handle any received commands.
             let mut cmds = vec![];
             let mut empty = false;
             while !empty {
-                match self.command_rx.try_recv() {
+                match command_rx.try_recv() {
                     Ok(cmd) => cmds.push(cmd),
                     Err(TryRecvError::Empty) => empty = true,
                     Err(TryRecvError::Disconnected) => {
                         empty = true;
-                        shutdown = true;
+                        disconnected = true;
                     }
                 }
             }
@@ -112,6 +136,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
         match cmd {
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
+                    if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
+                        // If we've been asked to create an ingestion that is
+                        // already installed, the descriptions must match
+                        // exactly.
+                        assert_eq!(
+                            *existing, ingestion.description,
+                            "New ingestion with same ID {:?}",
+                            ingestion.id,
+                        );
+                        self.storage_state.reported_frontiers.insert(
+                            ingestion.id,
+                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                        );
+                        continue;
+                    }
+
                     // Initialize shared frontier tracking.
                     self.storage_state.source_uppers.insert(
                         ingestion.id,
@@ -158,16 +198,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Specifically, this sends information about new timestamp bindings created by dataflow workers,
     /// with the understanding if that if made durable (and ack'd back to the workers) the source will
     /// in fact progress with this write frontier.
-    pub fn report_frontier_progress(&mut self) {
+    pub fn report_frontier_progress(&mut self, response_tx: &ResponseSender) {
         let mut changes = Vec::new();
 
         // Check if any observed frontier should advance the reported frontiers.
         for (id, frontier) in self.storage_state.source_uppers.iter() {
-            let reported_frontier = self
-                .storage_state
-                .reported_frontiers
-                .get_mut(&id)
-                .expect("Reported frontier missing!");
+            let reported_frontier = match self.storage_state.reported_frontiers.get_mut(&id) {
+                None => {
+                    // The current client has not expressed interest in this
+                    // collection. Move on.
+                    //
+                    // TODO(benesch): reconciliation should prevent
+                    // this situation.
+                    continue;
+                }
+                Some(reported_frontier) => reported_frontier,
+            };
 
             let observed_frontier = frontier.borrow();
 
@@ -189,14 +235,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         if !changes.is_empty() {
-            self.send_storage_response(StorageResponse::FrontierUppers(changes));
+            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(changes));
         }
     }
 
     /// Send a response to the coordinator.
-    fn send_storage_response(&self, response: StorageResponse) {
+    fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(response);
+        let _ = response_tx.send(response);
     }
 }

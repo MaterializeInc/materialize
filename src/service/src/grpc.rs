@@ -10,7 +10,7 @@
 //! gRPC transport for the [client](crate::client) module.
 
 use std::fmt::{self, Debug};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -146,17 +146,6 @@ pub trait BidiProtoClient: Debug + Send {
     ) -> Result<Response<Streaming<Self::PR>>, Status>;
 }
 
-/// A command from a gRPC server.
-pub enum GrpcServerCommand<T> {
-    /// A command indicating the upstream client has reconnected.
-    ///
-    /// This message is delivered by the [`GrpcServer`] immediately after client
-    /// reconnection.
-    Reconnected,
-    /// A command sent by the upstream client.
-    Client(T),
-}
-
 /// A gRPC server that stitches a gRPC service with a single bidirectional
 /// stream to a [`GenericClient`].
 ///
@@ -166,32 +155,31 @@ pub enum GrpcServerCommand<T> {
 /// The implementation of the bidirectional stream method should call
 /// [`GrpcServer::forward_bidi_stream`] to stitch the bidirectional stream to
 /// the client underlying this server.
-pub struct GrpcServer<G> {
-    state: Arc<GrpcServerState<G>>,
+pub struct GrpcServer<F> {
+    state: Arc<GrpcServerState<F>>,
 }
 
-struct GrpcServerState<G> {
+struct GrpcServerState<F> {
     cancel_tx: Mutex<oneshot::Sender<()>>,
-    client: Mutex<G>,
+    client_builder: F,
 }
 
-impl<G> GrpcServer<G>
+impl<F, G> GrpcServer<F>
 where
-    G: Send + 'static,
+    F: Fn() -> G + Send + Sync + 'static,
 {
-    /// Starts the server, listening for gRPC connections on `listen_addr` and
-    /// communicating with the provided `client`.
+    /// Starts the server, listening for gRPC connections on `listen_addr`.
     ///
     /// The trait bounds on `f` are intimidating, but it is a function that
     /// turns a `GrpcServer<ProtoCommandType, ProtoResponseType>` into a
     /// [`Service`] that represents a gRPC server. This is always encapsulated
     /// by the tonic-generated `ProtoServer::new` method for a specific Protobuf
     /// service.
-    pub async fn serve<S, F>(
+    pub async fn serve<S, Fs>(
         listen_addr: SocketAddr,
         version: Version,
-        client: G,
-        f: F,
+        client_builder: F,
+        service_builder: Fs,
     ) -> Result<(), anyhow::Error>
     where
         S: Service<
@@ -203,23 +191,25 @@ where
             + Send
             + 'static,
         S::Future: Send + 'static,
-        F: FnOnce(Self) -> S + Send + 'static,
+        Fs: FnOnce(Self) -> S + Send + 'static,
     {
         let (cancel_tx, _cancel_rx) = oneshot::channel();
         let state = GrpcServerState {
             cancel_tx: Mutex::new(cancel_tx),
-            client: Mutex::new(client),
+            client_builder,
         };
         let server = Self {
             state: Arc::new(state),
         };
-        let service =
-            InterceptedService::new(f(server), VersionCheckExactInterceptor::new(version));
+        let service = InterceptedService::new(
+            service_builder(server),
+            VersionCheckExactInterceptor::new(version),
+        );
 
         info!("Starting to listen on {}", listen_addr);
         Server::builder()
             .add_service(service)
-            .serve(listen_addr.to_socket_addrs()?.next().unwrap())
+            .serve(listen_addr)
             .await?;
         Ok(())
     }
@@ -234,7 +224,7 @@ where
         request: Request<Streaming<PC>>,
     ) -> Result<Response<ResponseStream<PR>>, Status>
     where
-        G: GenericClient<GrpcServerCommand<C>, R> + 'static,
+        G: GenericClient<C, R> + 'static,
         C: RustType<PC> + Send + Sync + 'static + fmt::Debug,
         R: RustType<PR> + Send + Sync + 'static + fmt::Debug,
         PC: fmt::Debug + Send + Sync + 'static,
@@ -253,14 +243,12 @@ where
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         *self.state.cancel_tx.lock().await = cancel_tx;
 
-        // Forward commands and responses to `client` until canceled.
+        // Construct a new client and forward commands and responses until
+        // canceled.
         let mut request = request.into_inner();
         let state = Arc::clone(&self.state);
         let response = stream! {
-            let mut client = state.client.lock().await;
-            if let Err(e) = client.send(GrpcServerCommand::Reconnected).await {
-                yield Err(Status::unknown(e.to_string()));
-            }
+            let mut client = (state.client_builder)();
             loop {
                 select! {
                     command = request.next() => {
@@ -273,7 +261,7 @@ where
                             }
                         };
                         let command = match command.into_rust() {
-                            Ok(command) => GrpcServerCommand::Client(command),
+                            Ok(command) => command,
                             Err(e) => {
                                 error!("error converting command to protobuf: {}", e);
                                 break;

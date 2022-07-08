@@ -24,18 +24,16 @@ use tokio::sync::mpsc;
 
 use mz_compute_client::command::ComputeCommand;
 use mz_compute_client::response::ComputeResponse;
+use mz_compute_client::service::ComputeClient;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_service::client::GenericClient;
-use mz_service::grpc::GrpcServerCommand;
 use mz_service::local::LocalClient;
 use mz_storage::types::connections::ConnectionContext;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
-use crate::reconciliation::ComputeCommandReconcile;
 use crate::SinkBaseMetrics;
 use crate::{TraceManager, TraceMetrics};
 
@@ -74,13 +72,7 @@ pub struct Server {
 /// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
     config: Config,
-) -> Result<
-    (
-        Server,
-        Box<dyn GenericClient<GrpcServerCommand<ComputeCommand>, ComputeResponse>>,
-    ),
-    anyhow::Error,
-> {
+) -> Result<(Server, impl Fn() -> Box<dyn ComputeClient>), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -89,22 +81,10 @@ pub fn serve(
     // Bundle metrics to conceal complexity.
     let metrics_bundle = (sink_metrics, trace_metrics);
 
-    // Construct endpoints for each thread that will receive the coordinator's
-    // sequenced command stream and send the responses to the coordinator.
-    //
-    // TODO(benesch): package up this idiom of handing out ownership of N items
-    // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
-    // is hard to read through.
-    let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+    let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| crossbeam_channel::unbounded())
         .unzip();
-    let (compute_response_txs, compute_response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-        .map(|_| mpsc::unbounded_channel())
-        .unzip();
-    // Mutexes around a vector of optional (take-able) pairs of (tx, rx) for worker/client communication.
-    let command_channels: Mutex<Vec<_>> = Mutex::new(command_rxs.into_iter().map(Some).collect());
-    let compute_response_channels: Mutex<Vec<_>> =
-        Mutex::new(compute_response_txs.into_iter().map(Some).collect());
+    let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
 
@@ -124,20 +104,15 @@ pub fn serve(
         move |timely_worker| {
             let timely_worker_index = timely_worker.index();
             let _tokio_guard = tokio_executor.enter();
-            let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
-                .take()
-                .unwrap();
-            let compute_response_tx = compute_response_channels.lock().unwrap()
-                [timely_worker_index % config.workers]
+            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
                 .take()
                 .unwrap();
             let (_sink_metrics, _trace_metrics) = metrics_bundle.clone();
             let persist_clients = Arc::clone(&persist_clients);
             Worker {
                 timely_worker,
-                command_rx,
+                client_rx,
                 compute_state: None,
-                compute_response_tx,
                 metrics_bundle: metrics_bundle.clone(),
                 connection_context: config.connection_context.clone(),
                 persist_clients,
@@ -151,13 +126,33 @@ pub fn serve(
         .iter()
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
-    let client = LocalClient::new_partitioned(compute_response_rxs, command_txs, worker_threads);
-    let client = ComputeCommandReconcile::new(client);
+    let client_builder = move || {
+        let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+            .map(|_| crossbeam_channel::unbounded())
+            .unzip();
+        let (response_txs, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+            .map(|_| mpsc::unbounded_channel())
+            .unzip();
+        for (client_tx, channels) in client_txs
+            .iter()
+            .zip(command_rxs.into_iter().zip(response_txs))
+        {
+            client_tx
+                .send(channels)
+                .expect("worker should not drop first");
+        }
+        let client =
+            LocalClient::new_partitioned(response_rxs, command_txs, worker_threads.clone());
+        Box::new(client) as Box<dyn ComputeClient>
+    };
     let server = Server {
         _worker_guards: worker_guards,
     };
-    Ok((server, Box::new(client)))
+    Ok((server, client_builder))
 }
+
+type CommandReceiver = crossbeam_channel::Receiver<ComputeCommand>;
+type ResponseSender = mpsc::UnboundedSender<ComputeResponse>;
 
 /// State maintained for each worker thread.
 ///
@@ -166,12 +161,10 @@ pub fn serve(
 struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
-    /// The channel from which commands are drawn.
-    command_rx: crossbeam_channel::Receiver<ComputeCommand>,
-    /// The state associated with rendering dataflows.
+    /// The channel over which communication handles for newly connected clients
+    /// are delivered.
+    client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
     compute_state: Option<ComputeState>,
-    /// The channel over which compute responses are reported.
-    compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
     /// Metrics bundle.
     metrics_bundle: (SinkBaseMetrics, TraceMetrics),
     /// Configuration for sink connections.
@@ -183,8 +176,38 @@ struct Worker<'w, A: Allocate> {
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
-    /// Draws from `dataflow_command_receiver` until shutdown.
-    fn run(&mut self) {
+    /// Waits for client connections and runs them to completion.
+    pub fn run(&mut self) {
+        let mut shutdown = false;
+        while !shutdown {
+            match self.client_rx.recv() {
+                Ok((rx, tx)) => self.run_client(rx, tx),
+                Err(_) => shutdown = true,
+            }
+        }
+    }
+
+    /// Draws commands from a single client until disconnected.
+    fn run_client(&mut self, command_rx: CommandReceiver, mut response_tx: ResponseSender) {
+        // A new client has connected. Reset state about what we have reported.
+        //
+        // TODO(benesch,mcsherry): introduce a `InitializationComplete` command
+        // and only clear the state that is missing after initialization
+        // completes.
+        if let Some(state) = self.activate_compute(&mut response_tx) {
+            state.compute_state.reported_frontiers.clear();
+            state.compute_state.pending_peeks.clear();
+            state
+                .compute_state
+                .sink_tokens
+                .retain(|_, token| !token.is_tail);
+            state
+                .compute_state
+                .tail_response_buffer
+                .borrow_mut()
+                .clear();
+        }
+
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -199,7 +222,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             self.timely_worker.step_or_park(None);
 
             // Report frontier information back the coordinator.
-            if let Some(mut compute_state) = self.activate_compute() {
+            if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.report_compute_frontiers();
             }
 
@@ -207,7 +230,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             let mut cmds = vec![];
             let mut empty = false;
             while !empty {
-                match self.command_rx.try_recv() {
+                match command_rx.try_recv() {
                     Ok(cmd) => cmds.push(cmd),
                     Err(TryRecvError::Empty) => empty = true,
                     Err(TryRecvError::Disconnected) => {
@@ -226,7 +249,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 self.metrics_bundle.1.clone(),
                                 self.timely_worker.index(),
                             ),
-                            dataflow_tokens: HashMap::new(),
+                            sink_tokens: HashMap::new(),
                             tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(
                                 Vec::new(),
                             )),
@@ -237,6 +260,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             compute_logger: None,
                             connection_context: self.connection_context.clone(),
                             persist_clients: Arc::clone(&self.persist_clients),
+                            dataflow_descriptions: HashMap::new(),
                         });
                     }
                     ComputeCommand::DropInstance => {
@@ -245,29 +269,34 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     _ => (),
                 }
 
-                self.activate_compute().unwrap().handle_compute_command(cmd);
+                self.activate_compute(&mut response_tx)
+                    .unwrap()
+                    .handle_compute_command(cmd);
                 if should_drop_compute {
                     self.compute_state = None;
                 }
             }
 
-            if let Some(mut compute_state) = self.activate_compute() {
+            if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.process_peeks();
                 compute_state.process_tails();
             }
         }
-        if let Some(mut compute_state) = self.activate_compute() {
+        if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
             compute_state.compute_state.traces.del_all_traces();
             compute_state.shutdown_logging();
         }
     }
 
-    fn activate_compute(&mut self) -> Option<ActiveComputeState<A>> {
+    fn activate_compute<'a>(
+        &'a mut self,
+        response_tx: &'a mut ResponseSender,
+    ) -> Option<ActiveComputeState<'a, A>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
                 compute_state,
-                response_tx: &mut self.compute_response_tx,
+                response_tx,
             })
         } else {
             None
