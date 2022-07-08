@@ -1197,12 +1197,14 @@ fn fill_pdt_date(
     match actual.front() {
         Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
             pdt.day = Some(DateTimeFieldValue::new(
-                i64::try_from(val % 100).unwrap(),
+                i64::try_from(val % 100)
+                    .expect("modulo operation between u64 and constant 100 should fit signed 64-bit integer"),
                 0,
             ));
             val /= 100;
             pdt.month = Some(DateTimeFieldValue::new(
-                i64::try_from(val % 100).unwrap(),
+                i64::try_from(val % 100)
+                .expect("modulo operation between u64 and constant 100 should fit signed 64-bit integer"),
                 0,
             ));
             val /= 100;
@@ -1214,7 +1216,11 @@ fn fill_pdt_date(
                     val += 1900;
                 }
             }
-            pdt.year = Some(DateTimeFieldValue::new(i64::try_from(val).unwrap(), 0));
+            pdt.year = Some(DateTimeFieldValue::new(
+                i64::try_from(val)
+                    .map_err(|_| format!("number should fit in signed 64-bit integer"))?,
+                0,
+            ));
             actual.pop_front();
             // Trim remaining optional tokens, but never an immediately
             // following colon
@@ -2063,7 +2069,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         (None, None, None) => {
                             // Postgres allows timezones in the range -15:59:59..15:59:59
                             if val <= 15 {
-                                hour_offset = Some(i64::try_from(val).unwrap());
+                                hour_offset = Some(i64::try_from(val).expect(
+                                    "number between 0 and 15 should fit in signed 64-bit integer",
+                                ));
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone hour invalid {}",
@@ -2073,7 +2081,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         }
                         (Some(_), None, None) => {
                             if val < 60 {
-                                minute_offset = Some(i64::try_from(val).unwrap());
+                                minute_offset = Some(i64::try_from(val).expect(
+                                    "number between 0 and 59 should fit in signed 64-bit integer",
+                                ));
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone minute invalid {}",
@@ -2083,7 +2093,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         }
                         (Some(_), Some(_), None) => {
                             if val < 60 {
-                                second_offset = Some(i64::try_from(val).unwrap());
+                                second_offset = Some(i64::try_from(val).expect(
+                                    "number between 0 and 59 should fit in signed 64-bit integer",
+                                ));
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone second invalid {}",
