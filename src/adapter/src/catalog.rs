@@ -2057,14 +2057,14 @@ impl<S: Append> Catalog<S> {
     /// Get all global timestamps that has been persisted to disk.
     pub async fn get_all_persisted_timestamps(
         &mut self,
-    ) -> Result<BTreeMap<String, mz_repr::Timestamp>, Error> {
+    ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
         self.storage().await.get_all_persisted_timestamps().await
     }
 
     /// Get a global timestamp for a timeline that has been persisted to disk.
     pub async fn get_persisted_timestamp(
         &mut self,
-        timeline: &str,
+        timeline: &Timeline,
     ) -> Result<mz_repr::Timestamp, Error> {
         self.storage().await.get_persisted_timestamp(timeline).await
     }
@@ -2072,7 +2072,7 @@ impl<S: Append> Catalog<S> {
     /// Persist new global timestamp for a timeline to disk.
     pub async fn persist_timestamp(
         &mut self,
-        timeline: String,
+        timeline: &Timeline,
         timestamp: mz_repr::Timestamp,
     ) -> Result<(), Error> {
         self.storage()

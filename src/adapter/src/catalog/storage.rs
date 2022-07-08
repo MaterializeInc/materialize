@@ -634,19 +634,19 @@ impl<S: Append> Connection<S> {
     /// Get all global timestamps that has been persisted to disk.
     pub async fn get_all_persisted_timestamps(
         &mut self,
-    ) -> Result<BTreeMap<String, mz_repr::Timestamp>, Error> {
+    ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
         Ok(COLLECTION_TIMESTAMP
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.id, v.ts))
+            .map(|(k, v)| (k.id.parse().expect("invalid timeline persisted"), v.ts))
             .collect())
     }
 
     /// Get a global timestamp for a timeline that has been persisted to disk.
     pub async fn get_persisted_timestamp(
         &mut self,
-        timeline: &str,
+        timeline: &Timeline,
     ) -> Result<mz_repr::Timestamp, Error> {
         let key = TimestampKey {
             id: timeline.to_string(),
@@ -661,7 +661,7 @@ impl<S: Append> Connection<S> {
     /// Persist new global timestamp for a timeline to disk.
     pub async fn persist_timestamp(
         &mut self,
-        timeline: String,
+        timeline: &Timeline,
         timestamp: mz_repr::Timestamp,
     ) -> Result<(), Error> {
         let key = TimestampKey {

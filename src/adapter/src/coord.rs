@@ -623,7 +623,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("no realtime timeline")
             .write_ts(|ts| {
                 self.catalog
-                    .persist_timestamp(Timeline::EpochMilliseconds.to_string(), ts)
+                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
             })
             .await
     }
@@ -638,7 +638,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("no realtime timeline")
             .write_ts(|ts| {
                 self.catalog
-                    .persist_timestamp(Timeline::EpochMilliseconds.to_string(), ts)
+                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
             })
             .await;
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
@@ -1624,9 +1624,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for (timeline, timestamp_oracle) in &mut self.global_timelines {
             let now = nows[timeline];
             timestamp_oracle
-                .fast_forward(now, |ts| {
-                    self.catalog.persist_timestamp(timeline.to_string(), ts)
-                })
+                .fast_forward(now, |ts| self.catalog.persist_timestamp(timeline, ts))
                 .await;
             let _ = timestamp_oracle.read_ts();
         }
@@ -6090,24 +6088,21 @@ pub async fn serve<S: Append + 'static>(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
-            for (timeline_str, initial_timestamp) in initial_timestamps {
-                let timeline = timeline_str
-                    .parse()
-                    .unwrap_or_else(|_| panic!("invalid timeline persisted {timeline_str}"));
+            for (timeline, initial_timestamp) in initial_timestamps {
                 let timestamp_oracle = if timeline == Timeline::EpochMilliseconds {
                     let now = now.clone();
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
                         move || (now)(),
                         *timeline::TIMESTAMP_PERSIST_INTERVAL,
-                        |ts| catalog.persist_timestamp(timeline_str, ts),
+                        |ts| catalog.persist_timestamp(&timeline, ts),
                     ))
                 } else {
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
                         Timestamp::minimum,
                         *timeline::TIMESTAMP_PERSIST_INTERVAL,
-                        |ts| catalog.persist_timestamp(timeline_str, ts),
+                        |ts| catalog.persist_timestamp(&timeline, ts),
                     ))
                 };
                 timestamp_oracles.insert(timeline, timestamp_oracle);
