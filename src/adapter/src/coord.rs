@@ -1613,10 +1613,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     // advance of any object's upper. This is the largest timestamp that is closed
                     // to writes.
                     let id_bundle = self.ids_in_timeline(&timeline);
-                    let mut now = Timestamp::minimum();
-                    let upper = self.largest_not_in_advance_of_upper(&id_bundle);
-                    now.join_assign(&upper);
-                    now
+                    self.largest_not_in_advance_of_upper(&id_bundle)
                 };
                 (timeline, now)
             })
