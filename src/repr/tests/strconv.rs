@@ -322,29 +322,29 @@ fn test_parse_interval_monthlike() {
 fn test_parse_interval_durationlike() {
     use DateTimeField::*;
 
-    run_test_parse_interval_durationlike("10", Interval::new(0, 0, 10 * 1_000_000).unwrap());
+    run_test_parse_interval_durationlike("10", Interval::new(0, 0, 10 * 1_000_000));
 
-    run_test_parse_interval_durationlike_from_sql("10", Day, Interval::new(0, 10, 0).unwrap());
+    run_test_parse_interval_durationlike_from_sql("10", Day, Interval::new(0, 10, 0));
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Hour,
-        Interval::new(0, 0, 10 * 60 * 60 * 1_000_000).unwrap(),
+        Interval::new(0, 0, 10 * 60 * 60 * 1_000_000),
     );
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Minute,
-        Interval::new(0, 0, 10 * 60 * 1_000_000).unwrap(),
+        Interval::new(0, 0, 10 * 60 * 1_000_000),
     );
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Second,
-        Interval::new(0, 0, 10 * 1_000_000).unwrap(),
+        Interval::new(0, 0, 10 * 1_000_000),
     );
 
-    run_test_parse_interval_durationlike("0.01", Interval::new(0, 0, 10_000).unwrap());
+    run_test_parse_interval_durationlike("0.01", Interval::new(0, 0, 10_000));
 
     run_test_parse_interval_durationlike(
         "1 2:3:4.5",
@@ -352,8 +352,7 @@ fn test_parse_interval_durationlike() {
             0,
             1,
             (2 * 60 * 60 * 1_000_000) + (3 * 60 * 1_000_000) + (4 * 1_000_000) + 500_000,
-        )
-        .unwrap(),
+        ),
     );
 
     run_test_parse_interval_durationlike(
@@ -362,8 +361,7 @@ fn test_parse_interval_durationlike() {
             0,
             -1,
             (2 * 60 * 60 * 1_000_000) + (3 * 60 * 1_000_000) + (4 * 1_000_000) + 500_000,
-        )
-        .unwrap(),
+        ),
     );
 
     fn run_test_parse_interval_durationlike(s: &str, expected: Interval) {
@@ -390,8 +388,7 @@ fn test_parse_interval_full() {
             79,
             1,
             (2 * 60 * 60 * 1_000_000) + (3 * 60 * 1_000_000) + (4 * 1_000_000) + 500_000,
-        )
-        .unwrap(),
+        ),
     );
 
     run_test_parse_interval_full(
@@ -400,8 +397,7 @@ fn test_parse_interval_full() {
             -79,
             1,
             (2 * 60 * 60 * 1_000_000) + (3 * 60 * 1_000_000) + (4 * 1_000_000) + 500_000,
-        )
-        .unwrap(),
+        ),
     );
 
     run_test_parse_interval_full(
@@ -410,8 +406,7 @@ fn test_parse_interval_full() {
             79,
             -1,
             (-2 * 60 * 60 * 1_000_000) + (-3 * 60 * 1_000_000) + (-4 * 1_000_000) + -500_000,
-        )
-        .unwrap(),
+        ),
     );
 
     run_test_parse_interval_full(
@@ -420,8 +415,7 @@ fn test_parse_interval_full() {
             -79,
             -1,
             (-2 * 60 * 60 * 1_000_000) + (-3 * 60 * 1_000_000) + (-4 * 1_000_000) + -500_000,
-        )
-        .unwrap(),
+        ),
     );
 
     run_test_parse_interval_full(
@@ -430,8 +424,7 @@ fn test_parse_interval_full() {
             -79,
             1,
             (-2 * 60 * 60 * 1_000_000) + (-3 * 60 * 1_000_000) + (-4 * 1_000_000) + -500_000,
-        )
-        .unwrap(),
+        ),
     );
 
     run_test_parse_interval_full(
@@ -440,14 +433,13 @@ fn test_parse_interval_full() {
             -79,
             -1,
             (2 * 60 * 60 * 1_000_000) + (3 * 60 * 1_000_000) + (4 * 1_000_000) + 500_000,
-        )
-        .unwrap(),
+        ),
     );
 
     run_test_parse_interval_full_from_sql(
         "-6-7 1",
         Minute,
-        Interval::new(-79, 0, 1 * 60 * 1_000_000).unwrap(),
+        Interval::new(-79, 0, 1 * 60 * 1_000_000),
     );
 
     fn run_test_parse_interval_full(s: &str, expected: Interval) {

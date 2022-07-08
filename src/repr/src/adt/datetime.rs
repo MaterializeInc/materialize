@@ -555,10 +555,7 @@ impl ParsedDateTime {
             self.add_field(field, &mut months, &mut days, &mut micros)?;
         }
 
-        match Interval::new(months, days, micros) {
-            Ok(i) => Ok(i),
-            Err(e) => Err(e.to_string()),
-        }
+        Ok(Interval::new(months, days, micros))
     }
     /// Adds the appropriate values from self's ParsedDateTime to `months`,
     /// `days`, and `micros`. These fields are then appropriate to construct
@@ -1199,9 +1196,14 @@ fn fill_pdt_date(
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
         Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
-            pdt.day = Some(DateTimeFieldValue::new(val % 100, 0));
+            let unit = i64::try_from(val % 100)
+                .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
+            pdt.day = Some(DateTimeFieldValue::new(unit, 0));
             val /= 100;
-            pdt.month = Some(DateTimeFieldValue::new(val % 100, 0));
+
+            let unit = i64::try_from(val % 100)
+                .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
+            pdt.month = Some(DateTimeFieldValue::new(unit, 0));
             val /= 100;
             // Handle 2 digit year case
             if *digits == 6 {
@@ -1211,7 +1213,10 @@ fn fill_pdt_date(
                     val += 1900;
                 }
             }
-            pdt.year = Some(DateTimeFieldValue::new(val, 0));
+
+            let unit = i64::try_from(val)
+                .map_err(|_| format!("number should fit in signed 64-bit integer"))?;
+            pdt.year = Some(DateTimeFieldValue::new(unit, 0));
             actual.pop_front();
             // Trim remaining optional tokens, but never an immediately
             // following colon
@@ -1493,10 +1498,10 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                     )
                 }
                 None => {
-                    unit_buf = Some(DateTimeFieldValue {
-                        unit: *val * sign,
-                        fraction: 0,
-                    });
+                    // create signed copy of *val
+                    let unit = i64::try_from(i128::from(*val) * i128::from(sign))
+                        .map_err(|_| format!("Unable to parse value {val} as a number: number too large to fit in target type"))?;
+                    unit_buf = Some(DateTimeFieldValue { unit, fraction: 0 });
                 }
             },
             (Nanos(val), Nanos(_)) => match unit_buf {
@@ -1528,20 +1533,24 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
 
                 if width > precision {
                     // Trim n to its 9 most significant digits.
-                    n /= 10_i64.pow(width - precision);
+                    n /= 10_u64.pow(width - precision);
                 } else {
                     // Right-pad n with 0s.
-                    n *= 10_i64.pow(precision - width);
+                    n *= 10_u64.pow(precision - width);
                 }
+
+                // create signed copy of n
+                let sn  = i64::try_from(i128::from(n) * i128::from(sign))
+                    .map_err(|_| format!("Unable to parse value {n} as a number: number too large to fit in target type"))?;
 
                 match unit_buf {
                     Some(ref mut u) => {
-                        u.fraction = n * sign;
+                        u.fraction = sn;
                     }
                     None => {
                         unit_buf = Some(DateTimeFieldValue {
                             unit: 0,
-                            fraction: n * sign,
+                            fraction: sn,
                         });
                     }
                 }
@@ -1757,7 +1766,7 @@ pub(crate) enum TimeStrToken {
     Plus,
     Zulu,
     // Holds the parsed number and the number of digits in the original string
-    Num(i64, usize),
+    Num(u64, usize),
     Nanos(i64),
     // String representation of a named timezone e.g. 'EST'
     TzName(String),
@@ -2052,7 +2061,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         (None, None, None) => {
                             // Postgres allows timezones in the range -15:59:59..15:59:59
                             if val <= 15 {
-                                hour_offset = Some(val);
+                                hour_offset = Some(i64::try_from(val).expect(
+                                    "number between 0 and 15 should fit in signed 64-bit integer",
+                                ));
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone hour invalid {}",
@@ -2062,7 +2073,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         }
                         (Some(_), None, None) => {
                             if val < 60 {
-                                minute_offset = Some(val);
+                                minute_offset = Some(i64::try_from(val).expect(
+                                    "number between 0 and 59 should fit in signed 64-bit integer",
+                                ));
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone minute invalid {}",
@@ -2072,7 +2085,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         }
                         (Some(_), Some(_), None) => {
                             if val < 60 {
-                                second_offset = Some(val);
+                                second_offset = Some(i64::try_from(val).expect(
+                                    "number between 0 and 59 should fit in signed 64-bit integer",
+                                ));
                             } else {
                                 return Err(format!(
                                     "Invalid timezone string ({}): timezone second invalid {}",
@@ -3635,22 +3650,22 @@ mod tests {
             (
                 "9223372036854775808 months",
                 Day,
-                "Unable to parse value as a number at index 19: number too large to fit in target type",
+                "Unable to parse value 9223372036854775808 as a number: number too large to fit in target type",
             ),
             (
-                "-9223372036854775808 months",
+                "-9223372036854775809 months",
                 Day,
-                "Unable to parse value as a number at index 20: number too large to fit in target type",
+                "Unable to parse value 9223372036854775809 as a number: number too large to fit in target type",
             ),
             (
                 "9223372036854775808 seconds",
                 Day,
-                "Unable to parse value as a number at index 19: number too large to fit in target type",
+                "Unable to parse value 9223372036854775808 as a number: number too large to fit in target type",
             ),
             (
-                "-9223372036854775808 seconds",
+                "-9223372036854775809 seconds",
                 Day,
-                "Unable to parse value as a number at index 20: number too large to fit in target type",
+                "Unable to parse value 9223372036854775809 as a number: number too large to fit in target type",
             ),
             (
                 "1.234 second 5 ms",
@@ -4158,8 +4173,7 @@ fn test_parseddatetime_compute_interval() {
             0,
             1,
             (-2 * 60 * 60 * 1_000_000) + (-3 * 60 * 1_000_000) + (-4 * 1_000_000) + -500_000,
-        )
-        .unwrap(),
+        ),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4174,8 +4188,7 @@ fn test_parseddatetime_compute_interval() {
             0,
             -1,
             (2 * 60 * 60 * 1_000_000) + (3 * 60 * 1_000_000) + (4 * 1_000_000) + 500_000,
-        )
-        .unwrap(),
+        ),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4184,7 +4197,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 1 day -00:00:00.27
-        Interval::new(0, 1, -270_000).unwrap(),
+        Interval::new(0, 1, -270_000),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4193,7 +4206,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -1 day 00:00:00.27
-        Interval::new(0, -1, 270_000).unwrap(),
+        Interval::new(0, -1, 270_000),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4210,8 +4223,7 @@ fn test_parseddatetime_compute_interval() {
             -16,
             13,
             (7 * 60 * 60 * 1_000_000) + (7 * 60 * 1_000_000) + (53 * 1_000_000) + 220_829,
-        )
-        .unwrap(),
+        ),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4220,7 +4232,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:03.003
-        Interval::new(0, 0, (3 * 1_000_000) + 3_000).unwrap(),
+        Interval::new(0, 0, (3 * 1_000_000) + 3_000),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4229,7 +4241,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:03.000003
-        Interval::new(0, 0, (3 * 1_000_000) + 3).unwrap(),
+        Interval::new(0, 0, (3 * 1_000_000) + 3),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4238,7 +4250,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 00:00:00.0012034
-        Interval::new(0, 0, 1_203).unwrap(),
+        Interval::new(0, 0, 1_203),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -4249,7 +4261,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 1234 years
-        Interval::new(1234 * 12, 0, 0).unwrap(),
+        Interval::new(1234 * 12, 0, 0),
     );
 
     fn run_test_parseddatetime_compute_interval(pdt: ParsedDateTime, expected: Interval) {
