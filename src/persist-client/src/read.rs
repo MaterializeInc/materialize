@@ -505,7 +505,6 @@ where
         trace!("ReadHandle::clone");
         let new_reader_id = ReaderId::new();
         let mut machine = self.machine.clone();
-        // WIP: This is not used for anything right now.
         let _read_cap = machine.clone_reader(&self.reader_id).await;
         let new_reader = ReadHandle {
             metrics: Arc::clone(&self.metrics),
@@ -778,7 +777,6 @@ impl SinceHandleId {
 /// # };
 /// ```
 ///
-// WIP: Move to its own since_handle.rs?
 #[derive(Debug)]
 pub struct SinceHandle<K, V, T, D>
 where
@@ -790,7 +788,7 @@ where
 {
     #[allow(unused)]
     pub(crate) metrics: Arc<Metrics>,
-    // WIP: Introduce a `SinceHandleId`?
+
     pub(crate) since_handle_id: SinceHandleId,
     pub(crate) machine: Machine<K, V, T, D>,
 
