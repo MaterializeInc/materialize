@@ -1600,9 +1600,10 @@ impl<S: Append + 'static> Coordinator<S> {
         // is in. We step back the value of `now()` so that the
         // next write can happen at `now()` and not a value above
         // `now()`
-        let timelines: Vec<_> = self.global_timelines.keys().cloned().collect();
-        let nows: HashMap<_, _> = timelines
-            .into_iter()
+        let nows: HashMap<_, _> = self
+            .global_timelines
+            .keys()
+            .cloned()
             .map(|timeline| {
                 let now = if timeline == Timeline::EpochMilliseconds {
                     let now = self.now();
