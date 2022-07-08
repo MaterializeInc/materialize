@@ -20,18 +20,13 @@ use tokio::sync::mpsc;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_service::client::GenericClient;
-use mz_service::grpc::GrpcServerCommand;
 use mz_service::local::LocalClient;
 
-use crate::protocol::client::{StorageCommand, StorageResponse};
-use crate::protocol::server::reconciliation::StorageCommandReconcile;
+use crate::protocol::client::StorageClient;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::{StorageState, Worker};
 use crate::types::connections::ConnectionContext;
 use crate::DecodeMetrics;
-
-mod reconciliation;
 
 /// Configures a dataflow server.
 pub struct Config {
@@ -57,13 +52,7 @@ pub struct Server {
 /// Initiates a timely dataflow computation, processing storage commands.
 pub fn serve(
     config: Config,
-) -> Result<
-    (
-        Server,
-        Box<dyn GenericClient<GrpcServerCommand<StorageCommand>, StorageResponse>>,
-    ),
-    anyhow::Error,
-> {
+) -> Result<(Server, impl Fn() -> Box<dyn StorageClient>), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -72,22 +61,10 @@ pub fn serve(
     // Bundle metrics to conceal complexity.
     let metrics_bundle = (source_metrics, decode_metrics);
 
-    // Construct endpoints for each thread that will receive the coordinator's
-    // sequenced command stream and send the responses to the coordinator.
-    //
-    // TODO(benesch): package up this idiom of handing out ownership of N items
-    // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
-    // is hard to read through.
-    let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+    let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| crossbeam_channel::unbounded())
         .unzip();
-    let (response_tx, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-        .map(|_| mpsc::unbounded_channel())
-        .unzip();
-    // Mutexes around a vector of optional (take-able) pairs of (tx, rx) for worker/client communication.
-    let command_channels: Mutex<Vec<_>> = Mutex::new(command_rxs.into_iter().map(Some).collect());
-    let storage_response_channels: Mutex<Vec<_>> =
-        Mutex::new(response_tx.into_iter().map(Some).collect());
+    let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
@@ -102,23 +79,20 @@ pub fn serve(
         // ensure tokio primitives are available on timely workers
         let _tokio_guard = tokio_executor.enter();
 
-        let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
-            .take()
-            .unwrap();
-        let response_tx = storage_response_channels.lock().unwrap()
-            [timely_worker_index % config.workers]
+        let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
             .take()
             .unwrap();
         let (source_metrics, decode_metrics) = metrics_bundle.clone();
         let persist_clients = Arc::clone(&persist_clients);
         Worker {
             timely_worker,
-            command_rx,
+            client_rx,
             storage_state: StorageState {
                 source_uppers: HashMap::new(),
                 source_tokens: HashMap::new(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
+                ingestions: HashMap::new(),
                 now: now.clone(),
                 source_metrics,
                 timely_worker_index,
@@ -126,7 +100,6 @@ pub fn serve(
                 connection_context: config.connection_context.clone(),
                 persist_clients,
             },
-            response_tx,
         }
         .run()
     })
@@ -136,10 +109,27 @@ pub fn serve(
         .iter()
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
-    let client = LocalClient::new_partitioned(response_rxs, command_txs, worker_threads);
-    let client = StorageCommandReconcile::new(client);
+    let client_builder = move || {
+        let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+            .map(|_| crossbeam_channel::unbounded())
+            .unzip();
+        let (response_txs, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+            .map(|_| mpsc::unbounded_channel())
+            .unzip();
+        for (client_tx, channels) in client_txs
+            .iter()
+            .zip(command_rxs.into_iter().zip(response_txs))
+        {
+            client_tx
+                .send(channels)
+                .expect("worker should not drop first");
+        }
+        let client =
+            LocalClient::new_partitioned(response_rxs, command_txs, worker_threads.clone());
+        Box::new(client) as Box<dyn StorageClient>
+    };
     let server = Server {
         _worker_guards: worker_guards,
     };
-    Ok((server, Box::new(client)))
+    Ok((server, client_builder))
 }

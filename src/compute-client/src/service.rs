@@ -25,9 +25,7 @@ use uuid::Uuid;
 
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{
-    BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, GrpcServerCommand, ResponseStream,
-};
+use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
 
 use crate::command::{BuildDesc, ComputeCommand, DataflowDescription, ProtoComputeCommand};
 use crate::response::{
@@ -76,9 +74,10 @@ impl BidiProtoClient for ProtoComputeClient<ClientTransport> {
 }
 
 #[async_trait]
-impl<G> ProtoCompute for GrpcServer<G>
+impl<F, G> ProtoCompute for GrpcServer<F>
 where
-    G: GenericClient<GrpcServerCommand<ComputeCommand>, ComputeResponse> + 'static,
+    F: Fn() -> G + Send + Sync + 'static,
+    G: ComputeClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
 

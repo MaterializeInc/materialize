@@ -19,7 +19,6 @@
 //! gRPC utilities that are presently in the `grpc` module.
 
 pub mod client;
-pub mod frontiers;
 pub mod grpc;
 pub mod local;
 pub mod secrets;

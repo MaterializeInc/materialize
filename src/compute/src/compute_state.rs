@@ -57,7 +57,7 @@ pub struct ComputeState {
     pub traces: TraceManager,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+    pub sink_tokens: HashMap<GlobalId, SinkToken>,
     /// Shared buffer with TAIL operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the tail instance)
@@ -80,6 +80,8 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// Descriptions for installed dataflows.
+    pub dataflow_descriptions: HashMap<GlobalId, DataflowDescription<Plan, CollectionMetadata>>,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
@@ -90,6 +92,14 @@ pub struct ActiveComputeState<'a, A: Allocate> {
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut mpsc::UnboundedSender<ComputeResponse>,
+}
+
+/// A token that keeps a sink alive.
+pub struct SinkToken {
+    /// The underlying token.
+    pub token: Box<dyn Any>,
+    /// Whether the sink token is keeping a tail alive.
+    pub is_tail: bool,
 }
 
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
@@ -122,6 +132,25 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         dataflows: Vec<DataflowDescription<Plan, CollectionMetadata>>,
     ) {
         for dataflow in dataflows.into_iter() {
+            let existed = if let Some(existing) = self
+                .compute_state
+                .dataflow_descriptions
+                .get(&dataflow.global_id().unwrap())
+            {
+                assert!(
+                    existing.compatible_with(&dataflow),
+                    "New dataflow with same ID {:?}",
+                    dataflow.id
+                );
+                true
+            } else {
+                false
+            };
+
+            self.compute_state
+                .dataflow_descriptions
+                .insert(dataflow.global_id().unwrap(), dataflow.clone());
+
             // Collect the exported object identifiers, paired with their associated "collection" identifier.
             // The latter is used to extract dependency information, which is in terms of collections ids.
             let sink_ids = dataflow
@@ -141,23 +170,27 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .insert(object_id, Antichain::from_elem(0));
 
                 // Log dataflow construction, frontier construction, and any dependencies.
-                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::Dataflow(object_id, true));
-                    logger.log(ComputeEvent::Frontier(object_id, 0, 1));
-                    for import_id in dataflow.depends_on(collection_id) {
-                        logger.log(ComputeEvent::DataflowDependency {
-                            dataflow: object_id,
-                            source: import_id,
-                        })
+                if !existed {
+                    if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+                        logger.log(ComputeEvent::Dataflow(object_id, true));
+                        logger.log(ComputeEvent::Frontier(object_id, 0, 1));
+                        for import_id in dataflow.depends_on(collection_id) {
+                            logger.log(ComputeEvent::DataflowDependency {
+                                dataflow: object_id,
+                                source: import_id,
+                            })
+                        }
                     }
                 }
             }
 
-            crate::render::build_compute_dataflow(
-                self.timely_worker,
-                &mut self.compute_state,
-                dataflow,
-            );
+            if !existed {
+                crate::render::build_compute_dataflow(
+                    self.timely_worker,
+                    &mut self.compute_state,
+                    dataflow,
+                );
+            }
         }
     }
 
@@ -168,7 +201,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
                 // Sink-specific work:
                 self.compute_state.sink_write_frontiers.remove(&id);
-                self.compute_state.dataflow_tokens.remove(&id);
+                self.compute_state.sink_tokens.remove(&id);
                 // Index-specific work:
                 self.compute_state.traces.del_trace(&id);
 
@@ -545,11 +578,17 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         for (id, traces) in self.compute_state.traces.traces.iter_mut() {
             // Read the upper frontier and compare to what we've reported.
             traces.oks_mut().read_upper(&mut new_frontier);
-            let prev_frontier = self
-                .compute_state
-                .reported_frontiers
-                .get_mut(&id)
-                .expect("Index frontier missing!");
+            let prev_frontier = match self.compute_state.reported_frontiers.get_mut(&id) {
+                None => {
+                    // The current client has not expressed interest in this
+                    // collection. Move on.
+                    //
+                    // TODO(benesch): reconciliation should prevent
+                    // this situation.
+                    continue;
+                }
+                Some(reported_frontier) => reported_frontier,
+            };
             if prev_frontier != &new_frontier {
                 add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                 prev_frontier.clone_from(&new_frontier);
@@ -567,11 +606,17 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
         for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
-            let prev_frontier = self
-                .compute_state
-                .reported_frontiers
-                .get_mut(&id)
-                .expect("Sink frontier missing!");
+            let prev_frontier = match self.compute_state.reported_frontiers.get_mut(&id) {
+                None => {
+                    // The current client has not expressed interest in this
+                    // collection. Move on.
+                    //
+                    // TODO(benesch): reconciliation should prevent
+                    // this situation.
+                    continue;
+                }
+                Some(reported_frontier) => reported_frontier,
+            };
             assert!(<_ as PartialOrder>::less_equal(
                 prev_frontier,
                 &new_frontier

@@ -25,6 +25,7 @@ use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
 use mz_storage::types::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
 
+use crate::compute_state::SinkToken;
 use crate::render::context::Context;
 
 impl<G> Context<G, Row, Timestamp>
@@ -88,9 +89,13 @@ where
             needed_tokens.push(sink_token);
         }
 
-        compute_state
-            .dataflow_tokens
-            .insert(sink_id, Box::new(needed_tokens));
+        compute_state.sink_tokens.insert(
+            sink_id,
+            SinkToken {
+                token: Box::new(needed_tokens),
+                is_tail: matches!(sink.connection, SinkConnection::Tail(_)),
+            },
+        );
     }
 }
 

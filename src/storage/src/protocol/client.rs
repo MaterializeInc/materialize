@@ -31,9 +31,7 @@ use tonic::{Request, Response, Status, Streaming};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{
-    BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, GrpcServerCommand, ResponseStream,
-};
+use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
 use mz_timely_util::progress::any_change_batch;
 
 use crate::controller::CollectionMetadata;
@@ -82,9 +80,10 @@ impl BidiProtoClient for ProtoStorageClient<ClientTransport> {
 }
 
 #[async_trait]
-impl<G> ProtoStorage for GrpcServer<G>
+impl<F, G> ProtoStorage for GrpcServer<F>
 where
-    G: GenericClient<GrpcServerCommand<StorageCommand>, StorageResponse> + 'static,
+    F: Fn() -> G + Send + Sync + 'static,
+    G: StorageClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoStorageResponse>;
 
