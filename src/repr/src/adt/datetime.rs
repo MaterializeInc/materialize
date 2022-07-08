@@ -1196,17 +1196,14 @@ fn fill_pdt_date(
     // Check for one number that represents YYYYMMDDD.
     match actual.front() {
         Some(Num(mut val, digits)) if 6 <= *digits && *digits <= 8 => {
-            pdt.day = Some(DateTimeFieldValue::new(
-                i64::try_from(val % 100)
-                    .expect("modulo operation between u64 and constant 100 should fit signed 64-bit integer"),
-                0,
-            ));
+            let unit = i64::try_from(val % 100)
+                .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
+            pdt.day = Some(DateTimeFieldValue::new(unit, 0));
             val /= 100;
-            pdt.month = Some(DateTimeFieldValue::new(
-                i64::try_from(val % 100)
-                .expect("modulo operation between u64 and constant 100 should fit signed 64-bit integer"),
-                0,
-            ));
+
+            let unit = i64::try_from(val % 100)
+                .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
+            pdt.month = Some(DateTimeFieldValue::new(unit, 0));
             val /= 100;
             // Handle 2 digit year case
             if *digits == 6 {
@@ -1216,11 +1213,10 @@ fn fill_pdt_date(
                     val += 1900;
                 }
             }
-            pdt.year = Some(DateTimeFieldValue::new(
-                i64::try_from(val)
-                    .map_err(|_| format!("number should fit in signed 64-bit integer"))?,
-                0,
-            ));
+
+            let unit = i64::try_from(val)
+                .map_err(|_| format!("number should fit in signed 64-bit integer"))?;
+            pdt.year = Some(DateTimeFieldValue::new(unit, 0));
             actual.pop_front();
             // Trim remaining optional tokens, but never an immediately
             // following colon
@@ -1503,13 +1499,9 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
                 }
                 None => {
                     // create signed copy of *val
-                    let sval = i64::try_from(i128::from(*val) * i128::from(sign))
-                        .map_err(|_| format!("Unable to parse value {} as a number: number too large to fit in target type", *val))?;
-
-                    unit_buf = Some(DateTimeFieldValue {
-                        unit: sval,
-                        fraction: 0,
-                    });
+                    let unit = i64::try_from(i128::from(*val) * i128::from(sign))
+                        .map_err(|_| format!("Unable to parse value {val} as a number: number too large to fit in target type"))?;
+                    unit_buf = Some(DateTimeFieldValue { unit, fraction: 0 });
                 }
             },
             (Nanos(val), Nanos(_)) => match unit_buf {
@@ -1549,7 +1541,7 @@ fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
 
                 // create signed copy of n
                 let sn  = i64::try_from(i128::from(n) * i128::from(sign))
-                    .map_err(|_| format!("Unable to parse value {} as a number: number too large to fit in target type", n))?;
+                    .map_err(|_| format!("Unable to parse value {n} as a number: number too large to fit in target type"))?;
 
                 match unit_buf {
                     Some(ref mut u) => {
