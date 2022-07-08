@@ -189,7 +189,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
-    AdvanceLocalInputs,
+    AdvanceTimelines,
     AdvanceLocalInput(AdvanceLocalInput<T>),
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
@@ -464,7 +464,7 @@ pub struct Coordinator<S> {
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
-    global_timeline: timeline::DurableTimestampOracle<Timestamp>,
+    global_timelines: BTreeMap<Timeline, timeline::DurableTimestampOracle<Timestamp>>,
 
     /// Tracks tables needing advancement, which can be processed at a low priority
     /// in the biased select loop.
@@ -581,19 +581,42 @@ macro_rules! guard_write_critical_section {
 }
 
 impl<S: Append + 'static> Coordinator<S> {
+    /// Returns a reference to the timestamp oracle used for reads and writes
+    /// from/to a local input.
+    fn get_local_timestamp_oracle(&self) -> &timeline::DurableTimestampOracle<Timestamp> {
+        self.global_timelines
+            .get(&Timeline::EpochMilliseconds)
+            .expect("no realtime timeline")
+    }
+
+    /// Returns a mutable reference to the timestamp oracle used for reads and writes
+    /// from/to a local input.
+    fn get_local_timestamp_oracle_mut(
+        &mut self,
+    ) -> &mut timeline::DurableTimestampOracle<Timestamp> {
+        self.global_timelines
+            .get_mut(&Timeline::EpochMilliseconds)
+            .expect("no realtime timeline")
+    }
+
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
     fn get_local_read_ts(&mut self) -> Timestamp {
-        self.global_timeline.read_ts()
+        self.get_local_timestamp_oracle_mut().read_ts()
     }
 
     /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
     async fn get_local_write_ts(&mut self) -> Timestamp {
-        self.global_timeline
-            .write_ts(|ts| self.catalog.persist_timestamp(ts))
+        self.global_timelines
+            .get_mut(&Timeline::EpochMilliseconds)
+            .expect("no realtime timeline")
+            .write_ts(|ts| {
+                self.catalog
+                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
+            })
             .await
     }
 
@@ -602,8 +625,13 @@ impl<S: Append + 'static> Coordinator<S> {
     /// timestamp to ensure they are not visible to any real-time earlier reads.
     async fn get_and_step_local_write_ts(&mut self) -> WriteTimestamp {
         let timestamp = self
-            .global_timeline
-            .write_ts(|ts| self.catalog.persist_timestamp(ts))
+            .global_timelines
+            .get_mut(&Timeline::EpochMilliseconds)
+            .expect("no realtime timeline")
+            .write_ts(|ts| {
+                self.catalog
+                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
+            })
             .await;
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
          * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
@@ -613,7 +641,7 @@ impl<S: Append + 'static> Coordinator<S> {
          * If we add an ADAPTER side durable WAL, then consecutive writes could all happen at the
          * same timestamp as long as they're written to the WAL first.
          */
-        let _ = self.global_timeline.read_ts();
+        let _ = self.get_local_timestamp_oracle_mut().read_ts();
         let advance_to = timestamp.step_forward();
         WriteTimestamp {
             timestamp,
@@ -626,13 +654,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// NOTE: This can be removed once DDL is included in group commits.
     fn peek_local_ts(&self) -> Timestamp {
-        self.global_timeline.peek_ts()
-    }
-
-    async fn local_fast_forward(&mut self, lower_bound: Timestamp) {
-        self.global_timeline
-            .fast_forward(lower_bound, |ts| self.catalog.persist_timestamp(ts))
-            .await;
+        self.get_local_timestamp_oracle().peek_ts()
     }
 
     fn now(&self) -> EpochMillis {
@@ -839,7 +861,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let id_bundle = self
                         .index_oracle(rview.compute_instance)
                         .sufficient_collections(&rview.depends_on);
-                    let as_of = self.least_valid_read(&id_bundle, rview.compute_instance);
+                    let as_of = self.least_valid_read(&id_bundle);
                     let internal_view_id = self.allocate_transient_id()?;
                     let df = self
                         .dataflow_builder(rview.compute_instance)
@@ -1010,13 +1032,16 @@ impl<S: Append + 'static> Coordinator<S> {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        // An explicit SELECT or INSERT on a table will bump the table's timestamps,
-        // but there are cases where timestamps are not bumped but we expect the closed
-        // timestamps to advance (`AS OF X`, TAILing views over RT sources and
-        // tables). To address these, spawn a task that forces table timestamps to
-        // close on a regular interval. This roughly tracks the behavior of realtime
-        // sources that close off timestamps on an interval.
-        let mut advance_local_inputs_interval =
+        // For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
+        // table's timestamps, but there are cases where timestamps are not bumped but
+        // we expect the closed timestamps to advance (`AS OF X`, TAILing views over
+        // RT sources and tables). To address these, spawn a task that forces table
+        // timestamps to close on a regular interval. This roughly tracks the behavior
+        // of realtime sources that close off timestamps on an interval.
+        //
+        // For non-realtime timelines, nothing pushes the timestamps forward, so we must do
+        // it manually.
+        let mut advance_timelines_interval =
             tokio::time::interval(self.catalog.config().timestamp_frequency);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
@@ -1038,7 +1063,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = advance_local_inputs_interval.tick() => Message::AdvanceLocalInputs,
+                _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
                 // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
                 () = self.controller.ready() => {
@@ -1097,21 +1122,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     // here.
                 }
                 Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
-                Message::AdvanceLocalInputs => {
-                    // Convince the coordinator it needs to open a new timestamp
-                    // and advance inputs.
-                    // Fast forwarding puts the `TimestampOracle` in write mode,
-                    // which means the next read will have to advance a table
-                    // after reading from it. To prevent this we explicitly put
-                    // the `TimestampOracle` in read mode. Writes will always
-                    // advance a table no matter what mode the `TimestampOracle`
-                    // is in. We step back the value of `now()` so that the
-                    // next write can happen at `now()` and not a value above
-                    // `now()`
-                    let now = self.now();
-                    self.local_fast_forward(now.step_back().unwrap_or(now))
-                        .await;
-                    let _ = self.get_local_read_ts();
+                Message::AdvanceTimelines => {
+                    self.message_advance_timelines().await;
                 }
                 Message::AdvanceLocalInput(inputs) => {
                     self.advance_local_input(inputs).await;
@@ -1130,7 +1142,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
 
-            if let Some(timestamp) = self.global_timeline.should_advance_to() {
+            if let Some(timestamp) = self.get_local_timestamp_oracle_mut().should_advance_to() {
                 self.advance_local_inputs(timestamp).await;
             }
         }
@@ -1552,6 +1564,77 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(Err(e), session);
             }
         }
+    }
+
+    async fn message_advance_timelines(&mut self) {
+        // Convince the coordinator it needs to open a new timestamp
+        // and advance inputs.
+        // Fast forwarding puts the `TimestampOracle` in write mode,
+        // which means the next read may have to wait for table
+        // advancements. To prevent this we explicitly put
+        // the `TimestampOracle` in read mode. Writes will always
+        // advance a table no matter what mode the `TimestampOracle`
+        // is in. We step back the value of `now()` so that the
+        // next write can happen at `now()` and not a value above
+        // `now()`
+        let nows: HashMap<_, _> = self
+            .global_timelines
+            .keys()
+            .cloned()
+            .map(|timeline| {
+                let now = if timeline == Timeline::EpochMilliseconds {
+                    let now = self.now();
+                    now.step_back().unwrap_or(now)
+                } else {
+                    // For non realtime sources, we define now as the largest timestamp, not in
+                    // advance of any object's upper. This is the largest timestamp that is closed
+                    // to writes.
+                    let id_bundle = self.ids_in_timeline(&timeline);
+                    self.largest_not_in_advance_of_upper(&id_bundle)
+                };
+                (timeline, now)
+            })
+            .collect();
+
+        for (timeline, timestamp_oracle) in &mut self.global_timelines {
+            let now = nows[timeline];
+            timestamp_oracle
+                .fast_forward(now, |ts| self.catalog.persist_timestamp(timeline, ts))
+                .await;
+            let _ = timestamp_oracle.read_ts();
+        }
+    }
+
+    fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {
+        let mut id_bundle = CollectionIdBundle::default();
+        for entry in self.catalog.entries() {
+            if let Some(entry_timeline) = self.get_timeline(entry.id()) {
+                if timeline == &entry_timeline {
+                    match entry.item() {
+                        CatalogItem::Table(_)
+                        | CatalogItem::Source(_)
+                        | CatalogItem::RecordedView(_) => {
+                            id_bundle.storage_ids.insert(entry.id());
+                        }
+                        CatalogItem::Index(index) => {
+                            id_bundle
+                                .compute_ids
+                                .entry(index.compute_instance)
+                                .or_default()
+                                .insert(entry.id());
+                        }
+                        CatalogItem::View(_)
+                        | CatalogItem::Sink(_)
+                        | CatalogItem::Type(_)
+                        | CatalogItem::Func(_)
+                        | CatalogItem::Secret(_)
+                        | CatalogItem::Connection(_)
+                        | CatalogItem::Log(_) => {}
+                    }
+                }
+            }
+        }
+        id_bundle
     }
 
     /// Remove all pending peeks that were initiated by `conn_id`.
@@ -2214,7 +2297,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let id_bundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(&[sink.from]);
-        let frontier = self.least_valid_read(&id_bundle, compute_instance);
+        let frontier = self.least_valid_read(&id_bundle);
         let as_of = SinkAsOf {
             frontier,
             strict: !sink.with_snapshot,
@@ -3347,7 +3430,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let id_bundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(&depends_on);
-        let as_of = self.least_valid_read(&id_bundle, compute_instance);
+        let as_of = self.least_valid_read(&id_bundle);
 
         let mut ops = Vec::new();
         if let Some(drop_id) = replace {
@@ -3832,7 +3915,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .sufficient_collections(item_ids.iter());
 
         // Filter out ids from different timelines.
-        for ids in [&mut id_bundle.storage_ids, &mut id_bundle.compute_ids] {
+        for ids in [
+            &mut id_bundle.storage_ids,
+            &mut id_bundle.compute_ids.entry(compute_instance).or_default(),
+        ] {
             ids.retain(|&id| {
                 let id_timeline = self
                     .validate_timeline(vec![id])
@@ -3986,7 +4072,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     let read_holds = read_holds::ReadHolds {
                         time: timestamp,
                         id_bundle,
-                        compute_instance,
                     };
                     self.acquire_read_holds(&read_holds).await;
                     let txn_reads = TxnReads {
@@ -4241,11 +4326,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// The smallest common valid read frontier among the specified collections.
-    fn least_valid_read(
-        &self,
-        id_bundle: &CollectionIdBundle,
-        instance: ComputeInstanceId,
-    ) -> Antichain<mz_repr::Timestamp> {
+    fn least_valid_read(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::from_elem(Timestamp::minimum());
         {
             let storage = self.controller.storage();
@@ -4254,9 +4335,11 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
         {
-            let compute = self.controller.compute(instance).unwrap();
-            for id in id_bundle.compute_ids.iter() {
-                since.join_assign(&compute.collection(*id).unwrap().implied_capability)
+            for (instance, compute_ids) in &id_bundle.compute_ids {
+                let compute = self.controller.compute(*instance).unwrap();
+                for id in compute_ids.iter() {
+                    since.join_assign(&compute.collection(*id).unwrap().implied_capability)
+                }
             }
         }
         since
@@ -4266,11 +4349,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// Times that are not greater or equal to this frontier are complete for all collections
     /// identified as arguments.
-    fn least_valid_write(
-        &self,
-        id_bundle: &CollectionIdBundle,
-        instance: ComputeInstanceId,
-    ) -> Antichain<mz_repr::Timestamp> {
+    fn least_valid_write(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::new();
         {
             let storage = self.controller.storage();
@@ -4287,20 +4366,47 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
         {
-            let compute = self.controller.compute(instance).unwrap();
-            for id in id_bundle.compute_ids.iter() {
-                since.extend(
-                    compute
-                        .collection(*id)
-                        .unwrap()
-                        .write_frontier
-                        .frontier()
-                        .iter()
-                        .cloned(),
-                );
+            for (instance, compute_ids) in &id_bundle.compute_ids {
+                let compute = self.controller.compute(*instance).unwrap();
+                for id in compute_ids.iter() {
+                    since.extend(
+                        compute
+                            .collection(*id)
+                            .unwrap()
+                            .write_frontier
+                            .frontier()
+                            .iter()
+                            .cloned(),
+                    );
+                }
             }
         }
         since
+    }
+
+    /// The largest element not in advance of any object in the collection.
+    ///
+    /// Times that are not greater to this frontier are complete for all collections
+    /// identified as arguments.
+    fn largest_not_in_advance_of_upper(
+        &self,
+        id_bundle: &CollectionIdBundle,
+    ) -> mz_repr::Timestamp {
+        let upper = self.least_valid_write(&id_bundle);
+
+        // We peek at the largest element not in advance of `upper`, which
+        // involves a subtraction. If `upper` contains a zero timestamp there
+        // is no "prior" answer, and we do not want to peek at it as it risks
+        // hanging awaiting the response to data that may never arrive.
+        if let Some(upper) = upper.as_option() {
+            upper.step_back().unwrap_or_else(Timestamp::minimum)
+        } else {
+            // A complete trace can be read in its final form with this time.
+            //
+            // This should only happen for literals that have no sources or sources that
+            // are known to have completed (non-tailed files for example).
+            Timestamp::MAX
+        }
     }
 
     /// Determines the timestamp for a query.
@@ -4330,7 +4436,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
 
-        let since = self.least_valid_read(&id_bundle, compute_instance);
+        let since = self.least_valid_read(&id_bundle);
 
         // Initialize candidate to the minimum correct time.
         let mut candidate = Timestamp::minimum();
@@ -4371,21 +4477,7 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&self.get_local_read_ts());
         }
         if when.advance_to_upper(uses_tables) {
-            let upper = self.least_valid_write(&id_bundle, compute_instance);
-
-            // We peek at the largest element not in advance of `upper`, which
-            // involves a subtraction. If `upper` contains a zero timestamp there
-            // is no "prior" answer, and we do not want to peek at it as it risks
-            // hanging awaiting the response to data that may never arrive.
-            let upper = if let Some(upper) = upper.as_option() {
-                upper.step_back().unwrap_or_else(Timestamp::minimum)
-            } else {
-                // A complete trace can be read in its final form with this time.
-                //
-                // This should only happen for literals that have no sources or sources that
-                // are known to have completed (non-tailed files for example).
-                Timestamp::MAX
-            };
+            let upper = self.largest_not_in_advance_of_upper(&id_bundle);
             candidate.join_assign(&upper);
         }
 
@@ -4394,26 +4486,30 @@ impl<S: Append + 'static> Coordinator<S> {
         if since.less_equal(&candidate) {
             Ok(candidate)
         } else {
-            let invalid_indexes = id_bundle
-                .compute_ids
-                .iter()
-                .filter_map(|id| {
-                    let since = self
-                        .controller
-                        .compute(compute_instance)
-                        .unwrap()
-                        .collection(*id)
-                        .unwrap()
-                        .read_capabilities
-                        .frontier()
-                        .to_owned();
-                    if since.less_equal(&candidate) {
-                        None
-                    } else {
-                        Some(since)
-                    }
-                })
-                .collect::<Vec<_>>();
+            let invalid_indexes =
+                if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
+                    compute_ids
+                        .iter()
+                        .filter_map(|id| {
+                            let since = self
+                                .controller
+                                .compute(compute_instance)
+                                .unwrap()
+                                .collection(*id)
+                                .unwrap()
+                                .read_capabilities
+                                .frontier()
+                                .to_owned();
+                            if since.less_equal(&candidate) {
+                                None
+                            } else {
+                                Some(since)
+                            }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
                 let since = self
                     .controller
@@ -4736,14 +4832,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     &QueryWhen::Immediately,
                     compute_instance,
                 )?;
-                let since = self
-                    .least_valid_read(&id_bundle, compute_instance)
-                    .elements()
-                    .to_vec();
-                let upper = self
-                    .least_valid_write(&id_bundle, compute_instance)
-                    .elements()
-                    .to_vec();
+                let since = self.least_valid_read(&id_bundle).elements().to_vec();
+                let upper = self.least_valid_write(&id_bundle).elements().to_vec();
                 let has_table = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
                 let table_read_ts = if has_table {
                     Some(self.get_local_read_ts())
@@ -4778,29 +4868,31 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
                 {
-                    let compute = self.controller.compute(compute_instance).unwrap();
-                    for id in id_bundle.compute_ids.iter() {
-                        let state = compute.collection(*id).unwrap();
-                        let name = self
-                            .catalog
-                            .try_get_entry(id)
-                            .map(|item| item.name())
-                            .map(|name| {
-                                self.catalog
-                                    .resolve_full_name(name, Some(session.conn_id()))
-                                    .to_string()
-                            })
-                            .unwrap_or_else(|| id.to_string());
-                        sources.push(TimestampSource {
-                            name: format!("{name} ({id}, compute)"),
-                            read_frontier: state.implied_capability.elements().to_vec(),
-                            write_frontier: state
-                                .write_frontier
-                                .frontier()
-                                .to_owned()
-                                .elements()
-                                .to_vec(),
-                        });
+                    if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
+                        let compute = self.controller.compute(compute_instance).unwrap();
+                        for id in compute_ids {
+                            let state = compute.collection(*id).unwrap();
+                            let name = self
+                                .catalog
+                                .try_get_entry(id)
+                                .map(|item| item.name())
+                                .map(|name| {
+                                    self.catalog
+                                        .resolve_full_name(name, Some(session.conn_id()))
+                                        .to_string()
+                                })
+                                .unwrap_or_else(|| id.to_string());
+                            sources.push(TimestampSource {
+                                name: format!("{name} ({id}, compute)"),
+                                read_frontier: state.implied_capability.elements().to_vec(),
+                                write_frontier: state
+                                    .write_frontier
+                                    .frontier()
+                                    .to_owned()
+                                    .elements()
+                                    .to_vec(),
+                            });
+                        }
                     }
                 }
                 let explanation = TimestampExplanation {
@@ -5754,13 +5846,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .copied()
             .collect::<BTreeSet<_>>();
 
-        let since = self.least_valid_read(
-            &CollectionIdBundle {
-                storage_ids,
-                compute_ids,
-            },
-            compute_instance,
-        );
+        let compute_ids = vec![(compute_instance, compute_ids)].into_iter().collect();
+        let since = self.least_valid_read(&CollectionIdBundle {
+            storage_ids,
+            compute_ids,
+        });
 
         // Ensure that the dataflow's `as_of` is at least `since`.
         if let Some(as_of) = &mut dataflow.as_of {
@@ -5800,6 +5890,48 @@ impl<S: Append + 'static> Coordinator<S> {
     where
         I: IntoIterator<Item = GlobalId>,
     {
+        let timelines = self.get_timelines(ids);
+
+        // If there's more than one timeline, we will not produce meaningful
+        // data to a user. Take, for example, some realtime source and a debezium
+        // consistency topic source. The realtime source uses something close to now
+        // for its timestamps. The debezium source starts at 1 and increments per
+        // transaction. We don't want to choose some timestamp that is valid for both
+        // of these because the debezium source will never get to the same value as the
+        // realtime source's "milliseconds since Unix epoch" value. And even if it did,
+        // it's not meaningful to join just because those two numbers happen to be the
+        // same now.
+        //
+        // Another example: assume two separate debezium consistency topics. Both
+        // start counting at 1 and thus have similarish numbers that probably overlap
+        // a lot. However it's still not meaningful to join those two at a specific
+        // transaction counter number because those counters are unrelated to the
+        // other.
+        if timelines.len() > 1 {
+            return Err(AdapterError::Unsupported(
+                "multiple timelines within one dataflow",
+            ));
+        }
+        Ok(timelines.into_iter().next())
+    }
+
+    /// Return the timeline belonging to a GlobalId, if one exists.
+    fn get_timeline(&self, id: GlobalId) -> Option<Timeline> {
+        let timelines = self.get_timelines(vec![id]);
+
+        assert!(
+            timelines.len() <= 1,
+            "impossible for a single object to belong to two timelines"
+        );
+
+        timelines.into_iter().next()
+    }
+
+    /// Return the timelines belonging to a list of GlobalIds, if any exist.
+    fn get_timelines<I>(&self, ids: I) -> HashSet<Timeline>
+    where
+        I: IntoIterator<Item = GlobalId>,
+    {
         let mut timelines: HashMap<GlobalId, Timeline> = HashMap::new();
 
         // Recurse through IDs to find all sources and tables, adding new ones to
@@ -5833,32 +5965,10 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let timelines: HashSet<Timeline> = timelines
+        timelines
             .into_iter()
             .map(|(_, timeline)| timeline)
-            .collect();
-
-        // If there's more than one timeline, we will not produce meaningful
-        // data to a user. Take, for example, some realtime source and a debezium
-        // consistency topic source. The realtime source uses something close to now
-        // for its timestamps. The debezium source starts at 1 and increments per
-        // transaction. We don't want to choose some timestamp that is valid for both
-        // of these because the debezium source will never get to the same value as the
-        // realtime source's "milliseconds since Unix epoch" value. And even if it did,
-        // it's not meaningful to join just because those two numbers happen to be the
-        // same now.
-        //
-        // Another example: assume two separate debezium consistency topics. Both
-        // start counting at 1 and thus have similarish numbers that probably overlap
-        // a lot. However it's still not meaningful to join those two at a specific
-        // transaction counter number because those counters are unrelated to the
-        // other.
-        if timelines.len() > 1 {
-            return Err(AdapterError::Unsupported(
-                "multiple timelines within one dataflow",
-            ));
-        }
-        Ok(timelines.into_iter().next())
+            .collect()
     }
 
     /// Attempts to immediately grant `session` access to the write lock or
@@ -5937,7 +6047,7 @@ pub async fn serve<S: Append + 'static>(
     let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
     let handle = TokioHandle::current();
 
-    let initial_timestamp = catalog.get_persisted_timestamp().await?;
+    let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -5945,18 +6055,33 @@ pub async fn serve<S: Append + 'static>(
         .stack_size(2 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
-            let timestamp_oracle = handle.block_on(timeline::DurableTimestampOracle::new(
-                initial_timestamp,
-                move || (&*now)(),
-                *timeline::TIMESTAMP_PERSIST_INTERVAL,
-                |ts| catalog.persist_timestamp(ts),
-            ));
+            let mut timestamp_oracles = BTreeMap::new();
+            for (timeline, initial_timestamp) in initial_timestamps {
+                let timestamp_oracle = if timeline == Timeline::EpochMilliseconds {
+                    let now = now.clone();
+                    handle.block_on(timeline::DurableTimestampOracle::new(
+                        initial_timestamp,
+                        move || (*&(now))(),
+                        *timeline::TIMESTAMP_PERSIST_INTERVAL,
+                        |ts| catalog.persist_timestamp(&timeline, ts),
+                    ))
+                } else {
+                    handle.block_on(timeline::DurableTimestampOracle::new(
+                        initial_timestamp,
+                        Timestamp::minimum,
+                        *timeline::TIMESTAMP_PERSIST_INTERVAL,
+                        |ts| catalog.persist_timestamp(&timeline, ts),
+                    ))
+                };
+                timestamp_oracles.insert(timeline, timestamp_oracle);
+            }
+
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 internal_cmd_tx,
-                global_timeline: timestamp_oracle,
+                global_timelines: timestamp_oracles,
                 advance_tables: AdvanceTables::new(),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
@@ -6461,15 +6586,12 @@ pub mod fast_path_peek {
 /// to ensure that they can continue to use collections over an open-ended series of
 /// queries. However, nothing is specific to transactions here.
 pub mod read_holds {
-    use mz_compute_client::controller::ComputeInstanceId;
-
     use crate::coord::id_bundle::CollectionIdBundle;
 
     /// Relevant information for acquiring or releasing a bundle of read holds.
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
         pub(super) id_bundle: CollectionIdBundle,
-        pub(super) compute_instance: ComputeInstanceId,
     }
 
     impl<S> crate::coord::Coordinator<S> {
@@ -6496,22 +6618,21 @@ pub mod read_holds {
             }
             storage.set_read_policy(policy_changes).await.unwrap();
             // Update COMPUTE read policies
-            let mut policy_changes = Vec::new();
-            let mut compute = self
-                .controller
-                .compute_mut(read_holds.compute_instance)
-                .unwrap();
-            for id in read_holds.id_bundle.compute_ids.iter() {
-                let collection = compute.as_ref().collection(*id).unwrap();
-                assert!(collection
-                    .read_capabilities
-                    .frontier()
-                    .less_equal(&read_holds.time));
-                let read_needs = self.read_capability.get_mut(id).unwrap();
-                read_needs.holds.update_iter(Some((read_holds.time, 1)));
-                policy_changes.push((*id, read_needs.policy()));
+            for (compute_instance, compute_ids) in read_holds.id_bundle.compute_ids.iter() {
+                let mut policy_changes = Vec::new();
+                let mut compute = self.controller.compute_mut(*compute_instance).unwrap();
+                for id in compute_ids.iter() {
+                    let collection = compute.as_ref().collection(*id).unwrap();
+                    assert!(collection
+                        .read_capabilities
+                        .frontier()
+                        .less_equal(&read_holds.time));
+                    let read_needs = self.read_capability.get_mut(id).unwrap();
+                    read_needs.holds.update_iter(Some((read_holds.time, 1)));
+                    policy_changes.push((*id, read_needs.policy()));
+                }
+                compute.set_read_policy(policy_changes).await.unwrap();
             }
-            compute.set_read_policy(policy_changes).await.unwrap();
         }
         /// Release read holds on the indicated collections at the indicated time.
         ///
@@ -6529,7 +6650,6 @@ pub mod read_holds {
                         storage_ids,
                         compute_ids,
                     },
-                compute_instance,
             } = read_holds;
 
             // Update STORAGE read policies.
@@ -6547,16 +6667,18 @@ pub mod read_holds {
                 .await
                 .unwrap();
             // Update COMPUTE read policies
-            let mut policy_changes = Vec::new();
-            for id in compute_ids.iter() {
-                // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                if let Some(read_needs) = self.read_capability.get_mut(id) {
-                    read_needs.holds.update_iter(Some((time, -1)));
-                    policy_changes.push((*id, read_needs.policy()));
+            for (compute_instance, compute_ids) in compute_ids.iter() {
+                let mut policy_changes = Vec::new();
+                for id in compute_ids.iter() {
+                    // It's possible that a concurrent DDL statement has already dropped this GlobalId
+                    if let Some(read_needs) = self.read_capability.get_mut(id) {
+                        read_needs.holds.update_iter(Some((time, -1)));
+                        policy_changes.push((*id, read_needs.policy()));
+                    }
                 }
-            }
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
-                compute.set_read_policy(policy_changes).await.unwrap();
+                if let Some(mut compute) = self.controller.compute_mut(*compute_instance) {
+                    compute.set_read_policy(policy_changes).await.unwrap();
+                }
             }
         }
     }

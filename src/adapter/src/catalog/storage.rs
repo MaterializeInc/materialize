@@ -35,6 +35,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
+use mz_storage::client::sources::Timeline;
 
 use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};
@@ -57,8 +58,6 @@ const ROLE_ID_ALLOC_KEY: &str = "role";
 const COMPUTE_ID_ALLOC_KEY: &str = "compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
-
-const EPOCH_MILLIS_TIMESTAMP_KEY: &str = "epoch_millis";
 
 async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
     // Initial state.
@@ -265,7 +264,7 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                         stash,
                         vec![(
                             TimestampKey {
-                                id: EPOCH_MILLIS_TIMESTAMP_KEY.into(),
+                                id: Timeline::EpochMilliseconds.to_string(),
                             },
                             TimestampValue {
                                 ts: mz_repr::Timestamp::minimum(),
@@ -632,10 +631,25 @@ impl<S: Append> Connection<S> {
         Ok((id..next.next_id).collect())
     }
 
-    /// Get the global timestamp that has been persisted to disk.
-    pub async fn get_persisted_timestamp(&mut self) -> Result<mz_repr::Timestamp, Error> {
+    /// Get all global timestamps that has been persisted to disk.
+    pub async fn get_all_persisted_timestamps(
+        &mut self,
+    ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
+        Ok(COLLECTION_TIMESTAMP
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(|(k, v)| (k.id.parse().expect("invalid timeline persisted"), v.ts))
+            .collect())
+    }
+
+    /// Get a global timestamp for a timeline that has been persisted to disk.
+    pub async fn get_persisted_timestamp(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Result<mz_repr::Timestamp, Error> {
         let key = TimestampKey {
-            id: EPOCH_MILLIS_TIMESTAMP_KEY.to_string(),
+            id: timeline.to_string(),
         };
         Ok(COLLECTION_TIMESTAMP
             .peek_key_one(&mut self.stash, &key)
@@ -644,17 +658,21 @@ impl<S: Append> Connection<S> {
             .ts)
     }
 
-    /// Persist new global timestamp to disk.
-    pub async fn persist_timestamp(&mut self, timestamp: mz_repr::Timestamp) -> Result<(), Error> {
+    /// Persist new global timestamp for a timeline to disk.
+    pub async fn persist_timestamp(
+        &mut self,
+        timeline: &Timeline,
+        timestamp: mz_repr::Timestamp,
+    ) -> Result<(), Error> {
         let key = TimestampKey {
-            id: EPOCH_MILLIS_TIMESTAMP_KEY.to_string(),
+            id: timeline.to_string(),
         };
         let value = TimestampValue { ts: timestamp };
         let old_value = COLLECTION_TIMESTAMP
             .upsert_key(&mut self.stash, &key, &value)
             .await?;
         if let Some(old_value) = old_value {
-            assert!(value >= old_value);
+            assert!(value >= old_value, "global timestamp must always go up");
         }
         Ok(())
     }
