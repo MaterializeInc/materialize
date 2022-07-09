@@ -8,30 +8,17 @@
 # by the Apache License, Version 2.0.
 
 $ set schema={
+    "name": "row",
     "type": "record",
-    "name": "envelope",
     "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
+      {"name": "a", "type": "long"}
     ]
   }
 
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
-{"before": null, "after": {"row": {"a": 1}}}
+{"a": 1}
 
 > CREATE SECRET ssl_key_kafka AS '${arg.materialized-kafka-key}'
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
@@ -53,7 +40,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
       username = "materialize",
       password = SECRET password_csr
   )
-  ENVELOPE DEBEZIUM
 
 > SELECT * FROM data
 a
@@ -61,7 +47,7 @@ a
 1
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"before": null, "after": {"row": {"a": 2}}}
+{"a": 2}
 
 > SELECT * FROM data
 a
@@ -87,7 +73,6 @@ a
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
       ssl_ca_pem = '${arg.ca-crt}'
   )
-  ENVELOPE DEBEZIUM
 contains:sslv3 alert certificate unknown
 
 # Ensure that our test infra correctly sets up certs by failing when CSR is not
@@ -108,7 +93,6 @@ contains:sslv3 alert certificate unknown
       ssl_certificate_pem = '${arg.materialized-kafka-crt}',
       ssl_ca_pem = '${arg.ca-crt}'
   )
-  ENVELOPE DEBEZIUM
 contains:sslv3 alert certificate unknown
 
 
