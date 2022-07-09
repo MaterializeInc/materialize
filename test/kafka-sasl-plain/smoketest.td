@@ -8,30 +8,17 @@
 # by the Apache License, Version 2.0.
 
 $ set schema={
+    "name": "row",
     "type": "record",
-    "name": "envelope",
     "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
+      {"name": "a", "type": "long"}
     ]
   }
 
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
-{"before": null, "after": {"row": {"a": 1}}}
+{"a": 1}
 
 > CREATE SECRET sasl_password AS 'sekurity'
 
@@ -48,7 +35,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   WITH (
       ssl_ca_pem = '${arg.ca}'
   )
-  ENVELOPE DEBEZIUM
 
 > SELECT * FROM data
 a
@@ -56,7 +42,7 @@ a
 1
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"before": null, "after": {"row": {"a": 2}}}
+{"a": 2}
 
 > SELECT * FROM data
 a
@@ -98,7 +84,6 @@ $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
   WITH (
       ssl_ca_pem = '${arg.ca}'
   )
-  ENVELOPE DEBEZIUM
 
 > SELECT * FROM env_pw_data
 a
@@ -123,7 +108,6 @@ a
   WITH (
       ssl_ca_pem = '${arg.ca}'
   )
-  ENVELOPE DEBEZIUM
 
 
 > SELECT * FROM connector_source
@@ -142,5 +126,4 @@ a
   WITH (
       ssl_ca_pem = '${arg.ca}'
   )
-  ENVELOPE DEBEZIUM
 contains:cannot set option security.protocol for SOURCE using CONNECTION materialize.public.kafka_sasl

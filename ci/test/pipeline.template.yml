@@ -245,7 +245,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: billing-demo
-          args: [--message-count=100, --partitions=10, --check-sink]
+          args: [--message-count=100, --partitions=10]
     agents:
       queue: linux-x86_64
 
