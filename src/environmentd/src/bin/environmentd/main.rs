@@ -30,7 +30,6 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
@@ -39,7 +38,7 @@ use url::Url;
 use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
-use mz_environmentd::{SecretsControllerConfig, TlsConfig, TlsMode};
+use mz_environmentd::{TlsConfig, TlsMode};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
@@ -52,7 +51,9 @@ use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
+use mz_secrets::SecretsController;
 use mz_storage::client::connections::ConnectionContext;
 
 mod sys;
@@ -144,20 +145,6 @@ pub struct Args {
     /// production cluster that happens to be the active Kubernetes context.)
     #[structopt(long, hide = true, default_value = "minikube")]
     kubernetes_context: String,
-    /// The name of this pod
-    #[clap(
-        long,
-        hide = true,
-        env = "POD_NAME",
-        required_if_eq("orchestrator", "kubernetes")
-    )]
-    pod_name: Option<String>,
-    /// The name of the Kubernetes secret object to use for storing user secrets
-    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
-    user_defined_secret: Option<String>,
-    /// The mount location of the Kubernetes secret object to use for storing user secrets
-    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
-    user_defined_secret_mount_path: Option<String>,
     /// The storaged image reference to use.
     #[structopt(
         long,
@@ -485,29 +472,34 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure controller.
     let cwd = env::current_dir().context("retrieving current working directory")?;
-    let orchestrator: Box<dyn Orchestrator> = match args.orchestrator {
-        OrchestratorKind::Kubernetes => Box::new(
-            runtime
-                .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
-                    context: args.kubernetes_context.clone(),
-                    service_labels: args
-                        .orchestrator_service_label
-                        .into_iter()
-                        .map(|l| (l.key, l.value))
-                        .collect(),
-                    service_node_selector: args
-                        .orchestrator_service_node_selector
-                        .into_iter()
-                        .map(|l| (l.key, l.value))
-                        .collect(),
-                    service_account: args.kubernetes_service_account,
-                    image_pull_policy: args.kubernetes_image_pull_policy,
-                    user_defined_secret: args.user_defined_secret.clone().unwrap_or_default(),
-                }))
-                .context("creating kubernetes orchestrator")?,
-        ),
+    let (orchestrator, secrets_controller) = match args.orchestrator {
+        OrchestratorKind::Kubernetes => {
+            let orchestrator = Arc::new(
+                runtime
+                    .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
+                        context: args.kubernetes_context.clone(),
+                        service_labels: args
+                            .orchestrator_service_label
+                            .into_iter()
+                            .map(|l| (l.key, l.value))
+                            .collect(),
+                        service_node_selector: args
+                            .orchestrator_service_node_selector
+                            .into_iter()
+                            .map(|l| (l.key, l.value))
+                            .collect(),
+                        service_account: args.kubernetes_service_account,
+                        image_pull_policy: args.kubernetes_image_pull_policy,
+                    }))
+                    .context("creating kubernetes orchestrator")?,
+            );
+            (
+                Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
+                orchestrator as Arc<dyn SecretsController>,
+            )
+        }
         OrchestratorKind::Process => {
-            Box::new(
+            let orchestrator = Arc::new(
                 runtime
                     .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
                         // Look for binaries in the same directory as the
@@ -529,9 +521,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
                     }))
                     .context("creating process orchestrator")?,
+            );
+            (
+                Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
+                orchestrator as Arc<dyn SecretsController>,
             )
         }
     };
+    let secrets_reader = secrets_controller.reader();
     let persist_clients = PersistClientCache::new(&metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let orchestrator = Arc::new(TracingOrchestrator::new(
@@ -638,22 +635,6 @@ max log level: {max_log_level}",
         bail!("--availability-zone values must be unique");
     }
 
-    let secrets_path = match args.orchestrator {
-        OrchestratorKind::Kubernetes => {
-            PathBuf::from(args.user_defined_secret_mount_path.unwrap_or_default())
-        }
-        OrchestratorKind::Process => args.data_directory.join("secrets"),
-    };
-    let secrets_controller = match args.orchestrator {
-        OrchestratorKind::Kubernetes => SecretsControllerConfig::Kubernetes {
-            context: args.kubernetes_context,
-            user_defined_secret: args.user_defined_secret.unwrap_or_default(),
-            user_defined_secret_mount_path: secrets_path.clone(),
-            refresh_pod_name: args.pod_name.unwrap_or_default(),
-        },
-        OrchestratorKind::Process => SecretsControllerConfig::LocalFileSystem(secrets_path.clone()),
-    };
-
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         sql_listen_addr: args.sql_listen_addr,
         http_listen_addr: args.http_listen_addr,
@@ -673,7 +654,7 @@ max log level: {max_log_level}",
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id_prefix,
-            secrets_path,
+            secrets_reader,
         ),
         otel_enable_callback,
     }))?;

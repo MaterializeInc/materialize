@@ -10,19 +10,19 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fmt::Debug;
-use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::stream::BoxStream;
 use itertools::Itertools;
 use scopeguard::defer;
 use sysinfo::{ProcessExt, ProcessStatus, SystemExt};
+use tokio::fs;
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
@@ -38,6 +38,7 @@ use mz_pid_file::PidFile;
 use crate::port_metadata_file::PortMetadataFile;
 
 pub mod port_metadata_file;
+pub mod secrets;
 
 /// Configures a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
@@ -50,7 +51,7 @@ pub struct ProcessOrchestratorConfig {
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
     /// The directory in which the orchestrator should look for process
-    /// lock files.
+    /// lock files and store secrets.
     pub data_dir: PathBuf,
     /// A command to wrap the child command invocation
     pub command_wrapper: Vec<String>,
@@ -72,6 +73,7 @@ pub struct ProcessOrchestrator {
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
     data_dir: PathBuf,
+    secrets_dir: PathBuf,
     command_wrapper: Vec<String>,
 }
 
@@ -86,12 +88,18 @@ impl ProcessOrchestrator {
             command_wrapper,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
+        let data_dir = fs::canonicalize(data_dir).await?;
+        let secrets_dir = data_dir.join("secrets");
+        fs::create_dir_all(&secrets_dir)
+            .await
+            .context("creating secrets directory")?;
         Ok(ProcessOrchestrator {
-            image_dir: fs::canonicalize(image_dir)?,
+            image_dir: fs::canonicalize(image_dir).await?,
             port_allocator,
             suppress_output,
             namespaces: Mutex::new(HashMap::new()),
-            data_dir: fs::canonicalize(data_dir)?,
+            data_dir,
+            secrets_dir,
             command_wrapper,
         })
     }
@@ -108,6 +116,7 @@ impl Orchestrator for ProcessOrchestrator {
                 suppress_output: self.suppress_output,
                 supervisors: Arc::new(Mutex::new(HashMap::new())),
                 data_dir: self.data_dir.clone(),
+                secrets_dir: self.secrets_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
             })
         }))
@@ -122,6 +131,7 @@ struct NamespacedProcessOrchestrator {
     suppress_output: bool,
     supervisors: Arc<Mutex<HashMap<String, Vec<AbortOnDrop>>>>,
     data_dir: PathBuf,
+    secrets_dir: PathBuf,
     command_wrapper: Vec<String>,
 }
 
@@ -228,13 +238,10 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     "--pid-file-location={}",
                     pid_file_locations[i].as_ref().unwrap().display()
                 ));
+                args.push("--secrets-reader=process".into());
                 args.push(format!(
-                    "--secrets-path={}",
-                    // TODO(benesch): avoid hardcoding this path. The
-                    // integration between the orchestrator and secrets
-                    // controller is about to change substantially, so I don't
-                    // want to do this now.
-                    self.data_dir.join("secrets").display()
+                    "--secrets-reader-process-dir={}",
+                    self.secrets_dir.display()
                 ));
 
                 let command_wrapper = self.command_wrapper.clone();

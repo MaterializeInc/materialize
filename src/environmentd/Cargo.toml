@@ -46,8 +46,6 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
-mz-secrets-filesystem = { path = "../secrets-filesystem" }
-mz-secrets-kubernetes = { path = "../secrets-kubernetes" }
 mz-stash = { path = "../stash" }
 mz-storage = { path = "../storage" }
 nix = "0.24.1"

@@ -266,7 +266,7 @@ fn get_decoder(
             let csr_client = match csr_connection {
                 None => None,
                 Some(csr_connection) => Some(
-                    block_on(csr_connection.connect(&connection_context.secrets_reader))
+                    block_on(csr_connection.connect(&*connection_context.secrets_reader))
                         .expect("CSR connection unexpectedly missing secrets"),
                 ),
             };

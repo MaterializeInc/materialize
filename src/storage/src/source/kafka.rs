@@ -532,7 +532,7 @@ fn create_kafka_config(
         options,
         std::collections::HashSet::new(),
         &mut kafka_config,
-        &connection_context.secrets_reader,
+        &*connection_context.secrets_reader,
     );
 
     // Default to disabling Kafka auto commit. This can be explicitly enabled

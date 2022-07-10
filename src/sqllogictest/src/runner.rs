@@ -59,7 +59,7 @@ use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
-use mz_environmentd::SecretsControllerConfig;
+use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
@@ -587,14 +587,16 @@ impl Runner {
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
             )
         };
-        let orchestrator = ProcessOrchestrator::new(ProcessOrchestratorConfig {
-            image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-            port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
-            suppress_output: false,
-            data_dir: temp_dir.path().to_path_buf(),
-            command_wrapper: vec![],
-        })
-        .await?;
+        let orchestrator = Arc::new(
+            ProcessOrchestrator::new(ProcessOrchestratorConfig {
+                image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
+                suppress_output: false,
+                data_dir: temp_dir.path().to_path_buf(),
+                command_wrapper: vec![],
+            })
+            .await?,
+        );
         let metrics_registry = MetricsRegistry::new();
         let persist_clients = PersistClientCache::new(&metrics_registry);
         let persist_clients = Arc::new(Mutex::new(persist_clients));
@@ -602,7 +604,7 @@ impl Runner {
             catalog_postgres_stash,
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
-                orchestrator: Arc::new(orchestrator),
+                orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
                 persist_location: PersistLocation {
@@ -612,9 +614,7 @@ impl Runner {
                 persist_clients,
                 storage_stash_url: storage_postgres_stash,
             },
-            secrets_controller: SecretsControllerConfig::LocalFileSystem(
-                temp_dir.path().to_path_buf().join("secrets"),
-            ),
+            secrets_controller: orchestrator,
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

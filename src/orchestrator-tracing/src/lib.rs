@@ -224,7 +224,7 @@ impl From<&TracingCliArgs> for TracingConfig {
 /// Wraps an [`Orchestrator`] to inject tracing into all created services.
 #[derive(Debug)]
 pub struct TracingOrchestrator {
-    inner: Box<dyn Orchestrator>,
+    inner: Arc<dyn Orchestrator>,
     tracing_args: TracingCliArgs,
     otel_enable_callback: OpenTelemetryEnableCallback,
 }
@@ -239,7 +239,7 @@ impl TracingOrchestrator {
     /// All services created by the orchestrator **must** embed the
     /// [`TracingCliArgs`] in their command-line argument parser.
     pub fn new(
-        inner: Box<dyn Orchestrator>,
+        inner: Arc<dyn Orchestrator>,
         tracing_args: TracingCliArgs,
         otel_enable_callback: OpenTelemetryEnableCallback,
     ) -> TracingOrchestrator {

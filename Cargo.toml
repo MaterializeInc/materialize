@@ -42,8 +42,6 @@ members = [
     "src/repr",
     "src/s3-datagen",
     "src/secrets",
-    "src/secrets-filesystem",
-    "src/secrets-kubernetes",
     "src/service",
     "src/sql-parser",
     "src/sql",

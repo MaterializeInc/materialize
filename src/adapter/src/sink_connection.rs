@@ -207,7 +207,7 @@ async fn build_kafka(
 ) -> Result<SinkConnection, AdapterError> {
     // Create Kafka topic
     let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-    builder.populate_client_config(&mut config, &connection_context.secrets_reader);
+    builder.populate_client_config(&mut config, &*connection_context.secrets_reader);
 
     let client: AdminClient<_> = config
         .create_with_context(MzClientContext)
@@ -244,7 +244,7 @@ async fn build_kafka(
             ..
         } => {
             let ccsr = csr_connection
-                .connect(&connection_context.secrets_reader)
+                .connect(&*connection_context.secrets_reader)
                 .await?;
             let (key_schema_id, value_schema_id) = publish_kafka_schemas(
                 &ccsr,
@@ -289,7 +289,7 @@ async fn build_kafka(
             .context("error registering kafka consistency topic for sink")?;
 
             let ccsr = csr_connection
-                .connect(&connection_context.secrets_reader)
+                .connect(&*connection_context.secrets_reader)
                 .await?;
             let (_, consistency_schema_id) = publish_kafka_schemas(
                 &ccsr,

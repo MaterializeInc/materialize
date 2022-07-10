@@ -111,7 +111,7 @@ pub async fn purify_create_source(
                 &connection,
                 &connection_options,
                 connection_context.librdkafka_log_level,
-                &connection_context.secrets_reader,
+                &*connection_context.secrets_reader,
             )
             .await
             .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
@@ -182,7 +182,7 @@ pub async fn purify_create_source(
             };
             // verify that we can connect upstream and snapshot publication metadata
             let config = connection
-                .config(&connection_context.secrets_reader)
+                .config(&*connection_context.secrets_reader)
                 .await?;
             let tables = mz_postgres_util::publication_info(&config, &publication).await?;
 
@@ -346,7 +346,7 @@ async fn purify_csr_connection_proto(
             };
 
             let ccsr_client = ccsr_connection
-                .connect(&connection_context.secrets_reader)
+                .connect(&*connection_context.secrets_reader)
                 .await?;
 
             let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
@@ -403,7 +403,7 @@ async fn purify_csr_connection_avro(
             }
         };
         let ccsr_client = ccsr_connection
-            .connect(&connection_context.secrets_reader)
+            .connect(&*connection_context.secrets_reader)
             .await?;
         let Schema {
             key_schema,

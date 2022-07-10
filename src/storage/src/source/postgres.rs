@@ -198,7 +198,7 @@ impl SourceReader for PostgresSourceReader {
         let connection_config = block_on(
             connection
                 .connection
-                .config(&connection_context.secrets_reader),
+                .config(&*connection_context.secrets_reader),
         )
         .expect("Postgres connection unexpectedly missing secrets");
 

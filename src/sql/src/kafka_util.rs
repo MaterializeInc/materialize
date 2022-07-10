@@ -221,7 +221,7 @@ pub async fn create_consumer(
     kafka_connection: &KafkaConnection,
     options: &BTreeMap<String, StringOrSecret>,
     librdkafka_log_level: tracing::Level,
-    secrets_reader: &SecretsReader,
+    secrets_reader: &dyn SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, PlanError> {
     let mut config = create_new_client_config(librdkafka_log_level);
     mz_storage::client::connections::populate_client_config(

@@ -232,7 +232,7 @@ where
                 None => None,
                 Some(csr_connection) => Some(
                     block_on(
-                        csr_connection.connect(&storage_state.connection_context.secrets_reader),
+                        csr_connection.connect(&*storage_state.connection_context.secrets_reader),
                     )
                     .expect("CSR connection unexpectedly missing secrets"),
                 ),
