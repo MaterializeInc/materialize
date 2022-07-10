@@ -22,7 +22,7 @@ futures = "0.3.21"
 headers = "0.3.7"
 hex = "0.4.3"
 http = "0.2.8"
-hyper = { version = "0.14.19", features = ["http1", "server"] }
+hyper = { version = "0.14.20", features = ["http1", "server"] }
 hyper-openssl = "0.9.2"
 include_dir = "0.7.2"
 itertools = "0.10.3"
