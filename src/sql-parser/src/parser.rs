@@ -1940,7 +1940,7 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
+        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT, POSTGRES])? {
             KAFKA => {
                 let with_options =
                     self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
@@ -1951,6 +1951,11 @@ impl<'a> Parser<'a> {
                 let with_options =
                     self.parse_comma_separated(Parser::parse_csr_connection_options)?;
                 CreateConnection::Csr { with_options }
+            }
+            POSTGRES => {
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_postgres_connection_options)?;
+                CreateConnection::Postgres { with_options }
             }
             _ => unreachable!(),
         };
@@ -2015,6 +2020,39 @@ impl<'a> Parser<'a> {
 
         let _ = self.consume_token(&Token::Eq);
         Ok(CsrConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
+    fn parse_postgres_connection_options(
+        &mut self,
+    ) -> Result<PostgresConnectionOption<Raw>, ParserError> {
+        let name = match self
+            .expect_one_of_keywords(&[DATABASE, HOST, PASSWORD, PORT, SSL, USER, USERNAME])?
+        {
+            DATABASE => PostgresConnectionOptionName::Database,
+            HOST => PostgresConnectionOptionName::Host,
+            PASSWORD => PostgresConnectionOptionName::Password,
+            PORT => PostgresConnectionOptionName::Port,
+            SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
+                CERTIFICATE => {
+                    if self.parse_keyword(AUTHORITY) {
+                        PostgresConnectionOptionName::SslCertificateAuthority
+                    } else {
+                        PostgresConnectionOptionName::SslCertificate
+                    }
+                }
+                KEY => PostgresConnectionOptionName::SslKey,
+                MODE => PostgresConnectionOptionName::SslMode,
+                _ => unreachable!(),
+            },
+            USER | USERNAME => PostgresConnectionOptionName::User,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(PostgresConnectionOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })
@@ -2182,7 +2220,7 @@ impl<'a> Parser<'a> {
             }
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
-                let conn = self.parse_literal_string()?;
+                let connection = self.parse_raw_name()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;
                 let details = if self.parse_keyword(DETAILS) {
@@ -2192,7 +2230,7 @@ impl<'a> Parser<'a> {
                 };
 
                 Ok(CreateSourceConnection::Postgres {
-                    conn,
+                    connection,
                     publication,
                     details,
                 })

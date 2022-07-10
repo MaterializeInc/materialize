@@ -602,11 +602,18 @@ CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED, PRIMARY KEY (b) NOT EN
                                                           ^
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red';
+CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo'
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red'
+CREATE CONNECTION pgconn FOR POSTGRES HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", details: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None, remote: None })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }] }, if_not_exists: false })
+
+parse-statement
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red';
+----
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None, remote: None })
 
 parse-statement
 CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel';

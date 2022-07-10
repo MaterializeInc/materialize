@@ -5501,7 +5501,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut recorded_views_to_drop = vec![];
-        let mut replication_slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
+        let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
 
         for op in &ops {
@@ -5514,14 +5514,17 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources_to_drop.push(*id);
                         match &source.source_desc.connection {
                             SourceConnection::Postgres(PostgresSourceConnection {
-                                conn,
+                                connection,
                                 details,
                                 ..
                             }) => {
-                                replication_slots_to_drop
-                                    .entry(conn.clone())
-                                    .or_insert_with(Vec::new)
-                                    .push(details.slot.clone());
+                                let config = connection
+                                    .config(&self.connection_context.secrets_reader)
+                                    .await
+                                    .unwrap_or_else(|e| {
+                                        panic!("Postgres source {id} missing secrets: {e}")
+                                    });
+                                replication_slots_to_drop.push((config, details.slot.clone()));
                             }
                             _ => {}
                         }
@@ -5607,12 +5610,16 @@ impl<S: Append + 'static> Coordinator<S> {
             if !replication_slots_to_drop.is_empty() {
                 // TODO(guswynn): see if there is more relevant info to add to this name
                 task::spawn(|| "drop_replication_slots", async move {
-                    for (conn, slot_names) in replication_slots_to_drop {
+                    for (config, slot_name) in replication_slots_to_drop {
                         // Try to drop the replication slots, but give up after a while.
                         let _ = Retry::default()
                             .max_duration(Duration::from_secs(30))
-                            .retry_async(|_state| {
-                                mz_postgres_util::drop_replication_slots(&conn, &slot_names)
+                            .retry_async(|_state| async {
+                                mz_postgres_util::drop_replication_slots(
+                                    config.clone(),
+                                    &[&slot_name],
+                                )
+                                .await
                             })
                             .await;
                     }

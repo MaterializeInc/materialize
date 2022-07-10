@@ -168,12 +168,23 @@ pub async fn purify_create_source(
             .await?;
         }
         CreateSourceConnection::Postgres {
-            conn,
+            connection,
             publication,
             details: details_ast,
         } => {
+            let scx = StatementContext::new(None, &*catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                match item.connection()? {
+                    Connection::Postgres(connection) => connection.clone(),
+                    _ => bail!("{} is not a postgres connection", item.name()),
+                }
+            };
             // verify that we can connect upstream and snapshot publication metadata
-            let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
+            let config = connection
+                .config(&connection_context.secrets_reader)
+                .await?;
+            let tables = mz_postgres_util::publication_info(&config, &publication).await?;
 
             let details = PostgresSourceDetails {
                 tables,

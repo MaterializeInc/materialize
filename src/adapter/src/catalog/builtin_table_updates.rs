@@ -311,6 +311,7 @@ impl CatalogState {
                     mz_storage::client::connections::Connection::Csr { .. } => {
                         "confluent-schema-registry"
                     }
+                    mz_storage::client::connections::Connection::Postgres { .. } => "postgres",
                 }),
             ]),
             diff,

@@ -18,9 +18,15 @@ CREATE TABLE upgrade_pg_cdc_table (f1 INTEGER);
 ALTER TABLE upgrade_pg_cdc_table REPLICA IDENTITY FULL;
 INSERT INTO upgrade_pg_cdc_table VALUES (1),(2),(3),(4),(5);
 
+> CREATE SECRET pgpass AS 'postgres';
+> CREATE CONNECTION pgconn FOR POSTGRES
+  HOST postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass,
+  DATABASE postgres;
 > CREATE MATERIALIZED SOURCE upgrade_pg_cdc_source
   FROM POSTGRES
-  CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  CONNECTION pgconn
   PUBLICATION 'upgrade_pg_cdc_publication'
 
 > CREATE MATERIALIZED VIEWS FROM SOURCE upgrade_pg_cdc_source;

@@ -11,6 +11,13 @@
 # Test the ENUM data type
 #
 
+> CREATE SECRET pgpass AS 'password'
+> CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
+
 
 # Insert data pre-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres

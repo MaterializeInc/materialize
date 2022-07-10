@@ -12,6 +12,7 @@ syntax = "proto3";
 import "kafka-util/src/addr.proto";
 import "repr/src/global_id.proto";
 import "repr/src/url.proto";
+import "proto/src/tokio_postgres.proto";
 import "storage/src/client/errors.proto";
 
 package mz_storage.client.connections;
@@ -64,4 +65,15 @@ message ProtoCsrConnection {
 message ProtoCsrConnectionHttpAuth {
     ProtoStringOrSecret username = 1;
     mz_repr.global_id.ProtoGlobalId password = 2;
+}
+
+message ProtoPostgresConnection {
+    string host = 1;
+    uint32 port = 2;
+    string database = 3;
+    ProtoStringOrSecret user = 4;
+    mz_repr.global_id.ProtoGlobalId password = 5;
+    mz_proto.tokio_postgres.ProtoSslMode tls_mode = 6;
+    ProtoStringOrSecret tls_root_cert = 7;
+    ProtoTlsIdentity tls_identity = 8;
 }

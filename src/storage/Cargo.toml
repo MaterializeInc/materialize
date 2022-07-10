@@ -44,7 +44,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
-mz-proto = { path = "../proto" }
+mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
@@ -66,7 +66,7 @@ serde_json = { version = "1.0.82" }
 tempfile = { version = "3.2.0" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.9"
 tokio-util = { version = "0.7.3", features = ["io"] }
 tonic = "0.7.2"

@@ -625,12 +625,63 @@ impl<T: AstInfo> AstDisplay for CsrConnectionOption<T> {
 impl_display_t!(CsrConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PostgresConnectionOptionName {
+    Database,
+    Host,
+    Password,
+    Port,
+    SslCertificate,
+    SslCertificateAuthority,
+    SslKey,
+    SslMode,
+    User,
+}
+
+impl AstDisplay for PostgresConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            PostgresConnectionOptionName::Database => "DATABASE",
+            PostgresConnectionOptionName::Host => "HOST",
+            PostgresConnectionOptionName::Password => "PASSWORD",
+            PostgresConnectionOptionName::Port => "PORT",
+            PostgresConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
+            PostgresConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
+            PostgresConnectionOptionName::SslKey => "SSL KEY",
+            PostgresConnectionOptionName::SslMode => "SSL MODE",
+            PostgresConnectionOptionName::User => "USER",
+        })
+    }
+}
+impl_display!(PostgresConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CONNECTION ... POSTGRES`.
+pub struct PostgresConnectionOption<T: AstInfo> {
+    pub name: PostgresConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for PostgresConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(PostgresConnectionOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
     Kafka {
         with_options: Vec<KafkaConnectionOption<T>>,
     },
     Csr {
         with_options: Vec<CsrConnectionOption<T>>,
+    },
+    Postgres {
+        with_options: Vec<PostgresConnectionOption<T>>,
     },
 }
 
@@ -643,6 +694,10 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
             }
             Self::Csr { with_options } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY ");
+                f.write_node(&display::comma_separated(&with_options));
+            }
+            Self::Postgres { with_options } => {
+                f.write_str("POSTGRES ");
                 f.write_node(&display::comma_separated(&with_options));
             }
         }
@@ -694,8 +749,8 @@ pub enum CreateSourceConnection<T: AstInfo> {
         compression: Compression,
     },
     Postgres {
-        /// The postgres connection string
-        conn: String,
+        /// The postgres connection.
+        connection: T::ObjectName,
         /// The name of the publication to sync
         publication: String,
         /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
@@ -750,13 +805,13 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 f.write_node(compression);
             }
             CreateSourceConnection::Postgres {
-                conn,
+                connection,
                 publication,
                 details,
             } => {
-                f.write_str("POSTGRES CONNECTION '");
-                f.write_str(&display::escape_single_quote_string(conn));
-                f.write_str("' PUBLICATION '");
+                f.write_str("POSTGRES CONNECTION ");
+                f.write_node(connection);
+                f.write_str(" PUBLICATION '");
                 f.write_str(&display::escape_single_quote_string(publication));
                 if let Some(details) = details {
                     f.write_str("' DETAILS '");
