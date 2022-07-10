@@ -452,11 +452,24 @@ impl AstDisplay for ResolvedDatabaseName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ResolvedClusterName(pub ComputeInstanceId);
+pub struct ResolvedClusterName {
+    pub id: ComputeInstanceId,
+    /// If set, a name to print in the `AstDisplay` implementation instead of
+    /// `None`. This is only meant to be used by the `NameSimplifier`.
+    ///
+    /// NOTE(benesch): it would be much clearer if the `NameSimplifier` folded
+    /// the AST into a different metadata type, to avoid polluting the resolved
+    /// AST with this field.
+    pub print_name: Option<String>,
+}
 
 impl AstDisplay for ResolvedClusterName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(format!("[{}]", self.0))
+        if let Some(print_name) = &self.print_name {
+            f.write_node(&Ident::new(print_name))
+        } else {
+            f.write_str(format!("[{}]", self.id))
+        }
     }
 }
 
@@ -986,18 +999,30 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         match cluster_name {
             RawClusterName::Unresolved(ident) => {
                 match self.catalog.resolve_compute_instance(Some(ident.as_str())) {
-                    Ok(cluster) => ResolvedClusterName(cluster.id()),
+                    Ok(cluster) => ResolvedClusterName {
+                        id: cluster.id(),
+                        print_name: None,
+                    },
                     Err(e) => {
                         self.status = Err(e.into());
-                        ResolvedClusterName(0)
+                        ResolvedClusterName {
+                            id: 0,
+                            print_name: None,
+                        }
                     }
                 }
             }
             RawClusterName::Resolved(ident) => match ident.parse() {
-                Ok(id) => ResolvedClusterName(id),
+                Ok(id) => ResolvedClusterName {
+                    id,
+                    print_name: None,
+                },
                 Err(e) => {
                     self.status = Err(e.into());
-                    ResolvedClusterName(0)
+                    ResolvedClusterName {
+                        id: 0,
+                        print_name: None,
+                    }
                 }
             },
         }
@@ -1060,6 +1085,10 @@ pub struct NameSimplifier<'a> {
 }
 
 impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
+    fn visit_cluster_name_mut(&mut self, node: &mut ResolvedClusterName) {
+        node.print_name = Some(self.catalog.get_compute_instance(node.id).name().into());
+    }
+
     fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {
         if let ResolvedObjectName::Object {
             id,

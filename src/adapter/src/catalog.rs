@@ -3773,6 +3773,13 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.item_exists(name, self.conn_id)
     }
 
+    fn get_compute_instance(
+        &self,
+        id: ComputeInstanceId,
+    ) -> &dyn mz_sql::catalog::CatalogComputeInstance {
+        &self.state.compute_instances_by_id[&id]
+    }
+
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         self.state.find_available_name(name, self.conn_id)
     }
