@@ -409,8 +409,6 @@ steps:
     label: Kafka resumption tests
     depends_on: build-x86_64
     timeout_in_minutes: 30
-    # https://github.com/MaterializeInc/materialize/issues/11992
-    soft_fail: true
     artifact_paths: junit_mzcompose_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
