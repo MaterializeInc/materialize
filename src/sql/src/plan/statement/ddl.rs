@@ -1780,9 +1780,12 @@ pub fn plan_create_recorded_view(
 ) -> Result<Plan, PlanError> {
     let compute_instance = match &stmt.in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.0,
+        Some(in_cluster) => in_cluster.id,
     };
-    stmt.in_cluster = Some(ResolvedClusterName(compute_instance));
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: compute_instance,
+        print_name: None,
+    });
 
     let create_sql = normalize::create_statement(scx, Statement::CreateRecordedView(stmt.clone()))?;
 
@@ -2181,9 +2184,12 @@ pub fn plan_create_sink(
     scx.require_unsafe_mode("CREATE SINK")?;
     let compute_instance = match &stmt.in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.0,
+        Some(in_cluster) => in_cluster.id,
     };
-    stmt.in_cluster = Some(ResolvedClusterName(compute_instance));
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: compute_instance,
+        print_name: None,
+    });
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
@@ -2508,9 +2514,12 @@ pub fn plan_create_index(
     let options = plan_index_options(with_options.clone())?;
     let compute_instance = match in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.0,
+        Some(in_cluster) => in_cluster.id,
     };
-    *in_cluster = Some(ResolvedClusterName(compute_instance));
+    *in_cluster = Some(ResolvedClusterName {
+        id: compute_instance,
+        print_name: None,
+    });
 
     // Normalize `stmt`.
     *name = Some(Ident::new(index_name.item.clone()));

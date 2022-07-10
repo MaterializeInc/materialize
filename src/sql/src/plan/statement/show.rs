@@ -27,7 +27,7 @@ use crate::ast::{
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowSchemasStatement, ShowStatementFilter, Statement, Value,
 };
-use crate::catalog::CatalogItemType;
+use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
     self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedSchemaName,
 };
@@ -54,19 +54,11 @@ pub fn plan_show_create_view(
     match view.item_type() {
         CatalogItemType::View => {
             let name = view_name.full_name_str();
-            let view_sql = view.create_sql();
-            let parsed = parse::parse(view_sql)?;
-            let parsed = parsed[0].clone();
-            let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
-            let mut s = NameSimplifier {
-                catalog: scx.catalog,
-            };
-            s.visit_statement_mut(&mut resolved);
-
+            let create_sql = simplify_names(scx.catalog, view.create_sql())?;
             Ok(Plan::SendRows(SendRowsPlan {
                 rows: vec![Row::pack_slice(&[
                     Datum::String(&name),
-                    Datum::String(&resolved.to_ast_string_stable()),
+                    Datum::String(&create_sql),
                 ])],
             }))
         }
@@ -96,19 +88,11 @@ pub fn plan_show_create_recorded_view(
     let rview = scx.get_item_by_resolved_name(&name)?;
     if let CatalogItemType::RecordedView = rview.item_type() {
         let full_name = name.full_name_str();
-        let view_sql = rview.create_sql();
-        let parsed = parse::parse(view_sql)?;
-        let parsed = parsed[0].clone();
-        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
-        let mut s = NameSimplifier {
-            catalog: scx.catalog,
-        };
-        s.visit_statement_mut(&mut resolved);
-
+        let create_sql = simplify_names(scx.catalog, rview.create_sql())?;
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&full_name),
-                Datum::String(&resolved.to_ast_string_stable()),
+                Datum::String(&create_sql),
             ])],
         }))
     } else {
@@ -134,16 +118,11 @@ pub fn plan_show_create_table(
     let table = scx.get_item_by_resolved_name(&table_name)?;
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
-        let parsed = parse::parse(table.create_sql())?.into_element();
-        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
-        let mut s = NameSimplifier {
-            catalog: scx.catalog,
-        };
-        s.visit_statement_mut(&mut resolved);
+        let create_sql = simplify_names(scx.catalog, table.create_sql())?;
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
-                Datum::String(&resolved.to_ast_string_stable()),
+                Datum::String(&create_sql),
             ])],
         }))
     } else {
@@ -169,10 +148,11 @@ pub fn plan_show_create_source(
     let source = scx.get_item_by_resolved_name(&source_name)?;
     if let CatalogItemType::Source = source.item_type() {
         let name = source_name.full_name_str();
+        let create_sql = simplify_names(scx.catalog, source.create_sql())?;
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
-                Datum::String(source.create_sql()),
+                Datum::String(&create_sql),
             ])],
         }))
     } else {
@@ -198,10 +178,11 @@ pub fn plan_show_create_sink(
     let sink = scx.get_item_by_resolved_name(&sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
         let name = sink_name.full_name_str();
+        let create_sql = simplify_names(scx.catalog, sink.create_sql())?;
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
-                Datum::String(sink.create_sql()),
+                Datum::String(&create_sql),
             ])],
         }))
     } else {
@@ -227,10 +208,11 @@ pub fn plan_show_create_index(
     let index = scx.get_item_by_resolved_name(&index_name)?;
     if let CatalogItemType::Index = index.item_type() {
         let name = index_name.full_name_str();
+        let create_sql = simplify_names(scx.catalog, index.create_sql())?;
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
-                Datum::String(index.create_sql()),
+                Datum::String(&create_sql),
             ])],
         }))
     } else {
@@ -256,10 +238,11 @@ pub fn plan_show_create_connection(
     let connection = scx.get_item_by_resolved_name(&connection_name)?;
     if let CatalogItemType::Connection = connection.item_type() {
         let name = connection_name.full_name_str();
+        let create_sql = simplify_names(scx.catalog, connection.create_sql())?;
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
-                Datum::String(connection.create_sql()),
+                Datum::String(&create_sql),
             ])],
         }))
     } else {
@@ -512,7 +495,7 @@ fn show_recorded_views<'a>(
     let mut where_clause = format!("schema_id = {schema_spec}");
 
     if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND cluster_id = {}", cluster.0)
+        write!(where_clause, " AND cluster_id = {}", cluster.id)
             .expect("write on string cannot fail");
     }
 
@@ -554,7 +537,7 @@ fn show_sinks<'a>(
     };
 
     if let Some(cluster) = in_cluster {
-        query_filters.push(format!("clusters.id = {}", cluster.0));
+        query_filters.push(format!("clusters.id = {}", cluster.id));
     }
 
     let query_filters = itertools::join(query_filters.iter(), " AND ");
@@ -672,7 +655,7 @@ pub fn show_indexes<'a>(
     }
 
     if let Some(cluster) = in_cluster {
-        query_filter.push(format!("clusters.id = {}", cluster.0))
+        query_filter.push(format!("clusters.id = {}", cluster.id))
     };
 
     let query = format!(
@@ -837,4 +820,12 @@ impl<'a> ShowSelect<'a> {
     pub fn plan(self) -> Result<Plan, PlanError> {
         dml::plan_select(self.scx, self.stmt, &Params::empty(), None)
     }
+}
+
+fn simplify_names(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
+    let parsed = parse::parse(sql)?.into_element();
+    let (mut resolved, _) = names::resolve(catalog, parsed)?;
+    let mut simplifier = NameSimplifier { catalog };
+    simplifier.visit_statement_mut(&mut resolved);
+    Ok(resolved.to_ast_string_stable())
 }

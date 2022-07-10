@@ -7,9 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=u\d+ replacement=UID
 > SHOW CREATE SINK upgrade_kafka_sink;
-"materialize.public.upgrade_kafka_sink" "CREATE SINK \"materialize\".\"public\".\"upgrade_kafka_sink\" IN CLUSTER [1] FROM [UID AS \"materialize\".\"public\".\"static_view\"] INTO KAFKA BROKER 'kafka:9092' TOPIC 'upgrade-kafka-sink' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081/' WITH SNAPSHOT"
+"materialize.public.upgrade_kafka_sink" "CREATE SINK \"materialize\".\"public\".\"upgrade_kafka_sink\" IN CLUSTER \"default\" FROM \"materialize\".\"public\".\"static_view\" INTO KAFKA BROKER 'kafka:9092' TOPIC 'upgrade-kafka-sink' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081/' WITH SNAPSHOT"
 
 $ kafka-verify format=avro sink=materialize.public.upgrade_kafka_sink sort-messages=true
 {"before": null, "after": {"row": {"f1": 1}}}

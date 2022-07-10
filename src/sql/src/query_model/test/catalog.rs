@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
@@ -280,6 +281,10 @@ impl SessionCatalog for TestCatalog {
 
     fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
         unimplemented!();
+    }
+
+    fn get_compute_instance(&self, _: ComputeInstanceId) -> &dyn CatalogComputeInstance {
+        unimplemented!()
     }
 
     fn config(&self) -> &CatalogConfig {

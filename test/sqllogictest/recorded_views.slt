@@ -254,7 +254,7 @@ query TT colnames
 SHOW CREATE RECORDED VIEW rv
 ----
 Recorded␠View         Create␠Recorded␠View
-materialize.public.rv CREATE␠RECORDED␠VIEW␠"materialize"."public"."rv"␠IN␠CLUSTER␠[1]␠AS␠SELECT␠1
+materialize.public.rv CREATE␠RECORDED␠VIEW␠"materialize"."public"."rv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
 
 
 # Test: SHOW RECORDED VIEWS
