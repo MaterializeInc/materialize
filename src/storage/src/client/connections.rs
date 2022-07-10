@@ -156,10 +156,9 @@ pub enum Connection {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct SslConfig {
-    pub key: GlobalId,
-    pub certificate: StringOrSecret,
-    pub certificate_authority: StringOrSecret,
+pub struct KafkaTlsConfig {
+    pub identity: Option<TlsIdentity>,
+    pub root_cert: Option<StringOrSecret>,
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -167,24 +166,24 @@ pub struct SaslConfig {
     pub mechanisms: String,
     pub username: StringOrSecret,
     pub password: GlobalId,
-    pub certificate_authority: StringOrSecret,
+    pub tls_root_cert: StringOrSecret,
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum Security {
-    Ssl(SslConfig),
+pub enum KafkaSecurity {
+    Tls(KafkaTlsConfig),
     Sasl(SaslConfig),
 }
 
-impl From<SslConfig> for Security {
-    fn from(c: SslConfig) -> Self {
-        Security::Ssl(c)
+impl From<KafkaTlsConfig> for KafkaSecurity {
+    fn from(c: KafkaTlsConfig) -> Self {
+        KafkaSecurity::Tls(c)
     }
 }
 
-impl From<SaslConfig> for Security {
+impl From<SaslConfig> for KafkaSecurity {
     fn from(c: SaslConfig) -> Self {
-        Security::Sasl(c)
+        KafkaSecurity::Sasl(c)
     }
 }
 
@@ -213,7 +212,7 @@ impl ConfigKey for KafkaConnectionOptionName {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
     pub brokers: Vec<String>,
-    pub security: Option<Security>,
+    pub security: Option<KafkaSecurity>,
 }
 
 impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
@@ -222,21 +221,24 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
         let mut r = BTreeMap::new();
         r.insert("bootstrap.servers".into(), v.brokers.join(",").into());
         match v.security {
-            Some(Security::Ssl(SslConfig {
-                key,
-                certificate,
-                certificate_authority,
+            Some(KafkaSecurity::Tls(KafkaTlsConfig {
+                root_cert,
+                identity,
             })) => {
                 r.insert("security.protocol".into(), "SSL".into());
-                r.insert(SslKey.config_key(), StringOrSecret::Secret(key));
-                r.insert(SslCertificate.config_key(), certificate);
-                r.insert(SslCertificateAuthority.config_key(), certificate_authority);
+                if let Some(root_cert) = root_cert {
+                    r.insert(SslCertificateAuthority.config_key(), root_cert);
+                }
+                if let Some(identity) = identity {
+                    r.insert(SslKey.config_key(), StringOrSecret::Secret(identity.key));
+                    r.insert(SslCertificate.config_key(), identity.cert);
+                }
             }
-            Some(Security::Sasl(SaslConfig {
+            Some(KafkaSecurity::Sasl(SaslConfig {
                 mechanisms,
                 username,
                 password,
-                certificate_authority,
+                tls_root_cert: certificate_authority,
             })) => {
                 r.insert("security.protocol".into(), "SASL_SSL".into());
                 r.insert(
@@ -282,18 +284,20 @@ impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
 
         let security = if let Some(v) = map.remove("security.protocol") {
             match v.unwrap_string().to_lowercase().as_str() {
-                config @ "ssl" => Some(Security::Ssl(SslConfig {
-                    key: key_or_err(config, map, SslKey)?.unwrap_secret(),
-                    certificate: key_or_err(config, map, SslCertificate)?,
-                    certificate_authority: key_or_err(config, map, SslCertificateAuthority)?,
+                config @ "ssl" => Some(KafkaSecurity::Tls(KafkaTlsConfig {
+                    identity: Some(TlsIdentity {
+                        key: key_or_err(config, map, SslKey)?.unwrap_secret(),
+                        cert: key_or_err(config, map, SslCertificate)?,
+                    }),
+                    root_cert: Some(key_or_err(config, map, SslCertificateAuthority)?),
                 })),
-                config @ "sasl_ssl" => Some(Security::Sasl(SaslConfig {
+                config @ "sasl_ssl" => Some(KafkaSecurity::Sasl(SaslConfig {
                     mechanisms: key_or_err(config, map, SaslMechanisms)?
                         .unwrap_string()
                         .to_string(),
                     username: key_or_err(config, map, SaslUsername)?,
                     password: key_or_err(config, map, SaslPassword)?.unwrap_secret(),
-                    certificate_authority: key_or_err(config, map, SslCertificateAuthority)?,
+                    tls_root_cert: key_or_err(config, map, SslCertificateAuthority)?,
                 })),
                 o => bail!("unsupported security.protocol: {}", o),
             }
@@ -314,26 +318,18 @@ impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
     }
 }
 
-impl RustType<ProtoKafkaConnectionSslConfig> for SslConfig {
-    fn into_proto(&self) -> ProtoKafkaConnectionSslConfig {
-        ProtoKafkaConnectionSslConfig {
-            key: Some(self.key.into_proto()),
-            certificate: Some(self.certificate.into_proto()),
-            certificate_authority: Some(self.certificate_authority.into_proto()),
+impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
+    fn into_proto(&self) -> ProtoKafkaConnectionTlsConfig {
+        ProtoKafkaConnectionTlsConfig {
+            identity: self.identity.into_proto(),
+            root_cert: self.root_cert.into_proto(),
         }
     }
 
-    fn from_proto(proto: ProtoKafkaConnectionSslConfig) -> Result<Self, TryFromProtoError> {
-        Ok(SslConfig {
-            key: proto
-                .key
-                .into_rust_if_some("ProtoKafkaConnectionSslConfig::key")?,
-            certificate: proto
-                .certificate
-                .into_rust_if_some("ProtoKafkaConnectionSslConfig::certificate")?,
-            certificate_authority: proto
-                .certificate_authority
-                .into_rust_if_some("ProtoKafkaConnectionSslConfig::certificate_authority")?,
+    fn from_proto(proto: ProtoKafkaConnectionTlsConfig) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaTlsConfig {
+            root_cert: proto.root_cert.into_rust()?,
+            identity: proto.identity.into_rust()?,
         })
     }
 }
@@ -344,7 +340,7 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
             mechanisms: self.mechanisms.into_proto(),
             username: Some(self.username.into_proto()),
             password: Some(self.password.into_proto()),
-            certificate_authority: Some(self.certificate_authority.into_proto()),
+            tls_root_cert: Some(self.tls_root_cert.into_proto()),
         }
     }
 
@@ -357,20 +353,20 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
             password: proto
                 .password
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::password")?,
-            certificate_authority: proto
-                .certificate_authority
-                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::certificate_authority")?,
+            tls_root_cert: proto
+                .tls_root_cert
+                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::tls_root_cert")?,
         })
     }
 }
 
-impl RustType<ProtoKafkaConnectionSecurity> for Security {
+impl RustType<ProtoKafkaConnectionSecurity> for KafkaSecurity {
     fn into_proto(&self) -> ProtoKafkaConnectionSecurity {
         use proto_kafka_connection_security::Kind;
         ProtoKafkaConnectionSecurity {
             kind: Some(match self {
-                Security::Ssl(config) => Kind::Ssl(config.into_proto()),
-                Security::Sasl(config) => Kind::Sasl(config.into_proto()),
+                KafkaSecurity::Tls(config) => Kind::Tls(config.into_proto()),
+                KafkaSecurity::Sasl(config) => Kind::Sasl(config.into_proto()),
             }),
         }
     }
@@ -381,8 +377,8 @@ impl RustType<ProtoKafkaConnectionSecurity> for Security {
             TryFromProtoError::missing_field("ProtoKafkaConnectionSecurity::kind")
         })?;
         Ok(match kind {
-            Kind::Ssl(s) => Security::Ssl(SslConfig::from_proto(s)?),
-            Kind::Sasl(s) => Security::Sasl(SaslConfig::from_proto(s)?),
+            Kind::Tls(s) => KafkaSecurity::Tls(KafkaTlsConfig::from_proto(s)?),
+            Kind::Sasl(s) => KafkaSecurity::Sasl(SaslConfig::from_proto(s)?),
         })
     }
 }
@@ -408,11 +404,11 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
 pub struct CsrConnection {
     /// The URL of the schema registry.
     pub url: Url,
-    /// Trusted root TLS certificates in PEM format.
-    pub root_certs: Vec<StringOrSecret>,
+    /// Trusted root TLS certificate in PEM format.
+    pub tls_root_cert: Option<StringOrSecret>,
     /// An optional TLS client certificate for authentication with the schema
     /// registry.
-    pub tls_identity: Option<CsrConnectionTlsIdentity>,
+    pub tls_identity: Option<TlsIdentity>,
     /// Optional HTTP authentication credentials for the schema registry.
     pub http_auth: Option<CsrConnectionHttpAuth>,
 }
@@ -424,7 +420,7 @@ impl CsrConnection {
         secrets_reader: &SecretsReader,
     ) -> Result<mz_ccsr::Client, anyhow::Error> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
-        for root_cert in &self.root_certs {
+        if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert.get_string(secrets_reader).await?;
             let root_cert = Certificate::from_pem(&root_cert.as_bytes())?;
             client_config = client_config.add_root_certificate(root_cert);
@@ -460,7 +456,7 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
     fn into_proto(&self) -> ProtoCsrConnection {
         ProtoCsrConnection {
             url: Some(self.url.into_proto()),
-            root_certs: self.root_certs.into_proto(),
+            tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
             http_auth: self.http_auth.into_proto(),
         }
@@ -469,7 +465,7 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
     fn from_proto(proto: ProtoCsrConnection) -> Result<Self, TryFromProtoError> {
         Ok(CsrConnection {
             url: proto.url.into_rust_if_some("ProtoCsrConnection::url")?,
-            root_certs: proto.root_certs.into_rust()?,
+            tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
             http_auth: proto.http_auth.into_rust()?,
         })
@@ -483,23 +479,25 @@ impl Arbitrary for CsrConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any_url(),
-            any::<Vec<StringOrSecret>>(),
-            any::<Option<CsrConnectionTlsIdentity>>(),
+            any::<Option<StringOrSecret>>(),
+            any::<Option<TlsIdentity>>(),
             any::<Option<CsrConnectionHttpAuth>>(),
         )
-            .prop_map(|(url, root_certs, tls_identity, http_auth)| CsrConnection {
-                url,
-                root_certs,
-                tls_identity,
-                http_auth,
-            })
+            .prop_map(
+                |(url, tls_root_cert, tls_identity, http_auth)| CsrConnection {
+                    url,
+                    tls_root_cert,
+                    tls_identity,
+                    http_auth,
+                },
+            )
             .boxed()
     }
 }
 
-/// A TLS key pair in a [`CsrConnection`].
+/// A TLS key pair used for client identity.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct CsrConnectionTlsIdentity {
+pub struct TlsIdentity {
     /// The client's TLS public certificate in PEM format.
     pub cert: StringOrSecret,
     /// The ID of the secret containing the client's TLS private key in PEM
@@ -507,22 +505,18 @@ pub struct CsrConnectionTlsIdentity {
     pub key: GlobalId,
 }
 
-impl RustType<ProtoCsrConnectionTlsIdentity> for CsrConnectionTlsIdentity {
-    fn into_proto(&self) -> ProtoCsrConnectionTlsIdentity {
-        ProtoCsrConnectionTlsIdentity {
+impl RustType<ProtoTlsIdentity> for TlsIdentity {
+    fn into_proto(&self) -> ProtoTlsIdentity {
+        ProtoTlsIdentity {
             cert: Some(self.cert.into_proto()),
             key: Some(self.key.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoCsrConnectionTlsIdentity) -> Result<Self, TryFromProtoError> {
-        Ok(CsrConnectionTlsIdentity {
-            cert: proto
-                .cert
-                .into_rust_if_some("ProtoCsrConnectionTlsIdentity::cert")?,
-            key: proto
-                .key
-                .into_rust_if_some("ProtoCsrConnectionTlsIdentity::key")?,
+    fn from_proto(proto: ProtoTlsIdentity) -> Result<Self, TryFromProtoError> {
+        Ok(TlsIdentity {
+            cert: proto.cert.into_rust_if_some("ProtoTlsIdentity::cert")?,
+            key: proto.key.into_rust_if_some("ProtoTlsIdentity::key")?,
         })
     }
 }

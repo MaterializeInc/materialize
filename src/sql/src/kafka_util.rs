@@ -24,7 +24,7 @@ use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::Value;
 use mz_storage::client::connections::{
-    CsrConnection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, StringOrSecret,
+    CsrConnection, CsrConnectionHttpAuth, KafkaConnection, StringOrSecret, TlsIdentity,
 };
 
 use crate::normalize::SqlValueOrSecret;
@@ -433,10 +433,7 @@ pub fn generate_ccsr_connection(
         ],
     )?;
 
-    let root_certs = match ccsr_options.remove("ssl.ca.pem") {
-        None => vec![],
-        Some(cert) => vec![cert],
-    };
+    let tls_root_cert = ccsr_options.remove("ssl.ca.pem");
     let cert = ccsr_options.remove("ssl.certificate.pem");
     let key = ccsr_options.remove("ssl.key.pem");
     let tls_identity = match (cert, key) {
@@ -444,7 +441,7 @@ pub fn generate_ccsr_connection(
         (Some(cert), Some(key)) => {
             // `key` was verified to be a secret by `extract`.
             let key = key.unwrap_secret();
-            Some(CsrConnectionTlsIdentity { cert, key })
+            Some(TlsIdentity { cert, key })
         }
         _ => sql_bail!(
             "Reading from SSL-auth Confluent Schema Registry \
@@ -462,7 +459,7 @@ pub fn generate_ccsr_connection(
     };
     Ok(CsrConnection {
         url,
-        root_certs,
+        tls_root_cert,
         tls_identity,
         http_auth,
     })

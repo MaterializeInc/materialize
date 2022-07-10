@@ -35,8 +35,8 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_storage::client::connections::{
-    Connection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, SaslConfig,
-    Security, SslConfig, StringOrSecret,
+    Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
+    StringOrSecret, TlsIdentity,
 };
 use mz_storage::client::sinks::{
     KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
@@ -2853,13 +2853,15 @@ impl KafkaConnectionOptionExtracted {
     }
 }
 
-impl From<&KafkaConnectionOptionExtracted> for Option<SslConfig> {
+impl From<&KafkaConnectionOptionExtracted> for Option<KafkaTlsConfig> {
     fn from(k: &KafkaConnectionOptionExtracted) -> Self {
         if k.ssl_config().iter().all(|config| k.seen.contains(config)) {
-            Some(SslConfig {
-                key: k.ssl_key.unwrap().into(),
-                certificate: k.ssl_certificate.clone().unwrap(),
-                certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
+            Some(KafkaTlsConfig {
+                identity: Some(TlsIdentity {
+                    key: k.ssl_key.unwrap().into(),
+                    cert: k.ssl_certificate.clone().unwrap(),
+                }),
+                root_cert: k.ssl_certificate_authority.clone(),
             })
         } else {
             None
@@ -2874,7 +2876,7 @@ impl From<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
                 mechanisms: k.sasl_mechanisms.clone().unwrap(),
                 username: k.sasl_username.clone().unwrap(),
                 password: k.sasl_password.unwrap().into(),
-                certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
+                tls_root_cert: k.ssl_certificate_authority.clone().unwrap(),
             })
         } else {
             None
@@ -2882,11 +2884,11 @@ impl From<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
     }
 }
 
-impl TryFrom<&KafkaConnectionOptionExtracted> for Option<Security> {
+impl TryFrom<&KafkaConnectionOptionExtracted> for Option<KafkaSecurity> {
     type Error = PlanError;
     fn try_from(value: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        let ssl_config = Option::<SslConfig>::from(value).map(Security::from);
-        let sasl_config = Option::<SaslConfig>::from(value).map(Security::from);
+        let ssl_config = Option::<KafkaTlsConfig>::from(value).map(KafkaSecurity::from);
+        let sasl_config = Option::<SaslConfig>::from(value).map(KafkaSecurity::from);
 
         let mut security_iter = vec![ssl_config, sasl_config].into_iter();
         let res = match security_iter.find(|v| v.is_some()) {
@@ -2941,15 +2943,11 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::
                 .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
             None => sql_bail!("invalid CONNECTION: must specify URL"),
         };
-        let root_certs = match ccsr_options.ssl_certificate_authority {
-            None => vec![],
-            Some(cert) => vec![cert],
-        };
         let cert = ccsr_options.ssl_certificate;
         let key = ccsr_options.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
             (None, None) => None,
-            (Some(cert), Some(key)) => Some(CsrConnectionTlsIdentity { cert, key }),
+            (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
             _ => sql_bail!(
                 "invalid CONNECTION: reading from SSL-auth Confluent Schema Registry requires both SSL KEY and SSL CERTIFICATE"
             ),
@@ -2960,7 +2958,7 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::
         });
         Ok(mz_storage::client::connections::CsrConnection {
             url,
-            root_certs,
+            tls_root_cert: ccsr_options.ssl_certificate_authority,
             tls_identity,
             http_auth,
         })
