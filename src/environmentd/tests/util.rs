@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
@@ -26,13 +25,15 @@ use tokio::sync::Mutex;
 use tower_http::cors::AllowOrigin;
 
 use mz_controller::ControllerConfig;
-use mz_environmentd::{SecretsControllerConfig, TlsMode};
+use mz_environmentd::TlsMode;
 use mz_frontegg_auth::FronteggAuthentication;
+use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 
 pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
@@ -140,27 +141,29 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         )
     };
     let metrics_registry = MetricsRegistry::new();
-    let orchestrator = runtime.block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
-        image_dir: env::current_exe()?
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf(),
-        port_allocator: PORT_ALLOCATOR.clone(),
-        // NOTE(benesch): would be nice to not have to do this, but
-        // the subprocess output wreaks havoc on cargo2junit.
-        suppress_output: true,
-        data_dir: data_directory.clone(),
-        command_wrapper: vec![],
-    }))?;
+    let orchestrator = Arc::new(
+        runtime.block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
+            image_dir: env::current_exe()?
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf(),
+            port_allocator: PORT_ALLOCATOR.clone(),
+            // NOTE(benesch): would be nice to not have to do this, but
+            // the subprocess output wreaks havoc on cargo2junit.
+            suppress_output: true,
+            data_dir: data_directory.clone(),
+            command_wrapper: vec![],
+        }))?,
+    );
     let persist_clients = PersistClientCache::new(&metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         catalog_postgres_stash,
         controller: ControllerConfig {
             build_info: &mz_environmentd::BUILD_INFO,
-            orchestrator: Arc::new(orchestrator),
+            orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
             persist_location: PersistLocation {
@@ -170,9 +173,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             persist_clients,
             storage_stash_url: storage_postgres_stash,
         },
-        secrets_controller: SecretsControllerConfig::LocalFileSystem(
-            data_directory.join("secrets"),
-        ),
+        secrets_controller: orchestrator,
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

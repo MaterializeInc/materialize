@@ -3212,8 +3212,6 @@ dependencies = [
  "mz-prof",
  "mz-repr",
  "mz-secrets",
- "mz-secrets-filesystem",
- "mz-secrets-kubernetes",
  "mz-stash",
  "mz-storage",
  "nix",
@@ -3489,6 +3487,8 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mz-orchestrator",
+ "mz-repr",
+ "mz-secrets",
  "serde_json",
  "sha2",
 ]
@@ -3506,6 +3506,8 @@ dependencies = [
  "mz-orchestrator",
  "mz-ore",
  "mz-pid-file",
+ "mz-repr",
+ "mz-secrets",
  "scopeguard",
  "serde_json",
  "sysinfo",
@@ -3886,43 +3888,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-secrets-filesystem"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "mz-secrets",
-]
-
-[[package]]
-name = "mz-secrets-kubernetes"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "k8s-openapi",
- "kube",
- "mz-ore",
- "mz-secrets",
- "rand",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "mz-service"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "clap",
  "crossbeam-channel",
  "futures",
  "http",
  "itertools",
+ "mz-orchestrator-kubernetes",
+ "mz-orchestrator-process",
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-secrets",
  "once_cell",
  "semver",
  "serde",
@@ -4011,6 +3993,7 @@ dependencies = [
  "md-5",
  "mz-controller",
  "mz-environmentd",
+ "mz-orchestrator",
  "mz-orchestrator-process",
  "mz-ore",
  "mz-persist-client",

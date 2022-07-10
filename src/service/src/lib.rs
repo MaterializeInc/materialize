@@ -22,3 +22,4 @@ pub mod client;
 pub mod frontiers;
 pub mod grpc;
 pub mod local;
+pub mod secrets;

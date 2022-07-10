@@ -10,9 +10,10 @@
 use std::path::PathBuf;
 use std::process;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use axum::routing;
 use mz_compute::server::CommunicationConfig;
+use mz_service::secrets::SecretsReaderCliArgs;
 use once_cell::sync::Lazy;
 use tracing::info;
 
@@ -69,9 +70,6 @@ struct Args {
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
-    /// The path at which secrets are stored.
-    #[clap(long)]
-    secrets_path: PathBuf,
     /// The address of the internal HTTP server.
     #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
     internal_http_listen_addr: String,
@@ -82,6 +80,9 @@ struct Args {
 
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    #[clap(flatten)]
+    secrets: SecretsReaderCliArgs,
 }
 
 #[tokio::main]
@@ -162,6 +163,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
     }
 
+    let secrets_reader = args
+        .secrets
+        .load()
+        .await
+        .context("loading secrets reader")?;
     let config = mz_compute::server::Config {
         workers: args.workers,
         comm_config,
@@ -170,7 +176,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id,
-            args.secrets_path,
+            secrets_reader,
         ),
     };
 

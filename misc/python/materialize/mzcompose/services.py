@@ -182,8 +182,6 @@ class Computed(Service):
             command_list.append(f"--process {peers.index(name)}")
             command_list.append(" ".join(f"{peer}:2102" for peer in peers))
 
-        command_list.append("--secrets-path=/mzdata/secrets")
-
         config.update(
             {
                 "command": " ".join(command_list),
@@ -239,8 +237,6 @@ class Storaged(Service):
 
         if workers:
             command_list.append(f"--workers {workers}")
-
-        command_list.append("--secrets-path=/mzdata/secrets")
 
         config.update(
             {

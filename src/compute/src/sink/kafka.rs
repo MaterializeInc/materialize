@@ -500,7 +500,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        connection.populate_client_config(&mut config, &connection_context.secrets_reader);
+        connection.populate_client_config(&mut config, &*connection_context.secrets_reader);
 
         // Ensure that messages are sinked in order and without duplicates. Note that
         // this only applies to a single instance of a producer - in the case of restarts,
@@ -541,7 +541,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        connection.populate_client_config(&mut config, &connection_context.secrets_reader);
+        connection.populate_client_config(&mut config, &*connection_context.secrets_reader);
 
         config
             .set(

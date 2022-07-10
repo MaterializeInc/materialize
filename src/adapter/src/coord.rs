@@ -119,7 +119,7 @@ use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
 };
-use mz_secrets::{SecretOp, SecretsController};
+use mz_secrets::SecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSourceStatement, ExplainStageNew, ExplainStageOld, FetchStatement,
@@ -263,7 +263,7 @@ pub struct Config<S> {
     pub build_info: &'static BuildInfo,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
-    pub secrets_controller: Box<dyn SecretsController>,
+    pub secrets_controller: Arc<dyn SecretsController>,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
     pub connection_context: ConnectionContext,
@@ -504,7 +504,7 @@ pub struct Coordinator<S> {
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
-    secrets_controller: Box<dyn SecretsController>,
+    secrets_controller: Arc<dyn SecretsController>,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
@@ -2844,12 +2844,7 @@ impl<S: Append + 'static> Coordinator<S> {
             create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
 
-        self.secrets_controller
-            .apply(vec![SecretOp::Ensure {
-                id,
-                contents: payload,
-            }])
-            .await?;
+        self.secrets_controller.ensure(id, &payload).await?;
 
         let ops = vec![catalog::Op::CreateItem {
             id,
@@ -2865,18 +2860,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
             Err(err) => {
-                match self
-                    .secrets_controller
-                    .apply(vec![SecretOp::Delete { id }])
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!(
-                            "Dropping newly created secrets has encountered an error: {}",
-                            e
-                        );
-                    }
+                if let Err(e) = self.secrets_controller.delete(id).await {
+                    warn!(
+                        "Dropping newly created secrets has encountered an error: {}",
+                        e
+                    );
                 }
                 Err(err)
             }
@@ -5434,12 +5422,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let payload = self.extract_secret(session, &mut secret_as)?;
 
-        self.secrets_controller
-            .apply(vec![SecretOp::Ensure {
-                id,
-                contents: payload,
-            }])
-            .await?;
+        self.secrets_controller.ensure(id, &payload).await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
@@ -5519,7 +5502,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 ..
                             }) => {
                                 let config = connection
-                                    .config(&self.connection_context.secrets_reader)
+                                    .config(&*self.connection_context.secrets_reader)
                                     .await
                                     .unwrap_or_else(|e| {
                                         panic!("Postgres source {id} missing secrets: {e}")
@@ -5774,14 +5757,8 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {
-        let ops = secrets
-            .into_iter()
-            .map(|id| SecretOp::Delete { id })
-            .collect_vec();
-
-        match self.secrets_controller.apply(ops).await {
-            Ok(_) => {}
-            Err(e) => {
+        for secret in secrets {
+            if let Err(e) = self.secrets_controller.delete(secret).await {
                 warn!("Dropping secrets has encountered an error: {}", e);
             }
         }

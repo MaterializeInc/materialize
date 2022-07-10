@@ -118,13 +118,6 @@ spec:
   selector:
     app: environmentd
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: user-managed-secrets
-  labels:
-    app: environmentd
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -155,8 +148,6 @@ spec:
             - --catalog-postgres-stash=postgres://postgres@postgres.default?options=--search_path=catalog
             - --storage-postgres-stash=postgres://postgres@postgres.default?options=--search_path=storage
             - --kubernetes-image-pull-policy=never
-            - --user-defined-secret=user-managed-secrets
-            - --user-defined-secret-mount-path=/secrets
             - --unsafe-mode
         ports:
         - containerPort: 6875

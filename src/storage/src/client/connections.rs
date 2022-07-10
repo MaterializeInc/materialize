@@ -10,8 +10,8 @@
 //! Connection types.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail};
 use futures::executor::block_on;
@@ -27,7 +27,7 @@ use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
-use mz_secrets::{SecretsReader, SecretsReaderConfig};
+use mz_secrets::{NullSecretsReader, SecretsReader};
 use mz_sql_parser::ast::KafkaConnectionOptionName;
 
 use crate::client::connections::aws::AwsExternalIdPrefix;
@@ -47,7 +47,7 @@ pub enum StringOrSecret {
 
 impl StringOrSecret {
     /// Gets the value as a string, reading the secret if necessary.
-    pub async fn get_string(&self, secrets_reader: &SecretsReader) -> anyhow::Result<String> {
+    pub async fn get_string(&self, secrets_reader: &dyn SecretsReader) -> anyhow::Result<String> {
         match self {
             StringOrSecret::String(s) => Ok(s.clone()),
             StringOrSecret::Secret(id) => secrets_reader.read_string(*id).await,
@@ -112,7 +112,7 @@ pub struct ConnectionContext {
     /// A prefix for an external ID to use for all AWS AssumeRole operations.
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// A secrets reader.
-    pub secrets_reader: SecretsReader,
+    pub secrets_reader: Arc<dyn SecretsReader>,
 }
 
 impl ConnectionContext {
@@ -126,14 +126,12 @@ impl ConnectionContext {
     pub fn from_cli_args(
         filter: &tracing_subscriber::filter::Targets,
         aws_external_id_prefix: Option<String>,
-        secrets_path: PathBuf,
+        secrets_reader: Arc<dyn SecretsReader>,
     ) -> ConnectionContext {
         ConnectionContext {
             librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
             aws_external_id_prefix: aws_external_id_prefix.map(AwsExternalIdPrefix),
-            secrets_reader: SecretsReader::new(SecretsReaderConfig {
-                mount_path: secrets_path,
-            }),
+            secrets_reader,
         }
     }
 }
@@ -143,10 +141,7 @@ impl Default for ConnectionContext {
         ConnectionContext {
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
-            secrets_reader: SecretsReader::new(SecretsReaderConfig {
-                // NOTE(benesch): this will vanish in a future secrets PR.
-                mount_path: "/dev/null".into(),
-            }),
+            secrets_reader: Arc::new(NullSecretsReader),
         }
     }
 }
@@ -420,7 +415,7 @@ impl CsrConnection {
     /// Constructs a schema registry client from the connection.
     pub async fn connect(
         &self,
-        secrets_reader: &SecretsReader,
+        secrets_reader: &dyn SecretsReader,
     ) -> Result<mz_ccsr::Client, anyhow::Error> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
@@ -564,14 +559,14 @@ pub fn populate_client_config(
     options: &BTreeMap<String, StringOrSecret>,
     drop_option_keys: HashSet<&'static str>,
     config: &mut rdkafka::ClientConfig,
-    secrets_reader: &mz_secrets::SecretsReader,
+    secrets_reader: &dyn SecretsReader,
 ) {
     let config_options: BTreeMap<String, StringOrSecret> = kafka_connection.into();
     for (k, v) in options.iter().chain(config_options.iter()) {
         if !drop_option_keys.contains(k.as_str()) {
             config.set(
                 k,
-                block_on(v.get_string(&secrets_reader))
+                block_on(v.get_string(secrets_reader))
                     .expect("reading kafka secret unexpectedly failed"),
             );
         }
@@ -589,7 +584,7 @@ pub trait PopulateClientConfig {
     fn populate_client_config(
         &self,
         config: &mut rdkafka::ClientConfig,
-        secrets_reader: &mz_secrets::SecretsReader,
+        secrets_reader: &dyn SecretsReader,
     ) {
         populate_client_config(
             self.kafka_connection().clone(),
@@ -627,7 +622,7 @@ pub struct PostgresConnection {
 impl PostgresConnection {
     pub async fn config(
         &self,
-        secrets_reader: &mz_secrets::SecretsReader,
+        secrets_reader: &dyn mz_secrets::SecretsReader,
     ) -> Result<tokio_postgres::Config, anyhow::Error> {
         let user = self.user.get_string(secrets_reader).await?;
         let mut config = tokio_postgres::Config::new();
