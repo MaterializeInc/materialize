@@ -14,6 +14,13 @@
 # IDENTITY DEFAULT is the same as USING INDEX (t1_pkey)
 #
 
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -36,7 +43,7 @@ ALTER TABLE identity_nothing REPLICA IDENTITY NOTHING;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
 # Make sure that the above sources are fully instantiated so that the DML statements below

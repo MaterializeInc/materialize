@@ -11,6 +11,13 @@
 # accepts connections from specific users. You will have to update
 # pg_hba.conf if you modify the existing user names or add new ones.
 
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -91,7 +98,7 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 
 > CREATE MATERIALIZED SOURCE "test_slot_source"
   FROM POSTGRES
-    CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    CONNECTION pg
     PUBLICATION 'mz_source';
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
@@ -104,38 +111,68 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 # Error checking
 #
 
+> CREATE CONNECTION no_such_host
+  FOR POSTGRES
+  HOST 'no_such_postgres.mtrlz.com',
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
 ! CREATE MATERIALIZED SOURCE "no_such_host"
-  FROM POSTGRES CONNECTION 'host=no_such_postgres.mtrlz.com port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION no_such_host PUBLICATION 'mz_source';
 contains:failed to lookup address information
 
+> CREATE CONNECTION no_such_port
+  FOR POSTGRES
+  HOST postgres,
+  PORT 65534,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
 ! CREATE MATERIALIZED SOURCE "no_such_port"
-  FROM POSTGRES CONNECTION 'host=postgres port=65534 user=postgres password=postgres dbname=postgres'
+  FROM POSTGRES CONNECTION no_such_port
   PUBLICATION 'mz_source';
 contains:error connecting to server: Connection refused (os error 111)
 
+> CREATE CONNECTION no_such_user
+  FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER no_such_user,
+  PASSWORD SECRET pgpass
 ! CREATE MATERIALIZED SOURCE "no_such_user"
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=no_such_user password=postgres dbname=postgres'
+  FROM POSTGRES CONNECTION no_such_user
   PUBLICATION 'mz_source';
 contains:db error: FATAL: role "no_such_user" does not exist
 
+> CREATE SECRET badpass AS 'badpass'
+> CREATE CONNECTION no_such_password
+  FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET badpass
 ! CREATE MATERIALIZED SOURCE "no_such_password"
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
+  FROM POSTGRES CONNECTION no_such_password
   PUBLICATION 'mz_source';
 contains:db error: FATAL: password authentication failed for user "postgres"
 
+> CREATE CONNECTION no_such_dbname FOR POSTGRES
+  HOST postgres,
+  DATABASE no_such_dbname,
+  USER postgres,
+  PASSWORD SECRET pgpass
 ! CREATE MATERIALIZED SOURCE "no_such_dbname"
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
+  FROM POSTGRES CONNECTION no_such_dbname
   PUBLICATION 'mz_source';
 contains:db error: FATAL: database "no_such_dbname" does not exist
 
 ! CREATE MATERIALIZED SOURCE "no_such_publication"
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'no_such_publication';
 contains:publication "no_such_publication" does not exist
 
 > CREATE MATERIALIZED SOURCE "mz_source"
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
 > CREATE VIEWS FROM SOURCE "mz_source" ("no_replica_identity")

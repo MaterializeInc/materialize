@@ -3799,7 +3799,9 @@ dependencies = [
  "prost",
  "prost-build",
  "regex",
+ "serde",
  "serde_json",
+ "tokio-postgres",
  "url",
  "uuid 1.1.2",
 ]
@@ -3968,6 +3970,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-postgres",
  "tracing",
  "typemap_rev",
  "uncased",
@@ -4818,7 +4821,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.19.3"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#686ed85732ab2626c36e695613e3e2abc58b9948"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -4831,7 +4834,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#686ed85732ab2626c36e695613e3e2abc58b9948"
 dependencies = [
  "futures",
  "openssl",
@@ -4843,7 +4846,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.4"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#686ed85732ab2626c36e695613e3e2abc58b9948"
 dependencies = [
  "base64",
  "byteorder",
@@ -4860,7 +4863,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.3"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#686ed85732ab2626c36e695613e3e2abc58b9948"
 dependencies = [
  "bytes",
  "chrono",
@@ -6266,7 +6269,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.6"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#686ed85732ab2626c36e695613e3e2abc58b9948"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -6280,6 +6283,7 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
+ "serde",
  "socket2",
  "tokio",
  "tokio-util",

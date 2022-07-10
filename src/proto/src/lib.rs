@@ -16,6 +16,9 @@ use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
 
+#[cfg(feature = "tokio-postgres")]
+pub mod tokio_postgres;
+
 include!(concat!(env!("OUT_DIR"), "/mz_proto.rs"));
 
 /// An error thrown when trying to convert from a `*.proto`-generated type
@@ -38,6 +41,8 @@ pub enum TryFromProtoError {
     /// Indicates an `Option<U>` field in the `Proto$T` that should be set,
     /// but for some reason it is not. In practice this should never occur.
     MissingField(String),
+    /// Indicates an unknown enum variant in `Proto$T`.
+    UnknownEnumVariant(String),
     /// Indicates that the serialized ShardId value failed to deserialize, according
     /// to its custom deserialization logic.
     InvalidShardId(String),
@@ -58,6 +63,11 @@ impl TryFromProtoError {
     /// Construct a new [`TryFromProtoError::MissingField`] instance.
     pub fn missing_field<T: ToString>(s: T) -> TryFromProtoError {
         TryFromProtoError::MissingField(s.to_string())
+    }
+
+    /// Construct a new [`TryFromProtoError::UnknownEnumVariant`] instance.
+    pub fn unknown_enum_variant<T: ToString>(s: T) -> TryFromProtoError {
+        TryFromProtoError::UnknownEnumVariant(s.to_string())
     }
 }
 
@@ -127,6 +137,7 @@ impl std::fmt::Display for TryFromProtoError {
             DeserializationError(error) => error.fmt(f),
             RowConversionError(msg) => write!(f, "Row packing failed: `{}`", msg),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
+            UnknownEnumVariant(field) => write!(f, "Unknown enum value for `{}`", field),
             InvalidShardId(value) => write!(f, "Invalid value of ShardId found: `{}`", value),
             CodecMismatch(error) => error.fmt(f),
             InvalidPersistState(error) => error.fmt(f),
@@ -156,6 +167,7 @@ impl std::error::Error for TryFromProtoError {
             DateConversionError(_) => None,
             RowConversionError(_) => None,
             MissingField(_) => None,
+            UnknownEnumVariant(_) => None,
             InvalidShardId(_) => None,
             CodecMismatch(_) => None,
             InvalidPersistState(_) => None,

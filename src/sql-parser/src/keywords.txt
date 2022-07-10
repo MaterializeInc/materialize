@@ -138,6 +138,7 @@ Having
 Header
 Headers
 Hold
+Host
 Hour
 Hours
 Id
@@ -189,6 +190,7 @@ Message
 Metadata
 Minute
 Minutes
+Mode
 Month
 Months
 Names
@@ -223,6 +225,7 @@ Password
 Physical
 Plan
 Plans
+Port
 Position
 Postgres
 Preceding

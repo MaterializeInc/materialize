@@ -186,7 +186,7 @@ message ProtoKinesisSourceConnection {
 }
 
 message ProtoPostgresSourceConnection {
-    string conn = 1;
+    mz_storage.client.connections.ProtoPostgresConnection connection = 1;
     string publication = 2;
     ProtoPostgresSourceDetails details = 4;
 }

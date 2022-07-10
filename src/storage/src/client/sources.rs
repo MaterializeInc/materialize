@@ -33,7 +33,7 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType}
 pub mod encoding;
 
 use crate::client::connections::aws::AwsConfig;
-use crate::client::connections::{KafkaConnection, StringOrSecret};
+use crate::client::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
 use crate::client::controller::CollectionMetadata;
 use crate::client::errors::DataflowError;
 
@@ -1414,7 +1414,7 @@ impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourceConnection {
-    pub conn: String,
+    pub connection: PostgresConnection,
     pub publication: String,
     pub details: PostgresSourceDetails,
 }
@@ -1422,7 +1422,7 @@ pub struct PostgresSourceConnection {
 impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
     fn into_proto(&self) -> ProtoPostgresSourceConnection {
         ProtoPostgresSourceConnection {
-            conn: self.conn.clone(),
+            connection: Some(self.connection.into_proto()),
             publication: self.publication.clone(),
             details: Some(self.details.into_proto()),
         }
@@ -1430,7 +1430,9 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
 
     fn from_proto(proto: ProtoPostgresSourceConnection) -> Result<Self, TryFromProtoError> {
         Ok(PostgresSourceConnection {
-            conn: proto.conn,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoPostgresSourceConnection::connection")?,
             publication: proto.publication,
             details: proto
                 .details

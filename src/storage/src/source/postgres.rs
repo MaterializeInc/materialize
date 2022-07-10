@@ -12,6 +12,7 @@ use std::error::Error;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
+use futures::executor::block_on;
 use futures::{pin_mut, FutureExt, StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
@@ -34,9 +35,7 @@ use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
 use crate::client::connections::ConnectionContext;
 use crate::client::errors::SourceErrorDetails;
-use crate::client::sources::{
-    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection, SourceConnection,
-};
+use crate::client::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -142,7 +141,9 @@ pub struct PostgresSourceReader {
 /// An internal struct held by the spawned tokio task
 struct PostgresTaskInfo {
     source_id: GlobalId,
-    connection: PostgresSourceConnection,
+    connection_config: tokio_postgres::Config,
+    publication: String,
+    slot: String,
     /// Our cursor into the WAL
     lsn: PgLsn,
     metrics: PgSourceMetrics,
@@ -167,7 +168,7 @@ impl SourceReader for PostgresSourceReader {
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
-        _connection_context: ConnectionContext,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
         let connection = match connection {
             SourceConnection::Postgres(pg) => pg,
@@ -194,9 +195,18 @@ impl SourceReader for PostgresSourceReader {
             })
             .unwrap_or_default();
 
+        let connection_config = block_on(
+            connection
+                .connection
+                .config(&connection_context.secrets_reader),
+        )
+        .expect("Postgres connection unexpectedly missing secrets");
+
         let task_info = PostgresTaskInfo {
             source_id: source_id.clone(),
-            connection: connection.clone(),
+            connection_config,
+            publication: connection.publication,
+            slot: connection.details.slot,
             /// Our cursor into the WAL
             lsn: start_offset.offset.into(),
             metrics: PgSourceMetrics::new(&metrics, source_id),
@@ -454,22 +464,19 @@ impl PostgresTaskInfo {
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
-        let client =
-            try_recoverable!(mz_postgres_util::connect_replication(&self.connection.conn).await);
+        let client = try_recoverable!(
+            mz_postgres_util::connect_replication(self.connection_config.clone()).await
+        );
 
         // We're initialising this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
         let _ = client
-            .simple_query(&format!(
-                "DROP_REPLICATION_SLOT {:?}",
-                &self.connection.details.slot
-            ))
+            .simple_query(&format!("DROP_REPLICATION_SLOT {:?}", &self.slot))
             .await;
 
         // Get all the relevant tables for this publication
         let publication_tables = try_recoverable!(
-            mz_postgres_util::publication_info(&self.connection.conn, &self.connection.publication)
-                .await
+            mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
         );
         // Validate publication tables against the state snapshot
         try_fatal!(self.validate_tables(publication_tables));
@@ -483,7 +490,7 @@ impl PostgresTaskInfo {
 
         let slot_query = format!(
             r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
-            &self.connection.details.slot
+            &self.slot
         );
         let slot_row = client
             .simple_query(&slot_query)
@@ -595,15 +602,16 @@ impl PostgresTaskInfo {
     async fn produce_replication(&mut self) -> Result<(), ReplicationError> {
         use ReplicationError::*;
 
-        let client =
-            try_recoverable!(mz_postgres_util::connect_replication(&self.connection.conn).await);
+        let client = try_recoverable!(
+            mz_postgres_util::connect_replication(self.connection_config.clone()).await
+        );
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
-            name = &self.connection.details.slot,
+            name = &self.slot,
             lsn = self.lsn,
-            publication = self.connection.publication
+            publication = self.publication
         );
         let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
 

@@ -27,9 +27,9 @@ use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateDatabaseStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Raw, ReplicaDefinition, Statement, ViewDefinition,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionStatement,
+    CreateDatabaseStatement, CreateSchemaStatement, CreateSecretStatement, CreateSourceStatement,
+    CreateTableStatement, CreateViewStatement, Raw, ReplicaDefinition, Statement, ViewDefinition,
 };
 
 use crate::action::{Action, ControlFlow, State};
@@ -137,6 +137,13 @@ impl Action for SqlAction {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP SECRET IF EXISTS {} CASCADE", name),
+                )
+                .await
+            }
+            Statement::CreateConnection(CreateConnectionStatement { name, .. }) => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP CONNECTION IF EXISTS {} CASCADE", name),
                 )
                 .await
             }

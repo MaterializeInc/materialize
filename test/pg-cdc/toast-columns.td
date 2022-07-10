@@ -11,6 +11,13 @@
 # Test that we can ingest unchanged toasted values
 #
 
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
+
 # Insert data pre-snapshot by generating 16kB of uncompressible data to force
 # TOASTed storage by concatenating 1024 random MD5 hashes, each being 128bit
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -29,7 +36,7 @@ INSERT INTO t1 SELECT 2, string_agg(md5(random()::text), '') FROM generate_serie
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
 > SELECT COUNT(*) > 0 FROM mz_source;

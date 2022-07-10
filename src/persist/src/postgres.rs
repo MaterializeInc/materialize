@@ -14,7 +14,9 @@ use std::time::Instant;
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use bytes::Bytes;
-use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
+use openssl::pkey::PKey;
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
 use tokio::task::JoinHandle;
 use tokio_postgres::config::SslMode;
@@ -208,15 +210,17 @@ fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, anyhow:
     // Configure certificates
     match (config.get_ssl_cert(), config.get_ssl_key()) {
         (Some(ssl_cert), Some(ssl_key)) => {
-            builder.set_certificate_file(ssl_cert, SslFiletype::PEM)?;
-            builder.set_private_key_file(ssl_key, SslFiletype::PEM)?;
+            builder.set_certificate(&*X509::from_pem(ssl_cert)?)?;
+            builder.set_private_key(&*PKey::private_key_from_pem(ssl_key)?)?;
         }
         (None, Some(_)) => bail!("must provide both sslcert and sslkey, but only provided sslkey"),
         (Some(_), None) => bail!("must provide both sslcert and sslkey, but only provided sslcert"),
         _ => {}
     }
     if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
-        builder.set_ca_file(ssl_root_cert)?
+        builder
+            .cert_store_mut()
+            .add_cert(X509::from_pem(ssl_root_cert)?)?;
     }
 
     let mut tls_connector = MakeTlsConnector::new(builder.build());

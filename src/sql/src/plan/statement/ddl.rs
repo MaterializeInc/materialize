@@ -69,11 +69,12 @@ use crate::ast::{
     DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
     DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
-    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
-    QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select,
-    SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, Statement,
-    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedObjectName, Value, ViewDefinition, WithOptionValue,
+    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op,
+    PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
+    Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr,
+    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
+    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -567,10 +568,15 @@ pub fn plan_create_source(
             (connection, encoding)
         }
         CreateSourceConnection::Postgres {
-            conn,
+            connection,
             publication,
             details,
         } => {
+            let item = scx.get_item_by_resolved_name(&connection)?;
+            let connection = match item.connection()? {
+                Connection::Postgres(connection) => connection.clone(),
+                _ => sql_bail!("{} is not a postgres connection", item.name()),
+            };
             let details = details
                 .as_ref()
                 .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
@@ -578,7 +584,7 @@ pub fn plan_create_source(
             let details =
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
-                conn: conn.clone(),
+                connection,
                 publication: publication.clone(),
                 details: PostgresSourceDetails::from_proto(details)
                     .map_err(|e| sql_err!("{}", e))?,
@@ -2965,6 +2971,62 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::
     }
 }
 
+generate_extracted_config!(
+    PostgresConnectionOption,
+    (Database, String),
+    (Host, String),
+    (Password, with_options::Secret),
+    (Port, u16, Default(5432_u16)),
+    (SslCertificate, StringOrSecret),
+    (SslCertificateAuthority, StringOrSecret),
+    (SslKey, with_options::Secret),
+    (SslMode, String),
+    (User, StringOrSecret)
+);
+
+impl TryFrom<PostgresConnectionOptionExtracted>
+    for mz_storage::client::connections::PostgresConnection
+{
+    type Error = PlanError;
+
+    fn try_from(options: PostgresConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        let cert = options.ssl_certificate;
+        let key = options.ssl_key.map(|secret| secret.into());
+        let tls_identity = match (cert, key) {
+            (None, None) => None,
+            (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
+            _ => sql_bail!("invalid CONNECTION: both SSL KEY and SSL CERTIFICATE are required"),
+        };
+        let tls_mode = match options.ssl_mode.as_ref().map(|m| m.as_str()) {
+            None | Some("disable") => tokio_postgres::config::SslMode::Disable,
+            // "prefer" intentionally omitted because it has dubious security
+            // properties.
+            Some("require") => tokio_postgres::config::SslMode::Require,
+            Some("verify_ca") | Some("verify-ca") => tokio_postgres::config::SslMode::VerifyCa,
+            Some("verify_full") | Some("verify-full") => {
+                tokio_postgres::config::SslMode::VerifyFull
+            }
+            Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
+        };
+        Ok(mz_storage::client::connections::PostgresConnection {
+            database: options
+                .database
+                .ok_or_else(|| sql_err!("DATABASE option is required"))?,
+            host: options
+                .host
+                .ok_or_else(|| sql_err!("HOST option is required"))?,
+            password: options.password.map(|password| password.into()),
+            port: options.port,
+            tls_mode,
+            tls_root_cert: options.ssl_certificate_authority,
+            tls_identity,
+            user: options
+                .user
+                .ok_or_else(|| sql_err!("USER option is required"))?,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -2986,6 +3048,11 @@ pub fn plan_create_connection(
             let c = CsrConnectionOptionExtracted::try_from(with_options)?;
             let connection = mz_storage::client::connections::CsrConnection::try_from(c)?;
             Connection::Csr(connection)
+        }
+        CreateConnection::Postgres { with_options } => {
+            let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
+            let connection = mz_storage::client::connections::PostgresConnection::try_from(c)?;
+            Connection::Postgres(connection)
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;

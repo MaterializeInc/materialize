@@ -12,6 +12,13 @@
 # correctly.
 #
 
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -27,15 +34,15 @@ CREATE PUBLICATION mz_source_update FOR TABLE t1 WITH ( publish = 'update') ;
 CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 
 > CREATE MATERIALIZED SOURCE mz_source_insert
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source_insert';
 
 > CREATE MATERIALIZED SOURCE mz_source_update
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source_update';
 
 > CREATE MATERIALIZED SOURCE mz_source_delete
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source_delete';
 
 # Make sure that the above sources are fully instantiated so that the DML statements below

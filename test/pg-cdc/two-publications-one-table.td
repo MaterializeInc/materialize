@@ -11,6 +11,13 @@
 # Test that two publications can replicate the same table
 #
 
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -31,13 +38,13 @@ CREATE PUBLICATION mz_source2 FOR ALL TABLES;
 > CREATE SCHEMA schema1
 
 > CREATE MATERIALIZED SOURCE mz_source1
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source1';
 
 > CREATE VIEWS FROM SOURCE mz_source1 (t1 AS t1_1);
 
 > CREATE MATERIALIZED SOURCE mz_source2
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source2';
 
 > CREATE VIEWS FROM SOURCE mz_source2 (t1 AS t1_2);

@@ -163,6 +163,23 @@ impl ImpliedValue for i32 {
     }
 }
 
+impl TryFromValue<Value> for u16 {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::Number(v) => v
+                .parse::<u16>()
+                .map_err(|e| sql_err!("invalid numeric value: {e}")),
+            _ => sql_bail!("cannot use value as number"),
+        }
+    }
+}
+
+impl ImpliedValue for u16 {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an integer value")
+    }
+}
+
 impl<V: TryFromValue<Value>> TryFromValue<Value> for Vec<V> {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {

@@ -18,10 +18,12 @@ use futures::executor::block_on;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tokio_postgres::config::SslMode;
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_kafka_util::KafkaAddrs;
+use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
@@ -153,6 +155,7 @@ impl Default for ConnectionContext {
 pub enum Connection {
     Kafka(KafkaConnection),
     Csr(CsrConnection),
+    Postgres(PostgresConnection),
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -595,5 +598,123 @@ pub trait PopulateClientConfig {
             config,
             secrets_reader,
         )
+    }
+}
+
+/// A connection to a PostgreSQL server.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+
+pub struct PostgresConnection {
+    /// The hostname of the server.
+    pub host: String,
+    /// The port of the server.
+    pub port: u16,
+    /// The name of the database to connect to.
+    pub database: String,
+    /// The username to authenticate as.
+    pub user: StringOrSecret,
+    /// An optional password for authentication.
+    pub password: Option<GlobalId>,
+    /// Whether to use TLS for encryption, authentication, or both.
+    pub tls_mode: SslMode,
+    /// An optional root TLS certificate in PEM format, to verify the server's
+    /// identity.
+    pub tls_root_cert: Option<StringOrSecret>,
+    /// An optional TLS client certificate for authentication.
+    pub tls_identity: Option<TlsIdentity>,
+}
+
+impl PostgresConnection {
+    pub async fn config(
+        &self,
+        secrets_reader: &mz_secrets::SecretsReader,
+    ) -> Result<tokio_postgres::Config, anyhow::Error> {
+        let user = self.user.get_string(secrets_reader).await?;
+        let mut config = tokio_postgres::Config::new();
+        config
+            .host(&self.host)
+            .port(self.port)
+            .dbname(&self.database)
+            .user(&user)
+            .ssl_mode(self.tls_mode);
+        if let Some(password) = self.password {
+            let password = secrets_reader.read_string(password).await?;
+            config.password(password);
+        }
+        if let Some(tls_root_cert) = &self.tls_root_cert {
+            let tls_root_cert = tls_root_cert.get_string(secrets_reader).await?;
+            config.ssl_root_cert(tls_root_cert.as_bytes());
+        }
+        if let Some(tls_identity) = &self.tls_identity {
+            let cert = tls_identity.cert.get_string(secrets_reader).await?;
+            let key = secrets_reader.read_string(tls_identity.key).await?;
+            config.ssl_cert(cert.as_bytes()).ssl_key(key.as_bytes());
+        }
+        Ok(config)
+    }
+}
+
+impl RustType<ProtoPostgresConnection> for PostgresConnection {
+    fn into_proto(&self) -> ProtoPostgresConnection {
+        ProtoPostgresConnection {
+            host: self.host.into_proto(),
+            port: self.port.into_proto(),
+            database: self.database.into_proto(),
+            user: Some(self.user.into_proto()),
+            password: self.password.into_proto(),
+            tls_mode: Some(self.tls_mode.into_proto()),
+            tls_root_cert: self.tls_root_cert.into_proto(),
+            tls_identity: self.tls_identity.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoPostgresConnection) -> Result<Self, TryFromProtoError> {
+        Ok(PostgresConnection {
+            host: proto.host,
+            port: proto.port.into_rust()?,
+            database: proto.database,
+            user: proto
+                .user
+                .into_rust_if_some("ProtoPostgresConnection::user")?,
+            password: proto.password.into_rust()?,
+            tls_mode: proto
+                .tls_mode
+                .into_rust_if_some("ProtoPostgresConnection::tls_mode")?,
+            tls_root_cert: proto.tls_root_cert.into_rust()?,
+            tls_identity: proto.tls_identity.into_rust()?,
+        })
+    }
+}
+
+impl Arbitrary for PostgresConnection {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<String>(),
+            any::<u16>(),
+            any::<String>(),
+            any::<StringOrSecret>(),
+            any::<Option<GlobalId>>(),
+            any_ssl_mode(),
+            any::<Option<StringOrSecret>>(),
+            any::<Option<TlsIdentity>>(),
+        )
+            .prop_map(
+                |(host, port, database, user, password, tls_mode, tls_root_cert, tls_identity)| {
+                    PostgresConnection {
+                        host,
+                        port,
+                        database,
+                        user,
+                        password,
+                        tls_mode,
+                        tls_root_cert,
+                        tls_identity,
+                    }
+                },
+            )
+            .boxed()
     }
 }
