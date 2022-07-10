@@ -437,7 +437,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
-            let process_id = pod.name().split('-').last().unwrap().parse()?;
+            let process_id = pod.name_any().split('-').last().unwrap().parse()?;
             let service_id_label = "environmentd.materialize.cloud/service-id";
             let service_id = pod
                 .labels()
