@@ -1862,10 +1862,7 @@ impl RustType<ProtoCaptureGroupDesc> for CaptureGroupDesc {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct AnalyzedRegex(
-    #[proptest(strategy = "mz_repr::adt::regex::any_regex()")] ReprRegex,
-    Vec<CaptureGroupDesc>,
-);
+pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>);
 
 impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
     fn into_proto(&self) -> ProtoAnalyzedRegex {

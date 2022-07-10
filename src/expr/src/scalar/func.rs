@@ -39,7 +39,7 @@ use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
-use mz_repr::adt::regex::any_regex;
+use mz_repr::adt::regex::Regex;
 use mz_repr::chrono::any_naive_datetime;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
@@ -3660,8 +3660,8 @@ impl Arbitrary for UnaryFunc {
             Chr::arbitrary().prop_map_into(),
             like_pattern::any_matcher()
                 .prop_map(|matcher| UnaryFunc::IsLikeMatch(IsLikeMatch(matcher))),
-            any_regex().prop_map(|regex| UnaryFunc::IsRegexpMatch(IsRegexpMatch(regex))),
-            any_regex().prop_map(|regex| UnaryFunc::RegexpMatch(RegexpMatch(regex))),
+            any::<Regex>().prop_map(|regex| UnaryFunc::IsRegexpMatch(IsRegexpMatch(regex))),
+            any::<Regex>().prop_map(|regex| UnaryFunc::RegexpMatch(RegexpMatch(regex))),
             ExtractInterval::arbitrary().prop_map_into(),
             ExtractTime::arbitrary().prop_map_into(),
             ExtractTimestamp::arbitrary().prop_map_into(),

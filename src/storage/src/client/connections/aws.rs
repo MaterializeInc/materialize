@@ -10,7 +10,7 @@
 //! AWS configuration for sources and sinks.
 
 use http::Uri;
-use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
+use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -24,23 +24,18 @@ include!(concat!(
 ));
 
 /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SerdeUri(#[serde(with = "http_serde::uri")] pub Uri);
+#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SerdeUri(
+    #[serde(with = "http_serde::uri")]
+    #[proptest(strategy(any_serde_uri))]
+    pub Uri,
+);
 
-/// Generate a random `SerdeUri` based on an arbitrary URL
+/// Generate a random `Uri` based on an arbitrary URL
 /// It doesn't cover the full spectrum of valid URIs, but just a wide enough sample
 /// to test our Protobuf roundtripping logic.
-fn any_serde_uri() -> impl Strategy<Value = SerdeUri> {
-    URL_PATTERN.prop_map(|s| SerdeUri(s.parse().unwrap()))
-}
-
-impl Arbitrary for SerdeUri {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_serde_uri().boxed()
-    }
+fn any_serde_uri() -> impl Strategy<Value = Uri> {
+    URL_PATTERN.prop_map(|s| s.parse().unwrap())
 }
 
 impl RustType<ProtoSerdeUri> for SerdeUri {
