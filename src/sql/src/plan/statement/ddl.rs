@@ -321,6 +321,10 @@ pub fn plan_create_source(
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options_original)?;
 
+    if !with_options.is_empty() {
+        scx.require_unsafe_mode("creating sources with WITH options")?;
+    }
+
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val.into() {
             Some(Value::Number(n)) => match n.parse::<u64>() {
@@ -349,6 +353,7 @@ pub fn plan_create_source(
             let mut options = kafka_util::extract_config(&mut with_options)?;
             let kafka_connection = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
+                    scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
                     options.insert(
                         "bootstrap.servers".into(),
                         KafkaAddrs::from_str(broker)
@@ -628,6 +633,8 @@ pub fn plan_create_source(
         // TODO: fixup key envelope
         mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
+            scx.require_unsafe_mode("ENVELOPE DEBEZIUM")?;
+
             //TODO check that key envelope is not set
             let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
@@ -699,6 +706,7 @@ pub fn plan_create_source(
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
+            scx.require_unsafe_mode("ENVELOPE UPSERT")?;
             let key_encoding = match encoding.key_ref() {
                 None => {
                     bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
@@ -713,6 +721,7 @@ pub fn plan_create_source(
             UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
+            scx.require_unsafe_mode("ENVELOPE MATERIALIZE")?;
             //TODO check that key envelope is not set
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
@@ -746,6 +755,8 @@ pub fn plan_create_source(
 
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
+        scx.require_unsafe_mode("PRIMARY KEY NOT ENFORCED")?;
+
         let key_columns = columns
             .into_iter()
             .map(normalize::column_name)
