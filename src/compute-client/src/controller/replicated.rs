@@ -599,15 +599,33 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             }
         }
 
-        // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
+        // Retain only those peeks that have not yet been processed.
+        live_peeks.retain(|peek| peeks.contains_key(&peek.uuid));
+
+        // Determine the required antichains to support live peeks;
+        let mut live_peek_frontiers = std::collections::BTreeMap::new();
+        for Peek { id, timestamp, .. } in live_peeks.iter() {
+            // Introduce `time` as a constraint on the `as_of` frontier of `id`.
+            live_peek_frontiers
+                .entry(id)
+                .or_insert_with(Antichain::new)
+                .insert(timestamp.clone());
+        }
+
+        // Update dataflow `as_of` frontiers, constrained by live peeks and allowed compaction.
         // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
         for dataflow in live_dataflows.iter_mut() {
             let mut as_of = Antichain::new();
             for id in dataflow.export_ids() {
+                // If compaction has been allowed use that; otherwise use the initial `as_of`.
                 if let Some(frontier) = final_frontiers.get(&id) {
                     as_of.extend(frontier.clone());
                 } else {
                     as_of.extend(dataflow.as_of.clone().unwrap());
+                }
+                // If we have requirements from peeks, apply them to hold `as_of` back.
+                if let Some(frontier) = live_peek_frontiers.get(&id) {
+                    as_of.extend(frontier.clone());
                 }
             }
 
@@ -625,9 +643,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
 
         // Discard dataflows whose outputs have all been allowed to compact away.
         live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
-
-        // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|peek| peeks.contains_key(&peek.uuid));
 
         // Record the volume of post-compaction commands.
         let mut command_count = 1;
@@ -647,17 +662,18 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             self.commands
                 .push(ComputeCommand::CreateDataflows(live_dataflows));
         }
-        if !final_frontiers.is_empty() {
-            self.commands.push(ComputeCommand::AllowCompaction(
-                final_frontiers.into_iter().collect(),
-            ));
-        }
         self.commands
             .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
         if !live_cancels.is_empty() {
             self.commands.push(ComputeCommand::CancelPeeks {
                 uuids: live_cancels,
             });
+        }
+        // Allow compaction only after emmitting peek commands.
+        if !final_frontiers.is_empty() {
+            self.commands.push(ComputeCommand::AllowCompaction(
+                final_frontiers.into_iter().collect(),
+            ));
         }
         if let Some(drop_command) = drop_command {
             self.commands.push(drop_command);
