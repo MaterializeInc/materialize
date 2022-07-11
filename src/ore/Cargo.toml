@@ -22,7 +22,7 @@ clap = { version = "3.2.8", features = ["env"], optional = true }
 ctor = { version = "0.1.22", optional = true }
 either = "1.7.0"
 futures = { version = "0.3.21", optional = true }
-once_cell = "1.12.0"
+once_cell = "1.13.0"
 # This isn't directly imported by anything, but it's required at link time. The
 # vendored feature is transitively depended upon by tokio-openssl.
 openssl = { version = "0.10.40", features = ["vendored"], optional = true }

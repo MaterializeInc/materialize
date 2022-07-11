@@ -15,7 +15,7 @@ enum-kinds = "0.5.1"
 globset = "0.4.9"
 hex = "0.4.3"
 itertools = "0.10.3"
-once_cell = "1.12.0"
+once_cell = "1.13.0"
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-compute-client = { path = "../compute-client" }
