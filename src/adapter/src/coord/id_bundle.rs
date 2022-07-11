@@ -50,6 +50,17 @@ impl CollectionIdBundle {
         }
     }
 
+    /// Adds all the ids from the `other` bundle to `self`.
+    pub fn union(&mut self, other: CollectionIdBundle) {
+        self.storage_ids.extend(other.storage_ids);
+        for (compute_instance, compute_ids) in other.compute_ids {
+            self.compute_ids
+                .entry(compute_instance)
+                .or_default()
+                .extend(compute_ids);
+        }
+    }
+
     /// Returns an iterator over all IDs in the bundle.
     ///
     /// The IDs are iterated in an unspecified order.

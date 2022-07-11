@@ -359,6 +359,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
+    let mut client_holds = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_writes.batch_execute(
@@ -368,7 +369,8 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     // system time. Do a read to bump the oracle's state so it will read from the
     // system clock during inserts below.
     *nowfn.lock().unwrap() = SYSTEM_TIME.clone();
-    client_writes.batch_execute("SELECT * FROM t")?;
+    // Create transaction to hold back compaction for duration of test
+    client_holds.batch_execute("BEGIN; SELECT * FROM t;")?;
     client_reads.batch_execute(
         "BEGIN;
          DECLARE c CURSOR FOR TAIL t;",
@@ -462,6 +464,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         .message()
         .starts_with("Timestamp (1) is not valid for all inputs"));
 
+    client_holds.batch_execute("COMMIT;")?;
     Ok(())
 }
 

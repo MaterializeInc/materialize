@@ -105,6 +105,7 @@ impl<T: CoordTimestamp> Session<T> {
                     ops: TransactionOps::None,
                     write_lock_guard: None,
                     access,
+                    timestamp_independent: true,
                 });
             }
             TransactionStatus::InTransactionImplicit(txn) => {
@@ -125,6 +126,7 @@ impl<T: CoordTimestamp> Session<T> {
                 ops: TransactionOps::None,
                 write_lock_guard: None,
                 access: None,
+                timestamp_independent: true,
             };
             match stmts {
                 1 => self.transaction = TransactionStatus::Started(txn),
@@ -256,6 +258,7 @@ impl<T: CoordTimestamp> Session<T> {
                 ops: TransactionOps::Peeks(ts),
                 write_lock_guard: _,
                 access: _,
+                timestamp_independent: _,
             }) => Some(ts.clone()),
             _ => None,
         }
@@ -435,6 +438,24 @@ impl<T: CoordTimestamp> Session<T> {
             Some(txn) => txn.write_lock_guard.is_some(),
         }
     }
+
+    /// Sets the timestamp_independent field on the inner transaction.
+    ///
+    /// # Panics
+    /// If `self` is `TransactionStatus::Default`, which indicates that the
+    /// transaction is idle, which is not appropriate to set the
+    /// timestamp_independent field.
+    pub fn set_timestamp_independent(&mut self, timestamp_independent: bool) {
+        match &mut self.transaction {
+            TransactionStatus::Default => {
+                panic!("cannot set timestamp_independent for txn not yet started")
+            }
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => txn.timestamp_independent = timestamp_independent,
+        }
+    }
 }
 
 /// A prepared statement.
@@ -608,6 +629,20 @@ impl<T> TransactionStatus<T> {
             | TransactionStatus::Failed(txn) => txn.grant_write_lock(guard),
         }
     }
+
+    /// Returns true iff all reads run so far in the transaction are independent
+    /// of the chosen logical timestamp (not the PlanContext walltime). This
+    /// happens if both 1) there are no referenced sources or indexes and 2)
+    /// `mz_logical_timestamp()` is not present.
+    pub fn is_timestamp_independent(&self) -> bool {
+        match self {
+            TransactionStatus::Default => true,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => txn.timestamp_independent,
+        }
+    }
 }
 
 impl<T> Default for TransactionStatus<T> {
@@ -623,6 +658,11 @@ pub struct Transaction<T> {
     pub pcx: PlanContext,
     /// Transaction operations.
     pub ops: TransactionOps<T>,
+    /// True iff all statements run so far in the transaction are independent
+    /// of the chosen logical timestamp (not the PlanContext walltime). This
+    /// happens if both 1) there are no referenced sources or indexes and 2)
+    /// `mz_logical_timestamp()` is not present.
+    pub timestamp_independent: bool,
     /// Holds the coordinator's write lock.
     write_lock_guard: Option<OwnedMutexGuard<()>>,
     /// Access mode (read only, read write).

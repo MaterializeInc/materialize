@@ -163,6 +163,7 @@ use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
+use crate::coord::compaction_group::CompactionGroupKey;
 use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::AdapterError;
@@ -194,6 +195,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks { conn_id: ConnectionId },
+    UpdateCompactionGroups,
 }
 
 #[derive(Debug)]
@@ -480,12 +482,15 @@ pub struct Coordinator<S> {
     /// policy can also be updated, though one should be sure to communicate this
     /// to the controller for it to have an effect.
     read_capability: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
-    /// For each transaction, the pinned storage and compute identifiers and time at
+    /// For each compaction group, the pinned storage and compute identifiers and time at
     /// which they are pinned.
     ///
-    /// Upon completing a transaction, this timestamp should be removed from the holds
-    /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_reads: HashMap<ConnectionId, TxnReads>,
+    /// When the compaction group is no longer needed, this timestamp should be removed
+    /// from the holds in `self.read_capability[id]`, using the `drop_compaction_group` method.
+    compaction_groups: HashMap<
+        CompactionGroupKey,
+        crate::coord::compaction_group::CompactionGroup<mz_repr::Timestamp>,
+    >,
 
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
@@ -535,15 +540,6 @@ struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
-}
-
-struct TxnReads {
-    // True iff all statements run so far in the transaction are independent
-    // of the chosen logical timestamp (not the PlanContext walltime). This
-    // happens if both 1) there are no referenced sources or indexes and 2)
-    // `mz_logical_timestamp()` is not present.
-    timestamp_independent: bool,
-    read_holds: crate::coord::read_holds::ReadHolds<mz_repr::Timestamp>,
 }
 
 /// Enforces critical section invariants for functions that perform writes to
@@ -668,25 +664,12 @@ impl<S: Append + 'static> Coordinator<S> {
     /// This should be called only after a storage collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
-    async fn initialize_storage_read_policies(
-        &mut self,
-        ids: Vec<GlobalId>,
-        compaction_window_ms: Option<Timestamp>,
-    ) {
-        let mut policy_updates = Vec::new();
-        for id in ids.into_iter() {
-            let policy = match compaction_window_ms {
-                Some(time) => ReadPolicy::lag_writes_by(time),
-                None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-            };
-            self.read_capability.insert(id, policy.clone().into());
-            policy_updates.push((id, self.read_capability[&id].policy()));
-        }
-        self.controller
-            .storage_mut()
-            .set_read_policy(policy_updates)
-            .await
-            .unwrap();
+    async fn initialize_storage_read_policies(&mut self, ids: Vec<GlobalId>) {
+        self.initialize_read_policies(CollectionIdBundle {
+            storage_ids: ids.into_iter().collect(),
+            compute_ids: BTreeMap::new(),
+        })
+        .await;
     }
 
     /// Initialize the compute read policies.
@@ -698,23 +681,205 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         ids: Vec<GlobalId>,
         instance: ComputeInstanceId,
-        compaction_window_ms: Option<Timestamp>,
     ) {
-        let mut policy_updates = Vec::new();
-        for id in ids.into_iter() {
-            let policy = match compaction_window_ms {
-                Some(time) => ReadPolicy::lag_writes_by(time),
-                None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-            };
-            self.read_capability.insert(id, policy.clone().into());
-            policy_updates.push((id, self.read_capability[&id].policy()));
+        let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        compute_ids.insert(instance, ids.into_iter().collect());
+        self.initialize_read_policies(CollectionIdBundle {
+            storage_ids: BTreeSet::new(),
+            compute_ids,
+        })
+        .await;
+    }
+
+    /// Initialize the storage and read policies.
+    ///
+    /// This should be called only after a storage or compute collection is created,
+    /// and ideally very soon afterwards. The collection is otherwise initialized
+    /// with a read policy that allows no compaction.
+    async fn initialize_read_policies(&mut self, id_bundle: CollectionIdBundle) {
+        let id_bundles = self.group_by_timeline(id_bundle.clone());
+        for (timeline, id_bundle) in id_bundles {
+            match timeline {
+                Some(timeline) => {
+                    if self
+                        .compaction_groups
+                        .contains_key(&CompactionGroupKey::Timeline(timeline.clone()))
+                    {
+                        self.add_compaction_group_ids(
+                            &CompactionGroupKey::Timeline(timeline),
+                            id_bundle,
+                        )
+                        .await;
+                    } else {
+                        let read_ts = self
+                            .ensure_timestamp_oracle(timeline.clone())
+                            .await
+                            .read_ts();
+                        self.create_compaction_group(
+                            CompactionGroupKey::Timeline(timeline),
+                            read_ts,
+                            id_bundle,
+                        )
+                        .await;
+                    }
+                }
+                None => {
+                    self.upsert_read_capability(
+                        id_bundle,
+                        vec![ReadCapabilityUpdate::Hold((Timestamp::minimum(), 1))],
+                    )
+                    .await
+                }
+            }
         }
-        self.controller
-            .compute_mut(instance)
-            .unwrap()
-            .set_read_policy(policy_updates)
+    }
+
+    /// If no timestamp oracle exists for the provided `timeline`, then one
+    /// will be created and added to `global_timelines`.
+    ///
+    /// Returns the timestamp oracle for the provided `timeline`.
+    async fn ensure_timestamp_oracle(
+        &mut self,
+        timeline: Timeline,
+    ) -> &mut timeline::DurableTimestampOracle<Timestamp> {
+        if !self.global_timelines.contains_key(&timeline) {
+            self.global_timelines.insert(
+                timeline.clone(),
+                timeline::DurableTimestampOracle::new(
+                    Timestamp::minimum(),
+                    Timestamp::minimum,
+                    *timeline::TIMESTAMP_PERSIST_INTERVAL,
+                    |ts| self.catalog.persist_timestamp(&timeline, ts),
+                )
+                .await,
+            );
+        }
+        self.global_timelines
+            .get_mut(&timeline)
+            .expect("created above")
+    }
+
+    /// Update the read capabilities of the ids in `id_bundle` using the provided
+    /// `read_capability_updates`.
+    ///
+    /// If an id does not have a current read capability, then it is ignored.
+    async fn update_read_capability(
+        &mut self,
+        id_bundle: CollectionIdBundle,
+        read_capability_updates: Vec<ReadCapabilityUpdate>,
+    ) {
+        // We do compute first, and they may result in additional storage policy effects.
+        // Update COMPUTE read policies.
+        for (compute_instance, ids) in id_bundle.compute_ids {
+            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
+                let mut compute_policy_updates = Vec::new();
+                for id in ids {
+                    if let Some(read_needs) = self.read_capability.get_mut(&id) {
+                        read_needs.update(read_capability_updates.clone());
+                        compute_policy_updates.push((id, read_needs.policy()));
+                    }
+                }
+                compute
+                    .set_read_policy(compute_policy_updates)
+                    .await
+                    .unwrap();
+            }
+        }
+        // Update STORAGE read policies.
+        let storage = self.controller.storage_mut();
+        let mut storage_policy_updates = Vec::new();
+        for id in id_bundle.storage_ids {
+            if let Some(read_needs) = self.read_capability.get_mut(&id) {
+                read_needs.update(read_capability_updates.clone());
+                storage_policy_updates.push((id, read_needs.policy()));
+            }
+        }
+        storage
+            .set_read_policy(storage_policy_updates)
             .await
             .unwrap();
+    }
+
+    /// Upsert the read capabilities of the ids in `id_bundle` using the provided
+    /// `read_capability_updates`.
+    ///
+    /// If an id does not have a current read capability, then a new one is created.
+    async fn upsert_read_capability(
+        &mut self,
+        id_bundle: CollectionIdBundle,
+        read_capability_updates: Vec<ReadCapabilityUpdate>,
+    ) {
+        // We do compute first, and they may result in additional storage policy effects.
+        // Upsert COMPUTE read policies.
+        for (compute_instance, ids) in id_bundle.compute_ids {
+            let mut compute = self.controller.compute_mut(compute_instance).unwrap();
+            let mut compute_policy_upserts = Vec::new();
+            for id in ids {
+                self.read_capability
+                    .entry(id)
+                    .or_insert(ReadCapability {
+                        base_policy: None,
+                        holds: MutableAntichain::new(),
+                    })
+                    .update(read_capability_updates.clone());
+                compute_policy_upserts.push((id, self.read_capability[&id].policy()));
+            }
+            compute
+                .set_read_policy(compute_policy_upserts)
+                .await
+                .unwrap();
+        }
+        // Upsert STORAGE read policies.
+        let storage = self.controller.storage_mut();
+        let mut storage_policy_upserts = Vec::new();
+        for id in id_bundle.storage_ids {
+            self.read_capability
+                .entry(id)
+                .or_insert(ReadCapability {
+                    base_policy: None,
+                    holds: MutableAntichain::new(),
+                })
+                .update(read_capability_updates.clone());
+            storage_policy_upserts.push((id, self.read_capability[&id].policy()));
+        }
+        storage
+            .set_read_policy(storage_policy_upserts)
+            .await
+            .unwrap();
+    }
+
+    /// Takes an `id_bundle` and separates it into multiple bundles where the ids
+    /// are grouped by the timeline they belong to.
+    ///
+    /// `None` is used for ids that do not belong to any timeline.
+    fn group_by_timeline(
+        &self,
+        id_bundle: CollectionIdBundle,
+    ) -> HashMap<Option<Timeline>, CollectionIdBundle> {
+        let mut grouped_id_bundles: HashMap<Option<Timeline>, CollectionIdBundle> = HashMap::new();
+
+        for id in id_bundle.storage_ids {
+            let timeline = self.get_timeline(id);
+            grouped_id_bundles
+                .entry(timeline)
+                .or_default()
+                .storage_ids
+                .insert(id);
+        }
+        for (compute_instance, ids) in id_bundle.compute_ids {
+            for id in ids {
+                let timeline = self.get_timeline(id);
+                grouped_id_bundles
+                    .entry(timeline)
+                    .or_default()
+                    .compute_ids
+                    .entry(compute_instance)
+                    .or_default()
+                    .insert(id);
+            }
+        }
+
+        grouped_id_bundles
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be
@@ -755,8 +920,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
-        let mut storage_policies_to_set = Vec::new();
-        let mut compute_policies_to_set = BTreeMap::new();
+        let mut policies_to_set = CollectionIdBundle::default();
 
         for entry in &entries {
             match entry.item() {
@@ -793,7 +957,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
                 }
                 CatalogItem::Table(table) => {
                     self.controller
@@ -809,23 +973,25 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
                 }
                 CatalogItem::Index(idx) => {
                     if logs.contains(&idx.on) {
-                        compute_policies_to_set
+                        policies_to_set
+                            .compute_ids
                             .entry(idx.compute_instance)
-                            .or_insert_with(Vec::new)
-                            .push(entry.id());
+                            .or_insert_with(BTreeSet::new)
+                            .insert(entry.id());
                     } else {
                         let dataflow = self
                             .dataflow_builder(idx.compute_instance)
                             .build_index_dataflow(entry.id())?;
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.compute_instance)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
-                        compute_policies_to_set
+                        policies_to_set
+                            .compute_ids
                             .entry(idx.compute_instance)
-                            .or_insert_with(Vec::new)
+                            .or_insert_with(BTreeSet::new)
                             .extend(dataflow.export_ids());
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
@@ -853,7 +1019,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
@@ -910,24 +1076,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
-        // We do compute first, and they may result in additional storage policy effects.
-        for (instance, mut ids) in compute_policies_to_set.into_iter() {
-            ids.sort();
-            ids.dedup();
-            self.initialize_compute_read_policies(
-                ids,
-                instance,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-            )
-            .await;
-        }
-        storage_policies_to_set.sort();
-        storage_policies_to_set.dedup();
-        self.initialize_storage_read_policies(
-            storage_policies_to_set,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-        )
-        .await;
+        self.initialize_read_policies(policies_to_set).await;
 
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
@@ -1043,6 +1192,9 @@ impl<S: Append + 'static> Coordinator<S> {
             tokio::time::interval(self.catalog.config().timestamp_frequency);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
+        // TODO(jkosh44) don't hardcoded interval
+        // Interval for updating compaction groups
+        let mut update_compaction_groups = tokio::time::interval(Duration::from_millis(1_0000));
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1073,6 +1225,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
+                // `tick()` on `Interval` is cancel-safe:
+                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                _ = update_compaction_groups.tick() => Message::UpdateCompactionGroups,
 
                 // At the lowest priority, process table advancements. This is a blocking
                 // HashMap instead of a channel so that we can delay the determination of
@@ -1138,6 +1293,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::RemovePendingPeeks { conn_id } => {
                     self.remove_pending_peeks(conn_id).await;
                 }
+                Message::UpdateCompactionGroups => self.message_update_compaction_groups().await,
             }
 
             if let Some(timestamp) = self.get_local_timestamp_oracle_mut().should_advance_to() {
@@ -1855,6 +2011,22 @@ impl<S: Append + 'static> Coordinator<S> {
         .expect("updating compute instance status cannot fail");
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn message_update_compaction_groups(&mut self) {
+        let timeline_updates: Vec<_> = self
+            .global_timelines
+            .iter_mut()
+            .map(|(timeline, oracle)| (timeline.clone(), oracle.read_ts()))
+            .collect();
+        for (timeline, read_ts) in timeline_updates {
+            self.update_compaction_group_timestamp(
+                &CompactionGroupKey::Timeline(timeline),
+                read_ts,
+            )
+            .await;
+        }
+    }
+
     async fn handle_statement(
         &mut self,
         session: &mut Session,
@@ -2263,9 +2435,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.drop_sinks(drop_sinks).await;
 
         // Release this transaction's compaction hold on collections.
-        if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
-            self.release_read_hold(txn_reads.read_holds).await;
-        }
+        self.drop_compaction_group(&CompactionGroupKey::Transaction(session.conn_id()))
+            .await;
         txn
     }
 
@@ -2936,11 +3107,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(
-                    vec![table_id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![table_id]).await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -3054,11 +3221,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(
-                    vec![source_id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![source_id]).await;
                 if let Some((df, compute_instance)) = df {
                     self.ship_dataflow(df, compute_instance).await;
                 }
@@ -3469,11 +3632,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(
-                    vec![id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![id]).await;
 
                 self.ship_dataflow(df, compute_instance).await;
 
@@ -4040,12 +4199,13 @@ impl<S: Append + 'static> Coordinator<S> {
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
         let timestamp = if in_transaction && when == QueryWhen::Immediately {
-            // If all previous statements were timestamp-independent and the current one is
+            // If all previous statements were timestamp-independent reads and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
-            if let Some(read_txn) = self.txn_reads.get(&conn_id) {
-                if read_txn.timestamp_independent && !timestamp_independent {
-                    session.clear_transaction_ops();
-                }
+            if session.get_transaction_timestamp().is_some()
+                && session.transaction().is_timestamp_independent()
+                && !timestamp_independent
+            {
+                session.clear_transaction_ops();
             }
 
             let timestamp = match session.get_transaction_timestamp() {
@@ -4064,16 +4224,13 @@ impl<S: Append + 'static> Coordinator<S> {
                         &QueryWhen::Immediately,
                         compute_instance,
                     )?;
-                    let read_holds = read_holds::ReadHolds {
-                        time: timestamp,
+                    self.create_compaction_group(
+                        CompactionGroupKey::Transaction(conn_id),
+                        timestamp,
                         id_bundle,
-                    };
-                    self.acquire_read_holds(&read_holds).await;
-                    let txn_reads = TxnReads {
-                        timestamp_independent,
-                        read_holds,
-                    };
-                    self.txn_reads.insert(conn_id, txn_reads);
+                    )
+                    .await;
+                    session.set_timestamp_independent(timestamp_independent);
                     timestamp
                 }
             };
@@ -4083,7 +4240,11 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
-            let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
+            let allowed_id_bundle = &self
+                .compaction_groups
+                .get(&CompactionGroupKey::Transaction(conn_id))
+                .unwrap()
+                .id_bundle;
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
@@ -5555,6 +5716,21 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        self.remove_timeline_compaction_group_ids_storage(
+            sources_to_drop
+                .iter()
+                .chain(tables_to_drop.iter())
+                .chain(recorded_views_to_drop.iter().map(|(_, id)| id))
+                .cloned(),
+        );
+        self.remove_timeline_compaction_group_ids_compute(
+            sinks_to_drop
+                .iter()
+                .chain(indexes_to_drop.iter())
+                .chain(recorded_views_to_drop.iter())
+                .cloned(),
+        );
+
         let (builtin_table_updates, result) = self
             .catalog
             .transact(session, ops, |catalog| {
@@ -5630,6 +5806,58 @@ impl<S: Append + 'static> Coordinator<S> {
         .await;
 
         Ok(result)
+    }
+
+    fn remove_timeline_compaction_group_ids_storage<I>(&mut self, ids: I)
+    where
+        I: IntoIterator<Item = GlobalId>,
+    {
+        for id in ids {
+            if let Some(timeline) = self.get_timeline(id) {
+                let compaction_group = self
+                    .compaction_groups
+                    .get_mut(&CompactionGroupKey::Timeline(timeline.clone()))
+                    .expect("all timelines have a compaction group");
+                compaction_group.id_bundle.storage_ids.remove(&id);
+                if compaction_group.id_bundle.is_empty() {
+                    self.compaction_groups
+                        .remove(&CompactionGroupKey::Timeline(timeline.clone()));
+                    self.global_timelines.remove(&timeline);
+                }
+            }
+        }
+    }
+
+    fn remove_timeline_compaction_group_ids_compute<I>(&mut self, ids: I)
+    where
+        I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
+    {
+        for (compute_instance, id) in ids {
+            if let Some(timeline) = self.get_timeline(id) {
+                let compaction_group = self
+                    .compaction_groups
+                    .get_mut(&CompactionGroupKey::Timeline(timeline.clone()))
+                    .expect("all timelines have a compaction group");
+                if let Some(ids) = compaction_group
+                    .id_bundle
+                    .compute_ids
+                    .get_mut(&compute_instance)
+                {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        compaction_group
+                            .id_bundle
+                            .compute_ids
+                            .remove(&compute_instance);
+                    }
+                    if compaction_group.id_bundle.is_empty() {
+                        self.compaction_groups
+                            .remove(&CompactionGroupKey::Timeline(timeline.clone()));
+                        self.global_timelines.remove(&timeline);
+                    }
+                }
+            }
+        }
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
@@ -5757,11 +5985,19 @@ impl<S: Append + 'static> Coordinator<S> {
                         .expect("setting options on index")
                         .compute_instance;
                     let window = window.map(duration_to_timestamp_millis);
-                    let policy = match window {
-                        Some(time) => ReadPolicy::lag_writes_by(time),
-                        None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
+                    let read_capability_updates = match window {
+                        Some(timestamp) => {
+                            vec![ReadCapabilityUpdate::BasePolicy(Some(
+                                ReadPolicy::lag_writes_by(timestamp),
+                            ))]
+                        }
+                        None => {
+                            vec![ReadCapabilityUpdate::BasePolicy(Some(
+                                ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
+                            ))]
+                        }
                     };
-                    needs.base_policy = policy;
+                    needs.update(read_capability_updates);
                     self.controller
                         .compute_mut(compute_instance)
                         .unwrap()
@@ -5802,12 +6038,8 @@ impl<S: Append + 'static> Coordinator<S> {
             .create_dataflows(dataflow_plans)
             .await
             .unwrap();
-        self.initialize_compute_read_policies(
-            output_ids,
-            instance,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-        )
-        .await;
+        self.initialize_compute_read_policies(output_ids, instance)
+            .await;
     }
 
     /// Finalizes a dataflow.
@@ -5944,24 +6176,26 @@ impl<S: Append + 'static> Coordinator<S> {
             if timelines.contains_key(&id) {
                 continue;
             }
-            let entry = self.catalog.get_entry(&id);
-            match entry.item() {
-                CatalogItem::Source(source) => {
-                    timelines.insert(id, source.timeline.clone());
+            let entry = self.catalog.try_get_entry(&id);
+            if let Some(entry) = entry {
+                match entry.item() {
+                    CatalogItem::Source(source) => {
+                        timelines.insert(id, source.timeline.clone());
+                    }
+                    CatalogItem::Index(index) => {
+                        ids.push(index.on);
+                    }
+                    CatalogItem::View(view) => {
+                        ids.extend(view.optimized_expr.depends_on());
+                    }
+                    CatalogItem::RecordedView(rview) => {
+                        ids.extend(rview.optimized_expr.depends_on());
+                    }
+                    CatalogItem::Table(table) => {
+                        timelines.insert(id, table.timeline());
+                    }
+                    _ => {}
                 }
-                CatalogItem::Index(index) => {
-                    ids.push(index.on);
-                }
-                CatalogItem::View(view) => {
-                    ids.extend(view.optimized_expr.depends_on());
-                }
-                CatalogItem::RecordedView(rview) => {
-                    ids.extend(rview.optimized_expr.depends_on());
-                }
-                CatalogItem::Table(table) => {
-                    timelines.insert(id, table.timeline());
-                }
-                _ => {}
             }
         }
 
@@ -6086,7 +6320,7 @@ pub async fn serve<S: Append + 'static>(
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
-                txn_reads: Default::default(),
+                compaction_groups: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
@@ -6463,14 +6697,8 @@ pub mod fast_path_peek {
                         .create_dataflows(vec![dataflow])
                         .await
                         .unwrap();
-                    self.initialize_compute_read_policies(
-                        output_ids,
-                        compute_instance,
-                        // Disable compaction by using None as the compaction window so that nothing
-                        // can compact before the peek occurs below.
-                        None,
-                    )
-                    .await;
+                    self.initialize_compute_read_policies(output_ids, compute_instance)
+                        .await;
 
                     // Create an identity MFP operator.
                     let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
@@ -6567,6 +6795,10 @@ pub mod fast_path_peek {
 
             // If it was created, drop the dataflow once the peek command is sent.
             if let Some(index_id) = drop_dataflow {
+                self.remove_timeline_compaction_group_ids_compute(vec![(
+                    compute_instance,
+                    index_id,
+                )]);
                 self.drop_indexes(vec![(compute_instance, index_id)]).await;
             }
 
@@ -6578,110 +6810,112 @@ pub mod fast_path_peek {
     }
 }
 
-/// Types and methods related to acquiring and releasing read holds on collections.
+/// Types and methods related to acquiring, updating, and dropping compaction groups.
 ///
-/// A "read hold" prevents the controller from compacting the associated collections,
-/// and ensures that they remain "readable" at a specific time, as long as the hold
-/// is held.
-///
-/// These are most commonly used in support of transactions, which acquire these holds
-/// to ensure that they can continue to use collections over an open-ended series of
-/// queries. However, nothing is specific to transactions here.
-pub mod read_holds {
+/// A "compaction group" is a group of collections that all share some common read
+/// policy. The compaction group is an abstraction that helps initialize these read
+/// policies, update them, and remove them, all while ensuring they are in sync across
+/// collections. The read policies help ensure that all collections remain "readable"
+/// at a specific common time.
+pub mod compaction_group {
+    use crate::client::ConnectionId;
     use crate::coord::id_bundle::CollectionIdBundle;
+    use crate::coord::ReadCapabilityUpdate;
+    use mz_stash::Append;
+    use mz_storage::client::sources::Timeline;
 
-    /// Relevant information for acquiring or releasing a bundle of read holds.
-    pub(super) struct ReadHolds<T> {
+    #[derive(Eq, Hash, PartialEq, Debug)]
+    pub(super) enum CompactionGroupKey {
+        Transaction(ConnectionId),
+        Timeline(Timeline),
+    }
+
+    /// Relevant information for acquiring, updating, or dropping a compaction group.
+    pub(super) struct CompactionGroup<T> {
         pub(super) time: T,
         pub(super) id_bundle: CollectionIdBundle,
     }
 
-    impl<S> crate::coord::Coordinator<S> {
-        /// Acquire read holds on the indicated collections at the indicated time.
-        ///
-        /// This method will panic if the holds cannot be acquired. In the future,
-        /// it would be polite to have it error instead, as it is not unrecoverable.
-        pub(super) async fn acquire_read_holds(
+    impl<S: Append + 'static> crate::coord::Coordinator<S> {
+        /// Create compaction group on the indicated collections at the indicated time.
+        pub(super) async fn create_compaction_group(
             &mut self,
-            read_holds: &ReadHolds<mz_repr::Timestamp>,
+            key: CompactionGroupKey,
+            time: mz_repr::Timestamp,
+            id_bundle: CollectionIdBundle,
         ) {
-            // Update STORAGE read policies.
-            let mut policy_changes = Vec::new();
-            let storage = self.controller.storage_mut();
-            for id in read_holds.id_bundle.storage_ids.iter() {
-                let collection = storage.collection(*id).unwrap();
-                assert!(collection
-                    .read_capabilities
-                    .frontier()
-                    .less_equal(&read_holds.time));
-                let read_needs = self.read_capability.get_mut(id).unwrap();
-                read_needs.holds.update_iter(Some((read_holds.time, 1)));
-                policy_changes.push((*id, read_needs.policy()));
-            }
-            storage.set_read_policy(policy_changes).await.unwrap();
-            // Update COMPUTE read policies
-            for (compute_instance, compute_ids) in read_holds.id_bundle.compute_ids.iter() {
-                let mut policy_changes = Vec::new();
-                let mut compute = self.controller.compute_mut(*compute_instance).unwrap();
-                for id in compute_ids.iter() {
-                    let collection = compute.as_ref().collection(*id).unwrap();
-                    assert!(collection
-                        .read_capabilities
-                        .frontier()
-                        .less_equal(&read_holds.time));
-                    let read_needs = self.read_capability.get_mut(id).unwrap();
-                    read_needs.holds.update_iter(Some((read_holds.time, 1)));
-                    policy_changes.push((*id, read_needs.policy()));
-                }
-                compute.set_read_policy(policy_changes).await.unwrap();
+            self.upsert_read_capability(
+                id_bundle.clone(),
+                vec![ReadCapabilityUpdate::Hold((time, 1))],
+            )
+            .await;
+            self.compaction_groups
+                .insert(key, CompactionGroup { time, id_bundle });
+        }
+
+        /// Drop the compaction group identified by `key`.
+        ///
+        /// This method relies on a previous call to `create_compaction_group` with the same
+        /// `key`, and its behavior will be erratic if called on anything else, or if
+        /// called more than once on the same compaction group.
+        pub(super) async fn drop_compaction_group(&mut self, key: &CompactionGroupKey) {
+            if let Some(CompactionGroup { time, id_bundle }) = self.compaction_groups.remove(key) {
+                self.update_read_capability(
+                    id_bundle,
+                    vec![ReadCapabilityUpdate::Hold((time, -1))],
+                )
+                .await;
             }
         }
-        /// Release read holds on the indicated collections at the indicated time.
-        ///
-        /// This method relies on a previous call to `acquire_read_holds` with the same
-        /// argument, and its behavior will be erratic if called on anything else, or if
-        /// called more than once on the same bundle of read holds.
-        pub(super) async fn release_read_hold(
-            &mut self,
-            read_holds: ReadHolds<mz_repr::Timestamp>,
-        ) {
-            let ReadHolds {
-                time,
-                id_bundle:
-                    CollectionIdBundle {
-                        storage_ids,
-                        compute_ids,
-                    },
-            } = read_holds;
 
-            // Update STORAGE read policies.
-            let mut policy_changes = Vec::new();
-            for id in storage_ids.iter() {
-                // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                if let Some(read_needs) = self.read_capability.get_mut(id) {
-                    read_needs.holds.update_iter(Some((time, -1)));
-                    policy_changes.push((*id, read_needs.policy()));
-                }
-            }
-            self.controller
-                .storage_mut()
-                .set_read_policy(policy_changes)
-                .await
-                .unwrap();
-            // Update COMPUTE read policies
-            for (compute_instance, compute_ids) in compute_ids.iter() {
-                let mut policy_changes = Vec::new();
-                for id in compute_ids.iter() {
-                    // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                    if let Some(read_needs) = self.read_capability.get_mut(id) {
-                        read_needs.holds.update_iter(Some((time, -1)));
-                        policy_changes.push((*id, read_needs.policy()));
-                    }
-                }
-                if let Some(mut compute) = self.controller.compute_mut(*compute_instance) {
-                    compute.set_read_policy(policy_changes).await.unwrap();
-                }
-            }
+        /// Update the time of a compaction group identified by `key` to the provided
+        /// `new_time`
+        ///
+        /// This method relies on a previous call to `create_compaction_group` with the same
+        /// `key`, and its behavior will be erratic if called on anything else.
+        pub(super) async fn update_compaction_group_timestamp(
+            &mut self,
+            key: &CompactionGroupKey,
+            new_time: mz_repr::Timestamp,
+        ) {
+            let CompactionGroup { time, id_bundle } = self
+                .compaction_groups
+                .get_mut(key)
+                .unwrap_or_else(|| panic!("compaction group {:?} does not exist", key));
+            let old_time = time.clone();
+            let id_bundle = id_bundle.clone();
+            *time = new_time;
+            self.update_read_capability(
+                id_bundle,
+                vec![
+                    ReadCapabilityUpdate::Hold((new_time, 1)),
+                    ReadCapabilityUpdate::Hold((old_time, -1)),
+                ],
+            )
+            .await;
+        }
+
+        /// Add a new ids to a compaction group identified by `key`.
+        ///
+        /// This method relies on a previous call to `create_compaction_group` with the same
+        /// `key`, and its behavior will be erratic if called on anything else, or if
+        /// called more than once on the same id bundle.
+        pub(super) async fn add_compaction_group_ids(
+            &mut self,
+            key: &CompactionGroupKey,
+            new_id_bundle: CollectionIdBundle,
+        ) {
+            let CompactionGroup { time, id_bundle } = self
+                .compaction_groups
+                .get_mut(key)
+                .unwrap_or_else(|| panic!("compaction group {:?} does not exist", key));
+            id_bundle.union(new_id_bundle.clone());
+            let time = time.clone();
+            self.upsert_read_capability(
+                new_id_bundle.clone(),
+                vec![ReadCapabilityUpdate::Hold((time, 1))],
+            )
+            .await;
         }
     }
 }
@@ -6695,28 +6929,45 @@ where
     T: timely::progress::Timestamp,
 {
     /// The default read policy for the collection when no holds are present.
-    base_policy: ReadPolicy<T>,
+    base_policy: Option<ReadPolicy<T>>,
     /// Holds expressed by transactions, that should prevent compaction.
     holds: MutableAntichain<T>,
 }
 
-impl<T: timely::progress::Timestamp> From<ReadPolicy<T>> for ReadCapability<T> {
-    fn from(base_policy: ReadPolicy<T>) -> Self {
-        Self {
-            base_policy,
-            holds: MutableAntichain::new(),
-        }
-    }
+/// An update to apply to a `ReadCapability`.
+#[derive(Clone)]
+enum ReadCapabilityUpdate<T = mz_repr::Timestamp>
+where
+    T: timely::progress::Timestamp,
+{
+    BasePolicy(Option<ReadPolicy<T>>),
+    Hold((T, Diff)),
 }
 
-impl<T: timely::progress::Timestamp> ReadCapability<T> {
+impl ReadCapability<mz_repr::Timestamp> {
     /// Acquires the effective read policy, reflecting both the base policy and any holds.
-    fn policy(&self) -> ReadPolicy<T> {
+    fn policy(&self) -> ReadPolicy<mz_repr::Timestamp> {
         // TODO: This could be "optimized" when `self.holds.frontier` is empty.
-        ReadPolicy::Multiple(vec![
-            ReadPolicy::ValidFrom(self.holds.frontier().to_owned()),
-            self.base_policy.clone(),
-        ])
+        let mut policy = ReadPolicy::ValidFrom(self.holds.frontier().to_owned());
+        if let Some(bas_policy) = &self.base_policy {
+            policy = ReadPolicy::Multiple(vec![policy, bas_policy.clone()]);
+        }
+        policy
+    }
+
+    /// Applies `updates` to the current `ReadCapability`. For conflicting updates, such as
+    /// multiple `CompactionWindow` updates, the last update wins.
+    fn update(&mut self, updates: Vec<ReadCapabilityUpdate>) {
+        for update in updates {
+            match update {
+                ReadCapabilityUpdate::BasePolicy(base_policy) => {
+                    self.base_policy = base_policy;
+                }
+                ReadCapabilityUpdate::Hold((time, diff)) => {
+                    self.holds.update_iter(Some((time, diff)));
+                }
+            }
+        }
     }
 }
 
