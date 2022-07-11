@@ -4817,7 +4817,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.19.3"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#87257b2fce9288c108b004ad57d0f4af1e160f97"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -4830,7 +4830,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#87257b2fce9288c108b004ad57d0f4af1e160f97"
 dependencies = [
  "futures",
  "openssl",
@@ -4842,7 +4842,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.4"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#87257b2fce9288c108b004ad57d0f4af1e160f97"
 dependencies = [
  "base64",
  "byteorder",
@@ -4859,7 +4859,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.3"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#87257b2fce9288c108b004ad57d0f4af1e160f97"
 dependencies = [
  "bytes",
  "chrono",
@@ -6265,7 +6265,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.6"
-source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
+source = "git+https://github.com/MaterializeInc/rust-postgres#87257b2fce9288c108b004ad57d0f4af1e160f97"
 dependencies = [
  "async-trait",
  "byteorder",
