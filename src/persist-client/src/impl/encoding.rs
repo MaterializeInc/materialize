@@ -23,12 +23,12 @@ use uuid::Uuid;
 use crate::error::CodecMismatch;
 use crate::r#impl::state::{
     HollowBatch, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReader, ProtoSnapshotSplit,
-    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ReadCapability, State,
-    StateCollections,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriter,
+    ReadCapability, State, StateCollections, WriterState,
 };
 use crate::r#impl::trace::Trace;
 use crate::read::{ReaderId, SnapshotSplit};
-use crate::ShardId;
+use crate::{ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {
@@ -61,6 +61,19 @@ impl RustType<String> for ReaderId {
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
         match parse_id('r', "ReaderId", &proto) {
             Ok(x) => Ok(ReaderId(x)),
+            Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
+        }
+    }
+}
+
+impl RustType<String> for WriterId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        match parse_id('w', "WriterId", &proto) {
+            Ok(x) => Ok(WriterId(x)),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
@@ -140,6 +153,15 @@ where
                     seqno: cap.seqno.into_proto(),
                 })
                 .collect(),
+            writers: self
+                .collections
+                .writers
+                .iter()
+                .map(|(id, writer)| ProtoWriter {
+                    writer_id: id.into_proto(),
+                    last_heartbeat: writer.last_heartbeat,
+                })
+                .collect(),
             trace: Some(self.collections.trace.into_proto()),
         }
     }
@@ -186,8 +208,19 @@ where
             };
             readers.insert(reader_id, cap);
         }
+        let mut writers = HashMap::with_capacity(x.writers.len());
+        for proto in x.writers {
+            let writer_id = proto.writer_id.into_rust()?;
+            writers.insert(
+                writer_id,
+                WriterState {
+                    last_heartbeat: proto.last_heartbeat,
+                },
+            );
+        }
         let collections = StateCollections {
             readers,
+            writers,
             trace: x.trace.into_rust_if_some("trace")?,
         };
         Ok(Ok(State {

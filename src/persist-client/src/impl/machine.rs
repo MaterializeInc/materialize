@@ -30,9 +30,12 @@ use crate::error::{CodecMismatch, InvalidUsage};
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
-use crate::r#impl::state::{HollowBatch, ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::state::{
+    HollowBatch, ReadCapability, Since, State, StateCollections, Upper, WriterState,
+};
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
+use crate::write::WriterId;
 use crate::ShardId;
 
 #[derive(Debug)]
@@ -95,15 +98,25 @@ where
         self.state.upper()
     }
 
-    pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
+    pub async fn register_reader(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap)) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
-                state.register(seqno, reader_id)
+                state.register_reader(seqno, reader_id)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         (shard_upper, read_cap)
+    }
+
+    pub async fn register_writer(&mut self, writer_id: &WriterId) -> (Upper<T>, WriterState) {
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, (shard_upper, writer_state)) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
+                state.register_writer(writer_id)
+            })
+            .await;
+        (shard_upper, writer_state)
     }
 
     pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
@@ -120,6 +133,7 @@ where
     pub async fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
+        writer_id: &WriterId,
     ) -> Result<
         Result<Result<(SeqNo, Vec<FueledMergeReq<T>>), Upper<T>>, InvalidUsage<T>>,
         Indeterminate,
@@ -128,7 +142,7 @@ where
         loop {
             let (seqno, res) = self
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
-                    state.compare_and_append(batch)
+                    state.compare_and_append(batch, writer_id)
                 })
                 .await?;
 
@@ -189,6 +203,16 @@ where
         let (seqno, _existed) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
                 state.expire_reader(reader_id)
+            })
+            .await;
+        seqno
+    }
+
+    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
+        let metrics = Arc::clone(&self.metrics);
+        let (seqno, _existed) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, state| {
+                state.expire_writer(writer_id)
             })
             .await;
         seqno
@@ -839,7 +863,7 @@ mod tests {
                                 .expect("invalid shard types");
                             let (_, mut merge_reqs) = write
                                 .machine
-                                .compare_and_append(batch)
+                                .compare_and_append(batch, &write.writer_id)
                                 .await
                                 .expect("indeterminate")
                                 .expect("invalid usage")
