@@ -49,8 +49,15 @@ $ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish
 
 > CREATE SINK sink1 FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'recorded-view-sink'
+  TOPIC 'testdrive-recorded-views-sink-${testdrive.seed}'
+  WITH (reuse_topic = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> CREATE MATERIALIZED SOURCE sink1_check
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-recorded-views-sink-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
 {"f1": "456"}
@@ -60,18 +67,8 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > SELECT * FROM v1;
 4
 
-$ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
-{"before": null, "after": {"row": {"c1": 3}}}
-{"before": {"row": {"c1": 3}}, "after": {"row": {"c1": 4}}}
-
-> BEGIN
-
-> DECLARE c CURSOR FOR TAIL v1;
-
-> FETCH ALL c;
-<TIMESTAMP> 1 4
-
-> COMMIT
+> SELECT MAX((after).c1) FROM sink1_check;
+4
 
 # Inject failure in the source
 
