@@ -132,13 +132,13 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
             dataflow.objects_to_build[other]
                 .plan
                 .as_inner_mut()
-                .visit_mut_post_nolimit(&mut |expr| {
+                .visit_mut_post(&mut |expr| {
                     if let MirRelationExpr::Get { id, .. } = expr {
                         if id == &Id::Global(global_id) {
                             *id = Id::Local(new_local);
                         }
                     }
-                });
+                })?;
 
             // With identifiers rewritten, we can replace `other` with
             // a `MirRelationExpr::Let` binding, whose value is `index` and
