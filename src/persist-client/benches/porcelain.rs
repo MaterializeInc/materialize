@@ -118,7 +118,7 @@ async fn bench_write_to_listen_one_iter(
         loop {
             let events = tokio::select! {
                 x = listen.next() => x,
-                _ = tx.closed() => return,
+                _ = tx.closed() => break,
             };
             for event in events {
                 debug!("listener got event {:?}", event);
@@ -131,6 +131,9 @@ async fn bench_write_to_listen_one_iter(
                 }
             }
         }
+
+        // Gracefully expire the Listen.
+        listen.expire().await;
     });
 
     // Now write the data, waiting for the listener to catch up after each
@@ -169,9 +172,6 @@ async fn bench_write_to_listen_one_iter(
     // Now wait for the listener task to clean up so it doesn't leak into other
     // benchmarks.
     listen.await.expect("listener task failed");
-
-    // Gracefully expire the ReadHandle.
-    read.expire().await;
 
     Ok(batch_count)
 }

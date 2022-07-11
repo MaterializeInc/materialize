@@ -32,7 +32,7 @@ use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
 use crate::r#impl::state::{
-    HollowBatch, ReadCapability, Since, State, StateCollections, Upper, WriterState,
+    HollowBatch, ReaderState, Since, State, StateCollections, Upper, WriterState,
 };
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
@@ -103,11 +103,15 @@ where
         self.state.upper()
     }
 
-    pub async fn register_reader(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
+    pub async fn register_reader(
+        &mut self,
+        reader_id: &ReaderId,
+        heartbeat_timestamp_ms: u64,
+    ) -> (Upper<T>, ReaderState<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap)) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
-                state.register_reader(seqno, reader_id)
+                state.register_reader(reader_id, seqno, heartbeat_timestamp_ms)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
@@ -128,11 +132,15 @@ where
         (shard_upper, writer_state)
     }
 
-    pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
+    pub async fn clone_reader(
+        &mut self,
+        new_reader_id: &ReaderId,
+        heartbeat_timestamp_ms: u64,
+    ) -> ReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, read_cap) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, state| {
-                state.clone_reader(seqno, new_reader_id)
+                state.clone_reader(new_reader_id, seqno, heartbeat_timestamp_ms)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
@@ -199,12 +207,27 @@ where
         &mut self,
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
+        heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>) {
         let metrics = Arc::clone(&self.metrics);
-        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |_, state| {
-            state.downgrade_since(reader_id, new_since)
+        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, state| {
+            state.downgrade_since(reader_id, seqno, new_since, heartbeat_timestamp_ms)
         })
         .await
+    }
+
+    pub async fn heartbeat_reader(
+        &mut self,
+        reader_id: &ReaderId,
+        heartbeat_timestamp_ms: u64,
+    ) -> SeqNo {
+        let metrics = Arc::clone(&self.metrics);
+        let (seqno, _existed) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, state| {
+                state.heartbeat_reader(reader_id, heartbeat_timestamp_ms)
+            })
+            .await;
+        seqno
     }
 
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
@@ -278,16 +301,16 @@ where
     }
 
     // NB: Unlike the other methods here, this one is read-only.
-    pub async fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Self, Since<T>> {
+    pub async fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
         match self.state.verify_listen(as_of) {
-            Ok(Ok(())) => Ok(self.clone()),
+            Ok(Ok(())) => Ok(()),
             Ok(Err(Upper(_))) => {
                 // The upper may not be ready yet (maybe it would be ready if we
                 // re-fetched state), but that's okay! One way to think of
                 // Listen is as an async stream where creating the stream at any
                 // legal as_of does not block but then updates trickle in once
                 // they are available.
-                Ok(self.clone())
+                Ok(())
             }
             Err(Since(since)) => return Err(Since(since)),
         }

@@ -1384,7 +1384,12 @@ mod reader {
                 }
             }
 
-            let mut listen = read.listen(as_of.clone()).await.expect("invalid as_of");
+            let mut listen = read
+                .clone()
+                .await
+                .listen(as_of.clone())
+                .await
+                .expect("invalid as_of");
 
             'outer: loop {
                 let next = listen.next().await;

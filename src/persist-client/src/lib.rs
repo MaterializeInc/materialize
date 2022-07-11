@@ -19,6 +19,7 @@
 
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -232,6 +233,11 @@ impl PersistConfig {
     }
 }
 
+impl PersistConfig {
+    // Move this to a PersistConfig field when we actually have read leases.
+    pub(crate) const FAKE_READ_LEASE_DURATION: Duration = Duration::from_secs(60);
+}
+
 /// A handle for interacting with the set of persist shard made durable at a
 /// single [PersistLocation].
 ///
@@ -340,13 +346,15 @@ impl PersistClient {
         .await?;
 
         let reader_id = ReaderId::new();
-        let (_, read_cap) = machine.register_reader(&reader_id).await;
+        let (_, read_cap) = machine.register_reader(&reader_id, (self.cfg.now)()).await;
         let reader = ReadHandle {
+            cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             reader_id,
             machine,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
+            last_heartbeat: Instant::now(),
             explicitly_expired: false,
         };
 
@@ -551,7 +559,7 @@ mod tests {
 
         // Grab a snapshot and listener as_of 1.
         let mut snap = read.expect_snapshot(1).await;
-        let mut listen = read.expect_listen(1).await;
+        let mut listen = read.clone().await.expect_listen(1).await;
 
         // Snapshot should only have part of what we wrote.
         assert_eq!(snap.read_all().await, all_ok(&data[..1], 1));
@@ -1031,7 +1039,7 @@ mod tests {
         let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener before we do any writing
-        let mut listen = read.expect_listen(0).await;
+        let mut listen = read.clone().await.expect_listen(0).await;
 
         // Write a [0,3) batch.
         write1
@@ -1388,7 +1396,7 @@ mod tests {
         let (mut write, read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
-        let mut listen = read.expect_listen(1).await;
+        let mut listen = read.clone().await.expect_listen(1).await;
         let mut listen_next = Box::pin(listen.next());
         // Intentionally don't await the listen_next, but instead manually poke
         // it for a while and assert that it doesn't resolve yet. See below for
