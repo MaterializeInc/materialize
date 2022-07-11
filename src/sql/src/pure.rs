@@ -18,7 +18,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
-use aws_arn::ARN;
+use aws_arn::ResourceName as AmazonResourceName;
 use mz_kafka_util::KafkaAddrs;
 use mz_sql_parser::ast::{
     CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConnection,
@@ -155,7 +155,7 @@ pub async fn purify_create_source(
         }
         CreateSourceConnection::Kinesis { arn } => {
             let region = arn
-                .parse::<ARN>()
+                .parse::<AmazonResourceName>()
                 .context("Unable to parse provided ARN")?
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;

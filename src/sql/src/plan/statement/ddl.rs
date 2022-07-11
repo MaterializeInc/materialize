@@ -18,7 +18,7 @@ use std::fmt::Write;
 use std::str::FromStr;
 use std::time::Duration;
 
-use aws_arn::ARN;
+use aws_arn::ResourceName as AmazonResourceName;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
@@ -501,7 +501,7 @@ pub fn plan_create_source(
         }
         CreateSourceConnection::Kinesis { arn, .. } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM KINESIS")?;
-            let arn: ARN = arn
+            let arn: AmazonResourceName = arn
                 .parse()
                 .map_err(|e| sql_err!("Unable to parse provided ARN: {:#?}", e))?;
             let stream_name = match arn.resource.strip_prefix("stream/") {

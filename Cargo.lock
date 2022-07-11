@@ -272,11 +272,12 @@ dependencies = [
 
 [[package]]
 name = "aws-arn"
-version = "0.2.1"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4fd4baeb3911d4188e01c792cb1e1f6b74414dfde632e291911e0fa18ff60f6"
+checksum = "6da0fae6942d45915eebb3c2cfad48c5359d969a58b24696c71baf6a54489a98"
 dependencies = [
  "lazy_static",
+ "regex",
  "serde",
 ]
 
