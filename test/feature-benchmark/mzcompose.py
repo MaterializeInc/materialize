@@ -414,7 +414,7 @@ def workflow_mzcloud(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--max-retries",
         metavar="N",
         type=int,
-        default=3,
+        default=2,
         help="Retry any potential performance regressions up to N times.",
     )
 
