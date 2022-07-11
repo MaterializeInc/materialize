@@ -690,14 +690,14 @@ Source materialize.public.int_table (u6):
 Query:
 %0 =
 | Get materialize.public.int_table (u6)
-| ArrangeBy (i32tof64(#0))
+| ArrangeBy (integer_to_double(#0))
 
 %1 =
 | Get materialize.public.double_table (u5)
 | Filter !(isnull(#0))
 
 %2 =
-| Join %0 %1 (= #1 i32tof64(#0))
-| | implementation = Differential %1 %0.(i32tof64(#0))
+| Join %0 %1 (= #1 integer_to_double(#0))
+| | implementation = Differential %1 %0.(integer_to_double(#0))
 
 EOF

@@ -37,7 +37,7 @@ Query:
 | Reduce group=(#1, #2)
 | | agg sum(#0)
 | | agg count(#0)
-| Map (i64tof64(#2) / i64tof64(if (#3 = 0) then {null} else {#3}))
+| Map (bigint_to_double(#2) / bigint_to_double(if (#3 = 0) then {null} else {#3}))
 | Project (#4, #0, #1)
 
 EOF
@@ -65,7 +65,7 @@ Query:
 | Reduce group=(((#0 + #1) + #2), ((#0 + #1) + #3))
 | | agg sum(#3)
 | | agg count(#3)
-| Map (i64tof64(#2) / i64tof64(if (#3 = 0) then {null} else {#3}))
+| Map (bigint_to_double(#2) / bigint_to_double(if (#3 = 0) then {null} else {#3}))
 | Project (#4, #0, #1)
 
 EOF

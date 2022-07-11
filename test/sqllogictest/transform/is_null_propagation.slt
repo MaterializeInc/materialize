@@ -93,7 +93,7 @@ Query:
 
 %6 =
 | Get %5 (l2)
-| Filter (#0 = i64tof64(#1))
+| Filter (#0 = bigint_to_double(#1))
 | Project (#0)
 
 %7 =

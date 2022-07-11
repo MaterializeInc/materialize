@@ -151,7 +151,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numerictoi16"]
+    #[sqlname = "numeric_to_smallint"]
     fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -162,7 +162,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numerictoi32"]
+    #[sqlname = "numeric_to_integer"]
     fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -172,7 +172,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numerictoi64"]
+    #[sqlname = "numeric_to_bigint"]
     fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -182,7 +182,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numerictof32"]
+    #[sqlname = "numeric_to_real"]
     fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
         let i = a.to_string().parse::<f32>().unwrap();
         if i.is_infinite() {
@@ -194,7 +194,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numerictof64"]
+    #[sqlname = "numeric_to_double"]
     fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
         let i = a.to_string().parse::<f64>().unwrap();
         if i.is_infinite() {
@@ -206,7 +206,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numerictostr"]
+    #[sqlname = "numeric_to_text"]
     fn cast_numeric_to_string(a: Numeric) -> String {
         let mut buf = String::new();
         strconv::format_numeric(&mut buf, &OrderedDecimal(a));

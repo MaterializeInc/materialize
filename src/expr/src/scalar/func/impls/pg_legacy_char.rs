@@ -33,7 +33,7 @@ where
 }
 
 sqlfunc!(
-    #[sqlname = "pglegacychartostr"]
+    #[sqlname = "\"char\"_to_text"]
     #[preserves_uniqueness = true]
     fn cast_pg_legacy_char_to_string(a: PgLegacyChar) -> Result<String, EvalError> {
         let mut buf = String::new();
@@ -43,7 +43,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "pglegacychartoi32"]
+    #[sqlname = "\"char\"_to_integer"]
     #[preserves_uniqueness = true]
     fn cast_pg_legacy_char_to_int32(a: PgLegacyChar) -> i32 {
         // Per PostgreSQL, casts to `i32` are performed as if `PgLegacyChar` is

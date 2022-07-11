@@ -12,7 +12,7 @@ use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
 use mz_repr::strconv;
 
 sqlfunc!(
-    #[sqlname = "oidtostring"]
+    #[sqlname = "oid_to_text"]
     #[preserves_uniqueness = true]
     fn cast_oid_to_string(a: Oid) -> String {
         let mut buf = String::new();
@@ -22,7 +22,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "oidtoi32"]
+    #[sqlname = "oid_to_integer"]
     #[preserves_uniqueness = true]
     fn cast_oid_to_int32(a: Oid) -> i32 {
         // For historical reasons in PostgreSQL, the bytes of the `u32` are
@@ -36,7 +36,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "oidtoi64"]
+    #[sqlname = "oid_to_bigint"]
     #[preserves_uniqueness = true]
     fn cast_oid_to_int64(a: Oid) -> i64 {
         i64::from(a.0)

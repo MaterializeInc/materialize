@@ -23,7 +23,7 @@ use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 use crate::EvalError;
 
 sqlfunc!(
-    #[sqlname = "tstostr"]
+    #[sqlname = "timestamp_to_text"]
     #[preserves_uniqueness = true]
     fn cast_timestamp_to_string(a: NaiveDateTime) -> String {
         let mut buf = String::new();
@@ -33,7 +33,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "tstztostr"]
+    #[sqlname = "timestamp_with_time_zone_to_text"]
     #[preserves_uniqueness = true]
     fn cast_timestamp_tz_to_string(a: DateTime<Utc>) -> String {
         let mut buf = String::new();
@@ -43,21 +43,21 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "tstodate"]
+    #[sqlname = "timestamp_to_date"]
     fn cast_timestamp_to_date(a: NaiveDateTime) -> NaiveDate {
         a.date()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "tstztodate"]
+    #[sqlname = "timestamp_with_time_zone_to_date"]
     fn cast_timestamp_tz_to_date(a: DateTime<Utc>) -> NaiveDate {
         a.naive_utc().date()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "tstotstz"]
+    #[sqlname = "timestamp_to_timestamp_with_time_zone"]
     #[preserves_uniqueness = true]
     fn cast_timestamp_to_timestamp_tz(a: NaiveDateTime) -> DateTime<Utc> {
         DateTime::<Utc>::from_utc(a, Utc)
@@ -65,21 +65,21 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "tstztots"]
+    #[sqlname = "timestamp_with_time_zone_to_timestamp"]
     fn cast_timestamp_tz_to_timestamp(a: DateTime<Utc>) -> NaiveDateTime {
         a.naive_utc()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "tstotime"]
+    #[sqlname = "timestamp_to_time"]
     fn cast_timestamp_to_time(a: NaiveDateTime) -> NaiveTime {
         a.time()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "tstztotime"]
+    #[sqlname = "timestamp_with_time_zone_to_time"]
     fn cast_timestamp_tz_to_time(a: DateTime<Utc>) -> NaiveTime {
         a.naive_utc().time()
     }

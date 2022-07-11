@@ -199,7 +199,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 | Get materialize.public.x (u2)
 
 %1 =
-| CallTable generate_series(i32toi64(100), i32toi64(#^0), 1)
+| CallTable generate_series(integer_to_bigint(100), integer_to_bigint(#^0), 1)
 
 %2 =
 | InnerJoin %0 %1 on true
@@ -452,7 +452,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 1::bigint)
 ----
 %0 =
-| CallTable generate_series(i32toi64(-2), i32toi64(2), i32toi64(1))
+| CallTable generate_series(integer_to_bigint(-2), integer_to_bigint(2), integer_to_bigint(1))
 
 EOF
 
