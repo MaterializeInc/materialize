@@ -15,6 +15,8 @@ from materialize.zippy.mz_capabilities import MzIsRunning
 
 
 class MzStart(Action):
+    """Starts a Mz instance (all components are running in the same container)."""
+
     def run(self, c: Composition) -> None:
         c.up("materialized")
         c.wait_for_materialized()
@@ -24,6 +26,8 @@ class MzStart(Action):
 
 
 class MzStop(Action):
+    """Stops the entire Mz instance (all components are running in the same container)."""
+
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning}

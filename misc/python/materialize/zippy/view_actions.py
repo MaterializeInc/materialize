@@ -21,6 +21,8 @@ WatermarkedObjects = List[Union[TableExists, SourceExists]]
 
 
 class CreateView(Action):
+    """Creates a view that is a join over one or more sources or tables"""
+
     @classmethod
     def requires(self) -> List[Set[Type[Capability]]]:
         return [{MzIsRunning, SourceExists}, {MzIsRunning, TableExists}]
@@ -79,6 +81,8 @@ class CreateView(Action):
 
 
 class ValidateView(Action):
+    """Validates a view."""
+
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, ViewExists}
@@ -87,14 +91,17 @@ class ValidateView(Action):
         self.view = random.choice(capabilities.get(ViewExists))
 
     def run(self, c: Composition) -> None:
-        froms: WatermarkedObjects = self.view.froms
-        low = max([f.get_watermarks().low for f in froms])
-        high = min([f.get_watermarks().high for f in froms])
+        # Calculate the intersection of the mins/maxs of the inputs
+        # The result from the view should match the calculation.
 
-        if low <= high:
+        froms: WatermarkedObjects = self.view.froms
+        view_min = max([f.get_watermarks().min for f in froms])
+        view_max = min([f.get_watermarks().max for f in froms])
+
+        if view_min <= view_max:
             c.testdrive(
                 f"""
 > SELECT * FROM {self.view.name};
-{low} {high} {(high-low)+1} {(high-low)+1}
+{view_min} {view_max} {(view_max-view_min)+1} {(view_max-view_min)+1}
 """
             )

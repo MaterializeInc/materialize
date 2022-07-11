@@ -26,7 +26,7 @@ use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, Versi
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
-use crate::error::InvalidUsage;
+use crate::error::{CodecMismatch, InvalidUsage};
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
@@ -65,7 +65,7 @@ where
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
-    ) -> Result<Self, InvalidUsage<T>> {
+    ) -> Result<Self, CodecMismatch> {
         let state = metrics
             .cmds
             .init_state
@@ -427,7 +427,7 @@ where
         consensus: &(dyn Consensus + Send + Sync),
         retry_metrics: &RetriesMetrics,
         shard_id: ShardId,
-    ) -> Result<State<K, V, T, D>, InvalidUsage<T>> {
+    ) -> Result<State<K, V, T, D>, CodecMismatch> {
         debug!("Machine::maybe_init_state shard_id={}", shard_id);
 
         let path = shard_id.to_string();

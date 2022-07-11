@@ -67,7 +67,7 @@ a min max
 
 > CREATE VIEW v2 AS SELECT * FROM m1 ORDER BY b LIMIT 3
 
-$ set-regex match=.User.:\s\d+ replacement=UID
+$ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v2
 {
@@ -135,7 +135,6 @@ $ set-regex match=.User.:\s\d+ replacement=UID
     }
   }
 }
-
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_materialized
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
@@ -439,6 +438,56 @@ $ set-regex match=.User.:\s\d+ replacement=UID
           }
         ],
         "limit": 2,
+        "arity": 1
+      }
+    }
+  }
+}
+
+
+> CREATE RECORDED VIEW r1 AS SELECT b FROM non_dbz_data
+
+> CREATE VIEW v11 AS SELECT * FROM r1 ORDER BY b LIMIT 3
+
+# Propagating monotonicity analysis through recorded views
+
+? EXPLAIN PHYSICAL PLAN FOR VIEW v11
+Source materialize.public.r1 UID:
+{
+  "predicates": [],
+  "projection": [
+    0
+  ]
+}
+
+Query:
+{
+  "TopK": {
+    "input": {
+      "Get": {
+        "id": {
+          "Global": {
+            UID
+          }
+        },
+        "keys": {
+          "raw": true,
+          "arranged": []
+        },
+        "plan": "PassArrangements"
+      }
+    },
+    "top_k_plan": {
+      "MonotonicTopK": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 0,
+            "desc": false,
+            "nulls_last": true
+          }
+        ],
+        "limit": 3,
         "arity": 1
       }
     }

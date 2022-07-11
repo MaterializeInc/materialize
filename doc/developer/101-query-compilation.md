@@ -19,7 +19,7 @@ Representations:
 * [`LIR`](https://github.com/MaterializeInc/materialize/blob/main/src/dataflow-types/src/plan/mod.rs) — low-level intermediate representation.
 * `TDO` — target language (timely & differential operators).
 
-Transformations in the compile-time lifecycle of a SQL statement.
+Transformations in the compile-time lifecycle of a dataflow.
 
 * [`SQL ⇒ AST`](https://github.com/materializeinc/materialize/blob/main/src/sql-parser/src/parser.rs#L55).
     * Parsing the SQL query.
@@ -74,6 +74,14 @@ Transformations in the compile-time lifecycle of a SQL statement.
     * RelationTypes (column types + unique keys) are discarded since we do no key or type of validation at render time.
     * `EXPLAIN PHYSICAL` returns the result of transformations up to this point.
 * [`LIR ⇒ TDO`](https://github.com/MaterializeInc/materialize/blob/main/src/compute/src/render/mod.rs).
+
+For a one-off query, we run all the transformations until the LIR stage. Then we
+determine whether we need to serve the query on the "slow path", that is,
+creating a temporary dataflow and then deleting it. If we don't need to serve
+the query on the "slow path", then we can skip the `LIR ⇒ TDO` step.
+Existing "fast paths" include:
+* [reading from an existing dataflow.](https://github.com/MaterializeInc/materialize/blob/main/src/compute/src/compute_state.rs#L689)
+* [the adapter itself spitting out a constant set of rows.](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/coord.rs#L6307)
 
 Currently, the optimization team is mostly concerned with the `HIR ⇒ MIR` and `MIR ⇒ MIR` stages.
 

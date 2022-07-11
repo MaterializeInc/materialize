@@ -1428,7 +1428,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])) }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProto { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, materialized: false, key_constraint: None, remote: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])) }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, materialized: false, key_constraint: None, remote: None })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))

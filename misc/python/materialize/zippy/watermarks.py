@@ -9,10 +9,12 @@
 
 
 class Watermarks:
+    """Holds the minimum and the maximum value expected to be present in a topic, source, table or view"""
+
     def __init__(self) -> None:
-        self.low = 0
-        self.high = 0
+        self.min = 0
+        self.max = 0
 
     def shift(self, delta: int) -> None:
-        self.low = self.low + delta
-        self.high = self.high + delta
+        self.min = self.min + delta
+        self.max = self.max + delta

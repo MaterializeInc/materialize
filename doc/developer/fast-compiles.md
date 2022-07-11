@@ -15,7 +15,7 @@ memory, and storage than a Mac.
 A Linux machine will also allow you to run performance tests on your laptop.
 Our customer's production deployments are running on Linux, not macOS. While
 it's possible to get a rough sense of Materialize's performance on macOS,
-there have been more than a few occasions where apparent perfomance defects
+there have been more than a few occasions where apparent performance defects
 have disappeared when running the workload on Linux.
 
 ### Use lld

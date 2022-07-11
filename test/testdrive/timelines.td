@@ -9,38 +9,16 @@
 
 # Test various joins and how they interact with timeline checks.
 
-$ set schema={
-    "type": "record",
-    "name": "envelope",
-    "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"},
-              {"name": "b", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
-    ]
-  }
-
 $ kafka-create-topic topic=input-system
 
 > CREATE MATERIALIZED SOURCE source_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+  FORMAT BYTES
 
 > CREATE MATERIALIZED SOURCE source_system_user
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
     WITH (timeline = 'user')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+  FORMAT BYTES
 
 $ set schema=[
   {

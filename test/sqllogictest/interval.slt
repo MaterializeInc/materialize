@@ -735,37 +735,57 @@ SELECT INTERVAL '1' YEAR / 0
 ## Largest values
 
 query T
-SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'
+SELECT INTERVAL '2147483647 days 2562047788 hours 54.775807 seconds'
 ----
-2147483647 days 2147483647:59:59.999999
+2147483647 days 2562047788:00:54.775807
 
 query T
-SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds'
+SELECT INTERVAL '-2147483648 days -2562047788 hours -54.775808 seconds'
 ----
--2147483647 days -2147483647:59:59.999999
+-2147483648 days -2562047788:00:54.775808
 
 query T
-SELECT INTERVAL '-2147483648 days -2147483648 hours -59 minutes -59.999999 seconds'
+SELECT INTERVAL '2147483647 days 2562047787 hours 59 minutes 59.999999 seconds'
 ----
--2147483648 days -2147483648:59:59.999999
+2147483647 days 2562047787:59:59.999999
 
-statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '2147483647 days 2147483648 hours'
+query T
+SELECT INTERVAL '-2147483648 days -2562047786 hours -59 minutes -59.999999 seconds'
+----
+-2147483648 days -2562047786:59:59.999999
 
-statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '-2147483648 days -2147483649 hours'
+query T
+SELECT INTERVAL '-2147483648 days -2562047787 hours -59 minutes -59.999999 seconds'
+----
+-2147483648 days -2562047787:59:59.999999
 
-statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '-2147483648 days -2147483648 hours -60 min'
+query T
+SELECT INTERVAL '2147483647 months 2147483647 days 9223372036854775807 us'
+----
+178956970 years 7 months 2147483647 days 2562047788:00:54.775807
 
-statement error invalid input syntax for type interval: exceeds min/max interval duration
-SELECT INTERVAL '-2147483648 days -2147483648 hours -59 min -60 sec'
+query T
+SELECT INTERVAL '-2147483648 months -2147483648 days -9223372036854775808 us'
+----
+-178956970 years -8 months -2147483648 days -2562047788:00:54.775808
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '2147483647 days 2562047789 hours';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-2147483648 days -2562047789 hours'
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-2147483648 days -2562047788 hours -60 min'
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-2147483648 days -2562047788 hours -59 min -60 sec'
 
 statement error interval out of range
-SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds' + INTERVAL '1';
+SELECT INTERVAL '2147483647 days 2562047788 hours 54 seconds' + INTERVAL '1'
 
 statement error interval out of range
-SELECT INTERVAL '-2147483648 days -2147483648 hours -59 minutes -59.999999 seconds' - INTERVAL '1';
+SELECT INTERVAL '-2147483648 days -2562047788 hours -54 seconds' - INTERVAL '1'
 
 statement error interval out of range
 SELECT INTERVAL '2147483647' MONTH / 0.99
@@ -779,7 +799,92 @@ SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.9999999
 ----
 29 days 49:01:00.997318
 
+# Largest and smallest numbers of cumulative microseconds
+query T
+SELECT INTERVAL '2562047788.01521550194 hours';
+----
+2562047788:00:54.775804
+
+query T
+SELECT INTERVAL '2562047788.015215502 hours';
+----
+2562047788:00:54.775807
+
+query T
+SELECT INTERVAL '-2562047788.01521550222 hours';
+----
+-2562047788:00:54.775807
+
+query T
+SELECT INTERVAL '-2562047788.0152155023 hours';
+----
+-2562047788:00:54.775807
+
+query T
+SELECT INTERVAL '153722867280.912930117 minutes';
+----
+2562047788:00:54.775807
+
+query T
+SELECT INTERVAL '-153722867280.912930133 minutes';
+----
+-2562047788:00:54.775808
+
+query T
+SELECT INTERVAL '9223372036854.775807 seconds';
+----
+2562047788:00:54.775807
+
+query T
+SELECT INTERVAL '-9223372036854.775808 seconds';
+----
+-2562047788:00:54.775808
+
+query T
+SELECT INTERVAL '9223372036854775.807 milliseconds';
+----
+2562047788:00:54.775807
+
+query T
+SELECT INTERVAL '-9223372036854775.808 milliseconds';
+----
+-2562047788:00:54.775808
+
+query T
+SELECT INTERVAL '9223372036854775807 microseconds'
+----
+2562047788:00:54.775807
+
+query T
+SELECT INTERVAL '-9223372036854775808 microseconds'
+----
+-2562047788:00:54.775808
+
 ## Overflows
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 millennium';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 millennium';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 centuries';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 centuries';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 decades';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 decades';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483648 years';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483649 years';
 
 statement error Overflows maximum months;
 SELECT INTERVAL '768614336404564651 year';
@@ -787,11 +892,119 @@ SELECT INTERVAL '768614336404564651 year';
 statement error Overflows maximum months;
 SELECT INTERVAL '768614336404564650.7 year';
 
-statement error Unable to parse value as a number at index 19: number too large to fit in target type
+statement error Overflows maximum months;
+SELECT INTERVAL '1 decade 2147483647 years';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '1 century 2147483647 years';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '1 millennium 2147483647 years';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-1 decade -2147483648 years';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-1 century -2147483648 years';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-1 millennium -2147483648 years';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 years 1 decade';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 years 1 century';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 years 1 millennium';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 years -1 decade';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 years -1 century';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 years -1 millennium';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483648 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483649 months';
+
+statement error Unable to parse value 9223372036854775808 as a number: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 months';
 
-statement error Unable to parse value as a number at index 20: number too large to fit in target type
+statement error Overflows maximum months;
 SELECT INTERVAL '-9223372036854775808 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '0.1 millennium 2147483647 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '0.1 centuries 2147483647 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '0.1 decades 2147483647 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '0.1 yrs 2147483647 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-0.1 millennium -2147483648 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-0.1 centuries -2147483648 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-0.1 decades -2147483648 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-0.1 yrs -2147483648 months';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 months 0.1 millennium';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 months 0.1 centuries';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 months 0.1 decades';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '2147483647 months 0.1 yrs';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 months -0.1 millennium';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 months -0.1 centuries';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 months -0.1 decades';
+
+statement error Overflows maximum months;
+SELECT INTERVAL '-2147483648 months -0.1 yrs';
+
+statement error Overflows maximum days;
+SELECT INTERVAL '2147483648 days';
+
+statement error Overflows maximum days;
+SELECT INTERVAL '-2147483649 days';
+
+statement error Overflows maximum days;
+SELECT INTERVAL '0.1 months 2147483647 days';
+
+statement error Overflows maximum days;
+SELECT INTERVAL '-0.1 months -2147483648 days';
+
+statement error Overflows maximum days;
+SELECT INTERVAL '2147483647 days 0.1 months';
+
+statement error Overflows maximum days;
+SELECT INTERVAL '-2147483648 days -0.1 months';
 
 statement error Overflows maximum days;
 SELECT INTERVAL '106751991167300 days .1 month';
@@ -803,10 +1016,22 @@ statement error Overflows maximum days;
 SELECT INTERVAL '106751991167300.9 days';
 
 statement error Overflows maximum microseconds;
+SELECT INTERVAL '2562047789 hours';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-2562047789 hours';
+
+statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854775807 seconds 1 hour';
 
 statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854771807 seconds 1.9 hour';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '153722867281 minutes';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-153722867281 minutes';
 
 statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854775807 seconds 1 minute';
@@ -814,11 +1039,56 @@ SELECT INTERVAL '9223372036854775807 seconds 1 minute';
 statement error Overflows maximum microseconds;
 SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
 
-statement error Unable to parse value as a number at index 19: number too large to fit in target type
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '9223372036855 seconds';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-9223372036855 seconds';
+
+statement error Unable to parse value 9223372036854775808 as a number: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 seconds';
 
-statement error Unable to parse value as a number at index 20: number too large to fit in target type
+statement error Overflows maximum microseconds;
 SELECT INTERVAL '-9223372036854775808 seconds';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '9223372036854777 millisecond';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-9223372036854777 millisecond';
+
+statement error Unable to parse value 9223372036854775808 as a number: number too large to fit in target type
+SELECT INTERVAL '9223372036854775808 microsecond';
+
+statement error Unable to parse value 9223372036854775809 as a number: number too large to fit in target type
+SELECT INTERVAL '-9223372036854775809 microsecond';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '0.01 months 9223372036854775807 microseconds';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-0.01 months -9223372036854775808 microseconds';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '9223372036854775807 microseconds 0.01 months';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-9223372036854775808 microseconds -0.01 months';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '0.1 days 9223372036854775807 microseconds';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-0.1 days -9223372036854775808 microseconds';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '9223372036854775807 microseconds 0.1 days';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '-9223372036854775808 microseconds -0.1 days';
+
+statement error Overflows maximum microseconds;
+SELECT INTERVAL '0.1 2562047788:0:54.775807';
 
 # 0 interval equality
 query B
@@ -929,7 +1199,7 @@ query error interval out of range
 SELECT -INTERVAL '-2147483648 days';
 
 query error interval out of range
-SELECT -INTERVAL '-2147483648 hours';
+SELECT -INTERVAL '-9223372036854775808 microseconds';
 
 query error interval out of range
 SELECT INTERVAL '-1 months' - INTERVAL '-2147483648 months';
@@ -938,10 +1208,10 @@ query error interval out of range
 SELECT INTERVAL '-1 day' - INTERVAL '-2147483648 days';
 
 query error interval out of range
-SELECT INTERVAL '-1 hours' - INTERVAL '-2147483648 hours';
+SELECT INTERVAL '-1 hours' + INTERVAL '-2562047788 hours';
 
 query error interval out of range
-SELECT -INTERVAL '-2147483648 days -2147483648 hours -59 minutes -59.999999 seconds';
+SELECT -INTERVAL '-2147483648 days -2562047787 hours -59 minutes -59.999999 seconds';
 
 # Cast Interval to time
 query T

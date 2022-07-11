@@ -17,6 +17,10 @@ statement ok
 CREATE MATERIALIZED VIEW v AS
 SELECT * FROM t WHERE a IS NOT NULL
 
+statement ok
+CREATE RECORDED VIEW rv AS
+SELECT * FROM t WHERE a IS NOT NULL
+
 mode cockroach
 
 query T multiline
@@ -521,6 +525,86 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN WITH (TYPES) AS JSON FOR
 VIEW v
+----
+Source materialize.public.t (u1):
+{
+  "predicates": [
+    {
+      "CallUnary": {
+        "func": {
+          "Not": null
+        },
+        "expr": {
+          "CallUnary": {
+            "func": {
+              "IsNull": null
+            },
+            "expr": {
+              "Column": 0
+            }
+          }
+        }
+      }
+    }
+  ],
+  "projection": [
+    0,
+    1
+  ]
+}
+
+Query:
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 1
+      }
+    },
+    "keys": {
+      "raw": true,
+      "arranged": []
+    },
+    "plan": {
+      "Collection": {
+        "expressions": [],
+        "predicates": [
+          [
+            1,
+            {
+              "CallUnary": {
+                "func": {
+                  "Not": null
+                },
+                "expr": {
+                  "CallUnary": {
+                    "func": {
+                      "IsNull": null
+                    },
+                    "expr": {
+                      "Column": 0
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        ],
+        "projection": [
+          0,
+          1
+        ],
+        "input_arity": 2
+      }
+    }
+  }
+}
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH (TYPES) AS JSON FOR
+RECORDED VIEW rv
 ----
 Source materialize.public.t (u1):
 {

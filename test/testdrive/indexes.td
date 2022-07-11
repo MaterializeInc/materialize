@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=cluster1|default|\[\d\] replacement=<VARIABLE_OUTPUT>
+$ set-regex match=cluster1|default replacement=<VARIABLE_OUTPUT>
 
 $ set writer-schema={
     "name": "row",
@@ -196,7 +196,7 @@ cluster on_name    key_name                seq_in_index  column_name  expression
 > SHOW CREATE INDEX data_view_primary_idx
 Index                                    "Create Index"
 --------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" IN CLUSTER <VARIABLE_OUTPUT> ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"
+materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" IN CLUSTER \"<VARIABLE_OUTPUT>\" ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"
 
 > CREATE TABLE foo (
     a int NOT NULL,

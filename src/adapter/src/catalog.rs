@@ -495,6 +495,7 @@ impl CatalogState {
         config: ConcreteComputeInstanceReplicaConfig,
         log_collections: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
+        tracing::debug!("in insert_compute_instance_replica");
         let mut log_collections_by_variant = HashMap::new();
         for (log, source_id) in log_collections {
             let oid = self.allocate_oid().expect("cannot return error here");
@@ -1423,7 +1424,7 @@ impl<S: Append> Catalog<S> {
                     cluster_id: config.storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
-                    timestamp_frequency: config.timestamp_frequency,
+                    timestamp_frequency: Duration::from_secs(1),
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
@@ -1960,7 +1961,6 @@ impl<S: Append> Catalog<S> {
             storage,
             unsafe_mode: true,
             build_info: &DUMMY_BUILD_INFO,
-            timestamp_frequency: Duration::from_secs(1),
             now,
             skip_migrations: true,
             metrics_registry,
@@ -2078,6 +2078,33 @@ impl<S: Append> Catalog<S> {
 
     pub async fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
+    }
+
+    /// Get all global timestamps that has been persisted to disk.
+    pub async fn get_all_persisted_timestamps(
+        &mut self,
+    ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
+        self.storage().await.get_all_persisted_timestamps().await
+    }
+
+    /// Get a global timestamp for a timeline that has been persisted to disk.
+    pub async fn get_persisted_timestamp(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Result<mz_repr::Timestamp, Error> {
+        self.storage().await.get_persisted_timestamp(timeline).await
+    }
+
+    /// Persist new global timestamp for a timeline to disk.
+    pub async fn persist_timestamp(
+        &mut self,
+        timeline: &Timeline,
+        timestamp: mz_repr::Timestamp,
+    ) -> Result<(), Error> {
+        self.storage()
+            .await
+            .persist_timestamp(timeline, timestamp)
+            .await
     }
 
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
@@ -3023,10 +3050,6 @@ impl<S: Append> Catalog<S> {
                     config,
                     log_collections,
                 } => {
-                    info!("create replica {} of instance {}", name, on_cluster_name);
-                    for (_log, id) in &log_collections {
-                        builtin_table_updates.extend(state.pack_item_update(*id, 1));
-                    }
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
                     state.insert_compute_instance_replica(
                         compute_instance_id,
@@ -3780,6 +3803,13 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn item_exists(&self, name: &QualifiedObjectName) -> bool {
         self.state.item_exists(name, self.conn_id)
+    }
+
+    fn get_compute_instance(
+        &self,
+        id: ComputeInstanceId,
+    ) -> &dyn mz_sql::catalog::CatalogComputeInstance {
+        &self.state.compute_instances_by_id[&id]
     }
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {

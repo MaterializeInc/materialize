@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -376,6 +377,20 @@ pub enum Timeline {
     User(String),
 }
 
+impl Timeline {
+    const EPOCH_MILLISECOND_ID_CHAR: char = 'M';
+    const EXTERNAL_ID_CHAR: char = 'E';
+    const USER_ID_CHAR: char = 'U';
+
+    fn id_char(&self) -> char {
+        match self {
+            Self::EpochMilliseconds => Self::EPOCH_MILLISECOND_ID_CHAR,
+            Self::External(_) => Self::EXTERNAL_ID_CHAR,
+            Self::User(_) => Self::USER_ID_CHAR,
+        }
+    }
+}
+
 impl RustType<ProtoTimeline> for Timeline {
     fn into_proto(&self) -> ProtoTimeline {
         use proto_timeline::Kind;
@@ -398,6 +413,42 @@ impl RustType<ProtoTimeline> for Timeline {
             Kind::External(s) => Timeline::External(s),
             Kind::User(s) => Timeline::User(s),
         })
+    }
+}
+
+impl ToString for Timeline {
+    fn to_string(&self) -> String {
+        match self {
+            Self::EpochMilliseconds => format!("{}", self.id_char()),
+            Self::External(id) => format!("{}.{id}", self.id_char()),
+            Self::User(id) => format!("{}.{id}", self.id_char()),
+        }
+    }
+}
+
+impl FromStr for Timeline {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err("empty timeline".to_string());
+        }
+        let mut chars = s.chars();
+        match chars.next().expect("non-empty string") {
+            Self::EPOCH_MILLISECOND_ID_CHAR => match chars.next() {
+                None => Ok(Self::EpochMilliseconds),
+                Some(_) => Err(format!("unknown timeline: {s}")),
+            },
+            Self::EXTERNAL_ID_CHAR => match chars.next() {
+                Some('.') => Ok(Self::External(chars.as_str().to_string())),
+                _ => Err(format!("unknown timeline: {s}")),
+            },
+            Self::USER_ID_CHAR => match chars.next() {
+                Some('.') => Ok(Self::User(chars.as_str().to_string())),
+                _ => Err(format!("unknown timeline: {s}")),
+            },
+            _ => Err(format!("unknown timeline: {s}")),
+        }
     }
 }
 
@@ -1825,4 +1876,17 @@ impl Codec for SourceData {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
     }
+}
+
+#[test]
+fn test_timeline_parsing() {
+    assert_eq!(Ok(Timeline::EpochMilliseconds), "M".parse());
+    assert_eq!(Ok(Timeline::External("JOE".to_string())), "E.JOE".parse());
+    assert_eq!(Ok(Timeline::User("MIKE".to_string())), "U.MIKE".parse());
+
+    assert!("Materialize".parse::<Timeline>().is_err());
+    assert!("Ejoe".parse::<Timeline>().is_err());
+    assert!("Umike".parse::<Timeline>().is_err());
+    assert!("Dance".parse::<Timeline>().is_err());
+    assert!("".parse::<Timeline>().is_err());
 }

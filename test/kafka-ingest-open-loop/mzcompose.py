@@ -126,12 +126,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"{args.blob_url}",
     ]
 
-    override = [
-        Materialized(
-            timestamp_frequency="1s",
-            options=options,
-        )
-    ]
+    override = [Materialized(options=options)]
 
     with c.override(*override):
         c.start_and_wait_for_tcp(services=prerequisites)

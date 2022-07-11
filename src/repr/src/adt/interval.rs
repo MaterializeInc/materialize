@@ -76,7 +76,7 @@ impl num_traits::ops::checked::CheckedNeg for Interval {
             self.days.checked_neg(),
             self.micros.checked_neg(),
         ) {
-            Self::new(months, days, micros).ok()
+            Some(Self::new(months, days, micros))
         } else {
             None
         }
@@ -110,15 +110,6 @@ static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
 });
 
 impl Interval {
-    // Don't let our duration exceed Postgres' min/max for those same fields,
-    // equivalent to:
-    // ```
-    // SELECT INTERVAL '2147483647 hours 59 minutes 59.999999 seconds';
-    // SELECT INTERVAL '-2147483648 hours -59 minutes -59.999999 seconds';
-    // ```
-    pub const MAX_MICROSECONDS: i64 = (((i32::MAX as i64 * 60) + 59) * 60) * 1_000_000 + 59_999_999;
-    pub const MIN_MICROSECONDS: i64 = (((i32::MIN as i64 * 60) - 59) * 60) * 1_000_000 - 59_999_999;
-
     pub const CENTURY_PER_MILLENNIUM: u16 = 10;
     pub const DECADE_PER_CENTURY: u16 = 10;
     pub const YEAR_PER_DECADE: u16 = 10;
@@ -140,21 +131,11 @@ impl Interval {
     pub const EPOCH_DAYS_PER_YEAR: f64 = 365.25;
 
     /// Constructs a new `Interval` with the specified units of time.
-    pub fn new(months: i32, days: i32, micros: i64) -> Result<Interval, anyhow::Error> {
-        let i = Interval {
+    pub fn new(months: i32, days: i32, micros: i64) -> Interval {
+        Interval {
             months,
             days,
             micros,
-        };
-        if i.micros > Self::MAX_MICROSECONDS || i.micros < Self::MIN_MICROSECONDS {
-            bail!(format!(
-                "exceeds min/max interval duration ({} hours 59 minutes 59.999999 seconds/\
-                {} hours -59 minutes -59.999999 seconds)",
-                i32::MAX,
-                i32::MIN,
-            ))
-        } else {
-            Ok(i)
         }
     }
 
@@ -172,10 +153,7 @@ impl Interval {
             None => return None,
         };
 
-        match Self::new(months, days, micros) {
-            Ok(i) => Some(i),
-            Err(_) => None,
-        }
+        Some(Self::new(months, days, micros))
     }
 
     pub fn checked_mul(&self, other: f64) -> Option<Self> {
@@ -221,7 +199,7 @@ impl Interval {
             return None;
         }
 
-        Self::new(months as i32, days as i32, micros as i64).ok()
+        Some(Self::new(months as i32, days as i32, micros as i64))
     }
 
     /// Computes the millennium part of the interval.
@@ -515,7 +493,7 @@ impl Interval {
 
     /// Returns a new Interval with only the time component
     pub fn as_time_interval(&self) -> Self {
-        Self::new(0, 0, self.micros).unwrap()
+        Self::new(0, 0, self.micros)
     }
 
     /// Returns true if combining all fields results in a negative number, false otherwise
@@ -623,7 +601,7 @@ impl Interval {
             months += 1;
         }
 
-        Self::new(months, days, self.micros)
+        Ok(Self::new(months, days, self.micros))
     }
 
     fn justify_days_inner(months: i32, days: i32) -> Result<(i32, i32), anyhow::Error> {
@@ -649,7 +627,7 @@ impl Interval {
             days += 1;
         }
 
-        Self::new(self.months, days, micros)
+        Ok(Self::new(self.months, days, micros))
     }
 
     fn justify_hours_inner(days: i32, micros: i64) -> Result<(i32, i64), anyhow::Error> {
@@ -696,7 +674,7 @@ impl Interval {
             days += 1;
         }
 
-        Self::new(months, days, micros)
+        Ok(Self::new(months, days, micros))
     }
 }
 
@@ -811,7 +789,7 @@ mod test {
         assert_eq!(mon(26), "2 years 2 months");
 
         fn dur(days: i32, micros: i64) -> String {
-            Interval::new(0, days, micros).unwrap().to_string()
+            Interval::new(0, days, micros).to_string()
         }
         assert_eq!(&dur(2, 0), "2 days");
         assert_eq!(&dur(2, 3 * 60 * 60 * 1_000_000), "2 days 03:00:00");
@@ -880,7 +858,7 @@ mod test {
         assert_eq!(&dur(0, -6 * 1_000_000), "-00:00:06");
 
         fn mon_dur(mon: i32, days: i32, micros: i64) -> String {
-            Interval::new(mon, days, micros).unwrap().to_string()
+            Interval::new(mon, days, micros).to_string()
         }
         assert_eq!(&mon_dur(1, 2, 6 * 1_000_000), "1 month 2 days 00:00:06");
         assert_eq!(
@@ -1138,8 +1116,8 @@ mod test {
         ];
 
         for test in test_cases.iter_mut() {
-            let mut i = Interval::new((test.2).0, (test.2).1, (test.2).2).unwrap();
-            let j = Interval::new((test.3).0, (test.3).1, (test.3).2).unwrap();
+            let mut i = Interval::new((test.2).0, (test.2).1, (test.2).2);
+            let j = Interval::new((test.3).0, (test.3).1, (test.3).2);
 
             i.truncate_low_fields(test.0, test.1).unwrap();
 
@@ -1231,8 +1209,8 @@ mod test {
         ];
 
         for test in test_cases.iter_mut() {
-            let mut i = Interval::new((test.1).0, (test.1).1, (test.1).2).unwrap();
-            let j = Interval::new((test.2).0, (test.2).1, (test.2).2).unwrap();
+            let mut i = Interval::new((test.1).0, (test.1).1, (test.1).2);
+            let j = Interval::new((test.2).0, (test.2).1, (test.2).2);
 
             i.truncate_high_fields(test.0);
 

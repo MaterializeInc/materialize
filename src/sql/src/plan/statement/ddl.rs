@@ -18,7 +18,7 @@ use std::fmt::Write;
 use std::str::FromStr;
 use std::time::Duration;
 
-use aws_arn::ARN;
+use aws_arn::ResourceName as AmazonResourceName;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
@@ -68,10 +68,10 @@ use crate::ast::{
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
     CsrConnection, CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName,
-    CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
-    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
-    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
+    CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode, DbzTxMetadataOption,
+    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
+    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
     KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
     QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select,
     SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, Statement,
@@ -501,7 +501,7 @@ pub fn plan_create_source(
         }
         CreateSourceConnection::Kinesis { arn, .. } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM KINESIS")?;
-            let arn: ARN = arn
+            let arn: AmazonResourceName = arn
                 .parse()
                 .map_err(|e| sql_err!("Unable to parse provided ARN: {:#?}", e))?;
             let stream_name = match arn.resource.strip_prefix("stream/") {
@@ -1347,15 +1347,13 @@ fn get_encoding_inner(
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
                 csr_connection:
-                    CsrConnectionProto {
+                    CsrConnectionProtobuf {
                         connection,
                         seed,
                         with_options: ccsr_options,
                     },
             } => {
-                if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
-                    seed
-                {
+                if let Some(CsrSeedProtobuf { key, value }) = seed {
                     // We validate to match the behavior of Avro CSR connections,
                     // even though we don't actually use the connection. (It
                     // was used during purification.)
@@ -1782,9 +1780,12 @@ pub fn plan_create_recorded_view(
 ) -> Result<Plan, PlanError> {
     let compute_instance = match &stmt.in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.0,
+        Some(in_cluster) => in_cluster.id,
     };
-    stmt.in_cluster = Some(ResolvedClusterName(compute_instance));
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: compute_instance,
+        print_name: None,
+    });
 
     let create_sql = normalize::create_statement(scx, Statement::CreateRecordedView(stmt.clone()))?;
 
@@ -2183,9 +2184,12 @@ pub fn plan_create_sink(
     scx.require_unsafe_mode("CREATE SINK")?;
     let compute_instance = match &stmt.in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.0,
+        Some(in_cluster) => in_cluster.id,
     };
-    stmt.in_cluster = Some(ResolvedClusterName(compute_instance));
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: compute_instance,
+        print_name: None,
+    });
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
@@ -2510,9 +2514,12 @@ pub fn plan_create_index(
     let options = plan_index_options(with_options.clone())?;
     let compute_instance = match in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.0,
+        Some(in_cluster) => in_cluster.id,
     };
-    *in_cluster = Some(ResolvedClusterName(compute_instance));
+    *in_cluster = Some(ResolvedClusterName {
+        id: compute_instance,
+        print_name: None,
+    });
 
     // Normalize `stmt`.
     *name = Some(Ident::new(index_name.item.clone()));
@@ -2833,18 +2840,18 @@ fn plan_replica_config(
         scx.require_unsafe_mode("REMOTE cluster replica option")?;
     }
 
-    let remote_replicas = remote
+    let remote_addrs = remote
         .unwrap_or_default()
         .into_iter()
         .collect::<BTreeSet<String>>();
 
-    match (remote_replicas.len() > 0, size) {
+    match (remote_addrs.len() > 0, size) {
         (true, None) => {
             if availability_zone.is_some() {
                 sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
             }
             Ok(ReplicaConfig::Remote {
-                replicas: remote_replicas,
+                addrs: remote_addrs,
             })
         }
         (false, Some(size)) => Ok(ReplicaConfig::Managed {

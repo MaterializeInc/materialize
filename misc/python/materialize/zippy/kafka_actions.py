@@ -12,7 +12,7 @@ from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
-from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
+from materialize.zippy.kafka_capabilities import Envelope, KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 
 SCHEMA = """
@@ -20,7 +20,7 @@ $ set keyschema={
         "type" : "record",
         "name" : "test",
         "fields" : [
-            {"name":"f1", "type":"long"}
+            {"name":"key", "type":"long"}
         ]
     }
 
@@ -28,13 +28,15 @@ $ set schema={
         "type" : "record",
         "name" : "test",
         "fields" : [
-            {"name":"f2", "type":"long"}
+            {"name":"f1", "type":"long"}
         ]
     }
 """
 
 
 class KafkaStart(Action):
+    """Start a Kafka instance."""
+
     def provides(self) -> List[Capability]:
         return [KafkaRunning()]
 
@@ -43,6 +45,8 @@ class KafkaStart(Action):
 
 
 class KafkaStop(Action):
+    """Stop the Kafka instance."""
+
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {KafkaRunning}
@@ -55,6 +59,8 @@ class KafkaStop(Action):
 
 
 class CreateTopic(Action):
+    """Creates a Kafka topic and decides on the envelope that will be used."""
+
     @classmethod
     def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, KafkaRunning}
@@ -67,6 +73,7 @@ class CreateTopic(Action):
 
         if len(existing_topics) == 0:
             self.new_topic = True
+            this_topic.envelope = random.choice([Envelope.NONE, Envelope.UPSERT])
             self.topic = this_topic
         elif len(existing_topics) == 1:
             self.new_topic = False
@@ -86,12 +93,14 @@ $ kafka-create-topic topic={self.topic.name}
 {SCHEMA}
 
 $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} publish=true repeat=1
-{{"f1": 0}} {{"f2": 0}}
+{{"key": 0}} {{"f1": 0}}
 """
             )
 
 
 class Ingest(Action):
+    """Ingests data (inserts, updates or deletions) into a Kafka topic."""
+
     @classmethod
     def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, KafkaRunning, TopicExists}
@@ -102,59 +111,71 @@ class Ingest(Action):
 
 
 class KafkaInsert(Ingest):
+    """Inserts data into a Kafka topic."""
+
     def run(self, c: Composition) -> None:
-        prev_high = self.topic.watermarks.high
-        self.topic.watermarks.high = prev_high + self.delta
-        assert self.topic.watermarks.high >= 0
-        assert self.topic.watermarks.low >= 0
+        prev_max = self.topic.watermarks.max
+        self.topic.watermarks.max = prev_max + self.delta
+        assert self.topic.watermarks.max >= 0
+        assert self.topic.watermarks.min >= 0
         c.testdrive(
             f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_high + 1} publish=true repeat={self.delta}
-{{"f1": ${{kafka-ingest.iteration}}}} {{"f2": ${{kafka-ingest.iteration}}}}
+$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} publish=true repeat={self.delta}
+{{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}}}
 """
         )
 
 
 class KafkaDeleteFromHead(Ingest):
-    def run(self, c: Composition) -> None:
-        prev_high = self.topic.watermarks.high
-        self.topic.watermarks.high = max(
-            prev_high - self.delta, self.topic.watermarks.low
-        )
-        assert self.topic.watermarks.high >= 0
-        assert self.topic.watermarks.low >= 0
+    """Deletes the largest values previously inserted."""
 
-        actual_delta = prev_high - self.topic.watermarks.high
+    def run(self, c: Composition) -> None:
+        if self.topic.envelope is Envelope.NONE:
+            return
+
+        prev_max = self.topic.watermarks.max
+        self.topic.watermarks.max = max(
+            prev_max - self.delta, self.topic.watermarks.min
+        )
+        assert self.topic.watermarks.max >= 0
+        assert self.topic.watermarks.min >= 0
+
+        actual_delta = prev_max - self.topic.watermarks.max
 
         if actual_delta > 0:
             c.testdrive(
                 f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.high + 1} publish=true repeat={actual_delta}
-{{"f1": ${{kafka-ingest.iteration}}}}
+$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} publish=true repeat={actual_delta}
+{{"key": ${{kafka-ingest.iteration}}}}
 """
             )
 
 
 class KafkaDeleteFromTail(Ingest):
+    """Deletes the smallest values previously inserted."""
+
     def run(self, c: Composition) -> None:
-        prev_low = self.topic.watermarks.low
-        self.topic.watermarks.low = min(
-            prev_low + self.delta, self.topic.watermarks.high
+        if self.topic.envelope is Envelope.NONE:
+            return
+
+        prev_min = self.topic.watermarks.min
+        self.topic.watermarks.min = min(
+            prev_min + self.delta, self.topic.watermarks.max
         )
-        assert self.topic.watermarks.high >= 0
-        assert self.topic.watermarks.low >= 0
-        actual_delta = self.topic.watermarks.low - prev_low
+        assert self.topic.watermarks.max >= 0
+        assert self.topic.watermarks.min >= 0
+        actual_delta = self.topic.watermarks.min - prev_min
 
         if actual_delta > 0:
             c.testdrive(
                 f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_low} publish=true repeat={actual_delta}
-{{"f1": ${{kafka-ingest.iteration}}}}
+$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} publish=true repeat={actual_delta}
+{{"key": ${{kafka-ingest.iteration}}}}
 """
             )

@@ -22,10 +22,10 @@ clap = { version = "3.2.8", features = ["env"], optional = true }
 ctor = { version = "0.1.22", optional = true }
 either = "1.7.0"
 futures = { version = "0.3.21", optional = true }
-once_cell = "1.12.0"
+once_cell = "1.13.0"
 # This isn't directly imported by anything, but it's required at link time. The
 # vendored feature is transitively depended upon by tokio-openssl.
-openssl = { version = "0.10.40", features = ["vendored"], optional = true }
+openssl = { version = "0.10.41", features = ["vendored"], optional = true }
 paste = "1.0.7"
 pin-project = "1.0.11"
 prometheus = { version = "0.13.1", default-features = false, optional = true }
@@ -51,7 +51,7 @@ tracing-opentelemetry = { version = "0.17", optional = true }
 tonic = { version = "0.7.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }
 native-tls = { version = "0.2.10", features = ["alpn"], optional = true }
-hyper = { version = "0.14.19", features = ["http1", "server"], optional = true }
+hyper = { version = "0.14.20", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
 opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"], optional = true }
 opentelemetry-otlp = { version = "0.10.0", optional = true }

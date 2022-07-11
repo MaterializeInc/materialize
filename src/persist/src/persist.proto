@@ -13,55 +13,6 @@ syntax = "proto3";
 
 package mz_persist.gen.persist;
 
-message ProtoMeta {
-    // For data written by some vX.Y.Z of Materialize, we'll support reading it
-    // back in by later versions (backward compatibility, so users can upgrade)
-    // and earlier versions (forward compatiblity, so users can roll back an
-    // upgrade). The specific policy is yet to be determined, but each of these
-    // is likely to be bounded, especially forward compatatibility.
-    //
-    // For us to reason about this (e.g. to prevent startup if a binary is
-    // pointed at data it can't handle), we store the version that wrote data
-    // alongside the data itself.
-    string version = 1;
-
-    uint64 seqno = 2;
-    map<uint64, ProtoStreamRegistration> id_mapping = 3;
-    map<uint64, ProtoStreamRegistration> graveyard = 4;
-    map<uint64, ProtoArrangement> arrangements = 5;
-}
-
-message ProtoStreamRegistration {
-    string name = 1;
-    string key_codec_name = 2;
-    string val_codec_name = 3;
-}
-
-message ProtoArrangement {
-    ProtoU64Antichain since = 1;
-    ProtoU64Antichain seal = 2;
-    repeated ProtoUnsealedBatchMeta unsealed_batches = 3;
-    repeated ProtoTraceBatchMeta trace_batches = 4;
-}
-
-message ProtoUnsealedBatchMeta {
-    string key = 1;
-    ProtoBatchFormat format = 7;
-    uint64 seqno_lower = 2;
-    uint64 seqno_upper = 3;
-    uint64 ts_lower = 4;
-    uint64 ts_upper = 5;
-    uint64 size_bytes = 6;
-}
-
-message ProtoTraceBatchMeta {
-    repeated string keys = 1;
-    ProtoBatchFormat format = 5;
-    ProtoU64Description desc = 2;
-    uint64 size_bytes = 3;
-    uint64 level = 4;
-}
-
 message ProtoU64Antichain {
     repeated uint64 elements = 1;
 }
@@ -72,36 +23,15 @@ message ProtoU64Description {
     ProtoU64Antichain since = 3;
 }
 
-message ProtoBatchInline {
-    oneof batch_type {
-        ProtoUnsealedBatchInline unsealed = 1;
-        ProtoTraceBatchPartInline trace = 2;
-    }
-}
-
-message ProtoUnsealedBatchInline {
-    ProtoBatchFormat format = 7;
-    uint64 seqno_lower = 2;
-    uint64 seqno_upper = 3;
-
-    // These are used in ProtoUnsealedBatchMeta and, for now, we're not using
-    // them here in case we want to back out of this being two separate protos.
-    reserved 1, 4, 5, 6;
-}
-
-message ProtoTraceBatchPartInline {
-    ProtoBatchFormat format = 5;
+message ProtoBatchPartInline {
+    ProtoBatchFormat format = 1;
     // TraceBatchParts can contain partial data for a given trace batch, and so
     // this desc means only that the records contained in this part have to
     // abide by the constraints in the description. There may be other parts
     // for the same trace batch with the same description. However, there will
     // be only one trace batch with the same description and index.
     ProtoU64Description desc = 2;
-    uint64 index = 6;
-
-    // These are used in ProtoUnsealedBatchMeta and, for now, we're not using
-    // them here in case we want to back out of this being two separate protos.
-    reserved 1, 3, 4;
+    uint64 index = 3;
 }
 
 enum ProtoBatchFormat {

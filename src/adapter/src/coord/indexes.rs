@@ -35,7 +35,7 @@ impl<S: Append> Coordinator<S> {
     ) -> ComputeInstanceIndexOracle<mz_repr::Timestamp> {
         ComputeInstanceIndexOracle {
             catalog: self.catalog.state(),
-            compute: self.dataflow_client.compute(instance).unwrap(),
+            compute: self.controller.compute(instance).unwrap(),
         }
     }
 }
@@ -68,7 +68,11 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
             let mut available_indexes = self.indexes_on(id).map(|(id, _)| id).peekable();
 
             if available_indexes.peek().is_some() {
-                id_bundle.compute_ids.extend(available_indexes);
+                id_bundle
+                    .compute_ids
+                    .entry(self.compute.instance_id())
+                    .or_default()
+                    .extend(available_indexes);
             } else {
                 match self.catalog.get_entry(&id).item() {
                     // Unmaterialized view. Search its dependencies.

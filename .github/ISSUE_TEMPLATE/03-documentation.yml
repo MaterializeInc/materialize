@@ -7,24 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: Documentation request
-description: A request for new or updated documentation.
+name: Documentation
+description: A request for new or updated documentation. For example, "Add an integration guide for MySQL CDC".
 labels: A-docs
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your interest in helping us improve the Materialize documentation!
   - type: textarea
     attributes:
-      label: What pages are affected?
+      label: Documentation request
   - type: textarea
     attributes:
-      label: What needs to be changed or added?
-  - type: input
-    attributes:
-      label: Engineering tracking ticket
-  - type: textarea
-    attributes:
-      label: Feature description
-  - type: textarea
-    attributes:
-      label: Design documents
+      label: Related work
       description: |
-        Please link any available design documents, like technical specs, product specs, or test files.
+        If relevant, link to related work that can provide more context (e.g. design documents, tracking issues).

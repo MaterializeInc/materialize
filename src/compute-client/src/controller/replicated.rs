@@ -23,227 +23,110 @@
 //! exist any longer.
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::anyhow;
+use anyhow::bail;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use futures::Stream;
-use mz_storage::client::controller::CollectionMetadata;
+use futures::future;
+use futures::stream::{FuturesUnordered, StreamExt};
 use timely::progress::frontier::MutableAntichain;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::time;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
+use mz_ore::retry::Retry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
-use mz_service::client::Reconnect;
+use mz_service::client::GenericClient;
+use mz_storage::client::controller::CollectionMetadata;
 
 use crate::command::{ComputeCommand, Peek, ReplicaId};
 use crate::logging::LogVariant;
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
-use crate::service::ComputeClient;
+use crate::service::{ComputeClient, ComputeGrpcClient};
 
-const INITIAL_CONNECTION_BACKOFF: Duration = Duration::from_millis(1);
-
-/// A task that manages communication with a replica.
-struct ReplicaTask<C, T> {
+/// Configuration for `replica_task`.
+struct ReplicaTaskConfig<T> {
     /// The ID of the replica.
     replica_id: ReplicaId,
+    /// The network addresses of the processes in the replica.
+    addrs: Vec<String>,
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
-    /// A channel upon which responses are delivered.
-    response_tx: UnboundedSender<Result<ComputeResponse<T>, anyhow::Error>>,
-    /// The underlying client that communicates with the replica.
-    client: C,
-    // When the last reconnection attempt (if any) was made.
-    last_successful_connection: Option<Instant>,
-    /// The current backoff, for preventing crash loops.
-    backoff: Duration,
+    /// A channel upon which responses from the replica are delivered.
+    response_tx: UnboundedSender<ComputeResponse<T>>,
 }
 
-enum ReplicaTaskState {
-    /// The replica should be (re)connected to.
-    Reconnect,
-    /// Commands should be drained until the next `CreateInstance` command is
-    /// observed.
-    Drain,
-    /// Communication with the replica is live. Commands and responses should
-    /// be forwarded until an error occurs.
-    Pump,
-    /// The caller has asked us to shut down communication with this replica.
-    Done,
-}
-
-impl<C, T> ReplicaTask<C, T>
+/// Asynchronously forwards commands to and responses from a single replica.
+async fn replica_task<T>(config: ReplicaTaskConfig<T>)
 where
-    C: ComputeClient<T> + Reconnect + 'static,
-    T: Send + std::fmt::Debug + 'static,
+    T: Timestamp + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
-    fn spawn(
-        id: ReplicaId,
-        client: C,
-    ) -> (
-        UnboundedSender<ComputeCommand<T>>,
-        UnboundedReceiver<Result<ComputeResponse<T>, anyhow::Error>>,
-    ) {
-        let (command_tx, command_rx) = unbounded_channel();
-        let (response_tx, response_rx) = unbounded_channel();
-        let mut task = ReplicaTask {
-            replica_id: id,
-            command_rx,
-            response_tx,
-            client,
-            last_successful_connection: None,
-            backoff: INITIAL_CONNECTION_BACKOFF,
-        };
-        mz_ore::task::spawn(|| format!("active-replication-replica-{id}"), async move {
-            task.run().await
-        });
-        (command_tx, response_rx)
+    let replica_id = config.replica_id;
+    info!("starting replica task for {replica_id}");
+    match run_replica_core(config).await {
+        Ok(()) => info!("gracefully stopping replica task for {replica_id}"),
+        Err(e) => warn!("replica task for {replica_id} failed: {e}"),
     }
+}
 
-    async fn run(&mut self) {
-        let mut state = ReplicaTaskState::Reconnect;
-        loop {
-            state = match state {
-                ReplicaTaskState::Reconnect => self.step_reconnect().await,
-                ReplicaTaskState::Drain => self.step_drain().await,
-                ReplicaTaskState::Pump => self.step_pump().await,
-                ReplicaTaskState::Done => break,
+async fn run_replica_core<T>(
+    ReplicaTaskConfig {
+        replica_id,
+        addrs,
+        mut command_rx,
+        response_tx,
+    }: ReplicaTaskConfig<T>,
+) -> Result<(), anyhow::Error>
+where
+    T: Timestamp + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
+{
+    let mut client = Retry::default()
+        .clamp_backoff(Duration::from_secs(32))
+        .retry_async(|state| {
+            let addrs = addrs.clone();
+            async move {
+                match ComputeGrpcClient::connect_partitioned(addrs).await {
+                    Ok(client) => Ok(client),
+                    Err(e) => {
+                        warn!(
+                            "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                            state.next_backoff.unwrap()
+                        );
+                        Err(e)
+                    }
+                }
             }
-        }
-        debug!("task for replica {} exiting", self.replica_id);
-    }
+        })
+        .await
+        .expect("retry retries forever");
 
-    async fn step_reconnect(&mut self) -> ReplicaTaskState {
-        if let Some(last_successful_connection) = self.last_successful_connection {
-            // If we were previously up for long enough (60 seconds chosen
-            // arbitrarily), we consider the previous connection to have been
-            // successful and reset the backoff.
-            if Instant::now() - last_successful_connection > Duration::from_secs(60) {
-                self.backoff = INITIAL_CONNECTION_BACKOFF;
-            }
-        }
-        time::sleep(self.backoff).await;
-        // 60 seconds is arbitrarily chosen as a maximum plausible backoff. If
-        // Timely processes aren't realizing their buddies are down within that
-        // time, something is seriously hosed with the network anyway and its
-        // unlikely things will work.
-        self.backoff = (self.backoff * 2).min(Duration::from_secs(60));
-        match self.client.reconnect().await {
-            Ok(()) => {
-                self.last_successful_connection = Some(Instant::now());
-                ReplicaTaskState::Drain
-            }
-            Err(e) => {
-                info!(
-                    "Reconnecting to replica {} failed (retrying in {:?}): {}",
-                    self.replica_id, self.backoff, e
-                );
-                ReplicaTaskState::Reconnect
-            }
-        }
-    }
-
-    async fn step_drain(&mut self) -> ReplicaTaskState {
-        match self.command_rx.recv().await {
-            None => ReplicaTaskState::Done,
-            Some(command) => match command {
-                ComputeCommand::CreateInstance(_) => self.send_command(command).await,
-                // Command intended for the prior incarnation of the replica.
-                // Ignore it.
-                _ => ReplicaTaskState::Drain,
-            },
-        }
-    }
-
-    async fn step_pump(&mut self) -> ReplicaTaskState {
+    loop {
         select! {
             // Command from controller to forward to replica.
-            command = self.command_rx.recv() => match command {
-                None => ReplicaTaskState::Done,
-                Some(command) => self.send_command(command).await,
+            command = command_rx.recv() => match command {
+                None => {
+                    // Controller is no longer interested in this replica. Shut
+                    // down.
+                    return Ok(())
+                }
+                Some(command) => client.send(command).await?,
             },
             // Response from replica to forward to controller.
-            response = self.client.recv() => {
-                let response = match response.transpose() {
-                    None => {
-                        // In the future, if a replica politely hangs up, we
-                        // might want to take it as a signal that a new
-                        // controller has taken over. For now we just try to
-                        // reconnect.
-                        Err(anyhow!("replica unexpectedly gracefully terminated connection"))
-                    }
+            response = client.recv() => {
+                let response = match response? {
+                    None => bail!("replica unexpectedly gracefully terminated connection"),
                     Some(response) => response,
                 };
-                self.send_response(response).await
-            }
-        }
-    }
-
-    async fn send_command(&mut self, command: ComputeCommand<T>) -> ReplicaTaskState {
-        match self.client.send(command).await {
-            Ok(()) => ReplicaTaskState::Pump,
-            Err(e) => self.send_response(Err(e)).await,
-        }
-    }
-
-    async fn send_response(
-        &mut self,
-        response: Result<ComputeResponse<T>, anyhow::Error>,
-    ) -> ReplicaTaskState {
-        // We always forward the response verbatim, but if it's an error, we
-        // switch into reconnection mode. The controller will notice the error
-        // and eventually rehydrate the replica.
-        let next_state = match &response {
-            Ok(_) => ReplicaTaskState::Pump,
-            Err(_) => ReplicaTaskState::Reconnect,
-        };
-        if self.response_tx.send(response).is_err() {
-            ReplicaTaskState::Done
-        } else {
-            next_state
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Replica<T> {
-    tx: UnboundedSender<ComputeCommand<T>>,
-    rx: UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
-    log_collections: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
-}
-
-impl<T> Replica<T> {
-    /// Specialize a command for the given `Replica` and `ReplicaId`.
-    ///
-    /// Most `ComputeCommand`s are independent of the target replica, but some
-    /// contain replica-specific fields that must be adjusted before sending.
-    fn specialize_command(&self, command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
-        // Tell new instances their replica ID.
-        if let ComputeCommand::CreateInstance(config) = command {
-            // Set sink_logs
-            if let Some(logging) = &mut config.logging {
-                logging.sink_logs = self.log_collections.clone();
-                tracing::debug!(
-                    "Enabling sink_logs at replica {:?}: {:?}",
-                    replica_id,
-                    &logging.sink_logs
-                );
-            };
-
-            // Set replica id
-            config.replica_id = replica_id;
-        }
-
-        // Replace dataflow identifiers with new unique ids.
-        if let ComputeCommand::CreateDataflows(dataflows) = command {
-            for dataflow in dataflows.iter_mut() {
-                dataflow.id = uuid::Uuid::new_v4();
+                if response_tx.send(response).is_err() {
+                    // Controller is no longer interested in this replica. Shut
+                    // down.
+                    return Ok(());
+                }
             }
         }
     }
@@ -282,7 +165,7 @@ pub struct ActiveReplicationState<T> {
 
 impl<T> ActiveReplicationState<T>
 where
-    T: timely::progress::Timestamp + Lattice,
+    T: Timestamp + Lattice,
 {
     fn handle_command(
         &mut self,
@@ -347,7 +230,7 @@ where
         }
     }
 
-    fn handle_message(
+    fn handle_response(
         &mut self,
         message: ComputeResponse<T>,
         replica_id: ReplicaId,
@@ -462,8 +345,8 @@ where
 /// A client backed by multiple replicas.
 #[derive(Debug)]
 pub struct ActiveReplication<T> {
-    /// Handles to the replicas themselves.
-    replicas: HashMap<ReplicaId, Replica<T>>,
+    /// State for each replica.
+    replicas: HashMap<ReplicaId, ReplicaState<T>>,
     /// All other internal state of the client
     state: ActiveReplicationState<T>,
 }
@@ -484,40 +367,113 @@ impl<T> Default for ActiveReplication<T> {
     }
 }
 
+/// State for a single replica.
+#[derive(Debug)]
+struct ReplicaState<T> {
+    /// A sender for commands for the replica.
+    ///
+    /// If sending to this channel fails, the replica has failed and requires
+    /// rehydration.
+    command_tx: UnboundedSender<ComputeCommand<T>>,
+    /// A receiver for responses from the replica.
+    ///
+    /// If receiving from the channel returns `None`, the replica has failed
+    /// and requires rehydration.
+    response_rx: UnboundedReceiver<ComputeResponse<T>>,
+    /// The network addresses of the processes that make up the replica.
+    addrs: Vec<String>,
+    /// Where to persist introspection sources
+    log_collections: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
+}
+
+impl<T> ReplicaState<T> {
+    /// Specialize a command for the given `Replica` and `ReplicaId`.
+    ///
+    /// Most `ComputeCommand`s are independent of the target replica, but some
+    /// contain replica-specific fields that must be adjusted before sending.
+    fn specialize_command(&self, command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
+        // Tell new instances their replica ID.
+        if let ComputeCommand::CreateInstance(config) = command {
+            // Set sink_logs
+            if let Some(logging) = &mut config.logging {
+                logging.sink_logs = self.log_collections.clone();
+                tracing::debug!(
+                    "Enabling sink_logs at replica {:?}: {:?}",
+                    replica_id,
+                    &logging.sink_logs
+                );
+            };
+
+            // Set replica id
+            config.replica_id = replica_id;
+        }
+
+        // Replace dataflow identifiers with new unique ids.
+        if let ComputeCommand::CreateDataflows(dataflows) = command {
+            for dataflow in dataflows.iter_mut() {
+                dataflow.id = uuid::Uuid::new_v4();
+            }
+        }
+    }
+}
+
 impl<T> ActiveReplication<T>
 where
-    T: timely::progress::Timestamp,
+    T: Timestamp + Lattice + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub fn add_replica<C>(
+    pub fn add_replica(
         &mut self,
         id: ReplicaId,
-        client: C,
+        addrs: Vec<String>,
         log_collections: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
-    ) where
-        C: ComputeClient<T> + Reconnect + 'static,
-    {
-        for (_, frontiers) in self.state.uppers.values_mut() {
-            frontiers.insert(id, {
-                let mut frontier = timely::progress::frontier::MutableAntichain::new();
-                frontier.update_iter(Some((T::minimum(), 1)));
-                frontier
-            });
-        }
-        let (cmd_tx, resp_rx) = ReplicaTask::spawn(id, client);
-        self.replicas.insert(
-            id,
-            Replica {
-                tx: cmd_tx,
-                rx: resp_rx.into(),
-                log_collections,
-            },
+    ) {
+        // Launch a task to handle communication with the replica
+        // asynchronously. This isolates the main controller thread from
+        // the replica.
+        let (command_tx, command_rx) = unbounded_channel();
+        let (response_tx, response_rx) = unbounded_channel();
+        mz_ore::task::spawn(
+            || format!("active-replication-replica-{id}"),
+            replica_task(ReplicaTaskConfig {
+                replica_id: id,
+                addrs: addrs.clone(),
+                command_rx,
+                response_tx,
+            }),
         );
-        self.hydrate_replica(id);
+
+        // Take this opportunity to clean up the history we should present.
+        self.state.last_command_count = self.state.history.reduce(&self.state.peeks);
+
+        let replica_state = ReplicaState {
+            command_tx,
+            response_rx,
+            addrs,
+            log_collections,
+        };
+
+        // Replay the commands at the client, creating new dataflow identifiers.
+        for command in self.state.history.iter() {
+            let mut command = command.clone();
+            replica_state.specialize_command(&mut command, id);
+            replica_state
+                .command_tx
+                .send(command)
+                .expect("Channel to client has gone away!")
+        }
+
+        // Add replica to tracked state.
+        for (_, frontiers) in self.state.uppers.values_mut() {
+            frontiers.insert(id, MutableAntichain::new_bottom(T::minimum()));
+        }
+        self.replicas.insert(id, replica_state);
     }
 
+    /// Returns an iterator over the IDs of the replicas.
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
         self.replicas.keys().copied()
     }
@@ -530,42 +486,19 @@ where
         }
     }
 
-    /// Pipes a command stream at the indicated replica, introducing new dataflow identifiers.
-    fn hydrate_replica(&mut self, replica_id: ReplicaId) {
-        // Zero out frontiers maintained by this replica.
-        for (_id, (_, frontiers)) in self.state.uppers.iter_mut() {
-            *frontiers.get_mut(&replica_id).unwrap() =
-                timely::progress::frontier::MutableAntichain::new();
-            frontiers
-                .get_mut(&replica_id)
-                .unwrap()
-                .update_iter(Some((T::minimum(), 1)));
-        }
-        // Take this opportunity to clean up the history we should present.
-        self.state.last_command_count = self.state.history.reduce(&self.state.peeks);
-
-        // Replay the commands at the client, creating new dataflow identifiers.
-        let replica = self.replicas.get_mut(&replica_id).unwrap();
-        for command in self.state.history.iter() {
-            let mut command = command.clone();
-            replica.specialize_command(&mut command, replica_id);
-
-            replica
-                .tx
-                .send(command)
-                .expect("Channel to client has gone away!")
-        }
+    fn rehydrate_replica(&mut self, id: ReplicaId) {
+        let addrs = self.replicas[&id].addrs.clone();
+        let log_collections = self.replicas[&id].log_collections.clone();
+        self.remove_replica(id);
+        self.add_replica(id, addrs, log_collections);
     }
-}
 
-// We avoid implementing `GenericClient` here, because the protocol between
-// the compute controller and this client is subtly but meaningfully different:
-// this client is expected to handle errors, rather than propagate them, and therefore
-// it returns infallible values.
-impl<T> ActiveReplication<T>
-where
-    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
-{
+    // We avoid implementing `GenericClient` here, because the protocol between
+    // the compute controller and this client is subtly but meaningfully different:
+    // this client is expected to handle errors, rather than propagate them, and therefore
+    // it returns infallible values.
+
+    /// Sends a command to all replicas.
     pub fn send(&mut self, cmd: ComputeCommand<T>) {
         let frontiers = self
             .replicas
@@ -580,70 +513,56 @@ where
         self.state.handle_command(&cmd, frontiers);
 
         // Clone the command for each active replica.
+        let mut failed_replicas = vec![];
         for (id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
             replica.specialize_command(&mut command, *id);
-
-            // NOTE: Broadcasting commands to replicas irrespective of their
-            // presence or health is part of the isolation contract between
-            // ADAPTER and COMPUTE. If this changes (e.g. awaiting responses
-            // from replicas), ADAPTER needs to handle its interactions with
-            // COMPUTE differently.
-            let _ = replica.tx.send(command);
+            // If sending the command fails, the replica requires rehydration.
+            if replica.command_tx.send(command).is_err() {
+                failed_replicas.push(*id);
+            }
+        }
+        for id in failed_replicas {
+            self.rehydrate_replica(id);
         }
     }
 
-    pub async fn recv(&mut self) -> Option<ActiveReplicationResponse<T>> {
+    /// Receives the next response from any replica.
+    pub async fn recv(&mut self) -> ActiveReplicationResponse<T> {
         // If we have a pending response, we should send it immediately.
         if let Some(response) = self.state.pending_response.pop_front() {
-            return Some(response);
+            return response;
         }
 
-        if self.replicas.is_empty() {
-            // We want to communicate that the result is not ready
-            futures::future::pending().await
-        }
-
-        // We may need to iterate, if a replica needs rehydration.
+        // Receive responses from any of the replicas, and take appropriate
+        // action.
         loop {
-            // Receive responses from any of the replicas, and take appropriate action.
-            let mut stream: tokio_stream::StreamMap<_, _> = self
+            let mut responses = self
                 .replicas
                 .iter_mut()
-                .map(|(id, replica)| (id.clone(), &mut replica.rx))
-                .collect();
-
-            use futures::StreamExt;
-            while let Some((replica_id, message)) = stream.next().await {
-                match message {
-                    Ok(message) => match self.state.handle_message(message, replica_id) {
-                        Some(response) => return Some(response),
+                .map(|(id, replica)| async { (*id, replica.response_rx.recv().await) })
+                .collect::<FuturesUnordered<_>>();
+            match responses.next().await {
+                None => {
+                    // There were no replicas in the set. Block forever to
+                    // communicate that no response is ready.
+                    future::pending().await
+                }
+                Some((replica_id, None)) => {
+                    // A replica has failed and requires rehydration.
+                    drop(responses);
+                    self.rehydrate_replica(replica_id)
+                }
+                Some((replica_id, Some(response))) => {
+                    // A replica has produced a response. Absorb it, possibly
+                    // returning a response up the stack.
+                    match self.state.handle_response(response, replica_id) {
+                        Some(response) => return response,
                         None => { /* continue */ }
-                    },
-                    Err(e) => {
-                        warn!("Rehydrating replica {}: {}", replica_id, e);
-                        drop(stream);
-                        self.hydrate_replica(replica_id);
-                        break;
                     }
                 }
             }
         }
-    }
-
-    /// Returns an adapter that treats the client as a stream.
-    ///
-    /// The stream produces the responses that would be produced by repeated
-    /// calls to `recv`.
-    pub fn as_stream<'a>(&'a mut self) -> impl Stream<Item = ActiveReplicationResponse<T>> + 'a {
-        Box::pin(async_stream::stream!({
-            loop {
-                match self.recv().await {
-                    Some(response) => yield response,
-                    None => return,
-                }
-            }
-        }))
     }
 }
 
@@ -652,10 +571,10 @@ where
 /// that we heard from a given replica and should update its recency status.
 #[derive(Debug, Clone)]
 pub enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
-    /// A response from the compute layer.
+    /// A response from the underlying compute replica.
     ComputeResponse(ComputeResponse<T>),
-    /// A notification that we heard a response
-    /// from the given replica at the given time.
+    /// A notification that we heard a response from the given replica at the
+    /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
@@ -722,15 +641,33 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             }
         }
 
-        // Update dataflow `as_of` frontiers to the least of the final frontiers of their outputs.
+        // Retain only those peeks that have not yet been processed.
+        live_peeks.retain(|peek| peeks.contains_key(&peek.uuid));
+
+        // Determine the required antichains to support live peeks;
+        let mut live_peek_frontiers = std::collections::BTreeMap::new();
+        for Peek { id, timestamp, .. } in live_peeks.iter() {
+            // Introduce `time` as a constraint on the `as_of` frontier of `id`.
+            live_peek_frontiers
+                .entry(id)
+                .or_insert_with(Antichain::new)
+                .insert(timestamp.clone());
+        }
+
+        // Update dataflow `as_of` frontiers, constrained by live peeks and allowed compaction.
         // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
         for dataflow in live_dataflows.iter_mut() {
             let mut as_of = Antichain::new();
             for id in dataflow.export_ids() {
+                // If compaction has been allowed use that; otherwise use the initial `as_of`.
                 if let Some(frontier) = final_frontiers.get(&id) {
                     as_of.extend(frontier.clone());
                 } else {
                     as_of.extend(dataflow.as_of.clone().unwrap());
+                }
+                // If we have requirements from peeks, apply them to hold `as_of` back.
+                if let Some(frontier) = live_peek_frontiers.get(&id) {
+                    as_of.extend(frontier.clone());
                 }
             }
 
@@ -748,9 +685,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
 
         // Discard dataflows whose outputs have all been allowed to compact away.
         live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
-
-        // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|peek| peeks.contains_key(&peek.uuid));
 
         // Record the volume of post-compaction commands.
         let mut command_count = 1;
@@ -770,17 +704,18 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             self.commands
                 .push(ComputeCommand::CreateDataflows(live_dataflows));
         }
-        if !final_frontiers.is_empty() {
-            self.commands.push(ComputeCommand::AllowCompaction(
-                final_frontiers.into_iter().collect(),
-            ));
-        }
         self.commands
             .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
         if !live_cancels.is_empty() {
             self.commands.push(ComputeCommand::CancelPeeks {
                 uuids: live_cancels,
             });
+        }
+        // Allow compaction only after emmitting peek commands.
+        if !final_frontiers.is_empty() {
+            self.commands.push(ComputeCommand::AllowCompaction(
+                final_frontiers.into_iter().collect(),
+            ));
         }
         if let Some(drop_command) = drop_command {
             self.commands.push(drop_command);

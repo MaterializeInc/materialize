@@ -18,16 +18,13 @@
 )]
 
 use std::fmt::Debug;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -36,6 +33,7 @@ use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
+use crate::r#impl::encoding::parse_id;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
@@ -51,6 +49,7 @@ pub use crate::r#impl::state::{Since, Upper};
 /// An implementation of the public crate interface.
 pub(crate) mod r#impl {
     pub mod compact;
+    pub mod encoding;
     pub mod machine;
     pub mod metrics;
     pub mod state;
@@ -130,31 +129,7 @@ impl std::str::FromStr for ShardId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let u = match s.strip_prefix('s') {
-            Some(x) => x,
-            None => return Err(format!("invalid ShardId {}: incorrect prefix", s)),
-        };
-        let uuid = Uuid::parse_str(&u).map_err(|err| format!("invalid ShardId {}: {}", s, err))?;
-        Ok(ShardId(*uuid.as_bytes()))
-    }
-}
-
-impl Codec for ShardId {
-    fn codec_name() -> String {
-        "ShardId".to_owned()
-    }
-
-    fn encode<B>(&self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        let s = self.to_string();
-        <String as Codec>::encode(&s, buf)
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let s = <String as Codec>::decode(buf)?;
-        s.parse()
+        parse_id('s', "ShardId", s).map(ShardId)
     }
 }
 
@@ -163,16 +138,6 @@ impl ShardId {
     /// generated before.
     pub fn new() -> Self {
         ShardId(Uuid::new_v4().as_bytes().to_owned())
-    }
-}
-
-impl RustType<String> for ShardId {
-    fn into_proto(&self) -> String {
-        self.to_string()
-    }
-
-    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        ShardId::from_str(&proto).map_err(|_| TryFromProtoError::InvalidShardId(proto))
     }
 }
 
@@ -473,6 +438,7 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
+    use crate::error::CodecMismatch;
     use crate::r#impl::state::Upper;
     use crate::read::ListenEvent;
 
@@ -673,40 +639,40 @@ mod tests {
                     .open::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch {
+                InvalidUsage::CodecMismatch(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                }
+                })
             );
             assert_eq!(
                 client
                     .open::<String, Vec<u8>, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch {
+                InvalidUsage::CodecMismatch(CodecMismatch {
                     requested: codecs("String", "Vec<u8>", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                }
+                })
             );
             assert_eq!(
                 client
                     .open::<String, String, i64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch {
+                InvalidUsage::CodecMismatch(CodecMismatch {
                     requested: codecs("String", "String", "i64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                }
+                })
             );
             assert_eq!(
                 client
                     .open::<String, String, u64, u64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch {
+                InvalidUsage::CodecMismatch(CodecMismatch {
                     requested: codecs("String", "String", "u64", "u64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                }
+                })
             );
 
             // open_reader and open_writer end up using the same checks, so just
@@ -717,20 +683,20 @@ mod tests {
                     .open_reader::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch {
+                InvalidUsage::CodecMismatch(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                }
+                })
             );
             assert_eq!(
                 client
                     .open_writer::<Vec<u8>, String, u64, i64>(shard_id0)
                     .await
                     .unwrap_err(),
-                InvalidUsage::CodecMismatch {
+                InvalidUsage::CodecMismatch(CodecMismatch {
                     requested: codecs("Vec<u8>", "String", "u64", "i64"),
                     actual: codecs("String", "String", "u64", "i64"),
-                }
+                })
             );
         }
 

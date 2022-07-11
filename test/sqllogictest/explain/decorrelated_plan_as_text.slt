@@ -17,6 +17,10 @@ statement ok
 CREATE MATERIALIZED VIEW v AS
 SELECT * FROM t WHERE a IS NOT NULL
 
+statement ok
+CREATE RECORDED VIEW rv AS
+SELECT * FROM t WHERE a IS NOT NULL
+
 mode cockroach
 
 query T multiline
@@ -101,6 +105,31 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN WITH (TYPES) AS TEXT FOR
 VIEW v
+----
+%0 = Let l0 =
+| Constant ()
+| | types = ()
+| | keys = (())
+
+%1 =
+| Get materialize.public.t (u1)
+| | types = (integer?, integer?)
+| | keys = ()
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| | types = (integer?, integer?)
+| | keys = ()
+| Filter !(isnull(#0))
+| | types = (integer, integer?)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH (TYPES) AS TEXT FOR
+RECORDED VIEW rv
 ----
 %0 = Let l0 =
 | Constant ()

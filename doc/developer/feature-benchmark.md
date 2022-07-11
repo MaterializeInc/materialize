@@ -1,4 +1,4 @@
-# Inroduction
+# Introduction
 
 The Feature Benchmark provides facilities and ready-made benchmarks that measure the execution time of individual operations and
 SQL statements in Materialize. It is meant to sit somewhere between a microbenchmark one would write in Rust and database benchmarks
@@ -117,7 +117,7 @@ Currently, two criteria are used:
 
 The code currently assumes that the data follows a normal distribution, which is decidedly not the case, especially since extreme outliers are frequently observed. More advanced statistical
 techniques for massaging the numbers may be required in the future. In particular, there is some evidence that the distribution of values is multi-modal with: A) one peak for all operations that completed
-within some "tick" (either the kernel rescheduling some thread, or e.g. the timestamper thread kicking in): B) one peak for operations that completed immediately after the "tick" and C) extreme outliers that were particularily unlucky.
+within some "tick" (either the kernel rescheduling some thread, or e.g. the timestamper thread kicking in): B) one peak for operations that completed immediately after the "tick" and C) extreme outliers that were particularly unlucky.
 
 To limit the maximum number of measurements at the expense of accuracy, use the `--max-measurements N` option.
 
@@ -254,9 +254,9 @@ class ScalingScenario(ScenarioBig):
 * Aim for the query or queries being benchmarked to take around 1 second to execute. This allows the framework to perform several iterations without blowing up
 the total execution time. Avoid queries that take milliseconds to run, as the noise from various sources will overwhelm any signal.
 
-* The benchmarks will run with `--timestamp-frequency` and `--introspection-interval` set to `100ms`. This places a lower bound on the granularity and the
+* The benchmarks will run with the default timestamp and introspection granularity. This places a lower bound on the granularity and the
 information value obtained when benchmarking anything impacted by those intervals. Ingest enough data into Kafka so that operations take many times the
-timestamp frequency to complete.
+timestamp granularity to complete.
 
 * Operations in Materialize are more asynchronous than a person familiar with typical databases would expect. For example, `CREATE INDEX` returns before the
 index has been fully populated; DML operations may return to the user before all of their work is done. In both of those cases, the extra latency would be observed

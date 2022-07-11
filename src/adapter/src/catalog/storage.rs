@@ -15,6 +15,7 @@ use bytes::BufMut;
 use futures::future::BoxFuture;
 use itertools::max;
 use prost::{self, Message};
+use timely::progress::Timestamp;
 use uuid::Uuid;
 
 use mz_audit_log::VersionedEvent;
@@ -34,6 +35,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
+use mz_storage::client::sources::Timeline;
 
 use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};
@@ -253,6 +255,19 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                                     } \
                                 }"
                                 .into(),
+                            },
+                        )],
+                    )
+                    .await?;
+                COLLECTION_TIMESTAMP
+                    .upsert(
+                        stash,
+                        vec![(
+                            TimestampKey {
+                                id: Timeline::EpochMilliseconds.to_string(),
+                            },
+                            TimestampValue {
+                                ts: mz_repr::Timestamp::minimum(),
                             },
                         )],
                     )
@@ -614,6 +629,52 @@ impl<S: Append> Connection<S> {
             .upsert_key(&mut self.stash, &key, &next)
             .await?;
         Ok((id..next.next_id).collect())
+    }
+
+    /// Get all global timestamps that has been persisted to disk.
+    pub async fn get_all_persisted_timestamps(
+        &mut self,
+    ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
+        Ok(COLLECTION_TIMESTAMP
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(|(k, v)| (k.id.parse().expect("invalid timeline persisted"), v.ts))
+            .collect())
+    }
+
+    /// Get a global timestamp for a timeline that has been persisted to disk.
+    pub async fn get_persisted_timestamp(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Result<mz_repr::Timestamp, Error> {
+        let key = TimestampKey {
+            id: timeline.to_string(),
+        };
+        Ok(COLLECTION_TIMESTAMP
+            .peek_key_one(&mut self.stash, &key)
+            .await?
+            .expect("must have a persisted timestamp")
+            .ts)
+    }
+
+    /// Persist new global timestamp for a timeline to disk.
+    pub async fn persist_timestamp(
+        &mut self,
+        timeline: &Timeline,
+        timestamp: mz_repr::Timestamp,
+    ) -> Result<(), Error> {
+        let key = TimestampKey {
+            id: timeline.to_string(),
+        };
+        let value = TimestampValue { ts: timestamp };
+        let old_value = COLLECTION_TIMESTAMP
+            .upsert_key(&mut self.stash, &key, &value)
+            .await?;
+        if let Some(old_value) = old_value {
+            assert!(value >= old_value, "global timestamp must always go up");
+        }
+        Ok(())
     }
 
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
@@ -1306,6 +1367,20 @@ struct AuditLogKey {
 }
 impl_codec!(AuditLogKey);
 
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct TimestampKey {
+    #[prost(string)]
+    id: String,
+}
+impl_codec!(TimestampKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct TimestampValue {
+    #[prost(uint64)]
+    ts: u64,
+}
+impl_codec!(TimestampValue);
+
 static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
     TypedCollection::new("setting");
@@ -1329,3 +1404,5 @@ static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollect
 static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
 static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
 static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
+static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
+    TypedCollection::new("timestamp");

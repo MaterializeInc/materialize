@@ -21,7 +21,7 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
-openssl = { version = "0.10.40", features = ["vendored"] }
+openssl = { version = "0.10.41", features = ["vendored"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio = "1.19.2"
 tokio-openssl = "0.6.3"

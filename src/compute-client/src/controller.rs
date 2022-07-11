@@ -24,8 +24,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self, Debug};
 
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_persist_types::Codec64;
 use timely::progress::frontier::MutableAntichain;
@@ -35,20 +36,19 @@ use uuid::Uuid;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_service::client::Reconnect;
 use mz_storage::client::controller::{ReadPolicy, StorageController, StorageError};
 use mz_storage::client::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 
 use crate::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
 };
-use crate::controller::replicated::ActiveReplication;
-use crate::logging::{LogVariant, LoggingConfig};
-use crate::service::ComputeClient;
 
 // NOTE(benesch): this should be a private implementation detail of the compute
 // controller. It is unfortunate that it leaks out.
-pub use crate::controller::replicated::ActiveReplicationResponse;
+use crate::controller::replicated::{ActiveReplication, ActiveReplicationResponse};
+use crate::logging::{LogVariant, LoggingConfig};
+use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
+use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod replicated;
 
@@ -58,11 +58,14 @@ pub type ComputeInstanceId = u64;
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
 pub struct ComputeControllerState<T> {
-    pub client: ActiveReplication<T>,
+    /// The replicas of this compute instance.
+    pub replicas: ActiveReplication<T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
     pub peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
+    /// A response to handle on the next call to `ComputeControllerMut::process`.
+    stashed_response: Option<ActiveReplicationResponse<T>>,
 }
 
 /// An immutable controller for a compute instance.
@@ -79,6 +82,17 @@ pub struct ComputeControllerMut<'a, T> {
     pub instance: ComputeInstanceId,
     pub compute: &'a mut ComputeControllerState<T>,
     pub storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+}
+
+/// Responses from a compute instance controller.
+pub enum ComputeControllerResponse<T> {
+    /// See [`ComputeResponse::PeekResponse`].
+    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    /// See [`ComputeResponse::TailResponse`].
+    TailResponse(GlobalId, TailResponse<T>),
+    /// A notification that we heard a response from the given replica at the
+    /// given time.
+    ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
 /// Errors arising from compute commands.
@@ -155,7 +169,8 @@ impl From<anyhow::Error> for ComputeError {
 
 impl<T> ComputeControllerState<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Debug + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     pub async fn new(logging: &Option<LoggingConfig>) -> Self {
         let mut collections = BTreeMap::default();
@@ -171,16 +186,31 @@ where
                 );
             }
         }
-        let mut client = ActiveReplication::default();
-        client.send(ComputeCommand::CreateInstance(InstanceConfig {
+        let mut replicas = ActiveReplication::default();
+        replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
             logging: logging.clone(),
         }));
 
         Self {
-            client,
+            replicas,
             collections,
             peeks: Default::default(),
+            stashed_response: None,
+        }
+    }
+
+    /// Waits until the controller is ready to process a response.
+    ///
+    /// This method may block for an arbitrarily long time.
+    ///
+    /// When the method returns, the owner should call
+    /// [`ComputeControllerMut::process`] to process the ready message.
+    ///
+    /// This method is cancellation safe.
+    pub async fn ready(&mut self) {
+        if self.stashed_response.is_none() {
+            self.stashed_response = Some(self.replicas.recv().await);
         }
     }
 }
@@ -212,7 +242,8 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Debug + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Constructs an immutable handle from this mutable handle.
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
@@ -230,14 +261,12 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub fn add_replica<C>(
+    pub fn add_replica(
         &mut self,
         id: ReplicaId,
-        client: C,
+        addrs: Vec<String>,
         log_collections: HashMap<LogVariant, GlobalId>,
-    ) where
-        C: ComputeClient<T> + Reconnect + 'static,
-    {
+    ) {
         // Create ComputeState entries in ComputeController
         for id in log_collections.values() {
             self.compute.collections.insert(
@@ -261,16 +290,18 @@ where
             .collect();
 
         // Add the replica
-        self.compute.client.add_replica(id, client, log_collections);
+        self.compute
+            .replicas
+            .add_replica(id, addrs, log_collections);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
-        self.compute.client.get_replica_ids()
+        self.compute.replicas.get_replica_ids()
     }
 
     /// Removes an existing instance replica, by name.
     pub fn remove_replica(&mut self, id: ReplicaId) {
-        self.compute.client.remove_replica(id);
+        self.compute.replicas.remove_replica(id);
     }
 
     /// Creates and maintains the described dataflows, and initializes state for their output.
@@ -432,7 +463,7 @@ where
         }
 
         self.compute
-            .client
+            .replicas
             .send(ComputeCommand::CreateDataflows(augmented_dataflows));
 
         Ok(())
@@ -485,7 +516,7 @@ where
         self.update_read_capabilities(&mut updates).await?;
         self.compute.peeks.insert(uuid, (id, timestamp.clone()));
 
-        self.compute.client.send(ComputeCommand::Peek(Peek {
+        self.compute.replicas.send(ComputeCommand::Peek(Peek {
             id,
             key,
             uuid,
@@ -514,7 +545,7 @@ where
     ///   * No `PeekResponse` at all.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
         self.remove_peeks(uuids.iter().cloned()).await?;
-        self.compute.client.send(ComputeCommand::CancelPeeks {
+        self.compute.replicas.send(ComputeCommand::CancelPeeks {
             uuids: uuids.clone(),
         });
         Ok(())
@@ -578,6 +609,54 @@ where
         }
         Ok(())
     }
+
+    /// Processes the work queued by [`ComputeControllerState::ready`].
+    ///
+    /// This method is guaranteed to return "quickly" unless doing so would
+    /// compromise the correctness of the system.
+    ///
+    /// This method is **not** guaranteed to be cancellation safe. It **must**
+    /// be awaited to completion.
+    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, anyhow::Error> {
+        match self.compute.stashed_response.take() {
+            None => Ok(None),
+            Some(ActiveReplicationResponse::ComputeResponse(response)) => match response {
+                ComputeResponse::FrontierUppers(updates) => {
+                    self.update_write_frontiers(&updates).await?;
+                    Ok(None)
+                }
+                ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+                    self.remove_peeks(std::iter::once(uuid)).await?;
+                    Ok(Some(ComputeControllerResponse::PeekResponse(
+                        uuid,
+                        peek_response,
+                        otel_ctx,
+                    )))
+                }
+                ComputeResponse::TailResponse(global_id, response) => {
+                    let mut changes = timely::progress::ChangeBatch::new();
+                    match &response {
+                        TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                            changes.extend(upper.iter().map(|time| (time.clone(), 1)));
+                            changes.extend(lower.iter().map(|time| (time.clone(), -1)));
+                        }
+                        TailResponse::DroppedAt(frontier) => {
+                            // The tail will not be written to again, but we should not confuse that
+                            // with the source of the TAIL being complete through this time.
+                            changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                        }
+                    }
+                    self.update_write_frontiers(&[(global_id, changes)]).await?;
+                    Ok(Some(ComputeControllerResponse::TailResponse(
+                        global_id, response,
+                    )))
+                }
+            },
+            Some(ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when)) => Ok(Some(
+                ComputeControllerResponse::ReplicaHeartbeat(replica_id, when),
+            )),
+        }
+    }
 }
 
 // Internal interface
@@ -596,7 +675,8 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Copy,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Acquire a mutable reference to the collection state, should it exist.
     pub fn collection_mut(
@@ -715,7 +795,7 @@ where
         }
         if !compaction_commands.is_empty() {
             self.compute
-                .client
+                .replicas
                 .send(ComputeCommand::AllowCompaction(compaction_commands));
         }
 

@@ -78,6 +78,7 @@ pub enum PlanError {
     DropViewOnRecordedView(String),
     AlterViewOnRecordedView(String),
     ShowCreateViewOnRecordedView(String),
+    ExplainViewOnRecordedView(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -104,6 +105,9 @@ impl PlanError {
             }
             Self::ShowCreateViewOnRecordedView(_) => {
                 Some("Use SHOW CREATE RECORDED VIEW to show a recorded view.".into())
+            }
+            Self::ExplainViewOnRecordedView(_) => {
+                Some("Use EXPLAIN [...] RECORDED VIEW to explain a recorded view.".into())
             }
             _ => None,
         }
@@ -193,7 +197,8 @@ impl fmt::Display for PlanError {
             }
             Self::DropViewOnRecordedView(name)
             | Self::AlterViewOnRecordedView(name)
-            | Self::ShowCreateViewOnRecordedView(name) => write!(f, "{name} is not a view"),
+            | Self::ShowCreateViewOnRecordedView(name)
+            | Self::ExplainViewOnRecordedView(name) => write!(f, "{name} is not a view"),
         }
     }
 }

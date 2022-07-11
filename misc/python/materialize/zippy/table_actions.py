@@ -17,6 +17,8 @@ from materialize.zippy.table_capabilities import TableExists
 
 
 class CreateTable(Action):
+    """Creates a table on the Mz instance. 50% of the tables have a default index."""
+
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning}
@@ -47,7 +49,7 @@ class CreateTable(Action):
                 f"""
 > CREATE TABLE {self.table.name} (f1 INTEGER);
 {index}
-> INSERT INTO {self.table.name} VALUES ({self.table.watermarks.high});
+> INSERT INTO {self.table.name} VALUES ({self.table.watermarks.max});
 """
             )
 
@@ -56,6 +58,8 @@ class CreateTable(Action):
 
 
 class ValidateTable(Action):
+    """Validates that a single table contains data that is consistent with the expected min/max watermark."""
+
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, TableExists}
@@ -67,12 +71,14 @@ class ValidateTable(Action):
         c.testdrive(
             f"""
 > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
-{self.table.watermarks.low} {self.table.watermarks.high} {(self.table.watermarks.high-self.table.watermarks.low)+1} {(self.table.watermarks.high-self.table.watermarks.low)+1}
+{self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
 """
         )
 
 
 class DML(Action):
+    """Performs an INSERT, DELETE or UPDATE against a table."""
+
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, TableExists}
@@ -83,41 +89,51 @@ class DML(Action):
 
 
 class Insert(DML):
+    """Inserts rows into a table."""
+
     def run(self, c: Composition) -> None:
-        prev_high = self.table.watermarks.high
-        self.table.watermarks.high = prev_high + self.delta
+        prev_max = self.table.watermarks.max
+        self.table.watermarks.max = prev_max + self.delta
         c.testdrive(
-            f"> INSERT INTO {self.table.name} SELECT * FROM generate_series({prev_high + 1}, {self.table.watermarks.high});"
+            f"> INSERT INTO {self.table.name} SELECT * FROM generate_series({prev_max + 1}, {self.table.watermarks.max});"
         )
 
 
 class ShiftForward(DML):
+    """Update all rows from a table by incrementing their values by a constant."""
+
     def run(self, c: Composition) -> None:
         self.table.watermarks.shift(self.delta)
         c.testdrive(f"> UPDATE {self.table.name} SET f1 = f1 + {self.delta};")
 
 
 class ShiftBackward(DML):
+    """Update all rows from a table by decrementing their values by a constant."""
+
     def run(self, c: Composition) -> None:
         self.table.watermarks.shift(-self.delta)
         c.testdrive(f"> UPDATE {self.table.name} SET f1 = f1 - {self.delta};")
 
 
 class DeleteFromHead(DML):
+    """Delete the largest values from a table"""
+
     def run(self, c: Composition) -> None:
-        self.table.watermarks.high = max(
-            self.table.watermarks.high - self.delta, self.table.watermarks.low
+        self.table.watermarks.max = max(
+            self.table.watermarks.max - self.delta, self.table.watermarks.min
         )
         c.testdrive(
-            f"> DELETE FROM {self.table.name} WHERE f1 > {self.table.watermarks.high};"
+            f"> DELETE FROM {self.table.name} WHERE f1 > {self.table.watermarks.max};"
         )
 
 
 class DeleteFromTail(DML):
+    """Delete the smallest values from a table"""
+
     def run(self, c: Composition) -> None:
-        self.table.watermarks.low = min(
-            self.table.watermarks.low + self.delta, self.table.watermarks.high
+        self.table.watermarks.min = min(
+            self.table.watermarks.min + self.delta, self.table.watermarks.max
         )
         c.testdrive(
-            f"> DELETE FROM {self.table.name} WHERE f1 < {self.table.watermarks.low};"
+            f"> DELETE FROM {self.table.name} WHERE f1 < {self.table.watermarks.min};"
         )

@@ -18,6 +18,8 @@ from materialize.zippy.view_actions import CreateView, ValidateView
 
 
 class KafkaSources(Scenario):
+    """A Zippy test using Kafka sources exclusively."""
+
     def config(self) -> Dict[Type[Action], float]:
         return {
             MzStart: 1,
@@ -32,6 +34,8 @@ class KafkaSources(Scenario):
 
 
 class UserTables(Scenario):
+    """A Zippy test using user tables exclusively."""
+
     def config(self) -> Dict[Type[Action], float]:
         return {
             MzStart: 1,

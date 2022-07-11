@@ -172,6 +172,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Reports whether the specified type exists in the catalog.
     fn item_exists(&self, name: &QualifiedObjectName) -> bool;
 
+    /// Gets a compute instance by ID.
+    fn get_compute_instance(&self, id: ComputeInstanceId) -> &dyn CatalogComputeInstance;
+
     /// Finds a name like `name` that is not already in use.
     ///
     /// If `name` itself is available, it is returned unchanged.
@@ -673,6 +676,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn item_exists(&self, _: &QualifiedObjectName) -> bool {
         false
+    }
+
+    fn get_compute_instance(&self, _: ComputeInstanceId) -> &dyn CatalogComputeInstance {
+        unimplemented!();
     }
 
     fn resolve_full_name(&self, _: &QualifiedObjectName) -> FullObjectName {

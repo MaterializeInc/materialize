@@ -53,7 +53,7 @@ pub struct Server {
     _worker_guards: WorkerGuards<()>,
 }
 
-/// Initiates a timely dataflow computation, processing materialized commands.
+/// Initiates a timely dataflow computation, processing storage commands.
 pub fn serve(
     config: Config,
 ) -> Result<
