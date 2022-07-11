@@ -52,7 +52,7 @@ mz-stash = { path = "../stash" }
 # TODO(benesch): this crate should not depend on the SQL parser.
 mz-sql-parser = { path = "../sql-parser" }
 mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.12.0" }
+once_cell = { version = "1.13.0" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.1", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}

@@ -31,7 +31,7 @@ crossbeam-channel = "0.5.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures-util = "0.3.19"
-once_cell = "1.12.0"
+once_cell = "1.13.0"
 md-5 = "0.10.1"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "task"] }
 mz-persist-types = { path = "../persist-types" }
