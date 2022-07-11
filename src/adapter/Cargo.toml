@@ -41,7 +41,7 @@ mz-transform = { path = "../transform" }
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = "1.5.6"
+regex = "1.6.0"
 rusqlite = { version = "0.27.0", features = ["bundled", "unlock_notify"] }
 semver = "1.0.12"
 serde = "1.0.138"
