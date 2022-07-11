@@ -218,6 +218,37 @@ struct Replica<T> {
     log_collections: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
+impl<T> Replica<T> {
+    /// Specialize a command for the given `Replica` and `ReplicaId`.
+    ///
+    /// Most `ComputeCommand`s are independent of the target replica, but some
+    /// contain replica-specific fields that must be adjusted before sending.
+    fn specialize_command(&self, command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
+        // Tell new instances their replica ID.
+        if let ComputeCommand::CreateInstance(config) = command {
+            // Set sink_logs
+            if let Some(logging) = &mut config.logging {
+                logging.sink_logs = self.log_collections.clone();
+                tracing::debug!(
+                    "Enabling sink_logs at replica {:?}: {:?}",
+                    replica_id,
+                    &logging.sink_logs
+                );
+            };
+
+            // Set replica id
+            config.replica_id = replica_id;
+        }
+
+        // Replace dataflow identifiers with new unique ids.
+        if let ComputeCommand::CreateDataflows(dataflows) = command {
+            for dataflow in dataflows.iter_mut() {
+                dataflow.id = uuid::Uuid::new_v4();
+            }
+        }
+    }
+}
+
 /// Additional information to store with pening peeks.
 #[derive(Debug)]
 pub struct PendingPeek {
@@ -517,7 +548,7 @@ where
         let replica = self.replicas.get_mut(&replica_id).unwrap();
         for command in self.state.history.iter() {
             let mut command = command.clone();
-            specialize_command(&mut command, replica_id, replica);
+            replica.specialize_command(&mut command, replica_id);
 
             replica
                 .tx
@@ -551,7 +582,7 @@ where
         // Clone the command for each active replica.
         for (id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
-            specialize_command(&mut command, *id, replica);
+            replica.specialize_command(&mut command, *id);
 
             // NOTE: Broadcasting commands to replicas irrespective of their
             // presence or health is part of the isolation contract between
@@ -775,39 +806,6 @@ impl<T> Default for ComputeCommandHistory<T> {
     fn default() -> Self {
         Self {
             commands: Vec::new(),
-        }
-    }
-}
-
-/// Specialize a command for the given `ReplicaId`.
-///
-/// Most `ComputeCommand`s are independent of the target replica, but some
-/// contain replica-specific fields that must be adjusted before sending.
-fn specialize_command<T>(
-    command: &mut ComputeCommand<T>,
-    replica_id: ReplicaId,
-    replica: &Replica<T>,
-) {
-    // Tell new instances their replica ID.
-    if let ComputeCommand::CreateInstance(config) = command {
-        // Set sink_logs
-        if let Some(logging) = &mut config.logging {
-            logging.sink_logs = replica.log_collections.clone();
-            tracing::debug!(
-                "Enabling sink_logs at replica {:?}: {:?}",
-                replica_id,
-                &logging.sink_logs
-            );
-        };
-
-        // Set replica id
-        config.replica_id = replica_id;
-    }
-
-    // Replace dataflow identifiers with new unique ids.
-    if let ComputeCommand::CreateDataflows(dataflows) = command {
-        for dataflow in dataflows.iter_mut() {
-            dataflow.id = uuid::Uuid::new_v4();
         }
     }
 }
