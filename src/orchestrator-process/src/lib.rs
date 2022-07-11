@@ -148,6 +148,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             scale: scale_in,
             labels: _,
             availability_zone: _,
+            anti_affinity: _,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);

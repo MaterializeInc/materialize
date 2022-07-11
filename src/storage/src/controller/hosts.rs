@@ -240,6 +240,8 @@ impl<T> StorageHosts<T> {
                     scale: NonZeroUsize::new(1).unwrap(),
                     labels: HashMap::new(),
                     availability_zone: None,
+                    // TODO: Decide on an A-A policy for storage hosts
+                    anti_affinity: None,
                 },
             )
             .await?;

@@ -52,8 +52,8 @@ use mz_compute_client::response::{
 };
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
-    CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
-    ServicePort,
+    CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, NamespacedOrchestrator,
+    Orchestrator, ServiceConfig, ServiceEvent, ServicePort,
 };
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
@@ -304,10 +304,25 @@ where
                             memory_limit: allocation.memory_limit,
                             scale: allocation.scale,
                             labels: hashmap! {
+                                "replica-id".into() => replica_id.to_string(),
                                 "cluster-id".into() => instance_id.to_string(),
                                 "type".into() => "cluster".into(),
                             },
                             availability_zone,
+                            anti_affinity: Some(vec![
+                                LabelSelector {
+                                    label_name: "cluster-id".to_string(),
+                                    logic: LabelSelectionLogic::Eq {
+                                        value: instance_id.to_string(),
+                                    },
+                                },
+                                LabelSelector {
+                                    label_name: "replica-id".into(),
+                                    logic: LabelSelectionLogic::NotEq {
+                                        value: replica_id.to_string(),
+                                    },
+                                },
+                            ]),
                         },
                     )
                     .await?;
