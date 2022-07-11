@@ -277,6 +277,20 @@ where
         self.collections.trace.upper().clone()
     }
 
+    pub fn seqno_since(&self) -> SeqNo {
+        let mut seqno_since = self.seqno;
+        for cap in self.collections.readers.values() {
+            seqno_since = std::cmp::min(seqno_since, cap.seqno);
+        }
+        // TODO: This is meant to be the minimum SeqNo that some reader holds a
+        // capability on it, but we don't yet actually do the bookkeeping (it
+        // currently starts at the SeqNo at which the reader was registered). In
+        // the meantime, reset it to the current seqno and don't actually delete
+        // blobs in the GarbageCollector.
+        seqno_since = self.seqno;
+        seqno_since
+    }
+
     pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> ControlFlow<E, (R, Self)>
     where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,

@@ -35,6 +35,7 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::encoding::parse_id;
+use crate::r#impl::gc::GarbageCollector;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
@@ -51,6 +52,7 @@ pub use crate::r#impl::state::{Since, Upper};
 pub(crate) mod r#impl {
     pub mod compact;
     pub mod encoding;
+    pub mod gc;
     pub mod machine;
     pub mod metrics;
     pub mod state;
@@ -323,10 +325,16 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open_reader shard_id={:?}", shard_id);
+        let gc = GarbageCollector::new(
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
         let mut machine = Machine::new(
             shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
+            gc,
         )
         .await?;
 
@@ -360,13 +368,19 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open_writer shard_id={:?}", shard_id);
+        let gc = GarbageCollector::new(
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
         let mut machine = Machine::new(
             shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
+            gc,
         )
         .await?;
-        let compactor = self.cfg.compaction_enabled.then(|| {
+        let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.blob),
@@ -380,7 +394,7 @@ impl PersistClient {
             metrics: Arc::clone(&self.metrics),
             writer_id,
             machine,
-            compactor,
+            compact,
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
             explicitly_expired: false,

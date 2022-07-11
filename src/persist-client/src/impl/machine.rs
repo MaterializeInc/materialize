@@ -27,6 +27,7 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::{CodecMismatch, InvalidUsage};
+use crate::r#impl::gc::{GarbageCollector, GcReq};
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
@@ -42,6 +43,7 @@ use crate::ShardId;
 pub struct Machine<K, V, T, D> {
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
+    gc: GarbageCollector,
 
     state: State<K, V, T, D>,
 }
@@ -53,6 +55,7 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
             consensus: Arc::clone(&self.consensus),
             metrics: Arc::clone(&self.metrics),
             state: self.state.clone(),
+            gc: self.gc.clone(),
         }
     }
 }
@@ -68,6 +71,7 @@ where
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
+        gc: GarbageCollector,
     ) -> Result<Self, CodecMismatch> {
         let state = metrics
             .cmds
@@ -82,6 +86,7 @@ where
             consensus,
             metrics,
             state,
+            gc,
         })
     }
 
@@ -409,16 +414,22 @@ where
                             new_state.seqno(),
                             new_state
                         );
+
+                        // If this command has downgraded the seqno_since, fire
+                        // off a background request to the GarbageCollector so
+                        // it can delete eligible blobs and truncate the state
+                        // history.
+                        let old_seqno_since = self.state.seqno_since();
+                        let new_seqno_since = new_state.seqno_since();
+                        if old_seqno_since != new_seqno_since {
+                            self.gc.gc_and_truncate_background(GcReq {
+                                shard_id: self.shard_id(),
+                                old_seqno_since,
+                                new_seqno_since,
+                            });
+                        }
+
                         self.state = new_state;
-
-                        // Bound the number of entries in consensus.
-                        let () = retry_external(
-                            &self.metrics.retries.external.apply_unbatched_cmd_truncate,
-                            || async { self.consensus.truncate(&path, self.state.seqno()).await },
-                        )
-                        .instrument(debug_span!("apply_unbatched_cmd::truncate"))
-                        .await;
-
                         return Ok((self.state.seqno(), Ok(work_ret)));
                     }
                     Err(current) => {
@@ -901,7 +912,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
@@ -926,16 +937,27 @@ mod tests {
             .expect("scan failed");
         // Make sure we constructed the key correctly.
         assert!(consensus_entries.len() > 0);
-        // Make sure the number of entries is bounded.
-        //
-        // In practice, this is always 1 right now, but when we implement
-        // incremental state, it will be something like log(NUM_BATCHES).
-        let max_entries = usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
-        assert!(
-            consensus_entries.len() <= max_entries,
-            "expected at most {} entries got {}",
-            max_entries,
-            consensus_entries.len()
-        );
+        // Make sure the number of entries is bounded. (I think we could work
+        // out a tighter bound than this, but the point is only that it's
+        // bounded).
+        let max_entries = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
+
+        // The truncation is done in the background, so wait until the assertion
+        // passes, giving up and failing the test if that takes "too much" time.
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+        loop {
+            if consensus_entries.len() <= max_entries {
+                break;
+            }
+            info!(
+                "expected at most {} entries got {}",
+                max_entries,
+                consensus_entries.len()
+            );
+            if retry.next_sleep() > Duration::from_secs(10) {
+                panic!("did not converge in time");
+            }
+            retry = retry.sleep().await;
+        }
     }
 }
