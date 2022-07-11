@@ -839,6 +839,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 ingestion: Some(ingestion),
                                 remote_addr: source.remote_addr.clone(),
+                                since: None,
                             },
                         )])
                         .await
@@ -847,16 +848,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     policies_to_set.storage_ids.insert(entry.id());
                 }
                 CatalogItem::Table(table) => {
+                    let collection_desc = table.desc.clone().into();
                     self.controller
                         .storage_mut()
-                        .create_collections(vec![(
-                            entry.id(),
-                            CollectionDescription {
-                                desc: table.desc.clone(),
-                                ingestion: None,
-                                remote_addr: None,
-                            },
-                        )])
+                        .create_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
 
@@ -893,16 +888,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::View(_) => (),
                 CatalogItem::RecordedView(rview) => {
                     // Re-create the storage collection.
+                    let collection_desc = rview.desc.clone().into();
                     self.controller
                         .storage_mut()
-                        .create_collections(vec![(
-                            entry.id(),
-                            CollectionDescription {
-                                desc: rview.desc.clone(),
-                                ingestion: None,
-                                remote_addr: None,
-                            },
-                        )])
+                        .create_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
 
@@ -2946,16 +2935,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Determine the initial validity for the table.
                 let since_ts = self.get_local_write_ts().await;
 
+                let collection_desc = table.desc.clone().into();
                 self.controller
                     .storage_mut()
-                    .create_collections(vec![(
-                        table_id,
-                        CollectionDescription {
-                            desc: table.desc.clone(),
-                            ingestion: None,
-                            remote_addr: None,
-                        },
-                    )])
+                    .create_collections(vec![(table_id, collection_desc)])
                     .await
                     .unwrap();
 
@@ -3079,6 +3062,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc: source.desc.clone(),
                             ingestion: Some(ingestion),
                             remote_addr: source.remote_addr,
+                            since: None,
                         },
                     )])
                     .await
@@ -3479,7 +3463,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // it to storage.
                 let df = txn
                     .dataflow_builder(compute_instance)
-                    .build_recorded_view_dataflow(id, as_of, internal_view_id)?;
+                    .build_recorded_view_dataflow(id, as_of.clone(), internal_view_id)?;
                 Ok(df)
             })
             .await
@@ -3494,6 +3478,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc,
                             ingestion: None,
                             remote_addr: None,
+                            since: Some(as_of),
                         },
                     )])
                     .await
