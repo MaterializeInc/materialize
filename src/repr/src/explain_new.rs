@@ -64,9 +64,9 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Explanation::Text(explain) => explain.fmt_text(f),
-            Explanation::Json(explain) => explain.fmt_json(f),
-            Explanation::Dot(explain) => explain.fmt_dot(f),
+            Explanation::Text(explain) => explain.fmt_text(&mut T::Context::default(), f),
+            Explanation::Json(explain) => explain.fmt_json(&mut J::Context::default(), f),
+            Explanation::Dot(explain) => explain.fmt_dot(&mut D::Context::default(), f),
         }
     }
 }
@@ -95,7 +95,10 @@ pub trait DisplayText
 where
     Self: Sized,
 {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    /// A mutable context required to render `Self` and its sub-parts as text.
+    type Context: Default;
+
+    fn fmt_text(&self, ctx: &mut Self::Context, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 
     fn str_text(&self) -> String {
         Explanation::<'_, Self, UnsupportedFormat, UnsupportedFormat>::Text(self).to_string()
@@ -108,7 +111,10 @@ pub trait DisplayJson
 where
     Self: Sized,
 {
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    /// A mutable context required to render `Self` and its sub-parts as Json.
+    type Context: Default;
+
+    fn fmt_json(&self, ctx: &mut Self::Context, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 
     fn str_json(&self) -> String {
         Explanation::<'_, UnsupportedFormat, Self, UnsupportedFormat>::Json(self).to_string()
@@ -121,7 +127,10 @@ pub trait DisplayDot
 where
     Self: Sized,
 {
-    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    /// A mutable context required to render `Self` and its sub-parts as Dot.
+    type Context: Default;
+
+    fn fmt_dot(&self, ctx: &mut Self::Context, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 
     fn str_dot(&self) -> String {
         Explanation::<'_, UnsupportedFormat, UnsupportedFormat, Self>::Dot(self).to_string()
@@ -135,19 +144,22 @@ where
 pub enum UnsupportedFormat {}
 
 impl DisplayText for UnsupportedFormat {
-    fn fmt_text(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+    type Context = ();
+    fn fmt_text(&self, _ctx: &mut Self::Context, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         unreachable!()
     }
 }
 
 impl DisplayJson for UnsupportedFormat {
-    fn fmt_json(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+    type Context = ();
+    fn fmt_json(&self, _ctx: &mut Self::Context, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         unreachable!()
     }
 }
 
 impl DisplayDot for UnsupportedFormat {
-    fn fmt_dot(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+    type Context = ();
+    fn fmt_dot(&self, _ctx: &mut Self::Context, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         unreachable!()
     }
 }
@@ -372,7 +384,8 @@ mod tests {
     }
 
     impl<'a> DisplayText for TestExplanation<'a> {
-        fn fmt_text(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        type Context = ();
+        fn fmt_text(&self, _ctx: &mut Self::Context, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             let lhs = &self.expr.lhs;
             let rhs = &self.expr.rhs;
             writeln!(f, "expr = {lhs} + {rhs}")?;

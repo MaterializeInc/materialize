@@ -510,7 +510,8 @@ impl<'a> HirRelationExprExplanation<'a> {
 }
 
 impl<'a> DisplayText for HirRelationExprExplanation<'a> {
-    fn fmt_text(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    type Context = ();
+    fn fmt_text(&self, _ctx: &mut Self::Context, f: &mut fmt::Formatter) -> fmt::Result {
         let mut prev_chain = u64::max_value();
         for node in &self.nodes {
             if node.chain != prev_chain {
