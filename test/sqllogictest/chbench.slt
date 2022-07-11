@@ -267,7 +267,7 @@ ORDER BY ol_number
 | | agg count(#1)
 | | agg count(#2)
 | | agg count(true)
-| Map (bigint_to_double(#1) / bigint_to_double(if (#3 = 0) then {null} else {#3})), (numerictof64(#2) / bigint_to_double(if (#4 = 0) then {null} else {#4}))
+| Map (bigint_to_double(#1) / bigint_to_double(if (#3 = 0) then {null} else {#3})), (numeric_to_double(#2) / bigint_to_double(if (#4 = 0) then {null} else {#4}))
 | Project (#0..=#2, #6, #7, #5)
 
 Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#5)
@@ -1657,7 +1657,7 @@ ORDER BY substr(c_state, 1, 1)
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| Filter (numerictof64(#4) > (numerictof64(#5) / bigint_to_double(if (#6 = 0) then {null} else {#6})))
+| Filter (numeric_to_double(#4) > (numeric_to_double(#5) / bigint_to_double(if (#6 = 0) then {null} else {#6})))
 | Project (#0..=#4)
 
 %3 = Let l1 =

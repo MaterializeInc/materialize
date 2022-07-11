@@ -150,7 +150,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (bigint_to_double(integer_to_bigint(1)) > numerictof64(1.11111))
+| Map (bigint_to_double(integer_to_bigint(1)) > numeric_to_double(1.11111))
 
 EOF
 
@@ -161,7 +161,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (numerictof64(1.1) > integer_to_double(1))
+| Map (numeric_to_double(1.1) > integer_to_double(1))
 
 EOF
 
@@ -213,7 +213,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map coalesce(integer_to_double(1), numerictof64(integer_to_numeric(1)), integer_to_double(1))
+| Map coalesce(integer_to_double(1), numeric_to_double(integer_to_numeric(1)), integer_to_double(1))
 
 EOF
 

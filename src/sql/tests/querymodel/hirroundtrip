@@ -55,7 +55,7 @@ from (select false as a, null as b, null as c) x
 | Constant ()
 | Map false, null
 | Project (#0, #1, #1)
-| Map if !(#0) then {ltrim("e", #1)} els {substr(#2, i32toi64(3), i32toi64(4))}, mz_logical_timestamp()
+| Map if !(#0) then {ltrim("e", #1)} els {substr(#2, integer_to_bigint(3), integer_to_bigint(4))}, mz_logical_timestamp()
 | Project (#3, #4)
 
 round_trip
@@ -124,7 +124,7 @@ select x.b + 1 as d from x right join y on x.a = y.a;
 
 %2 =
 | RightOuterJoin %0 %1 on (#0 = #3)
-| Map (#1 + i32toi64(1))
+| Map (#1 + integer_to_bigint(1))
 | Project (#6)
 ----
 ----
@@ -141,7 +141,7 @@ select coalesce(x.b, 0) from x full join y on x.a = y.a and x.c is not null;
 
 %2 =
 | FullOuterJoin %0 %1 on ((#0 = #3) && !(isnull(#2)))
-| Map coalesce(#1, i32toi64(0))
+| Map coalesce(#1, integer_to_bigint(0))
 | Project (#6)
 ----
 ----

@@ -32,7 +32,7 @@ sqlfunc!(
     #[sqlname = "boolean_to_nonstandard_text"]
     #[preserves_uniqueness = true]
     fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
-        // N.B. this function differs from `cast_bool_to_string_implicit` because
+        // N.B. this function differs from `cast_bool_to_string` because
         // the SQL specification requires `true` and `false` to be spelled out in
         // explicit casts, while PostgreSQL prefers its more concise `t` and `f`
         // representation in some contexts, for historical reasons.

@@ -169,7 +169,7 @@ ORDER BY
 | | agg sum(((#1 * (1 - #2)) * (1 + #3)))
 | | agg count(true)
 | | agg sum(#2)
-| Map bigint_to_double(if (#6 = 0) then {null} else {#6}), (numerictof64(#2) / #8), (numerictof64(#3) / #8), (numerictof64(#7) / #8)
+| Map bigint_to_double(if (#6 = 0) then {null} else {#6}), (numeric_to_double(#2) / #8), (numeric_to_double(#3) / #8), (numeric_to_double(#7) / #8)
 | Project (#0..=#5, #9..=#11, #6)
 
 Finish order_by=(#0 asc nulls_last, #1 asc nulls_last) limit=none offset=0 project=(#0..=#9)
@@ -1324,7 +1324,7 @@ Query:
 %5 = Let l2 =
 | Join %2 %4 (= #0 #3)
 | | implementation = Differential %2 %4.(#0)
-| Filter (numerictof64(#1) < (0.2 * (numerictof64(#4) / bigint_to_double(if (#5 = 0) then {null} else {#5}))))
+| Filter (numeric_to_double(#1) < (0.2 * (numeric_to_double(#4) / bigint_to_double(if (#5 = 0) then {null} else {#5}))))
 | Project (#2)
 | Reduce group=()
 | | agg sum(#0)
@@ -1832,7 +1832,7 @@ ORDER BY
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| Filter (numerictof64(#2) > (numerictof64(#3) / bigint_to_double(if (#4 = 0) then {null} else {#4})))
+| Filter (numeric_to_double(#2) > (numeric_to_double(#3) / bigint_to_double(if (#4 = 0) then {null} else {#4})))
 | Project (#0..=#2)
 
 %3 = Let l1 =
@@ -1922,7 +1922,7 @@ ORDER BY
 
 %2 =
 | InnerJoin %0 %1 on true
-| Filter ((select(%3) && (#3 = #7)) && (#8 = strtochar("CANADA")))
+| Filter ((select(%3) && (#3 = #7)) && (#8 = text_to_char("CANADA")))
 | |
 | | %3 =
 | | | Get materialize.public.partsupp (u7)

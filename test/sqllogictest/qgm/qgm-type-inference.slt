@@ -128,7 +128,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: i32toi64(Q0.C0) (bigint?)| 3: i32toi64(Q0.C1) (bigint) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: integer_to_bigint(Q0.C0) (bigint?)| 3: integer_to_bigint(Q0.C1) (bigint) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -466,7 +466,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: if (Q0.C1 = strtoi32(\"a\")) then \{null\} else \{Q0.C1\} (integer?)| 3: if (Q0.C1 = null) then \{null\} else \{Q0.C1\} (integer?)| 4: if (Q0.C0 = null) then \{null\} else \{Q0.C0\} (integer?)| 5: if (Q0.C0 = Q0.C1) then \{null\} else \{Q0.C0\} (integer?) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: if (Q0.C1 = text_to_integer(\"a\")) then \{null\} else \{Q0.C1\} (integer?)| 3: if (Q0.C1 = null) then \{null\} else \{Q0.C1\} (integer?)| 4: if (Q0.C0 = null) then \{null\} else \{Q0.C0\} (integer?)| 5: if (Q0.C0 = Q0.C1) then \{null\} else \{Q0.C0\} (integer?) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -674,7 +674,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: abs(Q0.C1) (integer)| 3: log10f64(i32tof64(Q0.C1)) (double precision)| 4: roundf64(i32tof64(Q0.C1)) (double precision)| 5: cos(i32tof64(Q0.C1)) (double precision)| 6: (Q0.C1 \<\< Q0.C1) (integer) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: abs(Q0.C1) (integer)| 3: log10f64(integer_to_double(Q0.C1)) (double precision)| 4: roundf64(integer_to_double(Q0.C1)) (double precision)| 5: cos(integer_to_double(Q0.C1)) (double precision)| 6: (Q0.C1 \<\< Q0.C1) (integer) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -718,7 +718,7 @@ digraph G {
     }
     subgraph cluster3 {
         label = "Box3:Select"
-        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0 (integer?)| 1: Q2.C1 (integer?)| 2: Q2.C2 (bigint?)| 3: Q2.C3 (bigint)| 4: Q2.C4 (numeric?)| 5: Q2.C5 (numeric?)| 6: Q2.C6 (bigint)| 7: Q2.C7 (integer list?)| 8: (i64tof64(Q2.C2) / i64tof64(if (Q2.C3 = i32toi64(0)) then \{null\} else \{Q2.C3\})) (double precision?)| 9: sqrtnumeric(((Q2.C4 - ((Q2.C5 * Q2.C5) / i64tonumeric(if (Q2.C6 = i32toi64(0)) then \{null\} else \{Q2.C6\}))) / i64tonumeric(if ((Q2.C6 - i32toi64(1)) = i32toi64(0)) then \{null\} else \{(Q2.C6 - i32toi64(1))\}))) (numeric?) }" ]
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0 (integer?)| 1: Q2.C1 (integer?)| 2: Q2.C2 (bigint?)| 3: Q2.C3 (bigint)| 4: Q2.C4 (numeric?)| 5: Q2.C5 (numeric?)| 6: Q2.C6 (bigint)| 7: Q2.C7 (integer list?)| 8: (bigint_to_double(Q2.C2) / bigint_to_double(if (Q2.C3 = integer_to_bigint(0)) then \{null\} else \{Q2.C3\})) (double precision?)| 9: sqrtnumeric(((Q2.C4 - ((Q2.C5 * Q2.C5) / bigint_to_numeric(if (Q2.C6 = integer_to_bigint(0)) then \{null\} else \{Q2.C6\}))) / bigint_to_numeric(if ((Q2.C6 - integer_to_bigint(1)) = integer_to_bigint(0)) then \{null\} else \{(Q2.C6 - integer_to_bigint(1))\}))) (numeric?) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -736,7 +736,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C1 (integer)| 1: (i32tonumeric(Q0.C1) * i32tonumeric(Q0.C1)) (numeric)| 2: i32tonumeric(Q0.C1) (numeric)| 3: record_create(list_create(Q0.C1)) (record(: integer list)) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C1 (integer)| 1: (integer_to_numeric(Q0.C1) * integer_to_numeric(Q0.C1)) (numeric)| 2: integer_to_numeric(Q0.C1) (numeric)| 3: record_create(list_create(Q0.C1)) (record(: integer list)) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -924,7 +924,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (text?)| 1: Q0.C1 (text)| 2: split_string(Q0.C1, \"a\", i32toi64(100)) (text)| 3: split_string(\"a\", Q0.C1, i32toi64(100)) (text)| 4: split_string(\"a\", \"a\", i32toi64(strtoi32(Q0.C1))) (text) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (text?)| 1: Q0.C1 (text)| 2: split_string(Q0.C1, \"a\", integer_to_bigint(100)) (text)| 3: split_string(\"a\", Q0.C1, integer_to_bigint(100)) (text)| 4: split_string(\"a\", \"a\", integer_to_bigint(text_to_integer(Q0.C1))) (text) }" ]
         {
             rank = same
             node [ shape = circle ]

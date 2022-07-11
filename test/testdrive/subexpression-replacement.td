@@ -93,7 +93,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 > EXPLAIN SELECT * FROM t1
   WHERE mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null)
   AND (mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null) = true);
-"%0 =| Get t1| Filter (mz_sleep(i32tof64(#1)) > mz_sleep(i32tof64(#1)))"
+"%0 =| Get t1| Filter (mz_sleep(integer_to_double(#1)) > mz_sleep(integer_to_double(#1)))"
 
 # IN list inside the expression
 

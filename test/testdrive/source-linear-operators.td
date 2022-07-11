@@ -239,7 +239,7 @@ Query:
 
 %2 =
 | Get %0 (l0)
-| Map i64tonumeric((1 + #2))
+| Map bigint_to_numeric((1 + #2))
 | Project (#0, #4)
 
 %3 =
