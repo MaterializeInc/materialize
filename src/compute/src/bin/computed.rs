@@ -175,5 +175,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     let (_server, client) = mz_compute::server::serve(config)?;
-    GrpcServer::serve(args.listen_addr, client, ProtoComputeServer::new).await
+    GrpcServer::serve(
+        args.listen_addr,
+        BUILD_INFO.semver_version(),
+        client,
+        ProtoComputeServer::new,
+    )
+    .await
 }

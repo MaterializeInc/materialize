@@ -41,6 +41,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 
+use mz_build_info::BuildInfo;
 use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
@@ -853,6 +854,7 @@ where
 {
     /// Create a new storage controller from a client it should wrap.
     pub async fn new(
+        build_info: &'static BuildInfo,
         postgres_url: String,
         persist_location: PersistLocation,
         persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -869,6 +871,7 @@ where
         Self {
             state: StorageControllerState::new(postgres_url).await,
             hosts: StorageHosts::new(StorageHostsConfig {
+                build_info,
                 orchestrator,
                 storaged_image,
             }),

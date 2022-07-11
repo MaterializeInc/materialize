@@ -40,6 +40,7 @@ use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use mz_build_info::BuildInfo;
 use mz_compute_client::command::{ComputeCommand, ProcessId, ProtoComputeCommand, ReplicaId};
 use mz_compute_client::controller::{
     ComputeController, ComputeControllerMut, ComputeControllerResponse, ComputeControllerState,
@@ -70,6 +71,8 @@ pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 /// Configures a controller.
 #[derive(Debug, Clone)]
 pub struct ControllerConfig {
+    /// The build information for this process.
+    pub build_info: &'static BuildInfo,
     /// The orchestrator implementation to use.
     pub orchestrator: Arc<dyn Orchestrator>,
     /// The persist location where all storage collections will be written to.
@@ -254,6 +257,7 @@ enum Readiness {
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<T = mz_repr::Timestamp> {
+    build_info: &'static BuildInfo,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
@@ -273,8 +277,10 @@ where
         logging: Option<LoggingConfig>,
     ) {
         // Insert a new compute instance controller.
-        self.compute
-            .insert(instance, ComputeControllerState::new(&logging).await);
+        self.compute.insert(
+            instance,
+            ComputeControllerState::new(self.build_info, &logging).await,
+        );
     }
 
     /// Adds replicas of an instance.
@@ -556,6 +562,7 @@ where
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig) -> Self {
         let storage_controller = mz_storage::client::controller::Controller::new(
+            config.build_info,
             config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
@@ -564,6 +571,7 @@ where
         )
         .await;
         Self {
+            build_info: config.build_info,
             storage_controller: Box::new(storage_controller),
             compute_orchestrator: config.orchestrator.namespace("compute"),
             computed_image: config.computed_image,

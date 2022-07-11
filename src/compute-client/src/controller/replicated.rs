@@ -36,6 +36,7 @@ use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{info, warn};
 
+use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
@@ -51,6 +52,8 @@ struct ReplicaTaskConfig<T> {
     replica_id: ReplicaId,
     /// The network addresses of the processes in the replica.
     addrs: Vec<String>,
+    /// The build information for this process.
+    build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
@@ -75,6 +78,7 @@ async fn run_replica_core<T>(
     ReplicaTaskConfig {
         replica_id,
         addrs,
+        build_info,
         mut command_rx,
         response_tx,
     }: ReplicaTaskConfig<T>,
@@ -87,8 +91,9 @@ where
         .clamp_backoff(Duration::from_secs(32))
         .retry_async(|state| {
             let addrs = addrs.clone();
+            let version = build_info.semver_version();
             async move {
-                match ComputeGrpcClient::connect_partitioned(addrs).await {
+                match ComputeGrpcClient::connect_partitioned(addrs, version).await {
                     Ok(client) => Ok(client),
                     Err(e) => {
                         warn!(
@@ -343,15 +348,18 @@ where
 /// A client backed by multiple replicas.
 #[derive(Debug)]
 pub struct ActiveReplication<T> {
+    /// The build information for this process.
+    build_info: &'static BuildInfo,
     /// State for each replica.
     replicas: HashMap<ReplicaId, ReplicaState<T>>,
     /// All other internal state of the client
     state: ActiveReplicationState<T>,
 }
 
-impl<T> Default for ActiveReplication<T> {
-    fn default() -> Self {
+impl<T> ActiveReplication<T> {
+    pub fn new(build_info: &'static BuildInfo) -> Self {
         Self {
+            build_info,
             replicas: Default::default(),
             state: ActiveReplicationState {
                 peeks: Default::default(),
@@ -400,6 +408,7 @@ where
             || format!("active-replication-replica-{id}"),
             replica_task(ReplicaTaskConfig {
                 replica_id: id,
+                build_info: self.build_info,
                 addrs: addrs.clone(),
                 command_rx,
                 response_tx,

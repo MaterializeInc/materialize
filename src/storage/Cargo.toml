@@ -32,6 +32,7 @@ http = "0.2.8"
 http-serde = "1.1.0"
 itertools = { version = "0.10.3" }
 mz-avro = { path = "../avro", features = ["snappy"] }
+mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }

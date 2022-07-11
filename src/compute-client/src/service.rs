@@ -19,7 +19,6 @@ use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use timely::progress::frontier::MutableAntichain;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::debug;
 use uuid::Uuid;
@@ -27,7 +26,7 @@ use uuid::Uuid;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{
-    BidiProtoClient, GrpcClient, GrpcServer, GrpcServerCommand, ResponseStream,
+    BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, GrpcServerCommand, ResponseStream,
 };
 
 use crate::command::{BuildDesc, ComputeCommand, DataflowDescription, ProtoComputeCommand};
@@ -57,22 +56,21 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     }
 }
 
-pub type ComputeGrpcClient =
-    GrpcClient<ProtoComputeClient<Channel>, ProtoComputeCommand, ProtoComputeResponse>;
+pub type ComputeGrpcClient = GrpcClient<ProtoComputeClient<ClientTransport>>;
 
 #[async_trait]
-impl BidiProtoClient<ProtoComputeCommand, ProtoComputeResponse> for ProtoComputeClient<Channel> {
-    async fn connect(addr: String) -> Result<Self, tonic::transport::Error>
-    where
-        Self: Sized,
-    {
-        ProtoComputeClient::connect(addr).await
+impl BidiProtoClient for ProtoComputeClient<ClientTransport> {
+    type PC = ProtoComputeCommand;
+    type PR = ProtoComputeResponse;
+
+    fn new(inner: ClientTransport) -> Self {
+        ProtoComputeClient::new(inner)
     }
 
     async fn establish_bidi_stream(
         &mut self,
-        rx: UnboundedReceiverStream<ProtoComputeCommand>,
-    ) -> Result<Response<Streaming<ProtoComputeResponse>>, Status> {
+        rx: UnboundedReceiverStream<Self::PC>,
+    ) -> Result<Response<Streaming<Self::PR>>, Status> {
         self.command_response_stream(rx).await
     }
 }

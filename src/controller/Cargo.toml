@@ -12,6 +12,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std", "cloc
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
 maplit = "1.0.2"
+mz-build-info = { path = "../build-info" }
 mz-compute-client = { path = "../compute-client" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist-client = { path = "../persist-client" }

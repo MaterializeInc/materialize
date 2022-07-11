@@ -15,6 +15,7 @@
 //! The public API of the storage layer.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::iter;
 
 use async_trait::async_trait;
@@ -25,14 +26,13 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::progress::ChangeBatch;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{
-    BidiProtoClient, GrpcClient, GrpcServer, GrpcServerCommand, ResponseStream,
+    BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, GrpcServerCommand, ResponseStream,
 };
 use mz_timely_util::progress::any_change_batch;
 
@@ -69,25 +69,21 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     }
 }
 
-pub type StorageGrpcClient = GrpcClient<
-    proto_storage_client::ProtoStorageClient<tonic::transport::Channel>,
-    ProtoStorageCommand,
-    ProtoStorageResponse,
->;
+pub type StorageGrpcClient = GrpcClient<ProtoStorageClient<ClientTransport>>;
 
 #[async_trait]
-impl BidiProtoClient<ProtoStorageCommand, ProtoStorageResponse> for ProtoStorageClient<Channel> {
-    async fn connect(addr: String) -> Result<Self, tonic::transport::Error>
-    where
-        Self: Sized,
-    {
-        ProtoStorageClient::connect(addr).await
+impl BidiProtoClient for ProtoStorageClient<ClientTransport> {
+    type PC = ProtoStorageCommand;
+    type PR = ProtoStorageResponse;
+
+    fn new(inner: ClientTransport) -> Self {
+        ProtoStorageClient::new(inner)
     }
 
     async fn establish_bidi_stream(
         &mut self,
-        rx: UnboundedReceiverStream<ProtoStorageCommand>,
-    ) -> Result<Response<Streaming<ProtoStorageResponse>>, Status> {
+        rx: UnboundedReceiverStream<Self::PC>,
+    ) -> Result<Response<Streaming<Self::PR>>, Status> {
         self.command_response_stream(rx).await
     }
 }
