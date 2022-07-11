@@ -125,7 +125,7 @@ pub struct LabelSelector {
     /// The name of the label
     pub label_name: String,
     /// An assertion about the existence and value of a label
-    /// named [`label_name`]
+    /// named `label_name`
     pub logic: LabelSelectionLogic,
 }
 
@@ -162,7 +162,7 @@ pub struct ServiceConfig<'a> {
     /// a machine with that service.
     ///
     /// The orchestrator backend may or may not actually implement anti-affinity functionality.
-    pub anti_affinity: Option<Vec<LabelSelector>>
+    pub anti_affinity: Option<Vec<LabelSelector>>,
 }
 
 /// A named port associated with a service.
