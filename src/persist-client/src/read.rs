@@ -35,6 +35,7 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::encoding::SerdeSnapshotSplit;
+use crate::r#impl::gc::{GarbageCollector, GcReq};
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::Since;
@@ -337,6 +338,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
+    pub(crate) gc: GarbageCollector,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
@@ -369,11 +371,17 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
         trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
-        let (_seqno, current_reader_since) = self
+        let (seqno, current_reader_since) = self
             .machine
             .downgrade_since(&self.reader_id, &new_since)
             .await;
         self.since = current_reader_since.0;
+        // WIP these should instead come out of the machine as a function of
+        // reader seqno capabilities.
+        self.gc.gc_and_truncate(GcReq {
+            shard_id: self.machine.shard_id(),
+            seqno,
+        });
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -528,6 +536,7 @@ where
             metrics: Arc::clone(&self.metrics),
             reader_id: new_reader_id,
             machine,
+            gc: self.gc.clone(),
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
             explicitly_expired: false,

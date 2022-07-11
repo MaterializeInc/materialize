@@ -388,18 +388,6 @@ where
                         );
                         self.state = new_state;
 
-                        // Bound the number of entries in consensus.
-                        let () = retry_external(
-                            &self.metrics.retries.external.apply_unbatched_cmd_truncate,
-                            || async {
-                                self.consensus
-                                    .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
-                                    .await
-                            },
-                        )
-                        .instrument(debug_span!("apply_unbatched_cmd::truncate"))
-                        .await;
-
                         return Ok((self.state.seqno(), Ok(work_ret)));
                     }
                     Err(current) => {
@@ -889,11 +877,11 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
-        let (mut write, _) = new_test_client()
+        let (mut write, mut read) = new_test_client()
             .await
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;
@@ -906,6 +894,7 @@ mod tests {
             write
                 .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
                 .await;
+            read.downgrade_since(Antichain::from_elem(idx)).await;
         }
         let key = write.machine.shard_id().to_string();
         let consensus_entries = consensus
@@ -915,9 +904,6 @@ mod tests {
         // Make sure we constructed the key correctly.
         assert!(consensus_entries.len() > 0);
         // Make sure the number of entries is bounded.
-        //
-        // In practice, this is always 1 right now, but when we implement
-        // incremental state, it will be something like log(NUM_BATCHES).
         let max_entries = usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
         assert!(
             consensus_entries.len() <= max_entries,

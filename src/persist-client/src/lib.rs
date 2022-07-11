@@ -34,6 +34,7 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::encoding::parse_id;
+use crate::r#impl::gc::GarbageCollector;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
@@ -50,6 +51,7 @@ pub use crate::r#impl::state::{Since, Upper};
 pub(crate) mod r#impl {
     pub mod compact;
     pub mod encoding;
+    pub mod gc;
     pub mod machine;
     pub mod metrics;
     pub mod state;
@@ -309,6 +311,11 @@ impl PersistClient {
                 Arc::clone(&self.metrics),
             )
         });
+        let gc = GarbageCollector::new(
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
@@ -323,6 +330,7 @@ impl PersistClient {
             metrics: Arc::clone(&self.metrics),
             reader_id,
             machine,
+            gc,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
             explicitly_expired: false,
