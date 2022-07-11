@@ -6257,7 +6257,7 @@ pub mod fast_path_peek {
     use mz_stash::Append;
 
     use crate::client::ConnectionId;
-    use crate::coord::{PeekResponseUnary, PendingPeek, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS};
+    use crate::coord::{PeekResponseUnary, PendingPeek};
     use crate::AdapterError;
 
     #[derive(Debug)]
@@ -6464,7 +6464,9 @@ pub mod fast_path_peek {
                     self.initialize_compute_read_policies(
                         output_ids,
                         compute_instance,
-                        DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                        // Disable compaction by using None as the compaction window so that nothing
+                        // can compact before the peek occurs below.
+                        None,
                     )
                     .await;
 
