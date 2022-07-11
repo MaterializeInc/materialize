@@ -73,7 +73,7 @@ static METADATA_COLLECTION: TypedCollection<GlobalId, CollectionMetadata> =
 
 /// Describes a request to create a source.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CollectionDescription {
+pub struct CollectionDescription<T> {
     /// The schema of this collection
     pub desc: RelationDesc,
     /// The description of the source to ingest into this collection, if any.
@@ -83,6 +83,19 @@ pub struct CollectionDescription {
     /// If `None`, the controller manages the lifetime of the `storaged`
     /// process.
     pub remote_addr: Option<String>,
+    /// An optional frontier to which the collection's `since` should be advanced.
+    pub since: Option<Antichain<T>>,
+}
+
+impl<T> From<RelationDesc> for CollectionDescription<T> {
+    fn from(desc: RelationDesc) -> Self {
+        Self {
+            desc,
+            ingestion: None,
+            remote_addr: None,
+            since: None,
+        }
+    }
 }
 
 #[async_trait(?Send)]
@@ -109,7 +122,7 @@ pub trait StorageController: Debug + Send {
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
     async fn create_collections(
         &mut self,
-        collections: Vec<(GlobalId, CollectionDescription)>,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -456,7 +469,7 @@ where
 
     async fn create_collections(
         &mut self,
-        mut collections: Vec<(GlobalId, CollectionDescription)>,
+        mut collections: Vec<(GlobalId, CollectionDescription<T>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
@@ -488,11 +501,16 @@ where
                 .insert_without_overwrite(&mut self.state.stash, &id, metadata)
                 .await?;
 
-            let (write, read) = self
+            let (write, mut read) = self
                 .persist_client
                 .open(metadata.data_shard)
                 .await
                 .expect("invalid persist usage");
+
+            // Advance the collection's `since` as requested.
+            if let Some(since) = &description.since {
+                read.downgrade_since(since.clone()).await;
+            }
 
             let collection_state =
                 CollectionState::new(description.clone(), read.since().clone(), metadata);
@@ -895,7 +913,7 @@ where
 #[derive(Debug)]
 pub struct CollectionState<T> {
     /// Description with which the collection was created
-    pub description: CollectionDescription,
+    pub description: CollectionDescription<T>,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -928,7 +946,7 @@ pub(super) struct PersistHandles<T: Timestamp + Lattice + Codec64> {
 impl<T: Timestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(
-        description: CollectionDescription,
+        description: CollectionDescription<T>,
         since: Antichain<T>,
         metadata: CollectionMetadata,
     ) -> Self {
