@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-aws-arn = "0.2.1"
+aws-arn = "0.3.1"
 aws-sdk-sts = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 enum-kinds = "0.5.1"
@@ -35,7 +35,7 @@ paste = "1.0"
 protobuf-native = "0.2.1"
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = "1.5.6"
+regex = "1.6.0"
 reqwest = "0.11.11"
 serde = { version = "1.0.138", features = ["derive"] }
 serde_json = "1.0.82"
