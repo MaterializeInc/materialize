@@ -28,6 +28,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 
+use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
@@ -52,11 +53,12 @@ where
 {
     /// Creates a `RehydratingStorageClient` for a storage host with the given
     /// network address.
-    pub fn new(addr: String) -> RehydratingStorageClient<T> {
+    pub fn new(addr: String, build_info: &'static BuildInfo) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
         let mut task = RehydrationTask {
             addr,
+            build_info,
             command_rx,
             response_tx,
             ingestions: BTreeMap::new(),
@@ -86,6 +88,8 @@ where
 struct RehydrationTask<T> {
     /// The network address of the storage host.
     addr: String,
+    /// The build information for this process.
+    build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the storage host are delivered.
     command_rx: UnboundedReceiver<StorageCommand<T>>,
     /// A channel upon which responses from the storage host are delivered.
@@ -134,8 +138,9 @@ where
             .clamp_backoff(Duration::from_secs(32))
             .retry_async(|_| {
                 let addr = self.addr.clone();
+                let version = self.build_info.semver_version();
                 async move {
-                    match StorageGrpcClient::connect(addr).await {
+                    match StorageGrpcClient::connect(addr, version).await {
                         Ok(client) => Ok(client),
                         Err(e) => {
                             warn!("error connecting to storage host, retrying: {e}");

@@ -28,6 +28,7 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 use tracing::info;
 
+use mz_build_info::BuildInfo;
 use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
 use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
@@ -41,6 +42,8 @@ pub type StorageHostAddr = String;
 
 /// Configuration for [`StorageHosts`].
 pub struct StorageHostsConfig {
+    /// The build information for this process.
+    pub build_info: &'static BuildInfo,
     /// An orchestrator to start and stop storage hosts.
     pub orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// The storaged image to use when starting new storage hosts.
@@ -53,6 +56,8 @@ pub struct StorageHostsConfig {
 /// See the [module documentation](self) for details.
 #[derive(Debug)]
 pub struct StorageHosts<T> {
+    /// The build information for this process.
+    pub build_info: &'static BuildInfo,
     /// An orchestrator to start and stop storage hosts.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// The storaged image to use when starting new storage hosts.
@@ -78,6 +83,7 @@ impl<T> StorageHosts<T> {
     /// Constructs a new [`StorageHosts`] from its configuration.
     pub fn new(config: StorageHostsConfig) -> StorageHosts<T> {
         StorageHosts {
+            build_info: config.build_info,
             orchestrator: config.orchestrator,
             storaged_image: config.storaged_image,
             objects: HashMap::new(),
@@ -122,7 +128,7 @@ impl<T> StorageHosts<T> {
         info!("assigned storage object {id} to storage host {host_addr}");
         match self.hosts.entry(host_addr.clone()) {
             Entry::Vacant(entry) => {
-                let client = RehydratingStorageClient::new(host_addr);
+                let client = RehydratingStorageClient::new(host_addr, self.build_info);
                 let host = entry.insert(StorageHost {
                     client,
                     objects: HashSet::from_iter([id]),

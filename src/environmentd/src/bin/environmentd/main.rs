@@ -540,6 +540,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         otel_enable_callback.clone(),
     ));
     let controller = ControllerConfig {
+        build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
         persist_location: PersistLocation {
             blob_uri: match args.persist_blob_url {

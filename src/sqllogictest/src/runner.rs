@@ -601,6 +601,7 @@ impl Runner {
         let server_config = mz_environmentd::Config {
             catalog_postgres_stash,
             controller: ControllerConfig {
+                build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator: Arc::new(orchestrator),
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
