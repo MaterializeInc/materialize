@@ -1576,7 +1576,7 @@ impl<'a> Parser<'a> {
             }
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
-        } else if self.peek_keyword(SOURCE) || self.peek_keywords(&[MATERIALIZED, SOURCE]) {
+        } else if self.peek_keyword(SOURCE) {
             self.parse_create_source()
         } else if self.peek_keyword(TABLE)
             || self.peek_keywords(&[TEMP, TABLE])
@@ -2084,7 +2084,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(SOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
@@ -2127,7 +2126,6 @@ impl<'a> Parser<'a> {
             include_metadata,
             envelope,
             if_not_exists,
-            materialized,
             key_constraint,
             remote,
         }))
@@ -4325,7 +4323,7 @@ impl<'a> Parser<'a> {
 
         let materialized = self.parse_keyword(MATERIALIZED);
         if materialized {
-            self.expect_one_of_keywords(&[SOURCES, VIEWS])?;
+            self.expect_keyword(VIEWS)?;
             self.prev_token();
         }
 

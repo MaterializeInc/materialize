@@ -356,13 +356,11 @@ pub fn create_statement(
             include_metadata: _,
             envelope: _,
             if_not_exists,
-            materialized,
             key_constraint: _,
             remote: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
-            *materialized = false;
         }
 
         Statement::CreateTable(CreateTableStatement {
