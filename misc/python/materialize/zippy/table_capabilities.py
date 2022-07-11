@@ -12,6 +12,8 @@ from materialize.zippy.watermarks import Watermarks
 
 
 class TableExists(Capability):
+    """A Table exists in the Mz instance."""
+
     def __init__(self, name: str) -> None:
         self.name = name
         self.watermarks = Watermarks()

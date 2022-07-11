@@ -15,6 +15,8 @@ from materialize.zippy.watermarks import Watermarks
 
 
 class SourceExists(Capability):
+    """A Kafka source exists in Materialize."""
+
     def __init__(self, name: str, topic: Optional[TopicExists] = None) -> None:
         self.name = name
         self.topic = topic
