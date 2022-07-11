@@ -3056,8 +3056,11 @@ impl<S: Append> Catalog<S> {
                         name.clone(),
                         id,
                         config,
-                        log_collections,
+                        log_collections.clone(),
                     );
+                    for (_, id) in &log_collections {
+                        builtin_table_updates.extend(state.pack_item_update(*id, 1));
+                    }
                     builtin_table_updates.push(state.pack_compute_instance_replica_update(
                         compute_instance_id,
                         &name,
