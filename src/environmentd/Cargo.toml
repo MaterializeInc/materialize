@@ -52,7 +52,7 @@ mz-stash = { path = "../stash" }
 mz-storage = { path = "../storage" }
 nix = "0.24.1"
 num_cpus = "1.13.1"
-openssl = { version = "0.10.40", features = ["vendored"] }
+openssl = { version = "0.10.41", features = ["vendored"] }
 openssl-sys = { version = "0.9.75", features = ["vendored"] }
 os_info = "3.4.0"
 prometheus = { version = "0.13.1", default-features = false, features = ["process"] }

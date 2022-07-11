@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.58"
 mz-ore = { path = "../ore", features = ["task"] }
 mz-proto = { path = "../proto" }
-openssl = { version = "0.10.40", features = ["vendored"] }
+openssl = { version = "0.10.41", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }

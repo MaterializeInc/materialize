@@ -36,7 +36,7 @@ md-5 = "0.10.1"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "task"] }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
-openssl = { version = "0.10.40", features = ["vendored"] }
+openssl = { version = "0.10.41", features = ["vendored"] }
 openssl-sys = { version = "0.9.75", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
