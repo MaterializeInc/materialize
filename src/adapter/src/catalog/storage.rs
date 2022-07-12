@@ -15,13 +15,13 @@ use bytes::BufMut;
 use futures::future::BoxFuture;
 use itertools::max;
 use prost::{self, Message};
+use serde_json::json;
 use timely::progress::Timestamp;
 use uuid::Uuid;
 
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::ConcreteComputeInstanceReplicaConfig;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::Codec;
@@ -39,6 +39,7 @@ use mz_storage::client::sources::Timeline;
 
 use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};
+use crate::catalog::SerializedComputeInstanceReplicaConfig;
 
 const USER_VERSION: &str = "user_version";
 
@@ -59,10 +60,17 @@ const COMPUTE_ID_ALLOC_KEY: &str = "compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 
-async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
+async fn migrate<S: Append>(
+    stash: &mut S,
+    version: u64,
+    bootstrap_args: &BootstrapArgs,
+) -> Result<(), StashError> {
     // Initial state.
-    let migrations: &[fn(&mut S) -> BoxFuture<Result<(), StashError>>] = &[
-        |stash| {
+    let migrations: &[for<'a> fn(
+        &'a mut S,
+        &'a BootstrapArgs,
+    ) -> BoxFuture<'a, Result<(), StashError>>] = &[
+        |stash, bootstrap_args| {
             Box::pin(async {
                 // Bump uppers so peek works.
                 COLLECTION_SETTING.upsert(stash, vec![]).await?;
@@ -248,13 +256,10 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                             ComputeInstanceReplicaValue {
                                 compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                                 name: "default_replica".into(),
-                                config: "{ \
-                                    \"Managed\": { \
-                                        \"size_config\": {\"scale\": 1, \"workers\": 1}, \
-                                        \"size_name\": \"default\" \
-                                    } \
-                                }"
-                                .into(),
+                                config: json!({"Managed": {
+                                    "size": bootstrap_args.default_cluster_replica_size,
+                                }})
+                                .to_string(),
                             },
                         )],
                     )
@@ -298,7 +303,7 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
         .enumerate()
         .skip(usize::cast_from(version))
     {
-        (migration)(stash).await?;
+        (migration)(stash, bootstrap_args).await?;
         COLLECTION_CONFIG
             .upsert_key(
                 stash,
@@ -312,6 +317,10 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
     Ok(())
 }
 
+pub struct BootstrapArgs {
+    pub default_cluster_replica_size: String,
+}
+
 #[derive(Debug)]
 pub struct Connection<S> {
     stash: S,
@@ -319,7 +328,10 @@ pub struct Connection<S> {
 }
 
 impl<S: Append> Connection<S> {
-    pub async fn open(mut stash: S) -> Result<Connection<S>, Error> {
+    pub async fn open(
+        mut stash: S,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Connection<S>, Error> {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
         // collection is empty.
@@ -337,7 +349,7 @@ impl<S: Append> Connection<S> {
                 .value
                 + 1
         };
-        migrate(&mut stash, skip).await?;
+        migrate(&mut stash, skip, bootstrap_args).await?;
 
         let conn = Connection {
             cluster_id: Self::set_or_get_cluster_id(&mut stash).await?,
@@ -479,7 +491,7 @@ impl<S: Append> Connection<S> {
             ComputeInstanceId,
             ReplicaId,
             String,
-            ConcreteComputeInstanceReplicaConfig,
+            SerializedComputeInstanceReplicaConfig,
         )>,
         Error,
     > {
@@ -870,7 +882,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         &mut self,
         compute_name: &str,
         replica_name: &str,
-        config: &ConcreteComputeInstanceReplicaConfig,
+        config: &SerializedComputeInstanceReplicaConfig,
     ) -> Result<ReplicaId, Error> {
         let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
         let config = serde_json::to_string(config)

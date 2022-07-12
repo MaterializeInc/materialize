@@ -21,7 +21,7 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -89,77 +89,20 @@ pub struct ControllerConfig {
     pub computed_image: String,
 }
 
+/// Resource allocations for a replica of a compute instance.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ClusterReplicaSizeConfig {
+pub struct ComputeInstanceReplicaAllocation {
+    /// The memory limit for each process in the replica.
     pub memory_limit: Option<MemoryLimit>,
+    /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The number of processes in the replica.
     pub scale: NonZeroUsize,
+    /// The number of worker threads in the replica.
     pub workers: NonZeroUsize,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
-
-impl Default for ClusterReplicaSizeMap {
-    fn default() -> Self {
-        // {
-        //     "1": {"scale": 1, "workers": 1},
-        //     "2": {"scale": 1, "workers": 2},
-        //     "4": {"scale": 1, "workers": 4},
-        //     /// ...
-        //     "32": {"scale": 1, "workers": 32}
-        //     /// Testing with multiple processes on a single machine is a novelty, so
-        //     /// we don't bother providing many options.
-        //     "2-1": {"scale": 2, "workers": 1},
-        //     "2-2": {"scale": 2, "workers": 2},
-        //     "2-4": {"scale": 2, "workers": 4},
-        // }
-        let mut inner = (0..=5)
-            .map(|i| {
-                let workers = 1 << i;
-                (
-                    workers.to_string(),
-                    ClusterReplicaSizeConfig {
-                        memory_limit: None,
-                        cpu_limit: None,
-                        scale: NonZeroUsize::new(1).unwrap(),
-                        workers: NonZeroUsize::new(workers).unwrap(),
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        inner.insert(
-            "2-1".to_string(),
-            ClusterReplicaSizeConfig {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(1).unwrap(),
-            },
-        );
-        inner.insert(
-            "2-2".to_string(),
-            ClusterReplicaSizeConfig {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(2).unwrap(),
-            },
-        );
-        inner.insert(
-            "2-4".to_string(),
-            ClusterReplicaSizeConfig {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(4).unwrap(),
-            },
-        );
-        Self(inner)
-    }
-}
-
-/// Replica configuration
+/// Configuration for a replica of a compute instance.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConcreteComputeInstanceReplicaConfig {
     /// Out-of-process replica
@@ -169,10 +112,8 @@ pub enum ConcreteComputeInstanceReplicaConfig {
     },
     /// A remote but managed replica
     Managed {
-        /// The size configuration of the replica.
-        size_config: ClusterReplicaSizeConfig,
-        /// A readable name for the replica size.
-        size_name: String,
+        /// The resource allocation for the replica.
+        allocation: ComputeInstanceReplicaAllocation,
         /// The replica's availability zone, if `Some`.
         availability_zone: Option<String>,
     },
@@ -306,8 +247,7 @@ where
                 compute_instance.add_replica(replica_id, addrs.into_iter().collect());
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
-                size_config,
-                size_name: _,
+                allocation,
                 availability_zone,
             } => {
                 let service_name = generate_replica_service_name(instance_id, replica_id);
@@ -328,7 +268,7 @@ where
                                         "--internal-http-listen-addr={}:{}",
                                         assigned.listen_host, assigned.ports["internal-http"]
                                     ),
-                                    format!("--workers={}", size_config.workers),
+                                    format!("--workers={}", allocation.workers),
                                     format!("--opentelemetry-resource=instance_id={}", instance_id),
                                     format!("--opentelemetry-resource=replica_id={}", replica_id),
                                 ];
@@ -360,9 +300,9 @@ where
                                     port_hint: 6875,
                                 },
                             ],
-                            cpu_limit: size_config.cpu_limit,
-                            memory_limit: size_config.memory_limit,
-                            scale: size_config.scale,
+                            cpu_limit: allocation.cpu_limit,
+                            memory_limit: allocation.memory_limit,
+                            scale: allocation.scale,
                             labels: hashmap! {
                                 "cluster-id".into() => instance_id.to_string(),
                                 "type".into() => "cluster".into(),
@@ -388,12 +328,7 @@ where
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        if let ConcreteComputeInstanceReplicaConfig::Managed {
-            size_config: _,
-            size_name: _,
-            availability_zone: _,
-        } = config
-        {
+        if let ConcreteComputeInstanceReplicaConfig::Managed { .. } = config {
             let service_name = generate_replica_service_name(instance_id, replica_id);
             self.compute_orchestrator
                 .drop_service(&service_name)

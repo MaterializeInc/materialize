@@ -628,6 +628,7 @@ impl Runner {
             metrics_registry,
             now: SYSTEM_TIME.clone(),
             replica_sizes: Default::default(),
+            bootstrap_default_cluster_replica_size: "1".into(),
             availability_zones: Default::default(),
             connection_context: Default::default(),
             otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
