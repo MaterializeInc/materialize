@@ -239,7 +239,7 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice + Codec64 + Debug + Copy,
+    T: Timestamp + Lattice + Codec64 + Debug,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Constructs an immutable handle from this mutable handle.
@@ -642,7 +642,7 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice + Codec64 + Copy,
+    T: Timestamp + Lattice + Codec64,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Acquire a mutable reference to the collection state, should it exist.
