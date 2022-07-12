@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use async_trait::async_trait;
 
 use mz_repr::GlobalId;
@@ -45,18 +45,5 @@ pub trait SecretsReader: Debug + Send + Sync {
     async fn read_string(&self, id: GlobalId) -> Result<String, anyhow::Error> {
         let contents = self.read(id).await?;
         String::from_utf8(contents).context("converting secret value to string")
-    }
-}
-
-/// A [`SecretsReader`] that never contains any secrets.
-///
-/// Useful in tests that do not use secrets.
-#[derive(Debug, Clone, Copy)]
-pub struct NullSecretsReader;
-
-#[async_trait]
-impl SecretsReader for NullSecretsReader {
-    async fn read(&self, _: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
-        bail!("NullSecretsReader contains no secrets")
     }
 }

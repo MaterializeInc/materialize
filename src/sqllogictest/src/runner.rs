@@ -631,8 +631,9 @@ impl Runner {
             now: SYSTEM_TIME.clone(),
             replica_sizes: Default::default(),
             availability_zones: Default::default(),
-            connection_context: ConnectionContext::default()
-                .secrets_reader((Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader()),
+            connection_context: ConnectionContext::for_tests(
+                (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
+            ),
             otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
         };
         // We need to run the server on its own Tokio runtime, which in turn

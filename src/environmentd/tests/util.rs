@@ -188,8 +188,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         cors_allowed_origin: AllowOrigin::list([]),
         replica_sizes: Default::default(),
         availability_zones: Default::default(),
-        connection_context: ConnectionContext::default()
-            .secrets_reader((Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader()),
+        connection_context: ConnectionContext::for_tests(
+            (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
+        ),
         otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
     }))?;
     let server = Server {
