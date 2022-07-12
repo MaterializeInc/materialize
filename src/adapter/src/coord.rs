@@ -4586,7 +4586,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: Default::default(),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut raw_plan).explain(&format, &config, &context)?
@@ -4598,7 +4600,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: Default::default(),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut model).explain(&format, &config, &context)?
@@ -4611,7 +4615,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: Default::default(),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut model).explain(&format, &config, &context)?
@@ -4625,7 +4631,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: Default::default(),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -4639,7 +4647,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: Default::default(),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -4658,7 +4668,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: Default::default(),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
