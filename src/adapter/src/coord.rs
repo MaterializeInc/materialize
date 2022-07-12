@@ -855,11 +855,27 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     storage_policies_to_set.push(entry.id());
 
+                    // Select a time as of which to restart the sink dataflow.
+                    let collection = self.controller.storage().collection(entry.id()).unwrap();
+                    let upper_ts = collection.write_frontier.frontier()[0];
+                    let as_of = if upper_ts == Timestamp::minimum() {
+                        // The sink has never produced any updates, so we select `as_of` based on
+                        // the input `since`s, as we do when creating a new recorded view.
+                        let mut id_bundle = self
+                            .index_oracle(rview.compute_instance)
+                            .sufficient_collections(&rview.depends_on);
+                        // Also take the collection's `since` into account, to ensure that we
+                        // don't start writing at a time less than that.
+                        id_bundle.storage_ids.insert(entry.id());
+                        self.least_valid_read(&id_bundle)
+                    } else {
+                        // The sink already has emitted updates up to `upper`. We need to select
+                        // an `as_of` less than `upper` to ensure those updates are re-emitted at
+                        // a time that is ignored by the storage collection.
+                        Antichain::from_elem(upper_ts - 1)
+                    };
+
                     // Re-create the sink on the compute instance.
-                    let id_bundle = self
-                        .index_oracle(rview.compute_instance)
-                        .sufficient_collections(&rview.depends_on);
-                    let as_of = self.least_valid_read(&id_bundle);
                     let internal_view_id = self.allocate_transient_id()?;
                     let df = self
                         .dataflow_builder(rview.compute_instance)
