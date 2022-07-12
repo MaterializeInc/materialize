@@ -339,6 +339,71 @@ pub trait Explain<'a>: 'a {
     }
 }
 
+#[derive(Debug)]
+pub struct Indent {
+    unit: String,
+    buff: String,
+}
+
+impl Indent {
+    pub fn new(unit: char, step: usize) -> Indent {
+        Indent {
+            unit: std::iter::repeat(unit).take(step).collect::<String>(),
+            buff: String::with_capacity(unit.len_utf8()),
+        }
+    }
+
+    fn inc(&mut self, rhs: usize) {
+        for _ in 0..rhs {
+            self.buff += &self.unit;
+        }
+    }
+
+    fn dec(&mut self, rhs: usize) {
+        if let Some(len) = self.buff.len().checked_sub(rhs * self.unit.len()) {
+            self.buff.truncate(len);
+        } else {
+            self.buff.truncate(0)
+        }
+    }
+}
+
+impl Default for Indent {
+    fn default() -> Self {
+        Indent::new(' ', 2)
+    }
+}
+
+impl std::ops::AddAssign<usize> for Indent {
+    fn add_assign(&mut self, rhs: usize) {
+        self.inc(rhs)
+    }
+}
+
+// impl std::ops::AddAssign<usize> for &mut Indent {
+//     fn add_assign(&mut self, rhs: usize) {
+//         self.inc(rhs)
+//     }
+// }
+
+impl std::ops::SubAssign<usize> for Indent {
+    fn sub_assign(&mut self, rhs: usize) {
+        self.dec(rhs)
+    }
+}
+
+impl std::ops::SubAssign<usize> for &mut Indent {
+    fn sub_assign(&mut self, rhs: usize) {
+        self.dec(rhs)
+    }
+}
+
+impl fmt::Display for Indent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.buff)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +513,18 @@ mod tests {
 
         assert!(act.is_ok());
         assert_eq!(act.unwrap(), exp);
+    }
+
+    #[test]
+    fn test_indent() {
+        let mut indent = Indent::new('~', 3);
+        indent += 1;
+        assert_eq!(indent.to_string(), "~~~".to_string());
+        indent += 3;
+        assert_eq!(indent.to_string(), "~~~~~~~~~~~~".to_string());
+        indent -= 2;
+        assert_eq!(indent.to_string(), "~~~~~~".to_string());
+        indent -= 4;
+        assert_eq!(indent.to_string(), "".to_string());
     }
 }
