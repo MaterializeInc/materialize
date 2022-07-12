@@ -526,7 +526,7 @@ build apply=ReductionPushdown
 | Join %0 %1 %2 (= #1 #3 #5)
 | | implementation = Unimplemented
 | Reduce group=(#4)
-| | agg sum(distinct (#0 + i16toi32(#2)))
+| | agg sum(distinct (#0 + smallint_to_integer(#2)))
 | | agg sum(distinct (#2 * #4))
 
 %4 =

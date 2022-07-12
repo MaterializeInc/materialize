@@ -151,7 +151,7 @@ from (select 10 as a, 5 as b, 'world' as c, 'realm' as d) x
 | | implementation = Unimplemented
 | Map 10, 5, "world", "realm"
 | Project (#0..=#3)
-| Map #0, #1, #2, #3, if (#0 > #1) then {#2} else {lpad(#3, i32toi64(4), "ab")}
+| Map #0, #1, #2, #3, if (#0 > #1) then {#2} else {lpad(#3, integer_to_bigint(4), "ab")}
 | Project (#4..=#8)
 | Project (#4)
 ----
@@ -245,7 +245,7 @@ c from x where x.b is not null) z on y.a = z.b
 | Project (#0..=#3)
 | | types = (Int32, Int32?, Int64, Int32?)
 | | keys = ()
-| Filter (i32toi64(#0) = #2)
+| Filter (integer_to_bigint(#0) = #2)
 | | types = (Int32, Int32?, Int64, Int32?)
 | | keys = ()
 | Project (#0..=#3)

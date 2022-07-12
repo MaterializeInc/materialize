@@ -18,7 +18,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "booltostr"]
+    #[sqlname = "boolean_to_text"]
     #[preserves_uniqueness = true]
     fn cast_bool_to_string<'a>(a: bool) -> &'a str {
         match a {
@@ -29,10 +29,10 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "booltostrns"]
+    #[sqlname = "boolean_to_nonstandard_text"]
     #[preserves_uniqueness = true]
     fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
-        // N.B. this function differs from `cast_bool_to_string_implicit` because
+        // N.B. this function differs from `cast_bool_to_string` because
         // the SQL specification requires `true` and `false` to be spelled out in
         // explicit casts, while PostgreSQL prefers its more concise `t` and `f`
         // representation in some contexts, for historical reasons.
@@ -41,7 +41,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "booltoi32"]
+    #[sqlname = "boolean_to_integer"]
     #[preserves_uniqueness = true]
     fn cast_bool_to_int32(a: bool) -> i32 {
         match a {

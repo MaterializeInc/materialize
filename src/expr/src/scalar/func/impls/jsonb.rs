@@ -22,7 +22,7 @@ use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
 
 sqlfunc!(
-    #[sqlname = "jsonbtostr"]
+    #[sqlname = "jsonb_to_text"]
     fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
         let mut buf = String::new();
         strconv::format_jsonb(&mut buf, a);
@@ -31,7 +31,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "jsonbtoi16"]
+    #[sqlname = "jsonb_to_smallint"]
     fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
@@ -44,7 +44,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "jsonbtoi32"]
+    #[sqlname = "jsonb_to_integer"]
     fn cast_jsonb_to_int32<'a>(a: JsonbRef<'a>) -> Result<i32, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int32(a.into_inner()),
@@ -57,7 +57,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "jsonbtoi64"]
+    #[sqlname = "jsonb_to_bigint"]
     fn cast_jsonb_to_int64<'a>(a: JsonbRef<'a>) -> Result<i64, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int64(a.into_inner()),
@@ -70,7 +70,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "jsonbtof32"]
+    #[sqlname = "jsonb_to_real"]
     fn cast_jsonb_to_float32<'a>(a: JsonbRef<'a>) -> Result<f32, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_float32(a.into_inner()),
@@ -83,7 +83,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "jsonbtof64"]
+    #[sqlname = "jsonb_to_double"]
     fn cast_jsonb_to_float64<'a>(a: JsonbRef<'a>) -> Result<f64, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_float64(a.into_inner()),
@@ -129,12 +129,12 @@ impl<'a> EagerUnaryFunc<'a> for CastJsonbToNumeric {
 
 impl fmt::Display for CastJsonbToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("jsonbtonumeric")
+        f.write_str("jsonb_to_numeric")
     }
 }
 
 sqlfunc!(
-    #[sqlname = "jsonbtobool"]
+    #[sqlname = "jsonb_to_boolean"]
     fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {
         match a.into_datum() {
             Datum::True => Ok(true),
@@ -148,7 +148,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "jsonb?tojsonb"]
+    #[sqlname = "jsonb_or_null_to_jsonb"]
     fn cast_jsonb_or_null_to_jsonb<'a>(a: Option<JsonbRef<'a>>) -> JsonbRef<'a> {
         match a.map(|v| v.into_datum()) {
             None => JsonbRef::from_datum(Datum::JsonNull),

@@ -31,7 +31,7 @@ from (select null as \"a3R\", null as b, null as c) x"
     }
     subgraph cluster3 {
         label = "Box3:Select"
-        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: if isnull(Q2.C0) then \{coalesce(Q2.C1, Q2.C2, \"hello\")\} else \{substr(Q2.C1, i32toi64(3))\}| 4: mz_logical_timestamp() }" ]
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: if isnull(Q2.C0) then \{coalesce(Q2.C1, Q2.C2, \"hello\")\} else \{substr(Q2.C1, integer_to_bigint(3))\}| 4: mz_logical_timestamp() }" ]
         {
             rank = same
             node [ shape = circle ]

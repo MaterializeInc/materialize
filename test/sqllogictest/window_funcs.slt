@@ -221,7 +221,7 @@ WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 | Map #3
 | Project (#0..=#2, #4)
 | Project (#0, #3)
-| Filter ((i32toi64(#0) = #1) && true)
+| Filter ((integer_to_bigint(#0) = #1) && true)
 | Distinct group=(#0)
 
 %8 =
@@ -298,7 +298,7 @@ Query:
 | | agg row_number(record_create(list_create(record_create(#0, #1, #2))))
 | Project (#1)
 | FlatMap unnest_list(#0)
-| Filter (i32toi64(record_get[0](record_get[1](#1))) = record_get[0](#1))
+| Filter (integer_to_bigint(record_get[0](record_get[1](#1))) = record_get[0](#1))
 | Project (#1)
 | Distinct group=(record_get[0](record_get[1](#0)))
 | ArrangeBy (#0)

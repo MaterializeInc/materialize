@@ -259,7 +259,7 @@ ORDER BY ol_number
 ----
 %0 =
 | Get materialize.public.orderline (u13)
-| Filter (datetots(#6) > 2007-01-02 00:00:00)
+| Filter (date_to_timestamp(#6) > 2007-01-02 00:00:00)
 | Project (#3, #7, #8)
 | Reduce group=(#0)
 | | agg sum(#1)
@@ -267,7 +267,7 @@ ORDER BY ol_number
 | | agg count(#1)
 | | agg count(#2)
 | | agg count(true)
-| Map (i64tof64(#1) / i64tof64(if (#3 = 0) then {null} else {#3})), (numerictof64(#2) / i64tof64(if (#4 = 0) then {null} else {#4}))
+| Map (bigint_to_double(#1) / bigint_to_double(if (#3 = 0) then {null} else {#3})), (numeric_to_double(#2) / bigint_to_double(if (#4 = 0) then {null} else {#4}))
 | Project (#0..=#2, #6, #7, #5)
 
 Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#5)
@@ -404,7 +404,7 @@ Query:
 
 %2 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3)), (datetots(#4) > 2007-01-02 00:00:00)
+| Filter !(isnull(#3)), (date_to_timestamp(#4) > 2007-01-02 00:00:00)
 | Project (#0..=#4)
 | ArrangeBy (#0, #1, #2)
 
@@ -444,7 +444,7 @@ ORDER BY o_ol_cnt
 ----
 %0 = Let l0 =
 | Get materialize.public.order (u11)
-| Filter (datetots(#4) < 2012-01-02 00:00:00), (datetots(#4) >= 2007-01-02 00:00:00)
+| Filter (date_to_timestamp(#4) < 2012-01-02 00:00:00), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
 
 %1 =
 | Get %0 (l0)
@@ -517,7 +517,7 @@ Query:
 
 %1 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3)), (datetots(#4) >= 2007-01-02 00:00:00)
+| Filter !(isnull(#3)), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
 | Project (#0..=#3)
 | ArrangeBy (#0, #1, #2)
 
@@ -569,7 +569,7 @@ AND ol_quantity BETWEEN 1 AND 100000
 ----
 %0 = Let l0 =
 | Get materialize.public.orderline (u13)
-| Filter (#7 <= 100000), (#7 >= 1), (datetots(#6) < 2020-01-01 00:00:00), (datetots(#6) >= 1999-01-01 00:00:00)
+| Filter (#7 <= 100000), (#7 >= 1), (date_to_timestamp(#6) < 2020-01-01 00:00:00), (date_to_timestamp(#6) >= 1999-01-01 00:00:00)
 | Project (#8)
 | Reduce group=()
 | | agg sum(#0)
@@ -637,7 +637,7 @@ ORDER BY su_nationkey, cust_nation, l_year
 
 %3 =
 | Get materialize.public.orderline (u13)
-| Filter !(isnull(#4)), !(isnull(#5)), (datetots(#6) <= 2012-01-02 00:00:00), (datetots(#6) >= 2007-01-02 00:00:00)
+| Filter !(isnull(#4)), !(isnull(#5)), (date_to_timestamp(#6) <= 2012-01-02 00:00:00), (date_to_timestamp(#6) >= 2007-01-02 00:00:00)
 | Project (#0..=#2, #4, #5, #8)
 
 %4 =
@@ -657,7 +657,7 @@ ORDER BY su_nationkey, cust_nation, l_year
 | | implementation = Differential %3 %4.(#0, #1, #2) %5.(#0, #1, #2) %2.(#0, #1) %1.(#0) %0.(#0) %0.(#0)
 | Filter (((#22 = "GERMANY") && (#24 = "CAMBODIA")) || ((#22 = "CAMBODIA") && (#24 = "GERMANY")))
 | Project (#1, #10, #15, #19)
-| Reduce group=(#0, substr(chartostr(#3), 1, 1), extract_year_d(#2))
+| Reduce group=(#0, substr(char_to_text(#3), 1, 1), extract_year_d(#2))
 | | agg sum(#1)
 
 Finish order_by=(#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last) limit=none offset=0 project=(#0..=#3)
@@ -725,7 +725,7 @@ Query:
 
 %4 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3)), (datetots(#4) <= 2012-01-02 00:00:00), (datetots(#4) >= 2007-01-02 00:00:00)
+| Filter !(isnull(#3)), (date_to_timestamp(#4) <= 2012-01-02 00:00:00), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
 | Project (#0..=#4)
 | ArrangeBy (#0, #1, #2)
 
@@ -857,7 +857,7 @@ ORDER BY revenue DESC
 
 %1 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3)), (datetots(#4) >= 2007-01-02 00:00:00)
+| Filter !(isnull(#3)), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
 | Project (#0..=#4)
 | ArrangeBy (#0, #1, #2)
 
@@ -936,7 +936,7 @@ ORDER BY ordercount DESC
 %6 =
 | Join %4 %5
 | | implementation = Differential %4 %5.()
-| Filter (i64tonumeric(#1) > (i64tonumeric(#2) * 0.005))
+| Filter (bigint_to_numeric(#1) > (bigint_to_numeric(#2) * 0.005))
 | Project (#0, #1)
 
 Finish order_by=(#1 desc nulls_first) limit=none offset=0 project=(#0, #1)
@@ -974,7 +974,7 @@ ORDER BY o_ol_cnt
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#2, #1, #0)
 | |   delta %1 %0.(#0, #1, #2)
-| Filter (datetots(#12) < 2020-01-01 00:00:00), (#3 <= #12)
+| Filter (date_to_timestamp(#12) < 2020-01-01 00:00:00), (#3 <= #12)
 | Project (#4, #5)
 | Reduce group=(#1)
 | | agg sum(if ((#0 = 1) || (#0 = 2)) then {1} else {0})
@@ -1075,7 +1075,7 @@ Query:
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
-| Filter (datetots(#6) < 2020-01-02 00:00:00), (datetots(#6) >= 2007-01-02 00:00:00)
+| Filter (date_to_timestamp(#6) < 2020-01-02 00:00:00), (date_to_timestamp(#6) >= 2007-01-02 00:00:00)
 | Project (#8, #11)
 | Reduce group=()
 | | agg sum(if "PR%" ~~(padchar(#1)) then {#0} else {0})
@@ -1146,7 +1146,7 @@ ORDER BY su_suppkey
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0, #1)
 | |   delta %1 %0.(#5, #4)
-| Filter (datetots(#6) >= 2007-01-02 00:00:00)
+| Filter (date_to_timestamp(#6) >= 2007-01-02 00:00:00)
 | Project (#8, #12)
 | Reduce group=(#1)
 | | agg sum(#0)
@@ -1246,7 +1246,7 @@ Query:
 | Join %4 %8 (= #0 #4)
 | | implementation = Differential %8 %4.(#0)
 | Project (#0..=#3)
-| Reduce group=(#1, substr(chartostr(#3), 1, 3), #2)
+| Reduce group=(#1, substr(char_to_text(#3), 1, 3), #2)
 | | agg count(distinct #0)
 
 Finish order_by=(#3 desc nulls_first) limit=none offset=0 project=(#0..=#3)
@@ -1300,7 +1300,7 @@ Query:
 | | implementation = DeltaQuery
 | |   delta %0 %2.(#0)
 | |   delta %2 %0.(#4)
-| Filter (i32tof64(#7) < (i64tof64(#11) / i64tof64(if (#12 = 0) then {null} else {#12})))
+| Filter (integer_to_double(#7) < (bigint_to_double(#11) / bigint_to_double(if (#12 = 0) then {null} else {#12})))
 | Project (#8)
 | Reduce group=()
 | | agg sum(#0)
@@ -1502,11 +1502,11 @@ Query:
 %7 =
 | Join %3 %4 %5 %6 (= #1 #23 #29)
 | | implementation = Differential %4.(#0) %6.(#0) %5.(#4) %3.()
-| Filter (datetots(#25) > 2010-05-23 12:00:00)
+| Filter (date_to_timestamp(#25) > 2010-05-23 12:00:00)
 | Project (#0..=#3, #26)
 | Reduce group=(#0, #1, #2, #3)
 | | agg sum(#4)
-| Filter (i32toi64((2 * #3)) > #4), (#0 = ((#1 * #2) % 10000))
+| Filter (integer_to_bigint((2 * #3)) > #4), (#0 = ((#1 * #2) % 10000))
 | Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
@@ -1639,14 +1639,14 @@ ORDER BY substr(c_state, 1, 1)
 ----
 %0 =
 | Get materialize.public.customer (u4)
-| Map substr(chartostr(#11), 1, 1)
+| Map substr(char_to_text(#11), 1, 1)
 | Filter (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
 | Project (#0..=#2, #9, #16)
 
 %1 =
 | Get materialize.public.customer (u4)
 | Filter (#16 > 0)
-| Map substr(chartostr(#11), 1, 1)
+| Map substr(char_to_text(#11), 1, 1)
 | Filter (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
 | Project (#16)
 | Reduce group=()
@@ -1657,7 +1657,7 @@ ORDER BY substr(c_state, 1, 1)
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| Filter (numerictof64(#4) > (numerictof64(#5) / i64tof64(if (#6 = 0) then {null} else {#6})))
+| Filter (numeric_to_double(#4) > (numeric_to_double(#5) / bigint_to_double(if (#6 = 0) then {null} else {#6})))
 | Project (#0..=#4)
 
 %3 = Let l1 =
@@ -1688,7 +1688,7 @@ ORDER BY substr(c_state, 1, 1)
 | Join %4 %7 (= #0 #5) (= #1 #6) (= #2 #7)
 | | implementation = Differential %7 %4.(#0, #1, #2)
 | Project (#3, #4)
-| Reduce group=(substr(chartostr(#0), 1, 1))
+| Reduce group=(substr(char_to_text(#0), 1, 1))
 | | agg count(true)
 | | agg sum(#1)
 

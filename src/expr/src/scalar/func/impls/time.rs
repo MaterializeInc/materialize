@@ -63,7 +63,7 @@ pub trait TimeLike: chrono::Timelike {
 impl<T> TimeLike for T where T: chrono::Timelike {}
 
 sqlfunc!(
-    #[sqlname = "timetostr"]
+    #[sqlname = "time_to_text"]
     #[preserves_uniqueness = true]
     fn cast_time_to_string(a: NaiveTime) -> String {
         let mut buf = String::new();
@@ -73,7 +73,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "timetoiv"]
+    #[sqlname = "time_to_interval"]
     #[preserves_uniqueness = true]
     fn cast_time_to_interval<'a>(t: NaiveTime) -> Interval {
         // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us

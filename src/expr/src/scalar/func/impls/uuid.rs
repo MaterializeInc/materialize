@@ -12,7 +12,7 @@ use uuid::Uuid;
 use mz_repr::strconv;
 
 sqlfunc!(
-    #[sqlname = "timetostr"]
+    #[sqlname = "uuid_to_text"]
     #[preserves_uniqueness = true]
     fn cast_uuid_to_string(u: Uuid) -> String {
         let mut buf = String::with_capacity(36);

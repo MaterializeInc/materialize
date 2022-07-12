@@ -128,14 +128,14 @@ EXPLAIN SELECT * FROM lineitem
 %1 =
 | Get materialize.public.orders (u7)
 | Filter !(isnull(#0))
-| ArrangeBy (#0, datetots(#3))
+| ArrangeBy (#0, date_to_timestamp(#3))
 
 %2 =
 | Get materialize.public.customer (u4)
 
 %3 =
-| Join %0 %1 %2 (= #0 #8) (= datetots(#11) (#5 - 9 months))
-| | implementation = Differential %2 %0.() %1.(#0, datetots(#3))
+| Join %0 %1 %2 (= #0 #8) (= date_to_timestamp(#11) (#5 - 9 months))
+| | implementation = Differential %2 %0.() %1.(#0, date_to_timestamp(#3))
 | Filter (#5 != #11), (#14 >= #10)
 | Project (#0..=#7, #0, #9..=#14)
 
@@ -182,7 +182,7 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 %6 = Let l1 =
 | Join %1 %2 %5 (= #0 #3) (= #1 #5)
 | | implementation = Differential %5 %2.(#0) %1.(#0)
-| Filter (#1 <= 195), (#1 >= 38), (1997-08-25 00:00:00 = datetots(#4))
+| Filter (#1 <= 195), (#1 >= 38), (1997-08-25 00:00:00 = date_to_timestamp(#4))
 | Project (#1)
 | Reduce group=()
 | | agg min(#0)
@@ -246,7 +246,7 @@ EXPLAIN SELECT *
 ----
 %0 =
 | Get materialize.public.lineitem (u10)
-| Filter (datetots(#7) = (#5 + 6 days))
+| Filter (date_to_timestamp(#7) = (#5 + 6 days))
 | ArrangeBy ()
 
 %1 =

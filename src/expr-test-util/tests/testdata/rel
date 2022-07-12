@@ -126,7 +126,7 @@ build
 ----
 %0 =
 | Get y (u1)
-| Reduce group=(i32toi64(#0))
+| Reduce group=(integer_to_bigint(#0))
 | | agg max(#1)
 | | agg sum(distinct #2)
 

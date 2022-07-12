@@ -884,7 +884,7 @@ Source materialize.public.nums (u3):
 Query:
 %0 =
 | Get materialize.public.nums (u3)
-| Map ((#0 >> i16toi32(#1)) << i16toi32(#2)), ((#3 << #4) >> #5)
+| Map ((#0 >> smallint_to_integer(#1)) << smallint_to_integer(#2)), ((#3 << #4) >> #5)
 | Project (#9, #10)
 
 EOF
@@ -919,7 +919,7 @@ Source materialize.public.nums (u3):
 Query:
 %0 =
 | Get materialize.public.nums (u3)
-| Map ((#0 >> i16toi32(#1)) & #2), ((#3 << #4) & #5)
+| Map ((#0 >> smallint_to_integer(#1)) & #2), ((#3 << #4) & #5)
 | Project (#9, #10)
 
 EOF
@@ -956,7 +956,7 @@ Source materialize.public.nums (u3):
 Query:
 %0 =
 | Get materialize.public.nums (u3)
-| Map ((#0 & #1) | #2), ((#3 & #4) | #5), ((#6 & #7) | #8), (i32toi64((i16toi32(#0) & #4)) | #8)
+| Map ((#0 & #1) | #2), ((#3 & #4) | #5), ((#6 & #7) | #8), (integer_to_bigint((smallint_to_integer(#0) & #4)) | #8)
 | Project (#9..=#12)
 
 EOF
@@ -993,7 +993,7 @@ Source materialize.public.nums (u3):
 Query:
 %0 =
 | Get materialize.public.nums (u3)
-| Map ((#0 # #1) & #2), ((#3 # #4) & #5), ((#6 # #7) & #8), (i32toi64((i16toi32(#0) # #4)) & #8)
+| Map ((#0 # #1) & #2), ((#3 # #4) & #5), ((#6 # #7) & #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) & #8)
 | Project (#9..=#12)
 
 EOF
@@ -1030,7 +1030,7 @@ Source materialize.public.nums (u3):
 Query:
 %0 =
 | Get materialize.public.nums (u3)
-| Map ((#0 # #1) | #2), ((#3 # #4) | #5), ((#6 # #7) | #8), (i32toi64((i16toi32(#0) # #4)) | #8)
+| Map ((#0 # #1) | #2), ((#3 # #4) | #5), ((#6 # #7) | #8), (integer_to_bigint((smallint_to_integer(#0) # #4)) | #8)
 | Project (#9..=#12)
 
 EOF

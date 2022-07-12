@@ -40,7 +40,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i16tof32"]
+    #[sqlname = "smallint_to_real"]
     #[preserves_uniqueness = true]
     fn cast_int16_to_float32(a: i16) -> f32 {
         f32::from(a)
@@ -48,7 +48,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i16tof64"]
+    #[sqlname = "smallint_to_double"]
     #[preserves_uniqueness = true]
     fn cast_int16_to_float64(a: i16) -> f64 {
         f64::from(a)
@@ -56,7 +56,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i16toi32"]
+    #[sqlname = "smallint_to_integer"]
     #[preserves_uniqueness = true]
     fn cast_int16_to_int32(a: i16) -> i32 {
         i32::from(a)
@@ -64,7 +64,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i16toi64"]
+    #[sqlname = "smallint_to_bigint"]
     #[preserves_uniqueness = true]
     fn cast_int16_to_int64(a: i16) -> i64 {
         i64::from(a)
@@ -72,7 +72,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i16tostr"]
+    #[sqlname = "smallint_to_text"]
     #[preserves_uniqueness = true]
     fn cast_int16_to_string(a: i16) -> String {
         let mut buf = String::new();
@@ -105,6 +105,6 @@ impl<'a> EagerUnaryFunc<'a> for CastInt16ToNumeric {
 
 impl fmt::Display for CastInt16ToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("i16tonumeric")
+        f.write_str("smallint_to_numeric")
     }
 }

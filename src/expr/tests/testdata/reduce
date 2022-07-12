@@ -148,7 +148,7 @@ reduce
 )
 [string bool]
 ----
-isnull((isnull(#1) || strtobool(#0)))
+isnull((isnull(#1) || text_to_boolean(#0)))
 
 # outer is_null needs to be resolved in a second round.
 
@@ -670,7 +670,7 @@ canonicalize-join
 ]]
 [int32]
 ----
-[-(i16toi32(#0)) i16toi32(#0)]
+[-(smallint_to_integer(#0)) smallint_to_integer(#0)]
 
 # literals don't get overwritten with equivalent expressions
 

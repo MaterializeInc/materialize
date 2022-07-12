@@ -973,13 +973,13 @@ query T multiline
 EXPLAIN SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
 ----
 Source materialize.public.t1 (u5):
-| Filter (0 = i32toi64(#0))
+| Filter (0 = integer_to_bigint(#0))
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u5)
-| Filter (0 = i32toi64(#0))
+| Filter (0 = integer_to_bigint(#0))
 | Map 123, 0
 | Project (#1, #2, #0)
 
