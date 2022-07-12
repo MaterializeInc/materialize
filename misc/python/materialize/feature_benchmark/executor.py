@@ -7,11 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import subprocess
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List
 
 from materialize.mzcompose import Composition
-from materialize.ui import UIError
 
 
 class Executor:
@@ -56,14 +54,18 @@ class MzCloud(Executor):
         composition: Composition,
         seed: int,
         mzcloud_url: str,
-        kafka_addr: str,
-        schema_registry_url: str,
+        external_addr: str,
     ) -> None:
         self._composition = composition
         self._seed = seed
         self._mzcloud_url = mzcloud_url
-        self._kafka_addr = kafka_addr
-        self._schema_registry_url = schema_registry_url
+        self._external_addr = external_addr
+        self._testdrive_args = [
+            f"--materialize-url={self._mzcloud_url}",
+            f"--kafka-addr={self._external_addr}:9092",
+            f"--schema-registry-url=http://{self._external_addr}:8081",
+            f"--seed={self._seed}",
+        ]
 
     def RestartMz(self) -> None:
         # We can't restart the cloud, so complain.
@@ -71,28 +73,22 @@ class MzCloud(Executor):
 
     def Reset(self) -> None:
         print("resetting")
-        self.exec(
-            *[
-                "target/debug/testdrive",
-                f"--materialize-url={self._mzcloud_url}",
-                f"--seed={self._seed}",
-            ],
+        self._composition.exec(
+            "testdrive",
+            *self._testdrive_args,
+            # Use a lower timeout so we complain if the mzcloud_url was wrong or inaccessible.
+            "--default-timeout=10s",
             stdin="",
         )
+        print("reset done")
 
     def Td(self, input: str) -> Any:
-        return self.exec(
-            *[
-                "target/debug/testdrive",
-                f"--materialize-url={self._mzcloud_url}",
-                f"--kafka-addr={self._kafka_addr}",
-                f"--schema-registry-url={self._schema_registry_url}",
-                "--no-reset",
-                f"--seed={self._seed}",
-                "--initial-backoff=10ms",
-                "--backoff-factor=0",
-                "--default-timeout=100s",
-            ],
+        return self._composition.exec(
+            "testdrive",
+            "--no-reset",
+            *self._testdrive_args,
+            "--initial-backoff=10ms",
+            "--backoff-factor=0",
             stdin=input,
             capture=True,
         ).stdout
@@ -100,32 +96,3 @@ class MzCloud(Executor):
     def Kgen(self, topic: str, args: List[str]) -> Any:
         # TODO: Implement
         assert False
-
-    def exec(
-        self, *args: str, capture: bool = False, stdin: Optional[str] = None
-    ) -> subprocess.CompletedProcess:
-        """Invoke the command described by `args` and wait for it to complete.
-
-        Args:
-            capture: Whether to capture the child's stdout stream.
-            input: A string to provide as stdin for the command.
-        """
-
-        stdout = None
-        if capture:
-            stdout = subprocess.PIPE
-
-        try:
-            return subprocess.run(
-                [*args],
-                close_fds=False,
-                check=True,
-                stdout=stdout,
-                input=stdin,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            print("args:", args)
-            if e.stdout:
-                print("stdout:", e.stdout)
-            raise UIError(f"running exec failed (exit status {e.returncode})")

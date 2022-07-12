@@ -292,6 +292,7 @@ class Kafka(Service):
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
             "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
+        extra_environment: List[str] = [],
         depends_on: List[str] = ["zookeeper"],
         volumes: List[str] = [],
         listener_type: str = "PLAINTEXT",
@@ -300,6 +301,7 @@ class Kafka(Service):
             *environment,
             f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:{port}",
             f"KAFKA_BROKER_ID={broker_id}",
+            *extra_environment,
         ]
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
