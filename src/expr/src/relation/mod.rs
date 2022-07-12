@@ -15,6 +15,8 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use itertools::Itertools;
+use mz_ore::str::{bracketed, separated};
+use mz_repr::explain_new::{DisplayText, Explain, UnsupportedFormat, DisplayJson};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -1960,6 +1962,53 @@ pub struct RowSetFinishing {
     pub offset: usize,
     /// Include only given columns.
     pub project: Vec<usize>,
+}
+
+impl Explain<'_> for RowSetFinishing {
+    type Context = ();
+
+    type Text = Self;
+
+    type Json = Self;
+
+    type Dot = UnsupportedFormat;
+
+    fn explain_text(
+        &mut self,
+        _config: &mz_repr::explain_new::ExplainConfig,
+        _context: &Self::Context,
+    ) -> Result<Self::Text, mz_repr::explain_new::ExplainError> {
+        Ok(self.clone())
+    }
+
+    fn explain_json(
+        &mut self,
+        _config: &mz_repr::explain_new::ExplainConfig,
+        _context: &Self::Context,
+    ) -> Result<Self::Json, mz_repr::explain_new::ExplainError> {
+        Ok(self.clone())
+    }
+}
+
+impl DisplayText for RowSetFinishing {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "row_set_finishing")?;
+        writeln!(f, "\torder_by: [{}]", bracketed("[", "]", separated(",", &self.order_by)))?;
+        if let Some(limit) = self.limit {
+            writeln!(f, "\tlimit: {}", limit)?;
+        }
+        if self.offset > 0 {
+            writeln!(f, "\toffset: {}", self.offset)?;
+        }
+        // TODO: add an option for column ranges?
+        writeln!(f, "\toutput: {}", bracketed("[", "]", separated(",", &self.project)))
+    }
+}
+
+impl DisplayJson for RowSetFinishing {
+    fn fmt_json(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", serde_json::to_string(self).unwrap())
+    }
 }
 
 impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
