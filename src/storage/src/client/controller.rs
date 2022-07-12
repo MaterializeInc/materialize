@@ -495,71 +495,85 @@ where
             let collection_state =
                 CollectionState::new(description.clone(), read.since().clone(), metadata);
 
+            let upper = write.upper().clone();
+
             self.state
                 .persist_handles
                 .insert(id, PersistHandles { read, write });
 
             self.state.collections.insert(id, collection_state);
 
-            if let Some(ingestion) = description.ingestion {
-                // Each ingestion is augmented with the collection metadata.
-                let mut source_imports = BTreeMap::new();
-                for (id, _) in ingestion.source_imports {
+            match description.ingestion {
+                Some(ingestion) => {
+                    // Each ingestion is augmented with the collection metadata.
+                    let mut source_imports = BTreeMap::new();
+                    for (id, _) in ingestion.source_imports {
+                        let metadata = self.collection(id)?.collection_metadata.clone();
+                        source_imports.insert(id, metadata);
+                    }
+
                     let metadata = self.collection(id)?.collection_metadata.clone();
-                    source_imports.insert(id, metadata);
+
+                    // Calculate the point at which we can resume ingestion computing the greatest
+                    // antichain that is less or equal to all state and output shard uppers.
+                    let mut resume_upper: Antichain<T> = Antichain::new();
+                    let remap_write = self
+                        .persist_client
+                        .open_writer::<(), PartitionId, T, MzOffset>(metadata.remap_shard)
+                        .await
+                        .unwrap();
+                    for t in remap_write.upper().elements() {
+                        resume_upper.insert(t.clone());
+                    }
+                    let data_write = self
+                        .persist_client
+                        .open_writer::<SourceData, (), T, Diff>(metadata.data_shard)
+                        .await
+                        .unwrap();
+                    for t in data_write.upper().elements() {
+                        resume_upper.insert(t.clone());
+                    }
+
+                    // Check if this ingestion is using any operators that are stateful AND are not
+                    // storing their state in persist shards. This whole section should be eventually
+                    // removed as we make each operator durably record its state in persist shards.
+                    let resume_upper = match ingestion.desc.envelope {
+                        // We can only resume with the None envelope right now which is stateless
+                        SourceEnvelope::None(_) => resume_upper,
+                        // Otherwise re-ingest everything
+                        _ => Antichain::from_elem(T::minimum()),
+                    };
+
+                    let augmented_ingestion = IngestSourceCommand {
+                        id,
+                        description: IngestionDescription {
+                            source_imports,
+                            storage_metadata: self.collection(id)?.collection_metadata.clone(),
+                            // The rest of the fields are identical
+                            desc: ingestion.desc,
+                            typ: description.desc.typ().clone(),
+                        },
+                        resume_upper,
+                    };
+
+                    // Provision a storage host for the ingestion.
+                    let client = self
+                        .hosts
+                        .provision(id, description.remote_addr.clone())
+                        .await?;
+
+                    client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
                 }
-
-                let metadata = self.collection(id)?.collection_metadata.clone();
-
-                // Calculate the point at which we can resume ingestion computing the greatest
-                // antichain that is less or equal to all state and output shard uppers.
-                let mut resume_upper: Antichain<T> = Antichain::new();
-                let remap_write = self
-                    .persist_client
-                    .open_writer::<(), PartitionId, T, MzOffset>(metadata.remap_shard)
-                    .await
-                    .unwrap();
-                for t in remap_write.upper().elements() {
-                    resume_upper.insert(t.clone());
+                None => {
+                    // If this collection doesn't have an ingestion associated with it will be
+                    // managed by append calls to the storage controller. So immediately update our
+                    // write frontier to be the current global upper to be prepared for any future
+                    // appends.
+                    let mut change_batch = ChangeBatch::new();
+                    change_batch.extend(upper.into_iter().map(|t| (t, 1)));
+                    change_batch.update(T::minimum(), -1);
+                    self.update_write_frontiers(&[(id, change_batch)]).await?;
                 }
-                let data_write = self
-                    .persist_client
-                    .open_writer::<SourceData, (), T, Diff>(metadata.data_shard)
-                    .await
-                    .unwrap();
-                for t in data_write.upper().elements() {
-                    resume_upper.insert(t.clone());
-                }
-
-                // Check if this ingestion is using any operators that are stateful AND are not
-                // storing their state in persist shards. This whole section should be eventually
-                // removed as we make each operator durably record its state in persist shards.
-                let resume_upper = match ingestion.desc.envelope {
-                    // We can only resume with the None envelope right now which is stateless
-                    SourceEnvelope::None(_) => resume_upper,
-                    // Otherwise re-ingest everything
-                    _ => Antichain::from_elem(T::minimum()),
-                };
-
-                let augmented_ingestion = IngestSourceCommand {
-                    id,
-                    description: IngestionDescription {
-                        source_imports,
-                        storage_metadata: self.collection(id)?.collection_metadata.clone(),
-                        // The rest of the fields are identical
-                        desc: ingestion.desc,
-                        typ: description.desc.typ().clone(),
-                    },
-                    resume_upper,
-                };
-
-                // Provision a storage host for the ingestion.
-                let client = self
-                    .hosts
-                    .provision(id, description.remote_addr.clone())
-                    .await?;
-
-                client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
             }
         }
 
