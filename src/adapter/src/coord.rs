@@ -105,7 +105,7 @@ use mz_controller::{
     ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
 };
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
+    permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
@@ -115,6 +115,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::{stack, task};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
 };

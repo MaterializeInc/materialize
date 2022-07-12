@@ -19,12 +19,11 @@ use std::mem;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::DummyHumanizer;
-
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::explain_new::DummyHumanizer;
 use mz_repr::*;
 
 use crate::plan::error::PlanError;

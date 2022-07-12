@@ -32,6 +32,8 @@
 
 use std::{collections::HashSet, fmt};
 
+use crate::{ColumnType, GlobalId, ScalarType};
+
 /// Wraps a reference to a type that implements `Display$Format` for a specific
 /// [`ExplainFormat`] and implements [`fmt::Display`] by delegating to this
 /// implementation.
@@ -403,6 +405,107 @@ pub trait Explain<'a>: 'a {
     }
 }
 
+<<<<<<< HEAD
+=======
+/// A helper struct to keep track of indentation levels.
+///
+/// This will be most often used as part of the rendering context
+/// type for various `Display$Format` implementation.
+#[derive(Debug)]
+pub struct Indent {
+    unit: String,
+    buff: String,
+}
+
+impl Indent {
+    pub fn new(unit: char, step: usize) -> Indent {
+        Indent {
+            unit: std::iter::repeat(unit).take(step).collect::<String>(),
+            buff: String::with_capacity(unit.len_utf8()),
+        }
+    }
+
+    fn inc(&mut self, rhs: usize) {
+        for _ in 0..rhs {
+            self.buff += &self.unit;
+        }
+    }
+
+    fn dec(&mut self, rhs: usize) {
+        let tail = rhs.saturating_mul(self.unit.len());
+        let head = self.buff.len().saturating_sub(tail);
+        self.buff.truncate(head);
+    }
+}
+
+impl Default for Indent {
+    fn default() -> Self {
+        Indent::new(' ', 2)
+    }
+}
+
+impl std::ops::AddAssign<usize> for Indent {
+    fn add_assign(&mut self, rhs: usize) {
+        self.inc(rhs)
+    }
+}
+
+impl std::ops::SubAssign<usize> for Indent {
+    fn sub_assign(&mut self, rhs: usize) {
+        self.dec(rhs)
+    }
+}
+
+impl fmt::Display for Indent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.buff)
+    }
+}
+
+/// A trait for humanizing components of an expression.
+///
+/// This will be most often used as part of the rendering context
+/// type for various `Display$Format` implementation.
+pub trait ExprHumanizer: fmt::Debug {
+    /// Attempts to return the a human-readable string for the relation
+    /// identified by `id`.
+    fn humanize_id(&self, id: GlobalId) -> Option<String>;
+
+    /// Returns a human-readable name for the specified scalar type.
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
+
+    /// Returns a human-readable name for the specified scalar type.
+    fn humanize_column_type(&self, typ: &ColumnType) -> String {
+        format!(
+            "{}{}",
+            self.humanize_scalar_type(&typ.scalar_type),
+            if typ.nullable { "?" } else { "" }
+        )
+    }
+}
+
+/// A bare-minimum implementation of [`ExprHumanizer`].
+///
+/// The `DummyHumanizer` does a poor job of humanizing expressions. It is
+/// intended for use in contexts where polish is not required, like in tests or
+/// while debugging.
+#[derive(Debug)]
+pub struct DummyHumanizer;
+
+impl ExprHumanizer for DummyHumanizer {
+    fn humanize_id(&self, _: GlobalId) -> Option<String> {
+        // Returning `None` allows the caller to fall back to displaying the
+        // ID, if they so desire.
+        None
+    }
+
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+        // The debug implementation is better than nothing.
+        format!("{:?}", ty)
+    }
+}
+
+>>>>>>> 00f828a47... repr: move `ExprHumanizer` to the `explain-new` module
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -24,15 +24,13 @@ use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::visit::{Visit, VisitChildren};
-use crate::{
-    func as scalar_func, DummyHumanizer, EvalError, ExprHumanizer, Id, LocalId, MirScalarExpr,
-    UnaryFunc, VariadicFunc,
-};
+use crate::{func as scalar_func, EvalError, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc};
 
 pub mod canonicalize;
 pub mod func;

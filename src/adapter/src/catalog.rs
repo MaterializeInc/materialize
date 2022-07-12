@@ -31,12 +31,12 @@ use mz_compute_client::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_controller::{
     ComputeInstanceEvent, ComputeInstanceReplicaAllocation, ConcreteComputeInstanceReplicaConfig,
 };
-use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{explain_new::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
