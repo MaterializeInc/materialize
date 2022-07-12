@@ -134,6 +134,13 @@ impl ConnectionContext {
             secrets_reader,
         }
     }
+    /// Sets the `secrets_reader` field on `self`.
+    ///
+    /// Returns `Self`.
+    pub fn secrets_reader(mut self, secrets_reader: Arc<dyn SecretsReader>) -> ConnectionContext {
+        self.secrets_reader = secrets_reader;
+        self
+    }
 }
 
 impl Default for ConnectionContext {
