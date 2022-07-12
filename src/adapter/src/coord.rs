@@ -857,7 +857,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // Select a time as of which to restart the sink dataflow.
                     let collection = self.controller.storage().collection(entry.id()).unwrap();
-                    let upper_ts = collection.write_frontier.frontier()[0];
+                    let upper_ts = collection.write_frontier()[0];
                     let as_of = if upper_ts == Timestamp::minimum() {
                         // The sink has never produced any updates, so we select `as_of` based on
                         // the input `since`s, as we do when creating a new recorded view.
@@ -1212,7 +1212,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     || !storage
                         .collection(id)
                         .unwrap()
-                        .write_frontier
+                        .write_frontier()
                         .less_than(&inputs.advance_to)
                 {
                     // Filter out tables that were dropped while waiting for advancement.
@@ -4360,8 +4360,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     storage
                         .collection(*id)
                         .unwrap()
-                        .write_frontier
-                        .frontier()
+                        .write_frontier()
                         .iter()
                         .cloned(),
                 );
@@ -4860,12 +4859,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources.push(TimestampSource {
                             name: format!("{name} ({id}, storage)"),
                             read_frontier: state.implied_capability.elements().to_vec(),
-                            write_frontier: state
-                                .write_frontier
-                                .frontier()
-                                .to_owned()
-                                .elements()
-                                .to_vec(),
+                            write_frontier: state.write_frontier().to_owned().elements().to_vec(),
                         });
                     }
                 }

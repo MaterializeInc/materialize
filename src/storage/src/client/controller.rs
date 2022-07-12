@@ -492,8 +492,12 @@ where
                 .await
                 .expect("invalid persist usage");
 
-            let collection_state =
-                CollectionState::new(description.clone(), read.since().clone(), metadata);
+            let collection_state = CollectionState::new(
+                description.clone(),
+                read.since().clone(),
+                write.upper().clone(),
+                metadata,
+            );
 
             self.state
                 .persist_handles
@@ -681,7 +685,7 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
+                let mut new_read_capability = policy.frontier(collection.write_frontier());
 
                 if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                     let mut update = ChangeBatch::new();
@@ -717,12 +721,11 @@ where
                 .expect("Reference to absent collection");
 
             collection
-                .write_frontier
+                .reported_write_frontier
                 .update_iter(changes.clone().drain());
 
-            let mut new_read_capability = collection
-                .read_policy
-                .frontier(collection.write_frontier.frontier());
+            let mut new_read_capability =
+                collection.read_policy.frontier(collection.write_frontier());
             if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                 // TODO: reuse change batch above?
                 let mut update = ChangeBatch::new();
@@ -910,7 +913,10 @@ pub struct CollectionState<T> {
     /// Importantly, this is not a write capability, but what we have heard about the
     /// write capabilities of others. All future writes will have times greater than or
     /// equal to `write_frontier.frontier()`.
-    pub write_frontier: MutableAntichain<T>,
+    reported_write_frontier: MutableAntichain<T>,
+
+    /// The collection's write frontier when this `CollectionState` was created.
+    initial_write_frontier: Antichain<T>,
 
     pub collection_metadata: CollectionMetadata,
 }
@@ -928,6 +934,7 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: CollectionDescription,
         since: Antichain<T>,
+        upper: Antichain<T>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -937,8 +944,19 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            reported_write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            initial_write_frontier: upper,
             collection_metadata: metadata,
+        }
+    }
+
+    pub fn write_frontier(&self) -> AntichainRef<T> {
+        let initial = self.initial_write_frontier.borrow();
+        let reported = self.reported_write_frontier.frontier();
+        if PartialOrder::less_than(&initial, &reported) {
+            reported
+        } else {
+            initial
         }
     }
 }
