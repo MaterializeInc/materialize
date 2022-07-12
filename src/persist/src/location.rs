@@ -300,11 +300,7 @@ impl<T: Codec> TryFrom<&VersionedData> for (SeqNo, T) {
 pub trait Consensus: std::fmt::Debug {
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
-    async fn head(
-        &self,
-        deadline: Instant,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError>;
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
 
     /// Update the [VersionedData] stored at this location to `new`, iff the current
     /// sequence number is exactly `expected` and `new`'s sequence number > the current
@@ -321,7 +317,6 @@ pub trait Consensus: std::fmt::Debug {
     /// happen with None as the expected value to set the state.
     async fn compare_and_set(
         &self,
-        deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -332,24 +327,14 @@ pub trait Consensus: std::fmt::Debug {
     ///
     /// Returns an error if `from` is greater than the current sequence number
     /// or if there is no data at this key.
-    async fn scan(
-        &self,
-        deadline: Instant,
-        key: &str,
-        from: SeqNo,
-    ) -> Result<Vec<VersionedData>, ExternalError>;
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError>;
 
     /// Deletes all historical versions of the data stored at `key` that are < `seqno`,
     /// iff `seqno` <= the current sequence number.
     ///
     /// Returns an error if `seqno` is greater than the current sequence number,
     /// or if there is no data at this key.
-    async fn truncate(
-        &self,
-        deadline: Instant,
-        key: &str,
-        seqno: SeqNo,
-    ) -> Result<(), ExternalError>;
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError>;
 }
 
 /// An abstraction over read-write access to a `bytes key`->`bytes value` store.
@@ -366,33 +351,26 @@ pub trait Consensus: std::fmt::Debug {
 #[async_trait]
 pub trait Blob: std::fmt::Debug {
     /// Returns a reference to the value corresponding to the key.
-    async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError>;
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError>;
 
     /// List all of the keys in the map.
-    async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError>;
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError>;
 
     /// Inserts a key-value pair into the map.
     ///
     /// When atomicity is required, writes must be atomic and either succeed or
     /// leave the previous value intact.
-    async fn set(
-        &self,
-        deadline: Instant,
-        key: &str,
-        value: Bytes,
-        atomic: Atomicity,
-    ) -> Result<(), ExternalError>;
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError>;
 
     /// Remove a key from the map.
     ///
     /// Succeeds if the key does not exist.
-    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError>;
+    async fn delete(&self, key: &str) -> Result<(), ExternalError>;
 }
 
 #[cfg(test)]
 pub mod tests {
     use std::future::Future;
-    use std::time::Duration;
 
     use anyhow::anyhow;
     use uuid::Uuid;
@@ -415,7 +393,6 @@ pub mod tests {
     >(
         new_fn: NewFn,
     ) -> Result<(), ExternalError> {
-        let no_timeout = Instant::now() + Duration::from_secs(1_000_000);
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
 
         let blob0 = new_fn("path0").await?;
@@ -427,74 +404,74 @@ pub mod tests {
         let blob1 = new_fn("path0").await?;
 
         // Empty key is empty.
-        assert_eq!(blob0.get(no_timeout, "k0").await?, None);
-        assert_eq!(blob1.get(no_timeout, "k0").await?, None);
+        assert_eq!(blob0.get("k0").await?, None);
+        assert_eq!(blob1.get("k0").await?, None);
 
         // Empty list keys is empty.
-        let empty_keys = blob0.list_keys(no_timeout).await?;
+        let empty_keys = blob0.list_keys().await?;
         assert_eq!(empty_keys, Vec::<String>::new());
-        let empty_keys = blob1.list_keys(no_timeout).await?;
+        let empty_keys = blob1.list_keys().await?;
         assert_eq!(empty_keys, Vec::<String>::new());
 
         // Set a key with AllowNonAtomic and get it back.
         blob0
-            .set(no_timeout, "k0", values[0].clone().into(), AllowNonAtomic)
+            .set("k0", values[0].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[0].clone()));
-        assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[0].clone()));
+        assert_eq!(blob0.get("k0").await?, Some(values[0].clone()));
+        assert_eq!(blob1.get("k0").await?, Some(values[0].clone()));
 
         // Set a key with RequireAtomic and get it back.
         blob0
-            .set(no_timeout, "k0a", values[0].clone().into(), RequireAtomic)
+            .set("k0a", values[0].clone().into(), RequireAtomic)
             .await?;
-        assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[0].clone()));
-        assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[0].clone()));
+        assert_eq!(blob0.get("k0a").await?, Some(values[0].clone()));
+        assert_eq!(blob1.get("k0a").await?, Some(values[0].clone()));
 
         // Blob contains the key we just inserted.
-        let mut blob_keys = blob0.list_keys(no_timeout).await?;
+        let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&empty_keys, &["k0", "k0a"]));
-        let mut blob_keys = blob1.list_keys(no_timeout).await?;
+        let mut blob_keys = blob1.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&empty_keys, &["k0", "k0a"]));
 
         // Can overwrite a key with AllowNonAtomic.
         blob0
-            .set(no_timeout, "k0", values[1].clone().into(), AllowNonAtomic)
+            .set("k0", values[1].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
-        assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
+        assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
+        assert_eq!(blob1.get("k0").await?, Some(values[1].clone()));
         // Can overwrite a key with RequireAtomic.
         blob0
-            .set(no_timeout, "k0a", values[1].clone().into(), RequireAtomic)
+            .set("k0a", values[1].clone().into(), RequireAtomic)
             .await?;
-        assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[1].clone()));
-        assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[1].clone()));
+        assert_eq!(blob0.get("k0a").await?, Some(values[1].clone()));
+        assert_eq!(blob1.get("k0a").await?, Some(values[1].clone()));
 
         // Can delete a key.
-        blob0.delete(no_timeout, "k0").await?;
+        blob0.delete("k0").await?;
         // Can no longer get a deleted key.
-        assert_eq!(blob0.get(no_timeout, "k0").await?, None);
-        assert_eq!(blob1.get(no_timeout, "k0").await?, None);
+        assert_eq!(blob0.get("k0").await?, None);
+        assert_eq!(blob1.get("k0").await?, None);
         // Double deleting a key succeeds.
-        assert_eq!(blob0.delete(no_timeout, "k0").await, Ok(()));
+        assert_eq!(blob0.delete("k0").await, Ok(()));
         // Deleting a key that does not exist succeeds.
-        assert_eq!(blob0.delete(no_timeout, "nope").await, Ok(()));
+        assert_eq!(blob0.delete("nope").await, Ok(()));
 
         // Empty blob contains no keys.
-        blob0.delete(no_timeout, "k0a").await?;
-        let mut blob_keys = blob0.list_keys(no_timeout).await?;
+        blob0.delete("k0a").await?;
+        let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
-        let mut blob_keys = blob1.list_keys(no_timeout).await?;
+        let mut blob_keys = blob1.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
         blob0
-            .set(no_timeout, "k0", values[1].clone().into(), AllowNonAtomic)
+            .set("k0", values[1].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
-        assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
+        assert_eq!(blob1.get("k0").await?, Some(values[1].clone()));
+        assert_eq!(blob0.get("k0").await?, Some(values[1].clone()));
 
         // Insert multiple keys back to back and validate that we can list
         // them all out.
@@ -502,22 +479,22 @@ pub mod tests {
         for i in 1..=5 {
             let key = format!("k{}", i);
             blob0
-                .set(no_timeout, &key, values[0].clone().into(), AllowNonAtomic)
+                .set(&key, values[0].clone().into(), AllowNonAtomic)
                 .await?;
             expected_keys.push(key);
         }
 
         // Blob contains the key we just inserted.
-        let mut blob_keys = blob0.list_keys(no_timeout).await?;
+        let mut blob_keys = blob0.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&expected_keys, &["k0"]));
-        let mut blob_keys = blob1.list_keys(no_timeout).await?;
+        let mut blob_keys = blob1.list_keys().await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&expected_keys, &["k0"]));
 
         // We can open a new blob to the same path and use it.
         let blob3 = new_fn("path0").await?;
-        assert_eq!(blob3.get(no_timeout, "k0").await?, Some(values[1].clone()));
+        assert_eq!(blob3.get("k0").await?, Some(values[1].clone()));
 
         Ok(())
     }
@@ -535,17 +512,14 @@ pub mod tests {
         // with each other.
         let key = Uuid::new_v4().to_string();
 
-        // Enforce that this entire test completes within 10 minutes.
-        let deadline = Instant::now() + Duration::from_secs(600);
-
         // Starting value of consensus data is None.
-        assert_eq!(consensus.head(deadline, &key).await, Ok(None));
+        assert_eq!(consensus.head(&key).await, Ok(None));
 
         // Cannot scan a key that has no data.
-        assert!(consensus.scan(deadline, &key, SeqNo(0)).await.is_err());
+        assert!(consensus.scan(&key, SeqNo(0)).await.is_err());
 
         // Cannot truncate data from a key that doesn't have any data
-        assert!(consensus.truncate(deadline, &key, SeqNo(0)).await.is_err(),);
+        assert!(consensus.truncate(&key, SeqNo(0)).await.is_err(),);
 
         let state = VersionedData {
             seqno: SeqNo(5),
@@ -555,47 +529,42 @@ pub mod tests {
         // Incorrectly setting the data with a non-None expected should fail.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &key, Some(SeqNo(0)), state.clone())
+                .compare_and_set(&key, Some(SeqNo(0)), state.clone())
                 .await,
             Ok(Err(None))
         );
 
         // Correctly updating the state with the correct expected value should succeed.
         assert_eq!(
-            consensus
-                .compare_and_set(deadline, &key, None, state.clone())
-                .await,
+            consensus.compare_and_set(&key, None, state.clone()).await,
             Ok(Ok(()))
         );
 
         // We can observe the a recent value on successful update.
-        assert_eq!(
-            consensus.head(deadline, &key).await,
-            Ok(Some(state.clone()))
-        );
+        assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));
 
         // Can scan a key that has data with a lower bound sequence number < head.
         assert_eq!(
-            consensus.scan(deadline, &key, SeqNo(0)).await,
+            consensus.scan(&key, SeqNo(0)).await,
             Ok(vec![state.clone()])
         );
 
         // Can scan a key that has data with a lower bound sequence number == head.
         assert_eq!(
-            consensus.scan(deadline, &key, SeqNo(5)).await,
+            consensus.scan(&key, SeqNo(5)).await,
             Ok(vec![state.clone()])
         );
 
         // Cannot scan a key that has data with a lower bound sequence number > head.
-        assert!(consensus.scan(deadline, &key, SeqNo(6)).await.is_err());
+        assert!(consensus.scan(&key, SeqNo(6)).await.is_err());
 
         // Can truncate data with an upper bound <= head, even if there is no data in the
         // range [0, upper).
-        assert_eq!(consensus.truncate(deadline, &key, SeqNo(0)).await, Ok(()));
-        assert_eq!(consensus.truncate(deadline, &key, SeqNo(5)).await, Ok(()));
+        assert_eq!(consensus.truncate(&key, SeqNo(0)).await, Ok(()));
+        assert_eq!(consensus.truncate(&key, SeqNo(5)).await, Ok(()));
 
         // Cannot truncate data with an upper bound > head.
-        assert!(consensus.truncate(deadline, &key, SeqNo(6)).await.is_err(),);
+        assert!(consensus.truncate(&key, SeqNo(6)).await.is_err(),);
 
         let new_state = VersionedData {
             seqno: SeqNo(10),
@@ -605,7 +574,7 @@ pub mod tests {
         // Trying to update without the correct expected seqno fails, (even if expected > current)
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &key, Some(SeqNo(7)), new_state.clone())
+                .compare_and_set(&key, Some(SeqNo(7)), new_state.clone())
                 .await,
             Ok(Err(Some(state.clone())))
         );
@@ -613,7 +582,7 @@ pub mod tests {
         // Trying to update without the correct expected seqno fails, (even if expected < current)
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &key, Some(SeqNo(3)), new_state.clone())
+                .compare_and_set(&key, Some(SeqNo(3)), new_state.clone())
                 .await,
             Ok(Err(Some(state.clone())))
         );
@@ -627,7 +596,7 @@ pub mod tests {
         // expected is correct.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &key, Some(state.seqno), invalid_constant_seqno)
+                .compare_and_set(&key, Some(state.seqno), invalid_constant_seqno)
                 .await,
             Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)")))
         );
@@ -641,7 +610,7 @@ pub mod tests {
         // expected is correct.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &key, Some(state.seqno), invalid_regressing_seqno)
+                .compare_and_set(&key, Some(state.seqno), invalid_regressing_seqno)
                 .await,
             Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)")))
         );
@@ -649,57 +618,54 @@ pub mod tests {
         // Can correctly update to a new state if we provide the right expected seqno
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &key, Some(state.seqno), new_state.clone())
+                .compare_and_set(&key, Some(state.seqno), new_state.clone())
                 .await,
             Ok(Ok(()))
         );
 
         // We can observe the a recent value on successful update.
-        assert_eq!(
-            consensus.head(deadline, &key).await,
-            Ok(Some(new_state.clone()))
-        );
+        assert_eq!(consensus.head(&key).await, Ok(Some(new_state.clone())));
 
         // We can observe both states in the correct order with scan if pass
         // in a suitable lower bound.
         assert_eq!(
-            consensus.scan(deadline, &key, SeqNo(5)).await,
+            consensus.scan(&key, SeqNo(5)).await,
             Ok(vec![state.clone(), new_state.clone()])
         );
 
         // We can observe only the most recent state if the lower bound is higher
         // than the previous insertion's sequence number.
         assert_eq!(
-            consensus.scan(deadline, &key, SeqNo(6)).await,
+            consensus.scan(&key, SeqNo(6)).await,
             Ok(vec![new_state.clone()])
         );
 
         // We can still observe the most recent insert as long as the provided
         // lower bound == most recent 's sequence number.
         assert_eq!(
-            consensus.scan(deadline, &key, SeqNo(10)).await,
+            consensus.scan(&key, SeqNo(10)).await,
             Ok(vec![new_state.clone()])
         );
 
         // We cannot scan if the provided lower bound > head's sequence number.
-        assert!(consensus.scan(deadline, &key, SeqNo(11)).await.is_err());
+        assert!(consensus.scan(&key, SeqNo(11)).await.is_err());
 
         // Can remove the previous write with the appropriate truncation.
-        assert_eq!(consensus.truncate(deadline, &key, SeqNo(6)).await, Ok(()));
+        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(()));
 
         // Verify that the old write is indeed deleted.
         assert_eq!(
-            consensus.scan(deadline, &key, SeqNo(0)).await,
+            consensus.scan(&key, SeqNo(0)).await,
             Ok(vec![new_state.clone()])
         );
 
         // Truncate is idempotent and can be repeated.
-        assert_eq!(consensus.truncate(deadline, &key, SeqNo(6)).await, Ok(()));
+        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(()));
 
         // Make sure entries under different keys don't clash.
         let other_key = Uuid::new_v4().to_string();
 
-        assert_eq!(consensus.head(deadline, &other_key).await, Ok(None));
+        assert_eq!(consensus.head(&other_key).await, Ok(None));
 
         let state = VersionedData {
             seqno: SeqNo(1),
@@ -708,21 +674,15 @@ pub mod tests {
 
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &other_key, None, state.clone())
+                .compare_and_set(&other_key, None, state.clone())
                 .await,
             Ok(Ok(()))
         );
 
-        assert_eq!(
-            consensus.head(deadline, &other_key).await,
-            Ok(Some(state.clone()))
-        );
+        assert_eq!(consensus.head(&other_key).await, Ok(Some(state.clone())));
 
         // State for the first key is still as expected.
-        assert_eq!(
-            consensus.head(deadline, &key).await,
-            Ok(Some(new_state.clone()))
-        );
+        assert_eq!(consensus.head(&key).await, Ok(Some(new_state.clone())));
 
         // Trying to update from a stale version of current doesn't work.
         let invalid_jump_forward = VersionedData {
@@ -731,7 +691,7 @@ pub mod tests {
         };
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &key, Some(state.seqno), invalid_jump_forward)
+                .compare_and_set(&key, Some(state.seqno), invalid_jump_forward)
                 .await,
             Ok(Err(Some(new_state.clone())))
         );
@@ -743,7 +703,7 @@ pub mod tests {
         };
         assert_eq!(
             consensus
-                .compare_and_set(deadline, &key, Some(new_state.seqno), large_state)
+                .compare_and_set(&key, Some(new_state.seqno), large_state)
                 .await,
             Ok(Ok(()))
         );
@@ -753,7 +713,6 @@ pub mod tests {
         assert_eq!(
             consensus
                 .compare_and_set(
-                    deadline,
                     &Uuid::new_v4().to_string(),
                     None,
                     VersionedData {
@@ -767,7 +726,6 @@ pub mod tests {
         assert_eq!(
             consensus
                 .compare_and_set(
-                    deadline,
                     &Uuid::new_v4().to_string(),
                     None,
                     VersionedData {
@@ -780,7 +738,6 @@ pub mod tests {
         );
         assert!(consensus
             .compare_and_set(
-                deadline,
                 &Uuid::new_v4().to_string(),
                 None,
                 VersionedData {
@@ -792,7 +749,6 @@ pub mod tests {
             .is_err());
         assert!(consensus
             .compare_and_set(
-                deadline,
                 &Uuid::new_v4().to_string(),
                 None,
                 VersionedData {

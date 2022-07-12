@@ -9,8 +9,6 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use std::time::Instant;
-
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -239,13 +237,7 @@ fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, anyhow:
 
 #[async_trait]
 impl Consensus for PostgresConsensus {
-    async fn head(
-        &self,
-        _deadline: Instant,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError> {
-        // TODO: properly use the deadline argument.
-
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
         let row = self.client.query_opt(&*q, &[&key]).await?;
@@ -265,13 +257,10 @@ impl Consensus for PostgresConsensus {
 
     async fn compare_and_set(
         &self,
-        deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
-        // TODO: properly use the deadline argument.
-
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -322,19 +311,12 @@ impl Consensus for PostgresConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(deadline, key).await?;
+            let current = self.head(key).await?;
             Ok(Err(current))
         }
     }
 
-    async fn scan(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        from: SeqNo,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
-        // TODO: properly use the deadline argument.
-
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
@@ -360,12 +342,7 @@ impl Consensus for PostgresConsensus {
         }
     }
 
-    async fn truncate(
-        &self,
-        deadline: Instant,
-        key: &str,
-        seqno: SeqNo,
-    ) -> Result<(), ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
         let q = "DELETE FROM consensus
                 WHERE shard = $1 AND sequence_number < $2 AND
                 EXISTS(
@@ -385,7 +362,7 @@ impl Consensus for PostgresConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(deadline, key).await?;
+            let current = self.head(key).await?;
             if current.map_or(true, |data| data.seqno < seqno) {
                 return Err(ExternalError::from(anyhow!(
                     "upper bound too high for truncate: {:?}",
@@ -401,7 +378,6 @@ impl Consensus for PostgresConsensus {
 #[cfg(test)]
 mod tests {
     use crate::location::tests::consensus_impl_test;
-    use std::time::Duration;
     use tracing::info;
     use uuid::Uuid;
 
@@ -424,7 +400,6 @@ mod tests {
 
         // and now verify the implementation-specific `drop_and_recreate` works as intended
         let consensus = PostgresConsensus::open(config.clone()).await?;
-        let deadline = Instant::now() + Duration::from_secs(5);
         let key = Uuid::new_v4().to_string();
         let state = VersionedData {
             seqno: SeqNo(5),
@@ -432,20 +407,15 @@ mod tests {
         };
 
         assert_eq!(
-            consensus
-                .compare_and_set(deadline, &key, None, state.clone())
-                .await,
+            consensus.compare_and_set(&key, None, state.clone()).await,
             Ok(Ok(()))
         );
 
-        assert_eq!(
-            consensus.head(deadline, &key).await,
-            Ok(Some(state.clone()))
-        );
+        assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));
 
         consensus.drop_and_recreate().await?;
 
-        assert_eq!(consensus.head(deadline, &key).await, Ok(None));
+        assert_eq!(consensus.head(&key).await, Ok(None));
 
         Ok(())
     }

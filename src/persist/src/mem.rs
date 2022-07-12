@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -101,26 +100,20 @@ impl MemBlob {
 
 #[async_trait]
 impl Blob for MemBlob {
-    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         self.core.lock().await.get(key)
     }
 
-    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
         self.core.lock().await.list_keys()
     }
 
-    async fn set(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        value: Bytes,
-        _atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
         // NB: This is always atomic, so we're free to ignore the atomic param.
         self.core.lock().await.set(key, value)
     }
 
-    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
         self.core.lock().await.delete(key)
     }
 }
@@ -143,11 +136,7 @@ impl Default for MemConsensus {
 
 #[async_trait]
 impl Consensus for MemConsensus {
-    async fn head(
-        &self,
-        _deadline: Instant,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError> {
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let store = self.data.lock().map_err(Error::from)?;
         let values = match store.get(key) {
             None => return Ok(None),
@@ -159,7 +148,6 @@ impl Consensus for MemConsensus {
 
     async fn compare_and_set(
         &self,
-        _deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -196,12 +184,7 @@ impl Consensus for MemConsensus {
         Ok(Ok(()))
     }
 
-    async fn scan(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        from: SeqNo,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         let store = self.data.lock().map_err(Error::from)?;
         let mut results = vec![];
         if let Some(values) = store.get(key) {
@@ -224,13 +207,8 @@ impl Consensus for MemConsensus {
         }
     }
 
-    async fn truncate(
-        &self,
-        deadline: Instant,
-        key: &str,
-        seqno: SeqNo,
-    ) -> Result<(), ExternalError> {
-        let current = self.head(deadline, key).await?;
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
+        let current = self.head(key).await?;
         if current.map_or(true, |data| data.seqno < seqno) {
             return Err(ExternalError::from(anyhow!(
                 "upper bound too high for truncate: {:?}",

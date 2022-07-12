@@ -426,7 +426,6 @@ mod tests {
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
-    use std::time::{Duration, Instant};
 
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
@@ -502,9 +501,8 @@ mod tests {
         T: Codec64,
         D: Codec64,
     {
-        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
         let value = blob
-            .get(deadline, key)
+            .get(key)
             .await
             .expect("failed to fetch part")
             .expect("missing part");

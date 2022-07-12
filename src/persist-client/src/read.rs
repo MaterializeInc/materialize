@@ -13,7 +13,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
@@ -35,7 +35,7 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::encoding::SerdeSnapshotSplit;
-use crate::r#impl::machine::{retry_external, Machine, FOREVER};
+use crate::r#impl::machine::{retry_external, Machine};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::Since;
 use crate::ShardId;
@@ -625,7 +625,7 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     let get_span = debug_span!("fetch_batch::get");
     let value = loop {
         let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
-            blob.get(Instant::now() + FOREVER, key).await
+            blob.get(key).await
         })
         .instrument(get_span.clone())
         .await;
@@ -633,8 +633,7 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
             Some(x) => break x,
             // If the underlying impl of blob isn't linearizable, then we
             // might get a key reference that that blob isn't returning yet.
-            // Keep trying, it'll show up. The deadline will eventually bail
-            // us out of this loop if something has gone wrong internally.
+            // Keep trying, it'll show up.
             None => {
                 // This is quite unexpected given that our initial blobs _are_
                 // linearizable, so always log at info.
