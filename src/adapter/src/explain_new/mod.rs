@@ -16,7 +16,14 @@
 //! the various IRs live, this is not possible. Consequencly, we
 //! currently resort to using a wrapper type.
 
+use std::collections::HashMap;
+use std::fmt;
+
 use mz_expr::{ExprHumanizer, RowSetFinishing};
+use mz_repr::{explain_new::DisplayText, GlobalId};
+use mz_storage::client::transforms::LinearOperator;
+
+use crate::coord::fast_path_peek;
 
 pub(crate) mod common;
 pub(crate) mod hir;
@@ -25,7 +32,7 @@ pub(crate) mod mir;
 pub(crate) mod qgm;
 
 /// Newtype struct for wrapping types that should
-/// implement the `Explain` trait.
+/// implement the [`mz_repr::explain_new::Explain`] trait.
 pub(crate) struct Explainable<'a, T>(&'a mut T);
 
 impl<'a, T> Explainable<'a, T> {
@@ -34,10 +41,103 @@ impl<'a, T> Explainable<'a, T> {
     }
 }
 
-/// Explain context shared by all `Explain` implementations
-/// in this crate.
+/// Explain context shared by all [`mz_repr::explain_new::Explain`]
+/// implementations in this crate.
 #[derive(Debug)]
-pub struct ExplainContext<'a> {
-    pub humanizer: &'a dyn ExprHumanizer,
-    pub finishing: Option<RowSetFinishing>,
+#[allow(dead_code)] // TODO (#13299)
+pub(crate) struct ExplainContext<'a> {
+    pub(crate) humanizer: &'a dyn ExprHumanizer,
+    pub(crate) used_indexes: UsedIndexes,
+    pub(crate) finishing: Option<RowSetFinishing>,
+    pub(crate) fast_path_plan: Option<fast_path_peek::Plan>,
+}
+
+pub struct Attributes;
+
+/// A somewhat hacky way to annotate the nodes of a plan with
+/// arbitrary attributes based on the pre-order of the items
+/// in the associated plan.
+#[allow(dead_code)] // TODO (#13299)
+pub struct AnnotatedPlan<'a, T> {
+    pub(crate) plan: &'a mut T,
+    pub(crate) annotations: HashMap<usize, Attributes>,
+}
+
+/// A set of indexes that are used in the physical plan
+/// derived  from a plan wrapped in an [`ExplainSinglePlan`]
+/// or an [`ExplainMultiPlan`].
+#[derive(Debug)]
+pub(crate) struct UsedIndexes(Vec<GlobalId>);
+
+impl UsedIndexes {
+    pub(crate) fn new(values: Vec<GlobalId>) -> UsedIndexes {
+        UsedIndexes(values)
+    }
+}
+
+// TODO (#13472)
+impl DisplayText<()> for UsedIndexes {
+    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        unimplemented!() // TODO (#13472)
+    }
+}
+
+/// A structure produced by the `explain_$format` methods in
+/// [`mz_repr::explain_new::Explain`] implementations for points
+/// in the optimization pipeline identified with a single plan of
+/// type `T`.
+#[allow(dead_code)] // TODO (#13299)
+pub(crate) struct ExplainSinglePlan<'a, T> {
+    context: &'a ExplainContext<'a>,
+    plan: AnnotatedPlan<'a, T>,
+}
+
+impl<'a, T: 'a> DisplayText<()> for ExplainSinglePlan<'a, T>
+where
+    Explainable<'a, T>: DisplayText,
+{
+    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        // TODO (#13472)
+        // let mut context = ...
+        // self.context.finishing.fmt_text(&mut context, f)?;
+        // writeln!(f, "")?;
+        // self.plan.fmt_text(..., f)?;
+        // writeln!(f, "")?;
+        // self.context.used_indexes.fmt_text(..., f)?;
+        Ok(())
+    }
+}
+
+/// A structure produced by the `explain_$format` methods in
+/// [`mz_repr::explain_new::Explain`] implementations at points
+/// in the optimization pipeline identified with a
+/// `DataflowDescription` instance with plans of type `T`.
+#[allow(dead_code)] // TODO (#13299)
+pub(crate) struct ExplainMultiPlan<'a, T> {
+    pub(crate) context: ExplainContext<'a>,
+    // Maps the names of the sources to the linear operators that will be
+    // on them.
+    // TODO: implement DisplayText and DisplayJson for LinearOperator
+    // there are plans to replace LinearOperator with MFP struct (#6657)
+    pub(crate) sources: Vec<(String, LinearOperator)>,
+    // elements of the vector are in topological order
+    pub(crate) plans: Vec<AnnotatedPlan<'a, T>>,
+}
+
+impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
+where
+    Explainable<'a, T>: DisplayText,
+{
+    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        // TODO (#13472)
+        // let mut context = ...
+        // self.context.finishing.fmt_text(..., f)?;
+        // writeln!(f, "")?;
+        // self.plans.fmt_text(..., f)?;
+        // writeln!(f, "")?;
+        // self.sources.used_indexes.fmt_text(..., f)?;
+        // writeln!(f, "")?;
+        // self.context.used_indexes.fmt_text(..., f)?;
+        Ok(())
+    }
 }
