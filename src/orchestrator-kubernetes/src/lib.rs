@@ -308,7 +308,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             self.config.context
         ));
 
-        args.push(format!("--secrets-path={SECRETS_MOUNT_PATH}"));
         let anti_affinity = anti_affinity
             .map(|label_selectors| -> Result<_, anyhow::Error> {
                 let label_selector_requirements = label_selectors
