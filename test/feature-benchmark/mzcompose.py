@@ -78,22 +78,6 @@ def make_comparator(name: str) -> Comparator:
 
 default_timeout = "30m"
 
-SERVICES = [
-    Zookeeper(),
-    KafkaService(),
-    SchemaRegistry(),
-    # We are going to override the service definitions during the actual benchmark
-    # we put "unstable" here so that we fetch some image from Docker Hub and thus
-    # avoid recompiling the current source unless we will actually be benchmarking it.
-    Materialized(image="materialize/materialized:unstable"),
-    Testdrive(
-        validate_data_dir=False,
-        default_timeout=default_timeout,
-    ),
-    KgenService(),
-    Postgres(),
-]
-
 
 def start_services(
     c: Composition, args: argparse.Namespace, instance: str
@@ -204,6 +188,22 @@ def run_one_scenario(
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Feature benchmark framework."""
+
+    SERVICES = [
+        Zookeeper(),
+        KafkaService(),
+        SchemaRegistry(),
+        # We are going to override the service definitions during the actual benchmark
+        # we put "unstable" here so that we fetch some image from Docker Hub and thus
+        # avoid recompiling the current source unless we will actually be benchmarking it.
+        Materialized(image="materialize/materialized:unstable"),
+        Testdrive(
+            validate_data_dir=False,
+            default_timeout=default_timeout,
+        ),
+        KgenService(),
+        Postgres(),
+    ]
 
     c.silent = True
 
