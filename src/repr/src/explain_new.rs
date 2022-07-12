@@ -32,6 +32,8 @@
 
 use std::{collections::HashSet, fmt};
 
+use mz_ore::str::Indent;
+
 use crate::{ColumnType, GlobalId, ScalarType};
 
 /// Wraps a reference to a type that implements `Display$Format` for a specific
@@ -405,60 +407,18 @@ pub trait Explain<'a>: 'a {
     }
 }
 
-<<<<<<< HEAD
-=======
-/// A helper struct to keep track of indentation levels.
-///
-/// This will be most often used as part of the rendering context
-/// type for various `Display$Format` implementation.
+/// A helper struct which will most commonly be used as the generic
+/// rendering context type `C` for various `Explain$Format`
+/// implementations.
 #[derive(Debug)]
-pub struct Indent {
-    unit: String,
-    buff: String,
+pub struct RenderingContext<'a> {
+    pub indent: Indent,
+    pub humanizer: &'a dyn ExprHumanizer,
 }
 
-impl Indent {
-    pub fn new(unit: char, step: usize) -> Indent {
-        Indent {
-            unit: std::iter::repeat(unit).take(step).collect::<String>(),
-            buff: String::with_capacity(unit.len_utf8()),
-        }
-    }
-
-    fn inc(&mut self, rhs: usize) {
-        for _ in 0..rhs {
-            self.buff += &self.unit;
-        }
-    }
-
-    fn dec(&mut self, rhs: usize) {
-        let tail = rhs.saturating_mul(self.unit.len());
-        let head = self.buff.len().saturating_sub(tail);
-        self.buff.truncate(head);
-    }
-}
-
-impl Default for Indent {
-    fn default() -> Self {
-        Indent::new(' ', 2)
-    }
-}
-
-impl std::ops::AddAssign<usize> for Indent {
-    fn add_assign(&mut self, rhs: usize) {
-        self.inc(rhs)
-    }
-}
-
-impl std::ops::SubAssign<usize> for Indent {
-    fn sub_assign(&mut self, rhs: usize) {
-        self.dec(rhs)
-    }
-}
-
-impl fmt::Display for Indent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.buff)
+impl<'a> RenderingContext<'a> {
+    pub fn new(indent: Indent, humanizer: &'a dyn ExprHumanizer) -> RenderingContext {
+        RenderingContext { indent, humanizer }
     }
 }
 
@@ -505,7 +465,6 @@ impl ExprHumanizer for DummyHumanizer {
     }
 }
 
->>>>>>> 00f828a47... repr: move `ExprHumanizer` to the `explain-new` module
 #[cfg(test)]
 mod tests {
     use super::*;
