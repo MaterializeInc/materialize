@@ -3597,7 +3597,7 @@ impl From<PlanContext> for SerializedPlanContext {
 /// to the catalog stash. This is a separate type to allow us to evolve the
 /// on-disk format independently from the SQL layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum SerializedComputeInstanceReplicaConfig {
+pub enum SerializedComputeInstanceReplicaConfig {
     Remote {
         addrs: BTreeSet<String>,
     },
