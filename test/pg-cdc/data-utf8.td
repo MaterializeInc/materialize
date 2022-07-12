@@ -33,7 +33,7 @@ INSERT INTO t1 VALUES ('това е текст'), ('това ''е'' "текст"
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 

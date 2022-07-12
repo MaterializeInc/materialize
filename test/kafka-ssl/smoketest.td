@@ -38,7 +38,7 @@ contains: cannot drop
 # Ensure non-secrets cannot be used as secrets
 > CREATE TABLE not_a_secret (a int);
 
-! CREATE MATERIALIZED SOURCE data
+! CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       ssl_key_pem = SECRET not_a_secret
@@ -46,7 +46,7 @@ contains: cannot drop
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains: materialize.public.not_a_secret is not a secret
 
-> CREATE MATERIALIZED SOURCE data
+> CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
@@ -140,7 +140,7 @@ $ kafka-verify format=avro sink=materialize.public.env_pw_snk sort-messages=true
 contains:error publishing kafka schemas for sink: unable to publish value schema to registry in kafka sink: server error 401: Unauthorized
 
 # Ensure that we get an ssl error if we forget to set certs
-! CREATE MATERIALIZED SOURCE data
+! CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
@@ -152,7 +152,7 @@ contains:error publishing kafka schemas for sink: unable to publish value schema
 contains:self signed certificate in certificate chain
 
 # missing config
-! CREATE MATERIALIZED SOURCE data
+! CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
@@ -162,7 +162,7 @@ contains:self signed certificate in certificate chain
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:missing SSL KEY (ssl.key.pem)
 
-> CREATE MATERIALIZED SOURCE kafka_connector_source
+> CREATE SOURCE kafka_connector_source
   FROM KAFKA CONNECTION kafka_ssl
   TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -189,7 +189,7 @@ a
     USERNAME = 'materialize',
     PASSWORD = SECRET password_csr;
 
-> CREATE MATERIALIZED SOURCE kafka_csr_connector_source
+> CREATE SOURCE kafka_csr_connector_source
   FROM KAFKA CONNECTION kafka_ssl
     TOPIC 'testdrive-data-${testdrive.seed}'
     FORMAT AVRO

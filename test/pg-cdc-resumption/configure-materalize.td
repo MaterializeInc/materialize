@@ -19,14 +19,14 @@
   PASSWORD SECRET pgpass
 
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES
   CONNECTION pg
   PUBLICATION 'mz_source'
 
 > DROP SOURCE IF EXISTS mz_source_alter CASCADE;
 
-> CREATE MATERIALIZED SOURCE mz_source_alter
+> CREATE SOURCE mz_source_alter
   FROM POSTGRES
   CONNECTION pg
   PUBLICATION 'mz_source_alter'

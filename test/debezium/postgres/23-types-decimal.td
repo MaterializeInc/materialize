@@ -18,7 +18,7 @@ INSERT INTO decimal_type VALUES (NULL), (NULL), (12.345), ('NaN');
 
 $ schema-registry-wait-schema schema=postgres.public.decimal_type-value
 
-> CREATE MATERIALIZED SOURCE decimal_type
+> CREATE SOURCE decimal_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

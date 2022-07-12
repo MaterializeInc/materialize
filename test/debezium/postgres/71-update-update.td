@@ -20,7 +20,7 @@ INSERT INTO update_update VALUES (10);
 
 $ schema-registry-wait-schema schema=postgres.public.update_update-value
 
-> CREATE MATERIALIZED SOURCE update_update
+> CREATE SOURCE update_update
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.update_update'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

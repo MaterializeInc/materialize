@@ -91,12 +91,12 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
 $ kafka-ingest format=avro topic=bar schema=${schema}
 {"array":[{"data":{"a":10,"b":1},"time":1,"diff":1}]}
 
-> CREATE MATERIALIZED SOURCE data_foo
+> CREATE SOURCE data_foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
     WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED SOURCE data_bar
+> CREATE SOURCE data_bar
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bar-${testdrive.seed}'
     WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE

@@ -30,7 +30,7 @@ place""",CA,92679
   FORMAT CSV WITH 3 COLUMNS
 contains:unexpected parameters for CREATE SOURCE: badoption
 
-> CREATE MATERIALIZED SOURCE mismatched_column_count
+> CREATE SOURCE mismatched_column_count
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -43,7 +43,7 @@ contains:unexpected parameters for CREATE SOURCE: badoption
 ! SELECT * FROM mismatched_column_count
 contains:CSV error at record number 1: expected 2 columns, got 3.
 
-> CREATE MATERIALIZED SOURCE matching_column_names
+> CREATE SOURCE matching_column_names
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -59,7 +59,7 @@ city state zip
 ------------------
 Rochester NY 14618
 
-> CREATE MATERIALIZED SOURCE matching_column_names_alias (a, b, c)
+> CREATE SOURCE matching_column_names_alias (a, b, c)
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -75,7 +75,7 @@ a b c
 ----------------
 Rochester NY 14618
 
-> CREATE MATERIALIZED SOURCE mismatched_column_names
+> CREATE SOURCE mismatched_column_names
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -88,7 +88,7 @@ Rochester NY 14618
 ! SELECT * FROM mismatched_column_names
 contains:first mismatched column at index 1 expected=cities actual="city"
 
-> CREATE MATERIALIZED SOURCE mismatched_column_names_count
+> CREATE SOURCE mismatched_column_names_count
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -102,7 +102,7 @@ contains:first mismatched column at index 1 expected=cities actual="city"
 contains:CSV error at record number 1: expected 2 columns, got 3
 
 # Static CSV without headers.
-> CREATE MATERIALIZED SOURCE static_csv
+> CREATE SOURCE static_csv
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -139,7 +139,7 @@ contains:Expected a list of columns in parentheses, found EOF
 4  18446744073709551615
 
 # Static CSV with manual headers.
-> CREATE MATERIALIZED SOURCE static_csv_manual_header (city_man, state_man, zip_man)
+> CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -161,7 +161,7 @@ Rochester      NY         14618
 
 $ kafka-create-topic topic=dynamic
 
-> CREATE MATERIALIZED SOURCE dynamic_csv (city, state, zip)
+> CREATE SOURCE dynamic_csv (city, state, zip)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dynamic-${testdrive.seed}'
   FORMAT CSV WITH 3 COLUMNS
 
@@ -192,7 +192,7 @@ dollars,category
 ,badrow
 badint,
 
-> CREATE MATERIALIZED SOURCE malformed_csv
+> CREATE SOURCE malformed_csv
   FROM S3 DISCOVER OBJECTS MATCHING 'malformed.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -211,7 +211,7 @@ $ s3-put-object bucket=test key=bad-text.csv
 dollars,category
 5161669,\x80
 
-> CREATE MATERIALIZED SOURCE bad_text_csv
+> CREATE SOURCE bad_text_csv
   FROM S3 DISCOVER OBJECTS MATCHING 'bad-text.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -229,7 +229,7 @@ contains:Decode error: Text: CSV error at record number 2: invalid UTF-8
 
 $ kafka-create-topic topic=static-csv-pkne-sink
 
-> CREATE MATERIALIZED SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
+> CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',

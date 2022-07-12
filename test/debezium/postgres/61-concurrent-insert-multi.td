@@ -25,12 +25,12 @@ $ schema-registry-wait-schema schema=postgres.public.insert_multi_table1-value
 
 $ schema-registry-wait-schema schema=postgres.public.insert_multi_table2-value
 
-> CREATE MATERIALIZED SOURCE insert_multi_table1
+> CREATE SOURCE insert_multi_table1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_multi_table1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 
-> CREATE MATERIALIZED SOURCE insert_multi_table2
+> CREATE SOURCE insert_multi_table2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_multi_table2'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

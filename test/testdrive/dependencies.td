@@ -248,7 +248,7 @@ contains:unknown catalog item 'i4'
 
 # Materialized source tests
 
-> CREATE MATERIALIZED SOURCE s3
+> CREATE SOURCE s3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -272,7 +272,7 @@ contains:unknown catalog item 'j1'
 
 # Test cascade deletes all indexes associated with cascaded sources and views
 
-> CREATE MATERIALIZED SOURCE s4
+> CREATE SOURCE s4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -310,7 +310,7 @@ contains:unknown catalog item 'j2'
 
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
-> CREATE MATERIALIZED SOURCE s5
+> CREATE SOURCE s5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 

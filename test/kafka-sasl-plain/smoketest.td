@@ -22,7 +22,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 
 > CREATE SECRET sasl_password AS 'sekurity'
 
-> CREATE MATERIALIZED SOURCE data
+> CREATE SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SASL_SSL',
@@ -71,7 +71,7 @@ $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
 
 # Check environment variables; defined in mzcompose.py
 
-> CREATE MATERIALIZED SOURCE env_pw_data
+> CREATE SOURCE env_pw_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SASL_SSL',
@@ -101,7 +101,7 @@ a
     SASL PASSWORD = SECRET sasl_password,
     SSL CERTIFICATE AUTHORITY = '${arg.ca}';
 
-> CREATE MATERIALIZED SOURCE connector_source
+> CREATE SOURCE connector_source
   FROM KAFKA CONNECTION kafka_sasl
   TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -116,7 +116,7 @@ a
 1
 2
 
-! CREATE MATERIALIZED SOURCE connector_source
+! CREATE SOURCE connector_source
   FROM KAFKA CONNECTION kafka_sasl
   TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (

@@ -19,7 +19,7 @@ b1
 b2
 b3
 
-> CREATE MATERIALIZED SOURCE s3_all
+> CREATE SOURCE s3_all
   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -38,7 +38,7 @@ b1
 b2
 b3
 
-> CREATE MATERIALIZED SOURCE s3_glob_a
+> CREATE SOURCE s3_glob_a
   FROM S3 DISCOVER OBJECTS MATCHING '**/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -54,7 +54,7 @@ a1
 a2
 a3
 
-> CREATE MATERIALIZED SOURCE s3_just_a
+> CREATE SOURCE s3_just_a
   FROM S3 DISCOVER OBJECTS MATCHING 'short/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -75,7 +75,7 @@ c,7
 c,8
 c,9
 
-> CREATE MATERIALIZED SOURCE csv_example (name, counts)
+> CREATE SOURCE csv_example (name, counts)
   FROM S3 DISCOVER OBJECTS MATCHING '*.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -116,7 +116,7 @@ $ s3-put-object bucket=test key=logs/2021/01/01/frontend.log
 46.4.83.163 - - [01/01/2021:00:00:20] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Python/Requests_22"
 173.203.139.108 - - [01/01/2021:00:00:39] "GET /downloads/materialized HTTP/1.1" 404 335 "-" "Python/Requests_22"
 
-> CREATE MATERIALIZED SOURCE frontend_logs
+> CREATE SOURCE frontend_logs
   FROM S3 DISCOVER OBJECTS MATCHING 'logs/**/*.log' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -143,7 +143,7 @@ c1
 c2
 c3
 
-> CREATE MATERIALIZED SOURCE s3_multi
+> CREATE SOURCE s3_multi
   FROM S3 DISCOVER OBJECTS MATCHING 'short/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}', BUCKET SCAN 'testdrive-other-${testdrive.seed}'
   WITH (
@@ -183,7 +183,7 @@ id,value
 4,c
 5,c
 
-> CREATE MATERIALIZED SOURCE s3_csv_headers
+> CREATE SOURCE s3_csv_headers
   FROM S3 DISCOVER OBJECTS MATCHING 'csv/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (

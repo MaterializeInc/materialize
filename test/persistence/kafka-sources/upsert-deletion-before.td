@@ -32,7 +32,7 @@ $ kafka-create-topic topic=upsert-deletion
 $ kafka-ingest format=avro topic=upsert-deletion key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
-> CREATE MATERIALIZED SOURCE upsert_deletion
+> CREATE SOURCE upsert_deletion
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upsert-deletion-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT

@@ -31,7 +31,7 @@ INSERT INTO add_columns VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -63,7 +63,7 @@ INSERT INTO remove_column VALUES (2, 'ab');
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -95,7 +95,7 @@ INSERT INTO alter_column VALUES (2, 'ab');
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -126,7 +126,7 @@ INSERT INTO alter_nullability VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -161,7 +161,7 @@ INSERT INTO alter_drop_pk VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -203,7 +203,7 @@ INSERT INTO alter_extend_column VALUES ('ab');
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -237,7 +237,7 @@ INSERT INTO alter_decimal VALUES (123.45);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -271,7 +271,7 @@ INSERT INTO alter_set_with_oids VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -307,7 +307,7 @@ INSERT INTO alter_set_without_oids VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -342,7 +342,7 @@ INSERT INTO alter_table_rename VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -363,7 +363,7 @@ contains:alter_table_renamed not found
 
 > DROP VIEW alter_table_rename;
 > DROP SOURCE mz_source;
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -393,7 +393,7 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_orig','f2_orig');
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 

@@ -18,7 +18,7 @@ $ kafka-create-topic topic=avro-types-uuid
 $ kafka-ingest format=avro topic=avro-types-uuid schema=${uuid} timestamp=1
 {"f1": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"}
 
-> CREATE MATERIALIZED SOURCE avro_types_uuid
+> CREATE SOURCE avro_types_uuid
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-types-uuid-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${uuid}'
   ENVELOPE NONE

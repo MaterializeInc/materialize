@@ -18,13 +18,13 @@ INSERT INTO t1 VALUES (345);
 
 $ schema-registry-wait-schema schema=sql-server.transaction-value
 
-> CREATE MATERIALIZED SOURCE sqlserver_tx_metadata
+> CREATE SOURCE sqlserver_tx_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.transaction'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE;
 
 # TODO: make sqlserver debezium tx_metadata work.  It doesn't send the END message
-> CREATE MATERIALIZED SOURCE t1
+> CREATE SOURCE t1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.t1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

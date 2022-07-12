@@ -9,14 +9,14 @@
 
 $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_pk-value
 
-> CREATE MATERIALIZED SOURCE delete_table_pk
+> CREATE SOURCE delete_table_pk
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.delete_table_pk'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 
 $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_nopk-value
 
-> CREATE MATERIALIZED SOURCE delete_table_nopk
+> CREATE SOURCE delete_table_nopk
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.delete_table_nopk'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

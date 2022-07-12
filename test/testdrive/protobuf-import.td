@@ -56,7 +56,7 @@ $ kafka-create-topic topic=import partitions=1
 $ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Importer
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
-> CREATE MATERIALIZED SOURCE import FROM
+> CREATE SOURCE import FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Importer' USING SCHEMA FILE '${testdrive.temp-dir}/import.pb'
 
@@ -99,7 +99,7 @@ $ schema-registry-publish subject=testdrive-import-csr-${testdrive.seed}-value s
 $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
-> CREATE MATERIALIZED SOURCE import_csr FROM
+> CREATE SOURCE import_csr FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 

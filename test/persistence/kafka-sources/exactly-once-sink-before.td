@@ -32,7 +32,7 @@ $ kafka-create-topic topic=exactly-once
 $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=2
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
-> CREATE MATERIALIZED SOURCE exactly_once
+> CREATE SOURCE exactly_once
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-exactly-once-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT

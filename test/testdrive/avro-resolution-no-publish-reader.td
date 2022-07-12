@@ -21,7 +21,7 @@ $ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schem
 > DROP SCHEMA IF EXISTS public CASCADE
 > CREATE SCHEMA public
 
-! CREATE MATERIALIZED SOURCE resolution_no_publish_writer
+! CREATE SOURCE resolution_no_publish_writer
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-no-publish-writer-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE

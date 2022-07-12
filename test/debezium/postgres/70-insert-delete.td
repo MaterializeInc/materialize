@@ -18,7 +18,7 @@ INSERT INTO insert_delete VALUES (1);
 
 $ schema-registry-wait-schema schema=postgres.public.insert_delete-value
 
-> CREATE MATERIALIZED SOURCE insert_delete
+> CREATE SOURCE insert_delete
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_delete'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

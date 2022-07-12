@@ -14,7 +14,7 @@ $ kafka-ingest topic=request-log format=bytes
 96.12.83.72 - - [22/Jan/2020 18:59:52] "GET /search/?kw=helper+ins+hennaed HTTP/1.1" 200 -
 
 # Regex explained here: https://www.debuggex.com/r/k48kBEt-lTMUZbaw
-> CREATE MATERIALIZED SOURCE regex_source
+> CREATE SOURCE regex_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-request-log-${testdrive.seed}'
   FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -'
 
@@ -40,7 +40,7 @@ search_kw
 ------------------
 helper+ins+hennaed
 
-> CREATE MATERIALIZED SOURCE regex_source_named_cols (ip, ts, path, search_kw, product_detail_id, code)
+> CREATE SOURCE regex_source_named_cols (ip, ts, path, search_kw, product_detail_id, code)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-request-log-${testdrive.seed}'
   FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
 
@@ -55,7 +55,7 @@ product_detail_id  true      text
 code               true      text
 
 # verify metadata column renaming
-> CREATE MATERIALIZED SOURCE regex_source_renamed_cols (ip, ts, path, search_kw, product_detail_id, code, lineno)
+> CREATE SOURCE regex_source_renamed_cols (ip, ts, path, search_kw, product_detail_id, code, lineno)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-request-log-${testdrive.seed}'
   FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
   INCLUDE OFFSET
@@ -86,7 +86,7 @@ $ kafka-ingest topic=malformed-request-log format=bytes
 this line has invalid UTF-8 and will be cause dataflow errors --> \x80 <--
 96.12.83.72 - - [22/Jan/2020 18:59:52] "GET /search/?kw=helper+ins+hennaed HTTP/1.1" 200 -
 
-> CREATE MATERIALIZED SOURCE bad_regex_source
+> CREATE SOURCE bad_regex_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-malformed-request-log-${testdrive.seed}'
   FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -'
 

@@ -35,7 +35,7 @@ $ kafka-create-topic topic=defaults partitions=1
 $ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb message=Defaults
 {}
 
-> CREATE MATERIALIZED SOURCE defaults FROM
+> CREATE SOURCE defaults FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-defaults-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Defaults' USING SCHEMA FILE '${testdrive.temp-dir}/defaults.pb'
 

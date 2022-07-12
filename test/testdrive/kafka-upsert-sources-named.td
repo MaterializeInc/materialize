@@ -34,7 +34,7 @@ $ kafka-create-topic topic=avroavro
 $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish", "key2": "key2" } {"f1": "fishval", "f2": 1000}
 
-> CREATE MATERIALIZED SOURCE avroavro
+> CREATE SOURCE avroavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-avroavro-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -60,7 +60,7 @@ $ kafka-create-topic topic=single
 $ kafka-ingest format=avro topic=single key-format=avro key-schema=${keyschemasingle} schema=${schema}
 {"key": "fish" } {"f1": "fishval", "f2": 1000}
 
-> CREATE MATERIALIZED SOURCE single
+> CREATE SOURCE single
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-single-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschemasingle}'

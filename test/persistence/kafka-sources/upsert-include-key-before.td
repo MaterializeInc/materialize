@@ -33,7 +33,7 @@ $ kafka-create-topic topic=include-key
 $ kafka-ingest format=avro topic=include-key key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
 {"f1": ${kafka-ingest.iteration}, "key2": 1} {"f2": ${kafka-ingest.iteration}}
 
-> CREATE MATERIALIZED SOURCE include_key
+> CREATE SOURCE include_key
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-include-key-${testdrive.seed}'
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

@@ -23,7 +23,7 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 {"a": 1, "b": 1}
 
 # Materialized sources are synonymous with having an index automatically created
-> CREATE MATERIALIZED SOURCE mz_data
+> CREATE SOURCE mz_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 

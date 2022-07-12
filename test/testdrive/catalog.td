@@ -583,7 +583,7 @@ mz_scheduling_elapsed             system false
 mz_scheduling_histogram           system false
 mz_scheduling_parks               system false
 
-> SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
+> SHOW SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active
 mz_peek_durations
 

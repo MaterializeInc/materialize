@@ -21,7 +21,7 @@ b1
 b2
 b3
 
-> CREATE MATERIALIZED SOURCE s3_all_none
+> CREATE SOURCE s3_all_none
   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-no-compression-${testdrive.seed}'
   COMPRESSION NONE
   WITH (
@@ -58,7 +58,7 @@ b1
 b2
 b3
 
-> CREATE MATERIALIZED SOURCE s3_all_gzip
+> CREATE SOURCE s3_all_gzip
   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-gzip-compression-${testdrive.seed}'
   COMPRESSION GZIP
   WITH (
@@ -93,7 +93,7 @@ b3
 # b2
 # b3
 #
-# > CREATE MATERIALIZED SOURCE s3_all_auto
+# > CREATE SOURCE s3_all_auto
 #   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
 #   COMPRESSION AUTO
 #   WITH (

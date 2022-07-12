@@ -32,7 +32,7 @@ $ kafka-create-topic topic=upsert-modification
 $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
 {"f1": ${kafka-ingest.iteration}} {"f2": "${kafka-ingest.iteration}"}
 
-> CREATE MATERIALIZED SOURCE upsert_modification
+> CREATE SOURCE upsert_modification
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upsert-modification-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
@@ -49,28 +49,28 @@ bírdmore:geese
 mammal1:moose
 bìrd1:
 
-> CREATE MATERIALIZED SOURCE texttext
+> CREATE SOURCE texttext
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE textbytes
+> CREATE SOURCE textbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
   KEY FORMAT TEXT VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE bytesbytes
+> CREATE SOURCE bytesbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
   KEY FORMAT BYTES VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE bytestext
+> CREATE SOURCE bytestext
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
   KEY FORMAT BYTES VALUE FORMAT TEXT

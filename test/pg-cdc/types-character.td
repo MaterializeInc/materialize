@@ -34,7 +34,7 @@ INSERT INTO t1 VALUES ('abc ', 'abc ', 'abc ', 'abc ');
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 

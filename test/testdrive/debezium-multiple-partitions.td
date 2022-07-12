@@ -70,7 +70,7 @@ $ set schema={
 
 $ kafka-create-topic topic=data partitions=3
 
-> CREATE MATERIALIZED SOURCE multipartition
+> CREATE SOURCE multipartition
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM

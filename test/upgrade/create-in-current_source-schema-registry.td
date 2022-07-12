@@ -20,7 +20,7 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema} publish=true
 {"a": 1}
 
-> CREATE MATERIALIZED SOURCE data
+> CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE

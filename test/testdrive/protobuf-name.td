@@ -26,7 +26,7 @@ $ kafka-ingest topic=name format=protobuf descriptor-file=name.pb message=some.w
 {"i": 42}
 
 # Ingesting with the fully-qualified absolute path should work.
-> CREATE MATERIALIZED SOURCE qualified_absolute_path FROM
+> CREATE SOURCE qualified_absolute_path FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-name-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.some.where.Name' USING SCHEMA FILE '${testdrive.temp-dir}/name.pb'
 > SELECT i FROM qualified_absolute_path
@@ -35,7 +35,7 @@ i
 42
 
 # Ingesting with the absolute path should work without the leading dot.
-> CREATE MATERIALIZED SOURCE absolute_path FROM
+> CREATE SOURCE absolute_path FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-name-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE 'some.where.Name' USING SCHEMA FILE '${testdrive.temp-dir}/name.pb'
 > SELECT i FROM absolute_path
@@ -44,11 +44,11 @@ i
 42
 
 # Ingesting without the package prefix should fail.
-! CREATE MATERIALIZED SOURCE absolute_path FROM
+! CREATE SOURCE absolute_path FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-name-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE 'Name' USING SCHEMA FILE '${testdrive.temp-dir}/name.pb'
 contains:protobuf message "Name" not found in file descriptor set
-! CREATE MATERIALIZED SOURCE absolute_path FROM
+! CREATE SOURCE absolute_path FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-name-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Name' USING SCHEMA FILE '${testdrive.temp-dir}/name.pb'
 contains:protobuf message ".Name" not found in file descriptor set

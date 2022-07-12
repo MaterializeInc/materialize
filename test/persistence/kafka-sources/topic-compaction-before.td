@@ -30,7 +30,7 @@ $ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${k
 {"f1": ${kafka-ingest.iteration}} {"f2": "B${kafka-ingest.iteration}"}
 {"f1": ${kafka-ingest.iteration}} {"f2": "C${kafka-ingest.iteration}"}
 
-> CREATE MATERIALIZED SOURCE topic_compaction
+> CREATE SOURCE topic_compaction
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-topic-compaction-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;

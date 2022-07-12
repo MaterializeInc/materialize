@@ -96,7 +96,7 @@ CREATE TABLE "space table" ("space column" INTEGER);
 #
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
-> CREATE MATERIALIZED SOURCE "test_slot_source"
+> CREATE SOURCE "test_slot_source"
   FROM POSTGRES
     CONNECTION pg
     PUBLICATION 'mz_source';
@@ -117,7 +117,7 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
   DATABASE postgres,
   USER postgres,
   PASSWORD SECRET pgpass
-! CREATE MATERIALIZED SOURCE "no_such_host"
+! CREATE SOURCE "no_such_host"
   FROM POSTGRES CONNECTION no_such_host PUBLICATION 'mz_source';
 contains:failed to lookup address information
 
@@ -128,7 +128,7 @@ contains:failed to lookup address information
   DATABASE postgres,
   USER postgres,
   PASSWORD SECRET pgpass
-! CREATE MATERIALIZED SOURCE "no_such_port"
+! CREATE SOURCE "no_such_port"
   FROM POSTGRES CONNECTION no_such_port
   PUBLICATION 'mz_source';
 contains:error connecting to server: Connection refused (os error 111)
@@ -139,7 +139,7 @@ contains:error connecting to server: Connection refused (os error 111)
   DATABASE postgres,
   USER no_such_user,
   PASSWORD SECRET pgpass
-! CREATE MATERIALIZED SOURCE "no_such_user"
+! CREATE SOURCE "no_such_user"
   FROM POSTGRES CONNECTION no_such_user
   PUBLICATION 'mz_source';
 contains:db error: FATAL: role "no_such_user" does not exist
@@ -151,7 +151,7 @@ contains:db error: FATAL: role "no_such_user" does not exist
   DATABASE postgres,
   USER postgres,
   PASSWORD SECRET badpass
-! CREATE MATERIALIZED SOURCE "no_such_password"
+! CREATE SOURCE "no_such_password"
   FROM POSTGRES CONNECTION no_such_password
   PUBLICATION 'mz_source';
 contains:db error: FATAL: password authentication failed for user "postgres"
@@ -161,17 +161,17 @@ contains:db error: FATAL: password authentication failed for user "postgres"
   DATABASE no_such_dbname,
   USER postgres,
   PASSWORD SECRET pgpass
-! CREATE MATERIALIZED SOURCE "no_such_dbname"
+! CREATE SOURCE "no_such_dbname"
   FROM POSTGRES CONNECTION no_such_dbname
   PUBLICATION 'mz_source';
 contains:db error: FATAL: database "no_such_dbname" does not exist
 
-! CREATE MATERIALIZED SOURCE "no_such_publication"
+! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'no_such_publication';
 contains:publication "no_such_publication" does not exist
 
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 

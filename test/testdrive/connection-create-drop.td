@@ -45,7 +45,7 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 > CREATE CONNECTION testconn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-> CREATE MATERIALIZED SOURCE connection_source (first, second)
+> CREATE SOURCE connection_source (first, second)
   FROM KAFKA CONNECTION testconn
   TOPIC 'testdrive-connection_test-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS
@@ -123,7 +123,7 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
   FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}'
 
-> CREATE MATERIALIZED SOURCE csr_source
+> CREATE SOURCE csr_source
     FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csr_test-${testdrive.seed}'
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -139,7 +139,7 @@ id creature
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 
-> CREATE MATERIALIZED SOURCE two_connection_source
+> CREATE SOURCE two_connection_source
   FROM KAFKA CONNECTION broker_connection
   TOPIC 'testdrive-csr_test-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -155,13 +155,13 @@ contains:depended upon by catalog item 'materialize.public.csr_source'
 
 > DROP CONNECTION csr_conn CASCADE
 
-! CREATE MATERIALIZED SOURCE should_fail
+! CREATE SOURCE should_fail
   FROM KAFKA CONNECTION does_not_exist
   TOPIC 'error_topic'
   FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
 
-! CREATE MATERIALIZED SOURCE should_fail
+! CREATE SOURCE should_fail
   FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-csr_test-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
@@ -240,7 +240,7 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
     FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}'
 
-> CREATE MATERIALIZED SOURCE import_connection_csr FROM
+> CREATE SOURCE import_connection_csr FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 

@@ -18,7 +18,7 @@ INSERT INTO enum_type VALUES ('val1'), ('val2');
 
 $ schema-registry-wait-schema schema=postgres.public.enum_type-value
 
-> CREATE MATERIALIZED SOURCE enum_type
+> CREATE SOURCE enum_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.enum_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

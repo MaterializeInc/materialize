@@ -81,7 +81,7 @@ $ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
 
 {"before": null, "after": {"row":{"val": "too late"}}, "source": {"lsn": {"long": 1}, "sequence": {"string": "[\"1\", \"1\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
-> CREATE MATERIALIZED SOURCE pg_dbz
+> CREATE SOURCE pg_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
   ENVELOPE DEBEZIUM

@@ -15,7 +15,7 @@ $ kafka-ingest format=bytes topic=gzip timestamp=1
 hello
 world
 
-> CREATE MATERIALIZED SOURCE gzip
+> CREATE SOURCE gzip
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-gzip-${testdrive.seed}'
   FORMAT TEXT
 > SELECT text FROM gzip
@@ -28,7 +28,7 @@ $ kafka-ingest format=bytes topic=snappy timestamp=1
 hello
 world
 
-> CREATE MATERIALIZED SOURCE snappy
+> CREATE SOURCE snappy
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-snappy-${testdrive.seed}'
   FORMAT TEXT
 > SELECT text FROM snappy
@@ -41,7 +41,7 @@ $ kafka-ingest format=bytes topic=lz4 timestamp=1
 hello
 world
 
-> CREATE MATERIALIZED SOURCE lz4
+> CREATE SOURCE lz4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-lz4-${testdrive.seed}'
   FORMAT TEXT
 > SELECT text FROM lz4
