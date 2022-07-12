@@ -14,14 +14,16 @@ use std::rc::Rc;
 use std::{collections::HashMap, time::Duration};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
+use differential_dataflow::AsCollection;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_ore::iter::IteratorExt;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
+
 use timely::logging::WorkerIdentifier;
 
 use mz_compute_client::logging::LoggingConfig;
-use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
@@ -64,8 +66,6 @@ pub fn construct<A: Allocate>(
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
-        use differential_dataflow::collection::AsCollection;
-
         let (logs, token) = Some(linked).mz_replay(
             scope,
             "reachability logs",
@@ -75,86 +75,14 @@ pub fn construct<A: Allocate>(
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-        let construct_reachability_unarranged = || {
-            let mut flatten = OperatorBuilder::new(
-                "Timely Reachability Logging Flatten ".to_string(),
-                scope.clone(),
-            );
-
-            use timely::dataflow::channels::pact::Pipeline;
-            let mut input = flatten.new_input(&logs, Pipeline);
-
-            let (mut updates_out, updates) = flatten.new_output();
-
-            let mut buffer = Vec::new();
-            flatten.build(move |_capability| {
-                move |_frontiers| {
-                    let updates = updates_out.activate();
-                    let mut updates_session = ConsolidateBuffer::new(updates, 0);
-
-                    input.for_each(|cap, data| {
-                        data.swap(&mut buffer);
-
-                        for (time, worker, (addr, massaged)) in buffer.drain(..) {
-                            let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
-                                * granularity_ms)
-                                as Timestamp;
-                            for (source, port, update_type, ts, diff) in massaged {
-                                updates_session.give(
-                                    &cap,
-                                    (
-                                        (update_type, addr.clone(), source, port, worker, ts),
-                                        time_ms,
-                                        diff,
-                                    ),
-                                );
-                            }
-                        }
-                    });
-                }
-            });
-
-            updates
-                .as_collection()
-                .arrange_core::<_, RowSpine<_, _, _, _>>(
-                    Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
-                    "PreArrange Timely reachability",
-                )
-        };
-
-        let construct_reachability = |key: Vec<_>, value: Vec<_>| {
-            let mut row_buf = Row::default();
-            construct_reachability_unarranged().as_collection(
-                move |(update_type, addr, source, port, worker, ts), _| {
-                    let row_arena = RowArena::default();
-                    let update_type = if *update_type { "source" } else { "target" };
-                    row_buf.packer().push_list(
-                        addr.iter()
-                            .chain_one(&source)
-                            .map(|id| Datum::Int64(*id as i64)),
-                    );
-                    let datums = &[
-                        row_arena.push_unary_row(row_buf.clone()),
-                        Datum::Int64(*port as i64),
-                        Datum::Int64(*worker as i64),
-                        Datum::String(&update_type),
-                        Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
-                    ];
-                    row_buf.packer().extend(key.iter().map(|k| datums[*k]));
-                    let key_row = row_buf.clone();
-                    row_buf.packer().extend(value.iter().map(|k| datums[*k]));
-                    let value_row = row_buf.clone();
-                    (key_row, value_row)
-                },
-            )
-        };
-
         // Restrict results by those logs that are meant to be active.
-        let logs = vec![(LogVariant::Timely(TimelyLog::Reachability))];
+        let logs_active = vec![(LogVariant::Timely(TimelyLog::Reachability))];
 
         let mut result = std::collections::HashMap::new();
-        for variant in logs {
-            if config.active_logs.contains_key(&variant) {
+        for variant in logs_active {
+            let is_active = config.active_logs.contains_key(&variant);
+            let is_sinked = config.sink_logs.contains_key(&variant);
+            if is_active || is_sinked {
                 let key = variant.index_by();
                 let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
                     &key.iter()
@@ -163,23 +91,94 @@ pub fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let updates = construct_reachability(key.clone(), value);
 
-                let trace = updates
-                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
-                    .trace;
-                result.insert(variant.clone(), (trace, Rc::clone(&token)));
-            }
+                // Construct common dataflow. Common will feed into both, active and into sinked
+                let mut flatten = OperatorBuilder::new(
+                    "Timely Reachability Logging Flatten ".to_string(),
+                    scope.clone(),
+                );
 
-            if let Some((id, meta)) = config.sink_logs.get(&variant) {
-                tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
-                let updates = construct_reachability_unarranged();
-                let mut row_buf = Row::default();
-                persist_sink(
-                    *id,
-                    meta,
-                    compute_state,
-                    &updates.as_collection(
+                use timely::dataflow::channels::pact::Pipeline;
+                let mut input = flatten.new_input(&logs, Pipeline);
+
+                let (mut updates_out, updates) = flatten.new_output();
+
+                let mut buffer = Vec::new();
+                flatten.build(move |_capability| {
+                    move |_frontiers| {
+                        let updates = updates_out.activate();
+                        let mut updates_session = ConsolidateBuffer::new(updates, 0);
+
+                        input.for_each(|cap, data| {
+                            data.swap(&mut buffer);
+
+                            for (time, worker, (addr, massaged)) in buffer.drain(..) {
+                                let time_ms = (((time.as_millis() as Timestamp / granularity_ms)
+                                    + 1)
+                                    * granularity_ms)
+                                    as Timestamp;
+                                for (source, port, update_type, ts, diff) in massaged {
+                                    updates_session.give(
+                                        &cap,
+                                        (
+                                            (update_type, addr.clone(), source, port, worker, ts),
+                                            time_ms,
+                                            diff,
+                                        ),
+                                    );
+                                }
+                            }
+                        });
+                    }
+                });
+
+                let common = updates
+                    .as_collection()
+                    .arrange_core::<_, RowSpine<_, _, _, _>>(
+                        Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
+                        "PreArrange Timely reachability",
+                    );
+
+                if is_active {
+                    // Use common to create an arrangement.
+                    let mut row_buf = Row::default();
+                    let updates = common.as_collection(
+                        move |(update_type, addr, source, port, worker, ts), _| {
+                            let row_arena = RowArena::default();
+                            let update_type = if *update_type { "source" } else { "target" };
+                            row_buf.packer().push_list(
+                                addr.iter()
+                                    .chain_one(&source)
+                                    .map(|id| Datum::Int64(*id as i64)),
+                            );
+                            let datums = &[
+                                row_arena.push_unary_row(row_buf.clone()),
+                                Datum::Int64(*port as i64),
+                                Datum::Int64(*worker as i64),
+                                Datum::String(&update_type),
+                                Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                            ];
+                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                            let key_row = row_buf.clone();
+                            row_buf.packer().extend(value.iter().map(|k| datums[*k]));
+                            let value_row = row_buf.clone();
+                            (key_row, value_row)
+                        },
+                    );
+
+                    let trace = updates
+                        .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
+                        .trace;
+                    result.insert(variant.clone(), (trace, Rc::clone(&token)));
+                }
+
+                if is_sinked {
+                    // Use common to create sinked, a timely collection that ouptuts a single value row.
+                    let (id, meta) = config.sink_logs.get(&variant).unwrap();
+                    tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
+
+                    let mut row_buf = Row::default();
+                    let sinked = common.as_collection(
                         move |(update_type, addr, source, port, worker, ts), _| {
                             let row_arena = RowArena::default();
                             let update_type = if *update_type { "source" } else { "target" };
@@ -198,8 +197,9 @@ pub fn construct<A: Allocate>(
                             row_buf.packer().extend(datums);
                             row_buf.clone()
                         },
-                    ),
-                );
+                    );
+                    persist_sink(*id, meta, compute_state, &sinked);
+                }
             }
         }
         result
