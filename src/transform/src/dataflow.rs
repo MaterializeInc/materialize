@@ -128,7 +128,6 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
                 &mut id_gen,
             )?;
             // Install the `new_local` name wherever `global_id` was used.
-            #[allow(deprecated)]
             dataflow.objects_to_build[other]
                 .plan
                 .as_inner_mut()

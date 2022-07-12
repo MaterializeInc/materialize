@@ -672,7 +672,6 @@ impl LiteralLifting {
                         let input_arity = input.arity();
                         for key in keys.iter_mut() {
                             for expr in key.iter_mut() {
-                                #[allow(deprecated)]
                                 expr.visit_mut_post(&mut |e| {
                                     if let MirScalarExpr::Column(c) = e {
                                         if *c >= input_arity {
