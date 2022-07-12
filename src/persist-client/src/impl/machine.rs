@@ -13,7 +13,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -363,12 +363,7 @@ where
                     &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
                     || async {
                         self.consensus
-                            .compare_and_set(
-                                Instant::now() + FOREVER,
-                                &path,
-                                Some(self.state.seqno()),
-                                new.clone(),
-                            )
+                            .compare_and_set(&path, Some(self.state.seqno()), new.clone())
                             .await
                     },
                 )
@@ -391,11 +386,7 @@ where
                         // Bound the number of entries in consensus.
                         let () = retry_external(
                             &self.metrics.retries.external.apply_unbatched_cmd_truncate,
-                            || async {
-                                self.consensus
-                                    .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
-                                    .await
-                            },
+                            || async { self.consensus.truncate(&path, self.state.seqno()).await },
                         )
                         .instrument(debug_span!("apply_unbatched_cmd::truncate"))
                         .await;
@@ -432,7 +423,7 @@ where
 
         let path = shard_id.to_string();
         let mut current = retry_external(&retry_metrics.external.maybe_init_state_head, || async {
-            consensus.head(Instant::now() + FOREVER, &path).await
+            consensus.head(&path).await
         })
         .await;
 
@@ -456,9 +447,7 @@ where
                 state
             );
             let cas_res = retry_external(&retry_metrics.external.maybe_init_state_cas, || async {
-                consensus
-                    .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
-                    .await
+                consensus.compare_and_set(&path, None, new.clone()).await
             })
             .await;
             match cas_res {
@@ -489,11 +478,7 @@ where
         let shard_id = self.shard_id();
         let current = retry_external(
             &self.metrics.retries.external.fetch_and_update_state_head,
-            || async {
-                self.consensus
-                    .head(Instant::now() + FOREVER, &shard_id.to_string())
-                    .await
-            },
+            || async { self.consensus.head(&shard_id.to_string()).await },
         )
         .instrument(trace_span!("fetch_and_update_state::head"))
         .await;
@@ -526,8 +511,6 @@ where
 }
 
 pub const INFO_MIN_ATTEMPTS: usize = 3;
-
-pub const FOREVER: Duration = Duration::from_secs(1_000_000_000);
 
 pub async fn retry_external<R, F, WorkFn>(metrics: &RetryMetrics, mut work_fn: WorkFn) -> R
 where
@@ -909,7 +892,7 @@ mod tests {
         }
         let key = write.machine.shard_id().to_string();
         let consensus_entries = consensus
-            .scan(Instant::now() + FOREVER, &key, SeqNo::minimum())
+            .scan(&key, SeqNo::minimum())
             .await
             .expect("scan failed");
         // Make sure we constructed the key correctly.

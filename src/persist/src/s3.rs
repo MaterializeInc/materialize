@@ -163,8 +163,7 @@ impl S3Blob {
         // Connect before returning success. We don't particularly care about
         // what's stored in this blob (nothing writes to it, so presumably it's
         // empty) just that we were able and allowed to fetch it.
-        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
-        let _ = ret.get(deadline, "HEALTH_CHECK").await?;
+        let _ = ret.get("HEALTH_CHECK").await?;
         Ok(ret)
     }
 
@@ -175,7 +174,7 @@ impl S3Blob {
 
 #[async_trait]
 impl Blob for S3Blob {
-    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -393,7 +392,7 @@ impl Blob for S3Blob {
         Ok(Some(val))
     }
 
-    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
         let mut ret = vec![];
         let mut continuation_token = None;
         let prefix = self.get_path("");
@@ -434,13 +433,7 @@ impl Blob for S3Blob {
         Ok(ret)
     }
 
-    async fn set(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        value: Bytes,
-        _atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
         // NB: S3 is always atomic, so we're free to ignore the atomic param.
         let value_len = value.len();
         if self
@@ -456,7 +449,7 @@ impl Blob for S3Blob {
         }
     }
 
-    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
         let path = self.get_path(key);
         self.client
             .delete_object()
@@ -814,11 +807,7 @@ mod tests {
         {
             let blob = S3Blob::open(config_multipart).await?;
             blob.set_multi_part("multipart", "foobar".into()).await?;
-            let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
-            assert_eq!(
-                blob.get(deadline, "multipart").await?,
-                Some("foobar".into())
-            );
+            assert_eq!(blob.get("multipart").await?, Some("foobar".into()));
         }
 
         Ok(())

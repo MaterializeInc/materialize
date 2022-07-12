@@ -31,7 +31,7 @@ use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::{retry_external, FOREVER};
+use crate::r#impl::machine::retry_external;
 use crate::r#impl::metrics::{BatchWriteMetrics, Metrics};
 use crate::{PersistConfig, ShardId};
 
@@ -136,10 +136,9 @@ where
         // Temporarily removing the deletions while we figure out the bug in
         // case it has anything to do with CI timeouts.
         //
-        // let deadline = Instant::now() + FOREVER;
         // for key in self.blob_keys.iter() {
         //     retry_external("batch::delete", || async {
-        //         self.blob.delete(deadline, key).await
+        //         self.blob.delete(key).await
         //     })
         //     .await;
         // }
@@ -437,13 +436,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                 let payload_len = buf.len();
                 let () = retry_external(&metrics.retries.external.batch_set, || async {
-                    blob.set(
-                        Instant::now() + FOREVER,
-                        &blob_key,
-                        Bytes::clone(&buf),
-                        Atomicity::RequireAtomic,
-                    )
-                    .await
+                    blob.set(&blob_key, Bytes::clone(&buf), Atomicity::RequireAtomic)
+                        .await
                 })
                 .instrument(trace_span!("batch::set", payload_len))
                 .await;

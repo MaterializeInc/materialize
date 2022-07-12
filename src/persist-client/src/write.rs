@@ -547,9 +547,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
-
-    use crate::r#impl::machine::FOREVER;
     use crate::tests::new_test_client;
     use crate::ShardId;
 
@@ -576,21 +573,14 @@ mod tests {
         write.expect_append(&data[..2], vec![0], vec![upper]).await;
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
-        let blob_count_before = blob
-            .list_keys(Instant::now() + FOREVER)
-            .await
-            .expect("list_keys failed")
-            .len();
+        let blob_count_before = blob.list_keys().await.expect("list_keys failed").len();
         for _ in 0..5 {
             let new_upper = upper + 1;
             write.expect_compare_and_append(&[], upper, new_upper).await;
             upper = new_upper;
         }
         assert_eq!(
-            blob.list_keys(Instant::now() + FOREVER)
-                .await
-                .expect("list_keys failed")
-                .len(),
+            blob.list_keys().await.expect("list_keys failed").len(),
             blob_count_before
         );
     }

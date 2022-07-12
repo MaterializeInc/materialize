@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use bytes::Bytes;
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
@@ -61,7 +61,6 @@ fn bench_consensus_compare_and_set_all_iters(
     concurrency: usize,
     num_shards: usize,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(3600);
     b.iter_custom(|iters| {
         // We need to pick random keys because Criterion likes to run this
         // function many times as part of a warmup, and if we deterministically
@@ -98,7 +97,6 @@ fn bench_consensus_compare_and_set_all_iters(
                                 current_seqno.map_or_else(SeqNo::minimum, |x| x.next());
 
                             let fut = consensus.compare_and_set(
-                                deadline,
                                 key,
                                 current_seqno,
                                 VersionedData {
@@ -145,15 +143,9 @@ pub fn bench_blob_get(
     let payload = Bytes::from(workload::flat_blob(&data));
 
     bench_all_blob(&mut g, runtime, data, |b, blob| {
-        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
         let key = ShardId::new().to_string();
         runtime
-            .block_on(blob.set(
-                deadline,
-                &key,
-                Bytes::clone(&payload),
-                Atomicity::RequireAtomic,
-            ))
+            .block_on(blob.set(&key, Bytes::clone(&payload), Atomicity::RequireAtomic))
             .expect("failed to set blob");
         b.iter(|| {
             runtime
@@ -164,8 +156,7 @@ pub fn bench_blob_get(
 }
 
 async fn bench_blob_get_one_iter(blob: &dyn Blob, key: &str) -> Result<(), ExternalError> {
-    let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
-    let value = blob.get(deadline, &key).await?;
+    let value = blob.get(&key).await?;
     assert!(value.is_some());
     Ok(())
 }
@@ -193,15 +184,9 @@ pub fn bench_blob_set(
 }
 
 async fn bench_blob_set_one_iter(blob: &dyn Blob, payload: &Bytes) -> Result<(), ExternalError> {
-    let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
     let key = ShardId::new().to_string();
-    blob.set(
-        deadline,
-        &key,
-        Bytes::clone(payload),
-        Atomicity::RequireAtomic,
-    )
-    .await
+    blob.set(&key, Bytes::clone(payload), Atomicity::RequireAtomic)
+        .await
 }
 
 pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data: &DataGenerator) {

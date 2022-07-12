@@ -597,13 +597,8 @@ impl MetricsBlob {
 
 #[async_trait]
 impl Blob for MetricsBlob {
-    async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        let res = self
-            .metrics
-            .blob
-            .get
-            .run_op(|| self.blob.get(deadline, key))
-            .await;
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        let res = self.metrics.blob.get.run_op(|| self.blob.get(key)).await;
         if let Ok(Some(value)) = res.as_ref() {
             self.metrics
                 .blob
@@ -614,12 +609,12 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
         let res = self
             .metrics
             .blob
             .list_keys
-            .run_op(|| self.blob.list_keys(deadline))
+            .run_op(|| self.blob.list_keys())
             .await;
         if let Ok(keys) = res.as_ref() {
             let bytes = keys.iter().map(|x| x.len()).sum();
@@ -632,19 +627,13 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn set(
-        &self,
-        deadline: Instant,
-        key: &str,
-        value: Bytes,
-        atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let bytes = value.len();
         let res = self
             .metrics
             .blob
             .set
-            .run_op(|| self.blob.set(deadline, key, value, atomic))
+            .run_op(|| self.blob.set(key, value, atomic))
             .await;
         if res.is_ok() {
             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
@@ -652,12 +641,12 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
         // It'd be nice if this could also track bytes somehow.
         self.metrics
             .blob
             .delete
-            .run_op(|| self.blob.delete(deadline, key))
+            .run_op(|| self.blob.delete(key))
             .await
     }
 }
@@ -684,16 +673,12 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
-    async fn head(
-        &self,
-        deadline: Instant,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError> {
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let res = self
             .metrics
             .consensus
             .head
-            .run_op(|| self.consensus.head(deadline, key))
+            .run_op(|| self.consensus.head(key))
             .await;
         if let Ok(Some(data)) = res.as_ref() {
             self.metrics
@@ -707,7 +692,6 @@ impl Consensus for MetricsConsensus {
 
     async fn compare_and_set(
         &self,
-        deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -717,7 +701,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .compare_and_set
-            .run_op(|| self.consensus.compare_and_set(deadline, key, expected, new))
+            .run_op(|| self.consensus.compare_and_set(key, expected, new))
             .await;
         if let Ok(Ok(())) = res.as_ref() {
             self.metrics
@@ -729,17 +713,12 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    async fn scan(
-        &self,
-        deadline: Instant,
-        key: &str,
-        from: SeqNo,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         let res = self
             .metrics
             .consensus
             .scan
-            .run_op(|| self.consensus.scan(deadline, key, from))
+            .run_op(|| self.consensus.scan(key, from))
             .await;
         if let Ok(dataz) = res.as_ref() {
             let bytes = dataz.iter().map(|x| x.data.len()).sum();
@@ -752,16 +731,11 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    async fn truncate(
-        &self,
-        deadline: Instant,
-        key: &str,
-        seqno: SeqNo,
-    ) -> Result<(), ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
         self.metrics
             .consensus
             .truncate
-            .run_op(|| self.consensus.truncate(deadline, key, seqno))
+            .run_op(|| self.consensus.truncate(key, seqno))
             .await
     }
 }

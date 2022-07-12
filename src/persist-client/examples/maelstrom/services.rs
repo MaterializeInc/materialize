@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -64,7 +63,6 @@ impl MaelstromConsensus {
 
     pub async fn hydrate_seqno(
         &self,
-        deadline: Instant,
         key: &str,
         expected: SeqNo,
     ) -> Result<Result<VersionedData, Option<VersionedData>>, ExternalError> {
@@ -78,7 +76,7 @@ impl MaelstromConsensus {
 
         // It wasn't in the cache (must have been set by another process), fetch
         // head and see if that matches.
-        match self.head(deadline, key).await? {
+        match self.head(key).await? {
             Some(current) if current.seqno == expected => Ok(Ok(current)),
             x => Ok(Err(x)),
         }
@@ -87,11 +85,7 @@ impl MaelstromConsensus {
 
 #[async_trait]
 impl Consensus for MaelstromConsensus {
-    async fn head(
-        &self,
-        _deadline: Instant,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError> {
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let value = match self
             .handle
             .lin_kv_read(Value::from(format!("consensus/{}", key)))
@@ -111,7 +105,6 @@ impl Consensus for MaelstromConsensus {
 
     async fn compare_and_set(
         &self,
-        deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -119,7 +112,7 @@ impl Consensus for MaelstromConsensus {
         let create_if_not_exists = expected.is_none();
 
         let from = match expected {
-            Some(expected) => match self.hydrate_seqno(deadline, key, expected).await? {
+            Some(expected) => match self.hydrate_seqno(key, expected).await? {
                 Ok(x) => Value::from(&MaelstromVersionedData::from(x)),
                 Err(x) => return Ok(Err(x)),
             },
@@ -150,28 +143,18 @@ impl Consensus for MaelstromConsensus {
             }) => {
                 // TODO: Parse the current value out of the error string instead
                 // of another service fetch.
-                let current = self.head(deadline, key).await?;
+                let current = self.head(key).await?;
                 Ok(Err(current))
             }
             Err(err) => Err(ExternalError::from(anyhow::Error::new(err))),
         }
     }
 
-    async fn scan(
-        &self,
-        _deadline: Instant,
-        _key: &str,
-        _from: SeqNo,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, _key: &str, _from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         unimplemented!("not yet used")
     }
 
-    async fn truncate(
-        &self,
-        _deadline: Instant,
-        _key: &str,
-        _seqno: SeqNo,
-    ) -> Result<(), ExternalError> {
+    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<(), ExternalError> {
         // No-op until we implement `scan`.
         Ok(())
     }
@@ -191,7 +174,7 @@ impl MaelstromBlob {
 
 #[async_trait]
 impl Blob for MaelstromBlob {
-    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let value = match self
             .handle
             .lin_kv_read(Value::from(format!("blob/{}", key)))
@@ -209,17 +192,11 @@ impl Blob for MaelstromBlob {
         Ok(Some(value))
     }
 
-    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
         unimplemented!("not yet used")
     }
 
-    async fn set(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        value: Bytes,
-        _atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
         // lin_kv_write is always atomic, so we're free to ignore the atomic
         // param.
         let value = serde_json::to_string(value.as_ref()).expect("failed to serialize value");
@@ -230,7 +207,7 @@ impl Blob for MaelstromBlob {
         Ok(())
     }
 
-    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
         // Setting the value to Null is as close as we can get with lin_kv.
         self.handle
             .lin_kv_write(Value::from(format!("blob/{}", key)), Value::Null)
@@ -261,7 +238,7 @@ impl CachingBlob {
 
 #[async_trait]
 impl Blob for CachingBlob {
-    async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         // Fetch the cached value if there is one.
         let cache = self.cache.lock().await;
         if let Some(value) = cache.get(key) {
@@ -271,7 +248,7 @@ impl Blob for CachingBlob {
         drop(cache);
 
         // We didn't get a cache hit, fetch the value and update the cache.
-        let value = self.blob.get(deadline, key).await?;
+        let value = self.blob.get(key).await?;
         if let Some(value) = &value {
             // Everything in persist is write-once modify-never, so until we add
             // support for deletions to CachingBlob, we're free to blindly
@@ -285,25 +262,19 @@ impl Blob for CachingBlob {
         Ok(value)
     }
 
-    async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
-        self.blob.list_keys(deadline).await
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        self.blob.list_keys().await
     }
 
-    async fn set(
-        &self,
-        deadline: Instant,
-        key: &str,
-        value: Bytes,
-        atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         // Intentionally don't put this in the cache on set, so that this blob
         // gets fetched at least once (exercising those code paths).
-        self.blob.set(deadline, key, value, atomic).await
+        self.blob.set(key, value, atomic).await
     }
 
-    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
         self.cache.lock().await.remove(key);
-        self.blob.delete(deadline, key).await
+        self.blob.delete(key).await
     }
 }
 
