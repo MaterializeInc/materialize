@@ -159,7 +159,7 @@ where
                 .iter()
                 .map(|(id, writer)| ProtoWriter {
                     writer_id: id.into_proto(),
-                    last_heartbeat: writer.last_heartbeat,
+                    last_heartbeat_timestamp_ms: writer.last_heartbeat_timestamp_ms,
                 })
                 .collect(),
             trace: Some(self.collections.trace.into_proto()),
@@ -214,7 +214,7 @@ where
             writers.insert(
                 writer_id,
                 WriterState {
-                    last_heartbeat: proto.last_heartbeat,
+                    last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
                 },
             );
         }

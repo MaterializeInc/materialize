@@ -109,11 +109,15 @@ where
         (shard_upper, read_cap)
     }
 
-    pub async fn register_writer(&mut self, writer_id: &WriterId) -> (Upper<T>, WriterState) {
+    pub async fn register_writer(
+        &mut self,
+        writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
+    ) -> (Upper<T>, WriterState) {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, (shard_upper, writer_state)) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
-                state.register_writer(writer_id)
+                state.register_writer(writer_id, heartbeat_timestamp_ms)
             })
             .await;
         (shard_upper, writer_state)
@@ -617,6 +621,15 @@ where
             Err(ExternalError::Indeterminate(x)) => return Err(x),
         }
     }
+}
+
+pub fn system_time() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("failed to get millis since epoch")
+        .as_millis()
+        .try_into()
+        .expect("current time did not fit into u64")
 }
 
 #[cfg(test)]

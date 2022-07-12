@@ -45,7 +45,7 @@ message ProtoReader {
 
 message ProtoWriter {
     string writer_id = 1;
-    uint64 last_heartbeat = 2;
+    uint64 last_heartbeat_timestamp_ms = 2;
 }
 
 message ProtoStateRollup {

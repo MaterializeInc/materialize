@@ -14,7 +14,6 @@ use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -39,8 +38,8 @@ pub struct ReadCapability<T> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WriterState {
-    /// UNIX_EPOCH timestamp of the last time this writer recorded a heartbeat
-    pub last_heartbeat: u64,
+    /// UNIX_EPOCH timestamp (in millis) of this writer's most recent heartbeat
+    pub last_heartbeat_timestamp_ms: u64,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -87,15 +86,13 @@ where
     pub fn register_writer(
         &mut self,
         writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, (Upper<T>, WriterState)> {
         let writer_state = WriterState {
-            // WIP(phemberger): convert to NowFn so we can swap this out for tests
-            //   and default to EPOCH_MILLIS at runtime. should the NowFn live on
-            //   StateCollections?
-            last_heartbeat: SYSTEM_TIME(),
+            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
         };
         self.writers.insert(writer_id.clone(), writer_state.clone());
-        Continue((Upper(self.trace.since().clone()), writer_state))
+        Continue((Upper(self.trace.upper().clone()), writer_state))
     }
 
     pub fn clone_reader(
@@ -476,7 +473,7 @@ mod tests {
         let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
 
         let writer_id = WriterId::new();
-        let _ = state.register_writer(&writer_id);
+        let _ = state.register_writer(&writer_id, 0);
 
         // State is initially empty.
         assert_eq!(state.trace.num_spine_batches(), 0);
@@ -537,7 +534,7 @@ mod tests {
         );
 
         let writer_id = WriterId::new();
-        let _ = state.collections.register_writer(&writer_id);
+        let _ = state.collections.register_writer(&writer_id, 0);
 
         // Advance upper to 5.
         assert!(state
@@ -646,7 +643,7 @@ mod tests {
         assert_eq!(state.next_listen_batch(&Antichain::new()), None);
 
         let writer_id = WriterId::new();
-        let _ = state.collections.register_writer(&writer_id);
+        let _ = state.collections.register_writer(&writer_id, 0);
 
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
         assert!(state
@@ -700,13 +697,13 @@ mod tests {
 
         assert!(state
             .collections
-            .register_writer(&writer_id_one)
+            .register_writer(&writer_id_one, 0)
             .is_continue());
 
         let writer_id_two = WriterId::new();
         assert!(state
             .collections
-            .register_writer(&writer_id_two)
+            .register_writer(&writer_id_two, 0)
             .is_continue());
 
         // Writer is registered and is now eligible to write

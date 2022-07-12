@@ -34,7 +34,7 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::encoding::parse_id;
-use crate::r#impl::machine::{retry_external, Machine};
+use crate::r#impl::machine::{retry_external, system_time, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
 
@@ -404,7 +404,7 @@ impl PersistClient {
             )
         });
         let writer_id = WriterId::new();
-        let (shard_upper, _) = machine.register_writer(&writer_id).await;
+        let (shard_upper, _) = machine.register_writer(&writer_id, system_time()).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
