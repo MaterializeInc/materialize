@@ -37,6 +37,7 @@ use crate::error::InvalidUsage;
 use crate::r#impl::encoding::SerdeSnapshotSplit;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::r#impl::metrics::Metrics;
+use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::Since;
 use crate::ShardId;
 
@@ -79,7 +80,7 @@ impl ReaderId {
 pub struct SnapshotSplit<T> {
     pub(crate) shard_id: ShardId,
     pub(crate) as_of: Antichain<T>,
-    pub(crate) batches: Vec<(String, Description<T>)>,
+    pub(crate) batches: Vec<(PartialBlobKey, Description<T>)>,
 }
 
 /// An iterator over one split of a "snapshot" (the contents of a shard as of
@@ -91,7 +92,7 @@ pub struct SnapshotIter<K, V, T, D> {
     metrics: Arc<Metrics>,
     shard_id: ShardId,
     as_of: Antichain<T>,
-    batches: Vec<(String, Description<T>)>,
+    batches: Vec<(PartialBlobKey, Description<T>)>,
     blob: Arc<dyn Blob + Send + Sync>,
     _phantom: PhantomData<(K, V, T, D)>,
 }
@@ -608,10 +609,10 @@ where
 }
 
 pub(crate) async fn fetch_batch_part<T, UpdateFn>(
-    _shard_id: &ShardId,
+    shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
-    key: &str,
+    key: &PartialBlobKey,
     registered_desc: &Description<T>,
     mut update_fn: UpdateFn,
 ) where
@@ -625,7 +626,7 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     let get_span = debug_span!("fetch_batch::get");
     let value = loop {
         let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
-            blob.get(key).await
+            blob.get(&key.complete(shard_id)).await
         })
         .instrument(get_span.clone())
         .await;

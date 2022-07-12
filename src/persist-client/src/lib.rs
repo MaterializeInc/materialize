@@ -55,6 +55,7 @@ pub(crate) mod r#impl {
     pub mod gc;
     pub mod machine;
     pub mod metrics;
+    pub mod paths;
     pub mod state;
     pub mod trace;
 }
@@ -380,14 +381,15 @@ impl PersistClient {
             gc,
         )
         .await?;
+        let writer_id = WriterId::new();
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.metrics),
+                writer_id.clone(),
             )
         });
-        let writer_id = WriterId::new();
         let (shard_upper, _) = machine.register_writer(&writer_id, (self.cfg.now)()).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
@@ -448,6 +450,7 @@ mod tests {
     use crate::r#impl::state::Upper;
     use crate::read::ListenEvent;
 
+    use crate::r#impl::paths::BlobKey;
     use proptest::prelude::*;
 
     use super::*;
@@ -497,7 +500,7 @@ mod tests {
 
     pub async fn expect_fetch_part<K, V, T, D>(
         blob: &(dyn Blob + Send + Sync),
-        key: &str,
+        key: &BlobKey,
     ) -> (
         BlobTraceBatchPart,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
@@ -509,7 +512,7 @@ mod tests {
         D: Codec64,
     {
         let value = blob
-            .get(key)
+            .get(&key)
             .await
             .expect("failed to fetch part")
             .expect("missing part");

@@ -20,6 +20,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
+use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::write::WriterId;
@@ -50,7 +51,7 @@ pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
     /// Pointers usable to retrieve the updates.
-    pub keys: Vec<String>,
+    pub keys: Vec<PartialBlobKey>,
     /// The number of updates in the batch.
     pub len: usize,
 }
@@ -391,7 +392,10 @@ mod tests {
                 Antichain::from_elem(upper),
                 Antichain::from_elem(T::minimum()),
             ),
-            keys: keys.iter().map(|x| (*x).to_owned()).collect(),
+            keys: keys
+                .iter()
+                .map(|x| PartialBlobKey((*x).to_owned()))
+                .collect(),
             len,
         }
     }
@@ -520,7 +524,7 @@ mod tests {
             Break(Err(InvalidEmptyTimeInterval {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(5),
-                keys: vec!["key1".to_owned()],
+                keys: vec![PartialBlobKey("key1".to_owned())],
             }))
         );
 
