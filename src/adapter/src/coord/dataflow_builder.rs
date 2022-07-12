@@ -437,8 +437,7 @@ pub fn prep_scalar_expr(
             session,
         } => expr.try_visit_mut_post(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(f) = e {
-                let evaled = eval_unmaterializable_func(state, f, logical_time, session)?;
-                *e = evaled;
+                *e = eval_unmaterializable_func(state, f, logical_time, session)?;
             }
             Ok(())
         }),
