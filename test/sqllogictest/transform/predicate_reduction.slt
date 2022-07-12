@@ -40,13 +40,13 @@ query T multiline
 EXPLAIN SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
 ----
 Source materialize.public.t1 (u1):
-| Filter isnull(#0)
+| Filter (#0) IS NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter isnull(#0)
+| Filter (#0) IS NULL
 
 EOF
 
@@ -97,7 +97,7 @@ EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t1 WHERE (f1 is null)::int - 1 = 0 a
 %2 =
 | Join %0 %1
 | | implementation = Unimplemented
-| Filter (((boolean_to_integer(isnull(#0)) - 1) = 0) && (isnull(#0) || ((boolean_to_integer(isnull(#0)) - 1) = 0)))
+| Filter (((boolean_to_integer((#0) IS NULL) - 1) = 0) && ((#0) IS NULL || ((boolean_to_integer((#0) IS NULL) - 1) = 0)))
 
 EOF
 

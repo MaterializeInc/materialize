@@ -10,7 +10,7 @@
 use mz_repr::strconv;
 
 sqlfunc!(
-    #[sqlname = "!"]
+    #[sqlname = "NOT"]
     #[preserves_uniqueness = true]
     fn not(a: bool) -> bool {
         !a

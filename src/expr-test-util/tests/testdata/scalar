@@ -20,7 +20,7 @@ build-scalar
 build-scalar
 (call_unary not #200)
 ----
-!(#200)
+NOT(#200)
 
 build-scalar
 (call_binary add_int32 (call_unary neg_int32 #21) (1 int32))
@@ -45,7 +45,7 @@ build-scalar
 build-scalar
 (call_unary is_null null)
 ----
-isnull(null)
+(null) IS NULL
 
 build-scalar
 ("1999-12-31 23:42:23.342" timestamp)

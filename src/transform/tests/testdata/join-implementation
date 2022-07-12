@@ -38,14 +38,14 @@ opt
 ----
 %0 =
 | Get x (u0)
-| Filter ((isnull(#0) && isnull(#1)) || (#0 = #1)), ((isnull(#0) && isnull(#2)) || (#0 = #2)), ((isnull(#1) && isnull(#2)) || (#1 = #2))
+| Filter (((#0) IS NULL && (#1) IS NULL) || (#0 = #1)), (((#0) IS NULL && (#2) IS NULL) || (#0 = #2)), (((#1) IS NULL && (#2) IS NULL) || (#1 = #2))
 
 opt
 (join [(get x)] [[#0 #2 #1 #2]])
 ----
 %0 =
 | Get x (u0)
-| Filter ((isnull(#0) && isnull(#1)) || (#0 = #1)), ((isnull(#0) && isnull(#2)) || (#0 = #2)), ((isnull(#1) && isnull(#2)) || (#1 = #2))
+| Filter (((#0) IS NULL && (#1) IS NULL) || (#0 = #1)), (((#0) IS NULL && (#2) IS NULL) || (#0 = #2)), (((#1) IS NULL && (#2) IS NULL) || (#1 = #2))
 
 opt
 (join [(get x)] [[#0 #1 5]])

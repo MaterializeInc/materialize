@@ -718,7 +718,7 @@ Source materialize.public.t (u7):
 Query:
 %0 =
 | Get materialize.public.t (u7)
-| Map isnull(#0)
+| Map (#0) IS NULL
 | Project (#2)
 
 EOF
@@ -732,7 +732,7 @@ Source materialize.public.t (u7):
 Query:
 %0 =
 | Get materialize.public.t (u7)
-| Map isnull(#0)
+| Map (#0) IS NULL
 | Project (#2)
 
 EOF
@@ -746,7 +746,7 @@ Source materialize.public.t (u7):
 Query:
 %0 =
 | Get materialize.public.t (u7)
-| Map isnull(#0)
+| Map (#0) IS NULL
 | Project (#2)
 
 EOF
@@ -764,7 +764,7 @@ Source materialize.public.t (u7):
 Query:
 %0 =
 | Get materialize.public.t (u7)
-| Map isnull((integer_to_boolean(#0) && integer_to_boolean(#1)))
+| Map ((integer_to_boolean(#0) && integer_to_boolean(#1))) IS NULL
 | Project (#2)
 
 EOF

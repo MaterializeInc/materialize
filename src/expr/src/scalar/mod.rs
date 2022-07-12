@@ -1309,6 +1309,18 @@ impl MirScalarExpr {
     }
 }
 
+/// If the unary_func represents "IS X", return X.
+///
+/// A helper method for being able to print Not(IsX) as IS NOT X.
+fn is(unary_func: &UnaryFunc) -> Option<&'static str> {
+    match unary_func {
+        UnaryFunc::IsNull(_) => Some("NULL"),
+        UnaryFunc::IsTrue(_) => Some("TRUE"),
+        UnaryFunc::IsFalse(_) => Some("FALSE"),
+        _ => None,
+    }
+}
+
 impl fmt::Display for MirScalarExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         use MirScalarExpr::*;
@@ -1318,7 +1330,23 @@ impl fmt::Display for MirScalarExpr {
             Literal(Err(e), _) => write!(f, "(err: {})", e)?,
             CallUnmaterializable(func) => write!(f, "{}()", func)?,
             CallUnary { func, expr } => {
-                write!(f, "{}({})", func, expr)?;
+                if let UnaryFunc::Not(_) = *func {
+                    if let CallUnary {
+                        func,
+                        expr: inner_expr,
+                    } = &**expr
+                    {
+                        if let Some(is) = is(func) {
+                            write!(f, "({}) IS NOT {}", inner_expr, is)?;
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Some(is) = is(func) {
+                    write!(f, "({}) IS {}", expr, is)?;
+                } else {
+                    write!(f, "{}({})", func, expr)?;
+                }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {

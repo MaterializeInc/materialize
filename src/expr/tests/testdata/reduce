@@ -25,7 +25,7 @@ reduce
 )
 [int32]
 ----
-isnull(#0)
+(#0) IS NULL
 
 reduce
 (
@@ -34,26 +34,26 @@ reduce
 )
 [jsonb]
 ----
-isnull(#0)
+(#0) IS NULL
 
 # IsNull around a single BinaryFunc.
 
 reduce
 (call_unary is_null (call_binary add_int_32 #1 #0)) [(int32 false) (int32 false)]
 ----
-(isnull(#0) || isnull(#1))
+((#0) IS NULL || (#1) IS NULL)
 
 reduce
 (call_unary is_null (call_binary and #1 #0)) [(bool false) (bool false)]
 ----
-isnull((#0 && #1))
+((#0 && #1)) IS NULL
 
 reduce
 (call_unary is_null
     (call_binary (jsonb_get_int64 false) #1 #0))
 [(jsonb false) (int64 false)]
 ----
-isnull((#1 -> #0))
+((#1 -> #0)) IS NULL
 
 # IsNull around multiple functions
 
@@ -84,7 +84,7 @@ reduce
 )
 [int32]
 ----
-isnull(#0)
+(#0) IS NULL
 
 reduce
 (
@@ -95,7 +95,7 @@ reduce
 )
 [int32]
 ----
-isnull(#0)
+(#0) IS NULL
 
 reduce
 (
@@ -105,7 +105,7 @@ reduce
 )
 [int32 int32 int32]
 ----
-(isnull(#1) || (isnull(#0) || isnull(#2)))
+((#1) IS NULL || ((#0) IS NULL || (#2) IS NULL))
 
 # Null-propagating UnaryFunc around BinaryFunc
 reduce
@@ -116,7 +116,7 @@ reduce
 )
 [(int32 false) (int32 false)]
 ----
-(isnull(#0) || isnull(#1))
+((#0) IS NULL || (#1) IS NULL)
 
 # Non-null-propagating UnaryFunc around BinaryFunc
 reduce
@@ -136,7 +136,7 @@ reduce
 )
 [string bool]
 ----
-isnull(#0)
+(#0) IS NULL
 
 # Non-null-propagating BinaryFunc around UnaryFuncs
 reduce
@@ -148,7 +148,7 @@ reduce
 )
 [string bool]
 ----
-isnull((isnull(#1) || text_to_boolean(#0)))
+(((#1) IS NULL || text_to_boolean(#0))) IS NULL
 
 # outer is_null needs to be resolved in a second round.
 
@@ -161,7 +161,7 @@ reduce
 )
 [string bool]
 ----
-isnull(#0)
+(#0) IS NULL
 
 # Constant folding
 
@@ -194,7 +194,7 @@ reduce
 )
 [(int32 false) (int32 false)]
 ----
-(!(isnull(#0)) && !(isnull(#1)))
+((#0) IS NOT NULL && (#1) IS NOT NULL)
 
 canonicalize
 [(call_unary not
@@ -202,8 +202,8 @@ canonicalize
 )]
 [(int32 false) (int32 false)]
 ----
-!(isnull(#0))
-!(isnull(#1))
+(#0) IS NOT NULL
+(#1) IS NOT NULL
 
 reduce
 (
@@ -229,7 +229,7 @@ reduce
 )
 [(bool) (int32 false) (int32 false)]
 ----
-(#0 || (#1 >= !(#2)))
+(#0 || (#1 >= NOT(#2)))
 
 reduce
 (
@@ -242,7 +242,7 @@ reduce
 )
 [bool bool bool]
 ----
-(#0 || (#2 && !(#1)))
+(#0 || (#2 && NOT(#1)))
 
 # undistribute and/or
 
@@ -253,7 +253,7 @@ reduce
         (call_binary and (call_unary not #1) #2))
 [bool bool bool]
 ----
-(!(#1) && (#0 || #2))
+(NOT(#1) && (#0 || #2))
 
 reduce
 (call_unary not
@@ -262,14 +262,14 @@ reduce
         (call_binary and #1 #2)))
 [bool bool bool]
 ----
-(!(#1) || (!(#0) && !(#2)))
+(NOT(#1) || (NOT(#0) && NOT(#2)))
 
 reduce
 (call_unary not (call_binary and (call_binary or #1 #0)
         (call_binary or #1 #2)))
 [bool bool bool]
 ----
-(!(#1) && (!(#0) || !(#2)))
+(NOT(#1) && (NOT(#0) || NOT(#2)))
 
 reduce
 (call_binary and
@@ -278,7 +278,7 @@ reduce
 )
 [int64 int32 int32]
 ----
-(isnull(#0) || (isnull(#1) && isnull(#2)))
+((#0) IS NULL || ((#1) IS NULL && (#2) IS NULL))
 
 reduce
 (call_binary and (call_binary or (call_binary or #0 #1) (call_binary gt #2 2))
@@ -344,13 +344,13 @@ reduce
 (if (call_binary gt #0 #1) false true)
 [int32 int32]
 ----
-((isnull(#0) || isnull(#1)) || (#0 <= #1))
+(((#0) IS NULL || (#1) IS NULL) || (#0 <= #1))
 
 reduce
 (if (call_binary gt #0 #1) false (null bool))
 [int32 int32]
 ----
-(null && ((isnull(#0) || isnull(#1)) || (#0 <= #1)))
+(null && (((#0) IS NULL || (#1) IS NULL) || (#0 <= #1)))
 
 reduce
 (if (call_binary gt #0 #1) false false)
@@ -369,20 +369,20 @@ reduce
 (if (call_binary gt #0 #1) (null bool) false)
 [int32 int32]
 ----
-(null && ((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1)))
+(null && (((#0) IS NOT NULL && (#1) IS NOT NULL) && (#0 > #1)))
 
 # non-literal expression in the THEN clause
 reduce
 (if (call_binary gt #0 #1) true false)
 [int32 int32]
 ----
-((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1))
+(((#0) IS NOT NULL && (#1) IS NOT NULL) && (#0 > #1))
 
 reduce
 (if (call_binary gt #0 #1) true (null bool))
 [int32 int32]
 ----
-(null || ((!(isnull(#0)) && !(isnull(#1))) && (#0 > #1)))
+(null || (((#0) IS NOT NULL && (#1) IS NOT NULL) && (#0 > #1)))
 
 reduce
 (if (call_binary gt #0 #1) (call_binary eq #0 (1 int32)) true)
@@ -394,7 +394,7 @@ reduce
 (if (call_binary gt #0 #1) (null bool) true)
 [int32 int32]
 ----
-(null || ((isnull(#0) || isnull(#1)) || (#0 <= #1)))
+(null || (((#0) IS NULL || (#1) IS NULL) || (#0 <= #1)))
 
 reduce
 (if (call_binary gt #0 #1) true true)
@@ -559,8 +559,8 @@ canonicalize
     (call_unary is_null #1) (call_unary is_null #3)))))]
 [float64 float64 float64 float64]
 ----
-!(isnull(#1))
-(!(isnull(#3)) || (#0 < #2))
+(#1) IS NOT NULL
+((#3) IS NOT NULL || (#0 < #2))
 
 canonicalize
 [(call_binary or
@@ -570,8 +570,8 @@ canonicalize
         (call_binary lt #0 #2)))]
 [float64 float64 float64 float64]
 ----
-!(isnull(#1))
-(!(isnull(#3)) || (#0 < #2))
+(#1) IS NOT NULL
+((#3) IS NOT NULL || (#0 < #2))
 
 # expressions in equivalence classes only become simpler.
 
@@ -767,7 +767,7 @@ canonicalize-join
 ]
 [int32 int32 int32 int32]
 ----
-[#0 (isnull(#2) || isnull(#3))]
+[#0 ((#2) IS NULL || (#3) IS NULL)]
 [(#2 + #3) coalesce(#0, #1, false)]
 
 # impossible condition detection during predicate canonicalization produces

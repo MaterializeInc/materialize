@@ -28,7 +28,7 @@ query T multiline
 EXPLAIN SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
@@ -37,7 +37,7 @@ Source materialize.public.t2 (u2):
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy ()
 
 %1 =

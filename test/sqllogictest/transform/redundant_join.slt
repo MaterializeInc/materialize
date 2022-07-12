@@ -18,13 +18,13 @@ EXPLAIN
 SELECT * FROM t1, (SELECT DISTINCT f1 % 2 AS F FROM t1) T WHERE t1.f1 % 2 = t.f;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Map (#0 % 2)
 
 EOF
@@ -35,7 +35,7 @@ SELECT * FROM v1, (SELECT DISTINCT (v1.t1).f1 as f1 FROM v1) Y WHERE (v1.t1).f1 
 ----
 %0 =
 | Get materialize.public.v1 (u2)
-| Filter !(isnull(record_get[0](#0)))
+| Filter (record_get[0](#0)) IS NOT NULL
 | Map record_get[0](#0)
 
 EOF

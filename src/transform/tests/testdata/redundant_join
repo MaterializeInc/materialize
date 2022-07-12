@@ -84,7 +84,7 @@ build apply=RedundantJoin
 %1 =
 | Join %0
 | | implementation = Unimplemented
-| Map #0, #0, (#0 + 1), isnull(#0), record_create(#0), if (#0 = 0) then {1} else {2}
+| Map #0, #0, (#0 + 1), (#0) IS NULL, record_create(#0), if (#0 = 0) then {1} else {2}
 | Project (#2..=#7, #0, #1)
 ----
 ----
@@ -106,7 +106,7 @@ build apply=RedundantJoin
 %1 =
 | Join %0
 | | implementation = Unimplemented
-| Map #0, #0, (#0 + 1), isnull(#0)
+| Map #0, #0, (#0 + 1), (#0) IS NULL
 | Project (#2..=#5, #0, #1)
 ----
 ----
@@ -130,7 +130,7 @@ build apply=RedundantJoin
 %1 =
 | Join %0
 | | implementation = Unimplemented
-| Map isnull(#0), (#0 + 1), #0, #0
+| Map (#0) IS NULL, (#0 + 1), #0, #0
 | Project (#2..=#5, #0, #1)
 ----
 ----

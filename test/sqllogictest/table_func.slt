@@ -243,13 +243,13 @@ query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 Source materialize.public.x (u2):
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 = Let l0 =
 | Get materialize.public.x (u2)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 
 %1 =
 | Get %0 (l0)
@@ -268,13 +268,13 @@ query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 Source materialize.public.x (u2):
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 = Let l0 =
 | Get materialize.public.x (u2)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 
 %1 =
 | Get %0 (l0)
@@ -295,13 +295,13 @@ query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
 Source materialize.public.x (u2):
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 = Let l0 =
 | Get materialize.public.x (u2)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 
 %1 =
 | Get %0 (l0)

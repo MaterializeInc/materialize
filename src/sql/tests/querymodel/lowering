@@ -227,7 +227,7 @@ c from x where x.b is not null) z on y.a = z.b
 | Get %2 (l1)
 | | types = (Int32, Int64?, Int32?)
 | | keys = ()
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | | types = (Int32, Int64, Int32?)
 | | keys = ()
 | Project (#0..=#2)

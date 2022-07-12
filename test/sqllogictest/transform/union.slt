@@ -195,7 +195,7 @@ query T multiline
 EXPLAIN SELECT a1.* FROM t3 AS a1 LEFT JOIN t2 AS a2 ON (a1.f1 = a2.nokey);
 ----
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#1)
 
 Source materialize.public.t3 (u3):
@@ -204,12 +204,12 @@ Source materialize.public.t3 (u3):
 Query:
 %0 =
 | Get materialize.public.t3 (u3)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#1)
 
 %2 = Let l0 =

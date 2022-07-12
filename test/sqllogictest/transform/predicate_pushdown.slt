@@ -187,22 +187,22 @@ EXPLAIN
 SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND t1.f2 = t2.f2 AND t1.f1 + t2.f2 = t2.f1 + t1.f2;
 ----
 Source materialize.public.t1 (u3):
-| Filter !(isnull(#0)), !(isnull(#1))
+| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.t2 (u4):
-| Filter !(isnull(#0)), !(isnull(#1))
+| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u3)
-| Filter !(isnull(#0)), !(isnull(#1))
+| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
 | ArrangeBy (#0, #1)
 
 %1 =
 | Get materialize.public.t2 (u4)
-| Filter !(isnull(#0)), !(isnull(#1))
+| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= #0 #2) (= #1 #3)
