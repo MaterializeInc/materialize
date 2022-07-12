@@ -25,7 +25,7 @@ $ kafka-ingest format=avro topic=envelope-none schema=${schema} publish=true rep
 $ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${schema} schema=${schema} publish=true repeat=5000
 {"f1": ${kafka-ingest.iteration}} {"f1": ${kafka-ingest.iteration}}
 
-> CREATE MATERIALIZED SOURCE envelope_none
+> CREATE SOURCE envelope_none
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-envelope-none-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset

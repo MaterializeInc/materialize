@@ -40,7 +40,7 @@ $ kafka-create-topic topic=wide-data-ten
 $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
-> CREATE MATERIALIZED SOURCE wide_data_ten
+> CREATE SOURCE wide_data_ten
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-wide-data-ten-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE;
@@ -54,7 +54,7 @@ $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keys
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;
 
-> CREATE MATERIALIZED SOURCE wide_data_source
+> CREATE SOURCE wide_data_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-wide-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   INCLUDE KEY AS key2

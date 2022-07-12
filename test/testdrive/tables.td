@@ -100,7 +100,7 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"id": "valid1", "a": 2, "b": 1}
 
-> CREATE MATERIALIZED SOURCE data
+> CREATE SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 

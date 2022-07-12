@@ -18,12 +18,12 @@ COMMIT;
 
 $ schema-registry-wait-schema schema=mysql.transaction-value
 
-> CREATE MATERIALIZED SOURCE mysql_tx_metadata
+> CREATE SOURCE mysql_tx_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'mysql.transaction'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE;
 
-> CREATE MATERIALIZED SOURCE t1
+> CREATE SOURCE t1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'mysql.test.t1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM (

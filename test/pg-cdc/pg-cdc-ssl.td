@@ -58,7 +58,7 @@ $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
   USER host,
   SSL MODE disable,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
@@ -89,7 +89,7 @@ contains: invalid CONNECTION: unknown SSL MODE "prefer"
   USER host,
   SSL MODE require,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
@@ -112,7 +112,7 @@ DELETE FROM numbers WHERE number = 2;
   USER hostssl,
   SSL MODE disable,
   DATABASE postgres;
-! CREATE MATERIALIZED SOURCE "mz_source"
+! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl", database "postgres", SSL off
@@ -124,7 +124,7 @@ contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl"
   USER hostssl,
   SSL MODE require,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
@@ -147,7 +147,7 @@ DELETE FROM numbers WHERE number = 2;
   USER hostssl,
   SSL MODE verify_ca,
   DATABASE postgres;
-! CREATE MATERIALIZED SOURCE "mz_source"
+! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 contains:self signed certificate in certificate chain
@@ -160,7 +160,7 @@ contains:self signed certificate in certificate chain
   SSL MODE verify_ca,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
@@ -183,7 +183,7 @@ DELETE FROM numbers WHERE number = 2;
   USER hostssl,
   SSL MODE verify_full,
   DATABASE postgres;
-! CREATE MATERIALIZED SOURCE "mz_source"
+! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 contains:self signed certificate in certificate chain
@@ -196,7 +196,7 @@ contains:self signed certificate in certificate chain
   SSL MODE verify_full,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
@@ -219,7 +219,7 @@ DELETE FROM numbers WHERE number = 2;
   USER hostnossl,
   SSL MODE disable,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
@@ -242,7 +242,7 @@ DELETE FROM numbers WHERE number = 2;
   USER hostnossl,
   SSL MODE require,
   DATABASE postgres;
-! CREATE MATERIALIZED SOURCE "mz_source"
+! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnossl", database "postgres", SSL on
@@ -254,7 +254,7 @@ contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnoss
   USER hostnossl,
   SSL MODE verify_ca,
   DATABASE postgres;
-! CREATE MATERIALIZED SOURCE "mz_source"
+! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 contains:self signed certificate in certificate chain
@@ -266,7 +266,7 @@ contains:self signed certificate in certificate chain
   USER hostnossl,
   SSL MODE verify_full,
   DATABASE postgres;
-! CREATE MATERIALIZED SOURCE "mz_source"
+! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source';
 contains:self signed certificate in certificate chain
@@ -281,7 +281,7 @@ contains:self signed certificate in certificate chain
   SSL KEY SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source'
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
@@ -305,7 +305,7 @@ DELETE FROM numbers WHERE number = 2;
   SSL MODE verify_ca,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
-! CREATE MATERIALIZED SOURCE "mz_source"
+! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source'
 contains:db error: FATAL: connection requires a valid client certificate
@@ -320,7 +320,7 @@ contains:db error: FATAL: connection requires a valid client certificate
   SSL KEY SECRET ssl_wrong_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
-! CREATE MATERIALIZED SOURCE "mz_source"
+! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source'
 contains:db error: FATAL: certificate authentication failed for user "certuser"
@@ -335,7 +335,7 @@ contains:db error: FATAL: certificate authentication failed for user "certuser"
   SSL KEY SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source'
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")
@@ -361,7 +361,7 @@ DELETE FROM numbers WHERE number = 2;
   SSL KEY SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn
   PUBLICATION 'mz_source'
 > CREATE VIEWS FROM SOURCE "mz_source" ("numbers")

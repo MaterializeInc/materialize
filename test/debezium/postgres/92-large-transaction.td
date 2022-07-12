@@ -50,19 +50,19 @@ $ schema-registry-wait-schema schema=postgres.public.large_distinct_rows-value
 
 $ schema-registry-wait-schema schema=postgres.public.large_same_rows-value
 
-> CREATE MATERIALIZED SOURCE postgres_tx_metadata
+> CREATE SOURCE postgres_tx_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.transaction'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE;
 
-> CREATE MATERIALIZED SOURCE large_distinct_rows
+> CREATE SOURCE large_distinct_rows
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.large_distinct_rows'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE postgres_tx_metadata, COLLECTION 'public.large_distinct_rows')
   );
 
-> CREATE MATERIALIZED SOURCE large_same_rows
+> CREATE SOURCE large_same_rows
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.large_same_rows'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM (

@@ -35,7 +35,7 @@ $ kafka-create-topic topic=kafka-counters
 $ kafka-ingest format=avro topic=kafka-counters key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count}
 {"f1": "a${kafka-ingest.iteration}"} {"f2": "a${kafka-ingest.iteration}"}
 
-> CREATE MATERIALIZED SOURCE kafka_counters
+> CREATE SOURCE kafka_counters
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-counters-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT

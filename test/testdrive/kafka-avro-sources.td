@@ -108,7 +108,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True", "e": null, "f": null}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
 # We should refuse to create a source with invalid WITH options
-! CREATE MATERIALIZED SOURCE invalid_with_option
+! CREATE SOURCE invalid_with_option
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (badoption = true)
   FORMAT AVRO USING SCHEMA '${schema}'
@@ -122,7 +122,7 @@ name
 
 # Create a source using an inline schema.
 
-> CREATE MATERIALIZED SOURCE data_schema_inline
+> CREATE SOURCE data_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
@@ -139,7 +139,7 @@ a  b  json                     c            d             e                   f
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound  "(43,,\"(44,-1)\")" (45,-2)
 -1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
 
-> CREATE MATERIALIZED SOURCE fast_forwarded
+> CREATE SOURCE fast_forwarded
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (start_offset=2)
   FORMAT AVRO USING SCHEMA '${schema}'
@@ -166,7 +166,7 @@ a  b  json                     c            d             e                   f
 # Create a source using a file schema. This should fail if the named schema file
 # does not exist.
 
-! CREATE MATERIALIZED SOURCE data_schema_file
+! CREATE SOURCE data_schema_file
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA FILE 'data-schema.json'
   ENVELOPE DEBEZIUM
@@ -175,7 +175,7 @@ contains:No such file or directory
 $ file-append path=data-schema.json
 \${schema}
 
-> CREATE MATERIALIZED SOURCE data_schema_file
+> CREATE SOURCE data_schema_file
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
   ENVELOPE DEBEZIUM
@@ -210,7 +210,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 {"a": 1, "b": 2}
 {"a": 2, "b": 3}
 
-> CREATE MATERIALIZED SOURCE non_dbz_data
+> CREATE SOURCE non_dbz_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -223,14 +223,14 @@ a b
 
 # test INCLUDE metadata
 
-! CREATE MATERIALIZED SOURCE non_dbz_data_metadata
+! CREATE SOURCE non_dbz_data_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   INCLUDE TOPIC
   ENVELOPE NONE
 contains:INCLUDE TOPIC not yet supported
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_metadata
+> CREATE SOURCE non_dbz_data_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   INCLUDE PARTITION, OFFSET
@@ -242,7 +242,7 @@ a b partition offset
 1 2 0         1
 2 3 0         2
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_metadata_named
+> CREATE SOURCE non_dbz_data_metadata_named
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   INCLUDE PARTITION as part, OFFSET as mzo
@@ -264,7 +264,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-s
 $ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-schema} timestamp=1 partition=0
 {"a": 1, "b": 2}
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition
+> CREATE SOURCE non_dbz_data_multi_partition
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   WITH (start_offset=1)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -275,7 +275,7 @@ a  b
 -----
 4  1
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_2
+> CREATE SOURCE non_dbz_data_multi_partition_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   WITH (start_offset=[0,0])
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -287,7 +287,7 @@ a  b
 1  2
 4  1
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_fast_forwarded
+> CREATE SOURCE non_dbz_data_multi_partition_fast_forwarded
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   WITH (start_offset=[0,1])
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -298,7 +298,7 @@ a  b
 ----
 1  2
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_fast_forwarded_2
+> CREATE SOURCE non_dbz_data_multi_partition_fast_forwarded_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   WITH (start_offset=[1,0])
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -316,7 +316,7 @@ $ kafka-create-topic topic=non-dbz-data-varying-partition partitions=1
 $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz-schema} timestamp=1 partition=0
 {"a": 5, "b": 6}
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition
+> CREATE SOURCE non_dbz_data_varying_partition
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
   WITH (start_offset=1, topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -325,7 +325,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 > SELECT * FROM non_dbz_data_varying_partition
 
 # Erroneously adds start_offsets for non-existent partitions.
-> CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_2
+> CREATE SOURCE non_dbz_data_varying_partition_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
   WITH (start_offset=[0,1], topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -361,7 +361,7 @@ a  b
 5  6
 9  10
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_3
+> CREATE SOURCE non_dbz_data_varying_partition_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
   WITH (start_offset=[1,1], topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -458,7 +458,7 @@ $ kafka-ingest format=avro topic=new-dbz-data schema=${new-dbz-schema} timestamp
 {"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"string": "false"}}, "op": "c"}
 {"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"string": "false"}}, "op": "c"}
 
-> CREATE MATERIALIZED SOURCE new_dbz
+> CREATE SOURCE new_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-new-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
   ENVELOPE DEBEZIUM
@@ -485,7 +485,7 @@ $ kafka-create-topic topic=non-subset-key
 $ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true
 "asdf" {"a": "asdf"}
 
-> CREATE MATERIALIZED SOURCE non_subset_key
+> CREATE SOURCE non_subset_key
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-subset-key-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
@@ -562,7 +562,7 @@ $ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
 {"before": null, "after": {"row":{"a": -1, "b": 7}}, "source": {"lsn": {"long": 0}, "sequence": {"string": "[\"0\", \"1\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 {"before": null, "after": {"row":{"a": 4, "b": 5}}, "source": {"lsn": {"long": 2}, "sequence": {"string": "[\"1\", \"2\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
-> CREATE MATERIALIZED SOURCE pg_dbz
+> CREATE SOURCE pg_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
   ENVELOPE DEBEZIUM
@@ -673,7 +673,7 @@ $ kafka-ingest format=avro topic=ms-dbz-data schema=${ms-dbz-schema} timestamp=1
 {"before": null, "after": {"Value":{"a": 2, "b": 3}}, "source": {"change_lsn": {"string": "00000025:00000728:001c"}, "sequence": null, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}, "op": "c"}
 {"before": null, "after": {"Value":{"a": -1, "b": 7}}, "source": {"change_lsn": {"string": "00000025:00000728:001a"}, "sequence": null, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}, "op": "c"}
 
-> CREATE MATERIALIZED SOURCE ms_dbz
+> CREATE SOURCE ms_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
   ENVELOPE DEBEZIUM
@@ -684,7 +684,7 @@ a b
 1 1
 2 3
 
-> CREATE MATERIALIZED SOURCE ms_dbz_uncommitted
+> CREATE SOURCE ms_dbz_uncommitted
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}'
   WITH (isolation_level='read_uncommitted')
   FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'

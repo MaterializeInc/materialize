@@ -19,7 +19,7 @@ $ kafka-create-topic topic=resolution-2to1
 $ kafka-ingest format=avro topic=resolution-2to1 schema=${2columns} publish=true timestamp=1
 {"f1": "val_f1a", "f2": "val_f2a"}
 
-> CREATE MATERIALIZED SOURCE resolution_2to1
+> CREATE SOURCE resolution_2to1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-2to1-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE

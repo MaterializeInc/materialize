@@ -17,7 +17,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE truncate_table (f1 INTEGER PRIMARY KEY);
 INSERT INTO truncate_table VALUES (1),(2),(3);
 
-> CREATE MATERIALIZED SOURCE truncate_table
+> CREATE SOURCE truncate_table
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.truncate_table'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

@@ -16,21 +16,21 @@
 
 $ kafka-create-topic topic=t0
 
-! CREATE MATERIALIZED SOURCE missing_topic
+! CREATE SOURCE missing_topic
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'missing_topic'
   WITH (kafka_time_offset=1)
   FORMAT TEXT
   INCLUDE OFFSET
 contains:topic missing_topic does not exist
 
-! CREATE MATERIALIZED SOURCE pick_one
+! CREATE SOURCE pick_one
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset=1, start_offset=1)
   FORMAT TEXT
   INCLUDE OFFSET
 contains:`start_offset` and `kafka_time_offset` cannot be set at the same time.
 
-! CREATE MATERIALIZED SOURCE not_a_number
+! CREATE SOURCE not_a_number
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
   WITH (kafka_time_offset="not_a_number")
   FORMAT TEXT
@@ -58,37 +58,37 @@ fig:fig
 $ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp=4 partition=2
 grape:grape
 
-> CREATE MATERIALIZED SOURCE append_time_offset_0
+> CREATE SOURCE append_time_offset_0
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=0)
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE MATERIALIZED SOURCE append_time_offset_1
+> CREATE SOURCE append_time_offset_1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=1, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE MATERIALIZED SOURCE append_time_offset_2
+> CREATE SOURCE append_time_offset_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=2, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE MATERIALIZED SOURCE append_time_offset_3
+> CREATE SOURCE append_time_offset_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=3, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE MATERIALIZED SOURCE append_time_offset_4
+> CREATE SOURCE append_time_offset_4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=4, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE MATERIALIZED SOURCE append_time_offset_5
+> CREATE SOURCE append_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
   WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
@@ -177,42 +177,42 @@ fig:fig
 $ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=4 partition=2
 grape:grape
 
-> CREATE MATERIALIZED SOURCE upsert_time_offset_0
+> CREATE SOURCE upsert_time_offset_0
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=0)
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE upsert_time_offset_1
+> CREATE SOURCE upsert_time_offset_1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=1)
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE upsert_time_offset_2
+> CREATE SOURCE upsert_time_offset_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=2)
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE upsert_time_offset_3
+> CREATE SOURCE upsert_time_offset_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=3)
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE upsert_time_offset_4
+> CREATE SOURCE upsert_time_offset_4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=4)
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE upsert_time_offset_5
+> CREATE SOURCE upsert_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
   WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
   KEY FORMAT TEXT VALUE FORMAT TEXT
@@ -293,13 +293,13 @@ banana
 $ kafka-ingest format=bytes topic=t3 timestamp=4084108700000
 cherry
 
-> CREATE MATERIALIZED SOURCE relative_time_offset_30_years_ago
+> CREATE SOURCE relative_time_offset_30_years_ago
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t3-${testdrive.seed}'
   WITH (kafka_time_offset=-946100000000)
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE MATERIALIZED SOURCE relative_time_offset_today
+> CREATE SOURCE relative_time_offset_today
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t3-${testdrive.seed}'
   WITH (kafka_time_offset=-1)
   FORMAT TEXT
@@ -326,7 +326,7 @@ pie
 
 # A time offset of -1 specifies that we want to start from the end of the topic
 # (negative offsets are relative from the end).
-> CREATE MATERIALIZED SOURCE verify_no_fetch
+> CREATE SOURCE verify_no_fetch
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t4-${testdrive.seed}'
   WITH (kafka_time_offset = -1)
   FORMAT TEXT
@@ -404,7 +404,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=7
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}}
 
-> CREATE MATERIALIZED SOURCE upsert_time_skip
+> CREATE SOURCE upsert_time_skip
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   WITH (kafka_time_offset = 6)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

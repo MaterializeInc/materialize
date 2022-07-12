@@ -666,7 +666,7 @@ $ kafka-ingest format=avro topic=kafka-raw schema=${{schema}} publish=true repea
   WHERE CAST(statistics->'topics'->'testdrive-kafka-raw-${{testdrive.seed}}'->'partitions'->'0'->'msgs' AS INT) > 0
 true
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-raw-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
   ENVELOPE NONE
@@ -698,7 +698,7 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
             f"""
 > DROP SOURCE IF EXISTS s1;
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}'
   FORMAT BYTES
   ENVELOPE NONE
@@ -732,7 +732,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
             """
 > DROP SOURCE IF EXISTS s1;
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-upsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
@@ -765,7 +765,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > DROP SOURCE IF EXISTS s1;
   /* A */
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
   ENVELOPE UPSERT
@@ -795,7 +795,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
     def init(self) -> Action:
         return TdAction(
             f"""
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
   ENVELOPE UPSERT;
@@ -967,7 +967,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def init(self) -> Action:
         return TdAction(
             f"""
-> CREATE MATERIALIZED SOURCE source1
+> CREATE SOURCE source1
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-sink-input-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
   ENVELOPE UPSERT;
@@ -1043,7 +1043,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
-> CREATE MATERIALIZED SOURCE mz_source_pgcdc
+> CREATE SOURCE mz_source_pgcdc
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
   /* A */
@@ -1083,7 +1083,7 @@ DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'p1';
             """
@@ -1219,7 +1219,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true re
         )
         create_sources = "\n".join(
             f"""
-> CREATE MATERIALIZED SOURCE source{i}
+> CREATE SOURCE source{i}
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-startup-time-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
   ENVELOPE NONE

@@ -19,7 +19,7 @@ INSERT INTO hstore_type VALUES (NULL), ('a=>1'::hstore);
 
 $ schema-registry-wait-schema schema=postgres.public.hstore_type-value
 
-> CREATE MATERIALIZED SOURCE hstore_type
+> CREATE SOURCE hstore_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.hstore_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

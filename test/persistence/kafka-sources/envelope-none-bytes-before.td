@@ -13,7 +13,7 @@ $ kafka-ingest topic=envelope-none-bytes format=bytes repeat=5000
 ABC
 XYZ
 
-> CREATE MATERIALIZED SOURCE envelope_none_bytes
+> CREATE SOURCE envelope_none_bytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-envelope-none-bytes-${testdrive.seed}'
   FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
@@ -28,7 +28,7 @@ $ kafka-ingest topic=envelope-none-text format=bytes repeat=5000
 ABC
 XYZ
 
-> CREATE MATERIALIZED SOURCE envelope_none_text
+> CREATE SOURCE envelope_none_text
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-envelope-none-text-${testdrive.seed}'
   FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset

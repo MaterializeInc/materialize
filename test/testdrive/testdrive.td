@@ -120,7 +120,7 @@ $ kafka-create-topic topic=kafka-ingest-repeat
 $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} publish=true repeat=2
 {"f1": "fish"}
 
-> CREATE MATERIALIZED SOURCE kafka_ingest_repeat_input
+> CREATE SOURCE kafka_ingest_repeat_input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-kafka-ingest-repeat-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -158,7 +158,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 "g" {"a": "g"}
 "h" {"a": "h"}
 
-> CREATE MATERIALIZED SOURCE kafka_ingest_no_partition
+> CREATE SOURCE kafka_ingest_no_partition
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE

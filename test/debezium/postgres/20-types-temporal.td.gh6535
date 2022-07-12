@@ -16,7 +16,7 @@ CREATE TABLE temporal_types (date_col DATE, time_col TIME, timestamp_col TIMESTA
 ALTER TABLE temporal_types REPLICA IDENTITY FULL;
 INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11.123456', '2011-11-11 11:11:11.123456');
 
-> CREATE MATERIALIZED SOURCE temporal_types
+> CREATE SOURCE temporal_types
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.temporal_types'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

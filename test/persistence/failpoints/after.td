@@ -47,7 +47,7 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 
 # Validate the output of the sink as well
 
-> CREATE MATERIALIZED SOURCE failpoint_from_sink
+> CREATE SOURCE failpoint_from_sink
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-failpoint-sink-${testdrive.seed}'
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

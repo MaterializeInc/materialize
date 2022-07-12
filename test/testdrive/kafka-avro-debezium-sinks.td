@@ -105,7 +105,7 @@ $ kafka-create-topic topic=input
 # first create all the sinks, then ingest data, to ensure that
 # input is processed in consistency batches and not all at once
 
-> CREATE MATERIALIZED SOURCE input
+> CREATE SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 

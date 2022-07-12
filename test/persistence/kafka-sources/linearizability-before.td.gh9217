@@ -61,7 +61,7 @@ $ kafka-ingest format=avro topic=linearizability key-format=avro key-schema=${ke
 $ kafka-ingest format=avro topic=linearizability key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=100000
 {"f1": "j${kafka-ingest.iteration}"} {"f2": "j${kafka-ingest.iteration}"}
 
-> CREATE MATERIALIZED SOURCE linearizability
+> CREATE SOURCE linearizability
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-linearizability-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT

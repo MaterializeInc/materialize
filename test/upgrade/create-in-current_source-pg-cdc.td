@@ -24,7 +24,7 @@ INSERT INTO upgrade_pg_cdc_table VALUES (1),(2),(3),(4),(5);
   USER postgres,
   PASSWORD SECRET pgpass,
   DATABASE postgres;
-> CREATE MATERIALIZED SOURCE upgrade_pg_cdc_source
+> CREATE SOURCE upgrade_pg_cdc_source
   FROM POSTGRES
   CONNECTION pgconn
   PUBLICATION 'upgrade_pg_cdc_publication'

@@ -12,6 +12,6 @@ $ kafka-ingest topic=csv-basic format=bytes
 id,value
 1,person
 
-> CREATE MATERIALIZED SOURCE csv (al, sia)
+> CREATE SOURCE csv (al, sia)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csv-basic-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS

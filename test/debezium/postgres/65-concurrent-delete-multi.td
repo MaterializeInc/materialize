@@ -32,12 +32,12 @@ $ schema-registry-wait-schema schema=postgres.public.concurrent_delete1-value
 
 $ schema-registry-wait-schema schema=postgres.public.concurrent_delete2-value
 
-> CREATE MATERIALIZED SOURCE concurrent_delete1
+> CREATE SOURCE concurrent_delete1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.concurrent_delete1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 
-> CREATE MATERIALIZED SOURCE concurrent_delete2
+> CREATE SOURCE concurrent_delete2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.concurrent_delete2'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

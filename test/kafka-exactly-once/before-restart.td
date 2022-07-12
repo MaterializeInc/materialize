@@ -82,7 +82,7 @@ $ set schema=[
 
 $ kafka-create-topic topic=input
 
-> CREATE MATERIALIZED SOURCE input
+> CREATE SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 

@@ -36,7 +36,7 @@ $ kafka-create-topic topic=t1
 
 $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys} schema=${schema} publish=true
 
-> CREATE MATERIALIZED SOURCE t1
+> CREATE SOURCE t1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-t1-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -141,7 +141,7 @@ $ kafka-create-topic topic=t1-pkne
 
 $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 
-> CREATE MATERIALIZED SOURCE t1_pkne (PRIMARY KEY (key1, key2) NOT ENFORCED)
+> CREATE SOURCE t1_pkne (PRIMARY KEY (key1, key2) NOT ENFORCED)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-t1-pkne-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

@@ -301,7 +301,7 @@ b  c
 
 $ kafka-create-topic topic=mat
 
-> CREATE MATERIALIZED SOURCE mat_data
+> CREATE SOURCE mat_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mat-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 

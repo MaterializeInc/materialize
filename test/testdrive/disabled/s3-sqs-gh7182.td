@@ -20,7 +20,7 @@ $ set buk=mz-sqs-tst
 $ s3-create-bucket bucket=${buk}
 $ s3-add-notifications bucket=${buk} queue=${buk} sqs-validation-timeout=5m
 
-> CREATE MATERIALIZED SOURCE s3
+> CREATE SOURCE s3
   FROM S3
   DISCOVER OBJECTS MATCHING '**/*.csv' USING
   SQS NOTIFICATIONS 'testdrive-${buk}-${testdrive.seed}'
@@ -35,7 +35,7 @@ $ s3-add-notifications bucket=${buk} queue=${buk} sqs-validation-timeout=5m
 
 > DROP SOURCE s3;
 
-> CREATE MATERIALIZED SOURCE s3
+> CREATE SOURCE s3
   FROM S3
   DISCOVER OBJECTS MATCHING '**/*.csv' USING
   SQS NOTIFICATIONS 'testdrive-${buk}-${testdrive.seed}'

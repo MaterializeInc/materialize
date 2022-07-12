@@ -141,11 +141,11 @@ $ set dbz-schema={
 $ kafka-create-topic topic=input_dbz
 $ kafka-create-topic topic=input_cdcv2
 
-> CREATE MATERIALIZED SOURCE input_kafka_cdcv2
+> CREATE SOURCE input_kafka_cdcv2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_cdcv2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED SOURCE input_kafka_dbz
+> CREATE SOURCE input_kafka_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_dbz-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 
@@ -264,7 +264,7 @@ $ kafka-create-topic topic=compaction-test-input
 # Materialize create it when creating the sink
 $ kafka-create-topic topic=compaction-test-output-consistency compaction=true
 
-> CREATE MATERIALIZED SOURCE compaction_test_input
+> CREATE SOURCE compaction_test_input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-compaction-test-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
@@ -293,7 +293,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ kafka-create-topic topic=rt-binding-consistency-test-input
 
-> CREATE MATERIALIZED SOURCE rt_binding_consistency_test_source
+> CREATE SOURCE rt_binding_consistency_test_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-rt-binding-consistency-test-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 

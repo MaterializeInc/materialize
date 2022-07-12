@@ -18,7 +18,7 @@ INSERT INTO alter_drop_column_not_null VALUES (123, 234);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_drop_column_not_null-value
 
-> CREATE MATERIALIZED SOURCE alter_drop_column_not_null
+> CREATE SOURCE alter_drop_column_not_null
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_drop_column_not_null'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

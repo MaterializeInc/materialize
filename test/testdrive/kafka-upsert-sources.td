@@ -39,7 +39,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammal1"}
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
-> CREATE MATERIALIZED SOURCE avroavro
+> CREATE SOURCE avroavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
@@ -59,7 +59,7 @@ bìrd1: {"f1":"goose", "f2": 1}
 birdmore: {"f1":"geese", "f2": 2}
 mammal1: {"f1": "moose", "f2": 1}
 
-> CREATE MATERIALIZED SOURCE bytesavro
+> CREATE SOURCE bytesavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
   KEY FORMAT BYTES
   VALUE FORMAT AVRO USING SCHEMA  '${schema}'
@@ -68,7 +68,7 @@ mammal1: {"f1": "moose", "f2": 1}
 $ file-append path=data-schema.json
 \${schema}
 
-> CREATE MATERIALIZED SOURCE textavro
+> CREATE SOURCE textavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
   KEY FORMAT TEXT
   VALUE FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
@@ -104,24 +104,24 @@ bírdmore:geese
 mammal1:moose
 bìrd1:
 
-> CREATE MATERIALIZED SOURCE texttext
+> CREATE SOURCE texttext
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE textbytes
+> CREATE SOURCE textbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
   KEY FORMAT TEXT
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE bytesbytes
+> CREATE SOURCE bytesbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE bytestext
+> CREATE SOURCE bytestext
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
   KEY FORMAT BYTES
   VALUE FORMAT TEXT
@@ -181,13 +181,13 @@ $ protobuf-compile-descriptors inputs=test.proto output=test.pb
 
 $ kafka-create-topic topic=textproto partitions=1
 
-> CREATE MATERIALIZED SOURCE textproto
+> CREATE SOURCE textproto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textproto-${testdrive.seed}'
   KEY FORMAT TEXT
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA FILE '${testdrive.temp-dir}/test.pb'
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE bytesproto
+> CREATE SOURCE bytesproto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textproto-${testdrive.seed}'
   KEY FORMAT BYTES
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA FILE '${testdrive.temp-dir}/test.pb'
@@ -247,7 +247,7 @@ birdmore:geese
 mammalmore:moose
 mammal1:
 
-> CREATE MATERIALIZED SOURCE nullkey
+> CREATE SOURCE nullkey
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nullkey-${testdrive.seed}'
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
@@ -297,7 +297,7 @@ fire      yang    dog            42
 water     <null>  crocodile      7
 
 # Ensure that Upsert sources work with `start_offset`
-> CREATE MATERIALIZED SOURCE realtimeavroavro_ff
+> CREATE SOURCE realtimeavroavro_ff
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-realtimeavroavro-${testdrive.seed}'
   WITH (start_offset=1)
@@ -504,7 +504,7 @@ k1        k2
 -----------
 librairie 10
 
-> CREATE MATERIALIZED SOURCE include_metadata
+> CREATE SOURCE include_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
   WITH (start_offset=1)
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -519,7 +519,7 @@ f3        f4        f1           f2   partition  offset
 air       qi        chicken      47    0         13
 earth     dao       rhinoceros   211   0         12
 
-> CREATE MATERIALIZED SOURCE include_metadata_ts
+> CREATE SOURCE include_metadata_ts
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
   WITH (start_offset=1)
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

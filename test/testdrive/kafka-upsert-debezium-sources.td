@@ -90,7 +90,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 
 
 # Test that `WITH (start_offset=<whatever>)` gives an error on SELECT if misconfigured
-> CREATE MATERIALIZED SOURCE start_offset_misconfigured
+> CREATE SOURCE start_offset_misconfigured
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   WITH (start_offset = 1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -99,13 +99,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 ! SELECT * FROM start_offset_misconfigured
 contains:Invalid data in source, saw retractions (1) for row that does not exist
 
-! CREATE MATERIALIZED SOURCE doin_upsert
+! CREATE SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM UPSERT
 contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
 
-> CREATE MATERIALIZED SOURCE doin_upsert
+> CREATE SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
@@ -152,14 +152,14 @@ creature
 --------
 moros
 
-! CREATE MATERIALIZED SOURCE doin_upsert_metadata
+! CREATE SOURCE doin_upsert_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   INCLUDE OFFSET
   ENVELOPE DEBEZIUM
 contains:INCLUDE OFFSET with Debezium requires UPSERT semantics
 
-> CREATE MATERIALIZED SOURCE doin_upsert_metadata
+> CREATE SOURCE doin_upsert_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   INCLUDE PARTITION, OFFSET AS test_kafka_offset
@@ -191,7 +191,7 @@ id creature
 3  triceratops
 
 # Test that `WITH (start_offset=<whatever>)` works
-> CREATE MATERIALIZED SOURCE upsert_fast_forward
+> CREATE SOURCE upsert_fast_forward
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   WITH (start_offset = 6)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -203,7 +203,7 @@ id creature
 3  triceratops
 
 # Test that it doesn't work with full deduplication
-! CREATE MATERIALIZED SOURCE upsert_full_dedupe
+! CREATE SOURCE upsert_full_dedupe
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   WITH (deduplication = 'full')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -212,7 +212,7 @@ contains:unexpected parameters for CREATE SOURCE: deduplication
 
 
 # test include metadata
-> CREATE MATERIALIZED SOURCE upsert_metadata
+> CREATE SOURCE upsert_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   INCLUDE OFFSET, PARTITION
@@ -227,7 +227,7 @@ id   creature      offset  partition
 4    chicken       11      0
 
 # test include metadata respects metadata order
-> CREATE MATERIALIZED SOURCE upsert_metadata_reordered
+> CREATE SOURCE upsert_metadata_reordered
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   INCLUDE PARTITION, OFFSET

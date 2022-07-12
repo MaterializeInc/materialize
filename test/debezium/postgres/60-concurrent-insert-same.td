@@ -18,7 +18,7 @@ INSERT INTO insert_same_table VALUES (0);
 
 $ schema-registry-wait-schema schema=postgres.public.insert_same_table-value
 
-> CREATE MATERIALIZED SOURCE insert_same_table
+> CREATE SOURCE insert_same_table
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_same_table'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
