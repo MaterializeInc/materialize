@@ -212,7 +212,7 @@ impl<T> StorageHosts<T> {
                         vec![
                             format!("--workers=1"),
                             format!(
-                                "--listen-addr={}:{}",
+                                "--controller-listen-addr={}:{}",
                                 assigned.listen_host, assigned.ports["controller"]
                             ),
                             format!(

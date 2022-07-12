@@ -33,7 +33,7 @@ metadata:
 data:
   schemas.sql: |
     CREATE SCHEMA consensus;
-    CREATE SCHEMA catalog;
+    CREATE SCHEMA adapter;
     CREATE SCHEMA storage;
 ---
 apiVersion: v1
@@ -138,17 +138,17 @@ spec:
       - name: environmentd
         image: $(bin/mzimage spec --dev environmentd)
         args:
+            - --unsafe-mode
+            - --orchestrator=kubernetes
+            - --orchestrator-kubernetes-service-label=materialize.cloud/example1=label1
+            - --orchestrator-kubernetes-service-label=materialize.cloud/example2=label2
+            - --orchestrator-kubernetes-image-pull-policy=never
+            - --persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus
+            - --persist-blob-url=file:///tmp/persist/blob
+            - --storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage
+            - --adapter-stash-url=postgres://postgres@postgres.default?options=--search_path=catalog
             - --storaged-image=$(bin/mzimage spec --dev storaged)
             - --computed-image=$(bin/mzimage spec --dev computed)
-            - --data-directory=/data
-            - --orchestrator=kubernetes
-            - --orchestrator-service-label=materialize.cloud/example1=label1
-            - --orchestrator-service-label=materialize.cloud/example2=label2
-            - --persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus
-            - --catalog-postgres-stash=postgres://postgres@postgres.default?options=--search_path=catalog
-            - --storage-postgres-stash=postgres://postgres@postgres.default?options=--search_path=storage
-            - --kubernetes-image-pull-policy=never
-            - --unsafe-mode
         ports:
         - containerPort: 6875
           name: sql

@@ -30,10 +30,10 @@ Select an environment and follow the instructions to get the latest stable relea
 1. Open a terminal and spin up a container running [`materialized`](https://hub.docker.com/r/materialize/materialized):
 
     ```shell
-    docker run -p 6875:6875 materialize/materialized:{{< version >}} --workers 1
+    docker run -p 6875:6875 materialize/materialized:{{< version >}}
     ```
 
-    This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
+    This starts a process that listens for SQL connections on port 6875 by default.
 
 1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you already have `psql` installed on your machine, connect using:
 
@@ -58,7 +58,7 @@ Select an environment and follow the instructions to get the latest stable relea
     materialized --workers 1
     ```
 
-    This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
+    This starts a process that listens for SQL connections on port 6875 by default.
 
 1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you have `psql` installed on your machine, connect using:
 
@@ -87,10 +87,10 @@ Select an environment and follow the instructions to get the latest stable relea
 1. Once the installation is complete, you can start the `materialized` process:
 
     ```shell
-    materialized --workers 1
+    materialized
     ```
 
-    This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
+    This starts a process that listens for SQL connections on port 6875 by default.
 
 1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you have `psql` installed on your machine, connect using:
 

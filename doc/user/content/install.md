@@ -32,16 +32,7 @@ way. For example:
 docker run -p 6875:6875 materialize/materialized:{{< version >}}
 ```
 
-### Using Docker volumes
-
-To persist Materialize metadata, you can create a Docker volume and mount it to the [`/mzdata` directory](/cli/#data-directory) in the container:
-
-```shell
-# Create a volume
-docker volume create --name mzdata
-# Create a container with the volume mounted
-docker run -v mzdata:/mzdata -p 6875:6875 materialize/materialized:{{< version >}}
-```
+Note that Materialize's state does not outlive the container.
 
 ## Build from source
 

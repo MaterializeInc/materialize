@@ -10,7 +10,7 @@
 //! gRPC transport for the [client](crate::client) module.
 
 use std::fmt::{self, Debug};
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -188,7 +188,7 @@ where
     /// by the tonic-generated `ProtoServer::new` method for a specific Protobuf
     /// service.
     pub async fn serve<S, F>(
-        listen_addr: String,
+        listen_addr: SocketAddr,
         version: Version,
         client: G,
         f: F,

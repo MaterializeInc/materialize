@@ -321,7 +321,7 @@ where
                             args: &|assigned| {
                                 let mut compute_opts = vec![
                                     format!(
-                                        "--listen-addr={}:{}",
+                                        "--controller-listen-addr={}:{}",
                                         assigned.listen_host, assigned.ports["controller"]
                                     ),
                                     format!(

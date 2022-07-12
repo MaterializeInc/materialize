@@ -88,7 +88,6 @@ impl ProcessOrchestrator {
             command_wrapper,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
-        let data_dir = fs::canonicalize(data_dir).await?;
         let secrets_dir = data_dir.join("secrets");
         fs::create_dir_all(&secrets_dir)
             .await
@@ -98,8 +97,8 @@ impl ProcessOrchestrator {
             port_allocator,
             suppress_output,
             namespaces: Mutex::new(HashMap::new()),
-            data_dir,
-            secrets_dir,
+            data_dir: fs::canonicalize(data_dir).await?,
+            secrets_dir: fs::canonicalize(secrets_dir).await?,
             command_wrapper,
         })
     }
