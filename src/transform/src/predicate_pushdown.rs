@@ -77,7 +77,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::TransformArgs;
+use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
@@ -109,7 +109,7 @@ impl crate::Transform for PredicatePushdown {
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
+    ) -> Result<(), TransformError> {
         let mut empty = HashMap::new();
         self.action(relation, &mut empty)
     }
@@ -130,7 +130,7 @@ impl PredicatePushdown {
         &self,
         relation: &mut MirRelationExpr,
         get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,
-    ) -> Result<(), crate::TransformError> {
+    ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             // In the case of Filter or Get we have specific work to do;
             // otherwise we should recursively descend.
@@ -318,21 +318,19 @@ impl PredicatePushdown {
                                 if !predicate.is_literal_err() || all_errors {
                                     let mut supported = true;
                                     let mut new_predicate = predicate.clone();
-                                    #[allow(deprecated)]
-                                    new_predicate.visit_mut_post_nolimit(&mut |e| {
+                                    new_predicate.visit_mut_post(&mut |e| {
                                         if let MirScalarExpr::Column(c) = e {
                                             if *c >= group_key.len() {
                                                 supported = false;
                                             }
                                         }
-                                    });
+                                    })?;
                                     if supported {
-                                        #[allow(deprecated)]
-                                        new_predicate.visit_mut_post_nolimit(&mut |e| {
+                                        new_predicate.visit_mut_post(&mut |e| {
                                             if let MirScalarExpr::Column(i) = e {
                                                 *e = group_key[*i].clone();
                                             }
-                                        });
+                                        })?;
                                         push_down.push(new_predicate);
                                     } else if let MirScalarExpr::Column(col) = &predicate {
                                         if *col == group_key.len()
@@ -393,7 +391,7 @@ impl PredicatePushdown {
                                 predicates,
                                 input.arity(),
                                 all_errors,
-                            );
+                            )?;
                             let scalars = std::mem::replace(scalars, Vec::new());
                             let mut result = input.take_dangerous();
                             if !pushdown.is_empty() {
@@ -469,7 +467,7 @@ impl PredicatePushdown {
                     if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
                         if !list.is_empty() {
                             // Remove the predicates in `list` from the body.
-                            body.try_visit_mut_post::<_, crate::TransformError>(&mut |e| {
+                            body.try_visit_mut_post::<_, TransformError>(&mut |e| {
                                 if let MirRelationExpr::Filter { input, predicates } = e {
                                     if let MirRelationExpr::Get { id: get_id, .. } = **input {
                                         if get_id == Id::Local(*id) {
@@ -751,7 +749,7 @@ impl PredicatePushdown {
         predicates: &mut Vec<MirScalarExpr>,
         input_arity: usize,
         all_errors: bool,
-    ) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>) {
+    ) -> Result<(Vec<MirScalarExpr>, Vec<MirScalarExpr>), TransformError> {
         let mut pushdown = Vec::new();
         let mut retained = Vec::new();
         for mut predicate in predicates.drain(..) {
@@ -765,8 +763,7 @@ impl PredicatePushdown {
                         || PredicatePushdown::can_inline(&scalars[*c - input_arity], input_arity)
                 })
             {
-                #[allow(deprecated)]
-                predicate.visit_mut_post_nolimit(&mut |e| {
+                predicate.visit_mut_post(&mut |e| {
                     if let MirScalarExpr::Column(c) = e {
                         // NB: this inlining would be invalid if can_inline did not
                         // verify that scalars[*c - input_arity] referenced only
@@ -776,13 +773,13 @@ impl PredicatePushdown {
                             *e = scalars[*c - input_arity].clone()
                         }
                     }
-                });
+                })?;
                 pushdown.push(predicate);
             } else {
                 retained.push(predicate);
             }
         }
-        (retained, pushdown)
+        Ok((retained, pushdown))
     }
 
     /// Computes "safe" predicate to push through a FlatMap.

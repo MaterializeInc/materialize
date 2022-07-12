@@ -33,7 +33,7 @@
 //! busywork and less efficiency, but the wins can be substantial when
 //! expressions re-use complex subexpressions.
 
-use crate::TransformArgs;
+use crate::{TransformArgs, TransformError};
 use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::visit::VisitChildren;
 use mz_expr::MirRelationExpr;
@@ -47,13 +47,13 @@ impl crate::Transform for CanonicalizeMfp {
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
+    ) -> Result<(), TransformError> {
         self.action(relation)
     }
 }
 
 impl CanonicalizeMfp {
-    fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         let mut mfp = mz_expr::MapFilterProject::extract_non_errors_from_expr_mut(relation);
         relation.try_visit_mut_children(|e| self.action(e))?;
         mfp.optimize();
@@ -69,7 +69,7 @@ impl CanonicalizeMfp {
                 canonicalize_predicates(&mut filter, &relation_type);
                 let all_errors = filter.iter().all(|p| p.is_literal_err());
                 let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown::default()
-                    .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors);
+                    .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors)?;
                 if !pushdown.is_empty() {
                     *relation = relation.take_dangerous().filter(pushdown);
                     crate::fusion::filter::Filter.action(relation);

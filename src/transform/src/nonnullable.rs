@@ -46,7 +46,7 @@ impl NonNullable {
                 if contains_isnull {
                     let mut metadata = input.typ();
                     for scalar in scalars.iter_mut() {
-                        scalar_nonnullable(scalar, &metadata);
+                        scalar_nonnullable(scalar, &metadata)?;
                         let typ = scalar.typ(&metadata);
                         metadata.column_types.push(typ);
                     }
@@ -60,7 +60,7 @@ impl NonNullable {
                 if contains_isnull {
                     let metadata = input.typ();
                     for predicate in predicates.iter_mut() {
-                        scalar_nonnullable(predicate, &metadata);
+                        scalar_nonnullable(predicate, &metadata)?;
                     }
                 }
             }
@@ -82,7 +82,7 @@ impl NonNullable {
                 if contains_isnull_or_count {
                     let metadata = input.typ();
                     for aggregate in aggregates.iter_mut() {
-                        scalar_nonnullable(&mut aggregate.expr, &metadata);
+                        scalar_nonnullable(&mut aggregate.expr, &metadata)?;
                         aggregate_nonnullable(aggregate, &metadata);
                     }
                 }
@@ -109,10 +109,12 @@ fn scalar_contains_isnull(expr: &MirScalarExpr) -> Result<bool, TransformError> 
 }
 
 /// Transformations to scalar functions, based on nonnullability of columns.
-fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
+fn scalar_nonnullable(
+    expr: &mut MirScalarExpr,
+    metadata: &RelationType,
+) -> Result<(), TransformError> {
     // Tests for null can be replaced by "false" for non-nullable columns.
-    #[allow(deprecated)]
-    expr.visit_mut_post_nolimit(&mut |e| {
+    expr.visit_mut_post(&mut |e| {
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull(func::IsNull),
             expr,
@@ -124,7 +126,8 @@ fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
                 }
             }
         }
-    })
+    })?;
+    Ok(())
 }
 
 /// Transformations to aggregation functions, based on nonnullability of columns.
