@@ -105,6 +105,21 @@ where
     }
 }
 
+impl<A> DisplayText for Option<A>
+where
+    A: DisplayText,
+{
+    type Context = A::Context;
+
+    fn fmt_text(&self, ctx: &mut Self::Context, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(val) = self {
+            val.fmt_text(ctx, f)
+        } else {
+            fmt::Result::Ok(())
+        }
+    }
+}
+
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Json`].
 pub trait DisplayJson
@@ -118,6 +133,21 @@ where
 
     fn str_json(&self) -> String {
         Explanation::<'_, UnsupportedFormat, Self, UnsupportedFormat>::Json(self).to_string()
+    }
+}
+
+impl<A> DisplayJson for Option<A>
+where
+    A: DisplayText,
+{
+    type Context = A::Context;
+
+    fn fmt_json(&self, ctx: &mut Self::Context, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(val) = self {
+            val.fmt_text(ctx, f)
+        } else {
+            fmt::Result::Ok(())
+        }
     }
 }
 
