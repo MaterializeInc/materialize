@@ -63,7 +63,7 @@ struct ReplicaTaskConfig<T> {
 /// Asynchronously forwards commands to and responses from a single replica.
 async fn replica_task<T>(config: ReplicaTaskConfig<T>)
 where
-    T: Timestamp + Copy,
+    T: Timestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     let replica_id = config.replica_id;
@@ -84,7 +84,7 @@ async fn run_replica_core<T>(
     }: ReplicaTaskConfig<T>,
 ) -> Result<(), anyhow::Error>
 where
-    T: Timestamp + Copy,
+    T: Timestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
     let mut client = Retry::default()
@@ -393,7 +393,7 @@ struct ReplicaState<T> {
 
 impl<T> ActiveReplication<T>
 where
-    T: Timestamp + Lattice + Copy,
+    T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Introduce a new replica, and catch it up to the commands of other replicas.

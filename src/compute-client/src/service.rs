@@ -110,7 +110,7 @@ pub struct PartitionedComputeState<T> {
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
     for (ComputeCommand<T>, ComputeResponse<T>)
 where
-    T: timely::progress::Timestamp + Copy,
+    T: timely::progress::Timestamp,
 {
     type PartitionedState = PartitionedComputeState<T>;
 
@@ -126,7 +126,7 @@ where
 
 impl<T> PartitionedComputeState<T>
 where
-    T: timely::progress::Timestamp + Copy,
+    T: timely::progress::Timestamp,
 {
     fn reset(&mut self) {
         let PartitionedComputeState {
@@ -173,7 +173,7 @@ where
 
 impl<T> PartitionedState<ComputeCommand<T>, ComputeResponse<T>> for PartitionedComputeState<T>
 where
-    T: timely::progress::Timestamp + Copy,
+    T: timely::progress::Timestamp,
 {
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<ComputeCommand<T>> {
         self.observe_command(&command);
