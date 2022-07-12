@@ -16,6 +16,8 @@ flake8==4.0.1
 humanize==4.2.3
 isort==5.10.1
 junit-xml==1.9
+kubernetes==22.6.0
+kubernetes-stubs==22.6.0
 mypy==0.961
 numpy==1.22.4
 pandas==1.4.3
