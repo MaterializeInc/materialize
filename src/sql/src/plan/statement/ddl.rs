@@ -90,13 +90,14 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
+    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, ReplicaConfig, Secret, Sink,
-    Source, Table, Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, Secret, Sink, Source, Table,
+    Type, View,
 };
 
 pub fn describe_create_database(
@@ -2714,7 +2715,7 @@ generate_extracted_config!(
 fn plan_replica_config(
     scx: &StatementContext,
     options: Vec<ReplicaOption<Aug>>,
-) -> Result<ReplicaConfig, PlanError> {
+) -> Result<ComputeInstanceReplicaConfig, PlanError> {
     let ReplicaOptionExtracted {
         availability_zone,
         size,
@@ -2736,11 +2737,11 @@ fn plan_replica_config(
             if availability_zone.is_some() {
                 sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
             }
-            Ok(ReplicaConfig::Remote {
+            Ok(ComputeInstanceReplicaConfig::Remote {
                 addrs: remote_addrs,
             })
         }
-        (false, Some(size)) => Ok(ReplicaConfig::Managed {
+        (false, Some(size)) => Ok(ComputeInstanceReplicaConfig::Managed {
             size,
             availability_zone,
         }),

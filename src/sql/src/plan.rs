@@ -155,14 +155,14 @@ pub struct CreateRolePlan {
 pub struct CreateComputeInstancePlan {
     pub name: String,
     pub config: Option<ComputeInstanceIntrospectionConfig>,
-    pub replicas: Vec<(String, ReplicaConfig)>,
+    pub replicas: Vec<(String, ComputeInstanceReplicaConfig)>,
 }
 
 #[derive(Debug)]
 pub struct CreateComputeInstanceReplicaPlan {
     pub name: String,
     pub of_cluster: String,
-    pub config: ReplicaConfig,
+    pub config: ComputeInstanceReplicaConfig,
 }
 
 /// Configuration of introspection for a compute instance.
@@ -175,7 +175,7 @@ pub struct ComputeInstanceIntrospectionConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ReplicaConfig {
+pub enum ComputeInstanceReplicaConfig {
     Remote {
         addrs: BTreeSet<String>,
     },

@@ -36,6 +36,7 @@ use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
+use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
@@ -325,8 +326,20 @@ pub struct Args {
     #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID")]
     aws_external_id_prefix: Option<String>,
     /// A map from size name to resource allocations for cluster replicas.
-    #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
+    #[clap(
+        long,
+        env = "CLUSTER_REPLICA_SIZES",
+        requires = "bootstrap-default-cluster-replica-size"
+    )]
     cluster_replica_sizes: Option<String>,
+    /// The size of the default cluster replica if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
+        default_value = "1"
+    )]
+    bootstrap_default_cluster_replica_size: String,
+
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
@@ -614,10 +627,16 @@ max log level: {max_log_level}",
 
     sys::adjust_rlimits();
 
-    let replica_sizes = match args.cluster_replica_sizes {
+    let replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
         None => Default::default(),
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
+    if !replica_sizes
+        .0
+        .contains_key(&args.bootstrap_default_cluster_replica_size)
+    {
+        bail!("--bootstrap-default-cluster-replica-size must name a size in the cluster replica size map");
+    }
 
     if !args.availability_zone.iter().all_unique() {
         bail!("--availability-zone values must be unique");
@@ -638,6 +657,7 @@ max log level: {max_log_level}",
         metrics_registry,
         now: SYSTEM_TIME.clone(),
         replica_sizes,
+        bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         availability_zones: args.availability_zone,
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,

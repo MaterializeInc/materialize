@@ -102,8 +102,7 @@ use mz_compute_client::explain::{
 };
 use mz_compute_client::response::PeekResponse;
 use mz_controller::{
-    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent,
-    ConcreteComputeInstanceReplicaConfig, ControllerResponse,
+    ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
@@ -141,8 +140,8 @@ use mz_sql::plan::{
     DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
     ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
     MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    RecordedView, ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    RecordedView, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::client::connections::ConnectionContext;
@@ -156,8 +155,8 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
-    Connection, SinkConnectionState,
+    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ClusterReplicaSizeMap,
+    ComputeInstance, Connection, SinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{
@@ -322,52 +321,6 @@ pub struct CatalogTxn<'a, T> {
     catalog: &'a CatalogState,
 }
 
-fn concretize_replica_config(
-    config: ReplicaConfig,
-    replica_sizes: &ClusterReplicaSizeMap,
-    availability_zones: &[String],
-) -> Result<ConcreteComputeInstanceReplicaConfig, AdapterError> {
-    let config = match config {
-        ReplicaConfig::Remote { addrs } => ConcreteComputeInstanceReplicaConfig::Remote { addrs },
-        ReplicaConfig::Managed {
-            size,
-            availability_zone,
-        } => {
-            let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
-                let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
-                entries.sort_by_key(
-                    |(
-                        _name,
-                        ClusterReplicaSizeConfig {
-                            scale, cpu_limit, ..
-                        },
-                    )| (*scale, *cpu_limit),
-                );
-                let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                AdapterError::InvalidClusterReplicaSize {
-                    size: size.clone(),
-                    expected,
-                }
-            })?;
-
-            if let Some(az) = &availability_zone {
-                if !availability_zones.contains(az) {
-                    return Err(AdapterError::InvalidClusterReplicaAz {
-                        az: az.to_string(),
-                        expected: availability_zones.to_vec(),
-                    });
-                }
-            }
-            ConcreteComputeInstanceReplicaConfig::Managed {
-                size_config: *size_config,
-                size_name: size,
-                availability_zone,
-            }
-        }
-    };
-    Ok(config)
-}
-
 /// Holds tables needing advancement.
 struct AdvanceTables<T> {
     /// The current number of tables to advance in a single batch.
@@ -505,10 +458,6 @@ pub struct Coordinator<S> {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Arc<dyn SecretsController>,
-    /// Map of strings to corresponding compute replica sizes.
-    replica_sizes: ClusterReplicaSizeMap,
-    /// Valid availability zones for replicas.
-    availability_zones: Vec<String>,
 
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
@@ -731,7 +680,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.controller
-                    .add_replica_to_instance(instance.id, replica_id, replica.config)
+                    .add_replica_to_instance(instance.id, replica_id, replica.concrete_config)
                     .await
                     .unwrap();
             }
@@ -2767,17 +2716,10 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
 
         for (replica_name, config) in replicas {
-            let logical_size = match &config {
-                ReplicaConfig::Managed { size, .. } => Some(size.clone()),
-                ReplicaConfig::Remote { .. } => None,
-            };
-            let config =
-                concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
-                config,
+                config: config.into(),
                 on_cluster_name: name.clone(),
-                logical_size,
             });
         }
         self.catalog_transact(Some(session), ops, |_| Ok(()))
@@ -2791,7 +2733,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
-                .add_replica_to_instance(instance.id, replica_id, replica.config)
+                .add_replica_to_instance(instance.id, replica_id, replica.concrete_config)
                 .await
                 .unwrap();
         }
@@ -2807,17 +2749,10 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let logical_size = match &config {
-            ReplicaConfig::Managed { size, .. } => Some(size.clone()),
-            ReplicaConfig::Remote { .. } => None,
-        };
-        let config =
-            concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
-            config: config.clone(),
+            config: config.into(),
             on_cluster_name: of_cluster.clone(),
-            logical_size,
         };
 
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
@@ -2825,8 +2760,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
         let replica_id = instance.replica_id_by_name[&name];
+        let replica = &instance.replicas_by_id[&replica_id];
         self.controller
-            .add_replica_to_instance(instance.id, replica_id, config)
+            .add_replica_to_instance(instance.id, replica_id, replica.concrete_config.clone())
             .await
             .unwrap();
         Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false })
@@ -3653,7 +3589,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, replica) in replicas {
-                self.drop_replica(instance_id, replica_id, replica.config)
+                self.drop_replica(instance_id, replica_id, replica.concrete_config)
                     .await
                     .unwrap();
             }
@@ -3692,7 +3628,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
 
         for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.drop_replica(compute_id, replica_id, replica.config)
+            self.drop_replica(compute_id, replica_id, replica.concrete_config)
                 .await
                 .unwrap();
         }
@@ -6035,6 +5971,8 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
+        replica_sizes,
+        availability_zones,
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;
@@ -6094,8 +6032,6 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
-                replica_sizes,
-                availability_zones,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
             };

@@ -12,7 +12,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaConfig};
+use mz_controller::ComputeInstanceStatus;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -32,8 +32,9 @@ use crate::catalog::builtin::{
     MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, RecordedView, Sink,
-    SinkConnection, SinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, RecordedView,
+    SerializedComputeInstanceReplicaConfig, Sink, SinkConnection, SinkConnectionState, Type, View,
+    SYSTEM_CONN_ID,
 };
 use crate::coord::ReplicaMetadata;
 
@@ -128,13 +129,12 @@ impl CatalogState {
         let id = instance.replica_id_by_name[name];
         let replica = &instance.replicas_by_id[&id];
 
-        let (size, az) = match &replica.config {
-            ConcreteComputeInstanceReplicaConfig::Managed {
-                size_config: _,
-                size_name,
+        let (size, az) = match &replica.serialized_config {
+            SerializedComputeInstanceReplicaConfig::Managed {
+                size,
                 availability_zone,
-            } => (Some(&**size_name), availability_zone.as_deref()),
-            ConcreteComputeInstanceReplicaConfig::Remote { .. } => (None, None),
+            } => (Some(&**size), availability_zone.as_deref()),
+            SerializedComputeInstanceReplicaConfig::Remote { .. } => (None, None),
         };
 
         BuiltinTableUpdate {

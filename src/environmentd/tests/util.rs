@@ -185,6 +185,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         now: config.now,
         cors_allowed_origin: AllowOrigin::list([]),
         replica_sizes: Default::default(),
+        bootstrap_default_cluster_replica_size: "1".into(),
         availability_zones: Default::default(),
         connection_context: Default::default(),
         otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),

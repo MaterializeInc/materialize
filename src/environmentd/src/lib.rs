@@ -26,8 +26,10 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 
+use mz_adapter::catalog::storage::BootstrapArgs;
+use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_build_info::{build_info, BuildInfo};
-use mz_controller::{ClusterReplicaSizeMap, ControllerConfig};
+use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -90,6 +92,8 @@ pub struct Config {
     pub now: NowFn,
     /// Map of strings to corresponding compute replica sizes.
     pub replica_sizes: ClusterReplicaSizeMap,
+    /// The size of the default cluster replica if bootstrapping.
+    pub bootstrap_default_cluster_replica_size: String,
     /// Availability zones compute resources may be deployed in.
     pub availability_zones: Vec<String>,
 
@@ -182,7 +186,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let http_local_addr = http_listener.local_addr()?;
 
     // Load the adapter catalog from disk.
-    let adapter_storage = mz_adapter::catalog::storage::Connection::open(stash).await?;
+    let adapter_storage = mz_adapter::catalog::storage::Connection::open(
+        stash,
+        &BootstrapArgs {
+            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
+        },
+    )
+    .await?;
 
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller).await;
