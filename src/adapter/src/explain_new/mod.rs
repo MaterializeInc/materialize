@@ -97,10 +97,10 @@ impl<'a, T: 'a> DisplayText<()> for ExplainSinglePlan<'a, T>
 where
     Explainable<'a, T>: DisplayText,
 {
-    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         // TODO (#13472)
-        // let mut context = ...
-        // self.context.finishing.fmt_text(&mut context, f)?;
+        let mut context = Default::default();
+        self.context.finishing.fmt_text(f, &mut context)?;
         // writeln!(f, "")?;
         // self.plan.fmt_text(..., f)?;
         // writeln!(f, "")?;
@@ -129,10 +129,10 @@ impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
 where
     Explainable<'a, T>: DisplayText,
 {
-    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         // TODO (#13472)
-        // let mut context = ...
-        // self.context.finishing.fmt_text(..., f)?;
+        let mut context = Default::default();
+        self.context.finishing.fmt_text(f, &mut context)?;
         // writeln!(f, "")?;
         // self.plans.fmt_text(..., f)?;
         // writeln!(f, "")?;
