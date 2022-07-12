@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
 
@@ -43,10 +44,11 @@ const BUILD_INFO: BuildInfo = build_info!();
 
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
 
-/// Independent dataflow server for Materialize.
+/// Independent compute server for Materialize.
 #[derive(clap::Parser)]
 #[clap(name = "computed", version = VERSION.as_str())]
 struct Args {
+    // === Connection options. ===
     /// The address on which to listen for a connection from the controller.
     #[clap(
         long,
@@ -54,35 +56,50 @@ struct Args {
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:2100"
     )]
-    listen_addr: String,
+    controller_listen_addr: SocketAddr,
+    /// The address of the internal HTTP server.
+    #[clap(
+        long,
+        env = "INTERNAL_HTTP_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:6877"
+    )]
+    internal_http_listen_addr: SocketAddr,
+
+    // === Dataflow options. ===
     /// Number of dataflow worker threads.
-    #[clap(short, long, env = "WORKERS", value_name = "W", default_value = "1")]
+    #[clap(long, env = "WORKERS", value_name = "N", default_value = "1")]
     workers: usize,
     /// Number of this computed process.
-    #[clap(short = 'p', long, env = "PROCESS", value_name = "P")]
+    #[clap(long, env = "PROCESS", value_name = "P")]
     process: Option<usize>,
     /// The addresses of all computed processes in the cluster.
-    #[clap()]
+    #[clap(env = "ADDRESSES", use_value_delimiter = true)]
     addresses: Vec<String>,
 
+    // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    // TODO(benesch): remove this when external sinks are moved to the storage
+    // layer.
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
-    /// The address of the internal HTTP server.
-    #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
-    internal_http_listen_addr: String,
 
-    /// Where to write a pid lock file. Should only be used for local process orchestrators.
-    #[clap(long, value_name = "PATH")]
+    // === Process orchestrator options. ===
+    /// Where to write a PID lock file.
+    ///
+    /// Should only be set by the local process orchestrator.
+    #[clap(long, env = "PID_FILE_LOCATION", value_name = "PATH")]
     pid_file_location: Option<PathBuf>,
 
-    #[clap(flatten)]
-    tracing: TracingCliArgs,
-
+    // === Secrets reader options. ===
     #[clap(flatten)]
     secrets: SecretsReaderCliArgs,
+
+    // === Tracing options. ===
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[tokio::main]
@@ -129,7 +146,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     }
     let comm_config = create_communication_config(&args)?;
 
-    info!("about to bind to {:?}", args.listen_addr);
+    info!("about to bind to {:?}", args.controller_listen_addr);
 
     let metrics_registry = MetricsRegistry::new();
     {
@@ -140,7 +157,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
         mz_ore::task::spawn(
             || "computed_internal_http_server",
-            axum::Server::bind(&args.internal_http_listen_addr.parse()?).serve(
+            axum::Server::bind(&args.internal_http_listen_addr).serve(
                 mz_prof::http::router(&BUILD_INFO)
                     .route(
                         "/api/livez",
@@ -182,7 +199,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let (_server, client) = mz_compute::server::serve(config)?;
     GrpcServer::serve(
-        args.listen_addr,
+        args.controller_listen_addr,
         BUILD_INFO.semver_version(),
         client,
         ProtoComputeServer::new,

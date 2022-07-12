@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::env;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
 
@@ -47,6 +48,7 @@ pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
 #[derive(clap::Parser)]
 #[clap(name = "storaged", version = VERSION.as_str())]
 struct Args {
+    // === Connection options. ===
     /// The address on which to listen for a connection from the controller.
     #[clap(
         long,
@@ -54,35 +56,42 @@ struct Args {
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:2100"
     )]
-    listen_addr: String,
-    /// Number of dataflow worker threads.
-    #[clap(short, long, env = "WORKERS", value_name = "W", default_value = "1")]
-    workers: usize,
-    /// The hostnames of all storaged processes in the cluster.
-    #[clap()]
-    hosts: Vec<String>,
+    controller_listen_addr: SocketAddr,
+    /// The address of the internal HTTP server.
+    #[clap(
+        long,
+        env = "INTERNAL_HTTP_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:6877"
+    )]
+    internal_http_listen_addr: SocketAddr,
 
+    // === Dataflow options. ===
+    /// Number of dataflow worker threads.
+    #[clap(long, env = "WORKERS", value_name = "N", default_value = "1")]
+    workers: usize,
+
+    // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, value_name = "ID")]
+    #[clap(long, env = "AWS_EXTERNAL_ID", value_name = "ID")]
     aws_external_id: Option<String>,
 
-    /// The address of the internal HTTP server.
-    #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
-    internal_http_listen_addr: String,
-
-    /// Where to write a pid lock file. Should only be used for local process orchestrators.
-    #[clap(long, value_name = "PATH")]
+    // === Process orchestrator options. ===
+    /// Where to write a PID lock file.
+    ///
+    /// Should only be set by the local process orchestrator.
+    #[clap(long, env = "PID_FILE_LOCATION", value_name = "PATH")]
     pid_file_location: Option<PathBuf>,
 
-    /// === Tracing options. ===
-    #[clap(flatten)]
-    tracing: TracingCliArgs,
-
-    /// === Secrets reader options. ===
+    // === Secrets reader options. ===
     #[clap(flatten)]
     secrets: SecretsReaderCliArgs,
+
+    // === Tracing options. ===
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[tokio::main]
@@ -127,7 +136,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     }
     let timely_config = create_timely_config(&args)?;
 
-    info!("about to bind to {:?}", args.listen_addr);
+    info!("about to bind to {:?}", args.controller_listen_addr);
 
     let metrics_registry = MetricsRegistry::new();
     {
@@ -138,7 +147,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
         mz_ore::task::spawn(
             || "storaged_internal_http_server",
-            axum::Server::bind(&args.internal_http_listen_addr.parse()?).serve(
+            axum::Server::bind(&args.internal_http_listen_addr).serve(
                 mz_prof::http::router(&BUILD_INFO)
                     .route(
                         "/api/livez",
@@ -180,7 +189,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let (_server, client) = mz_storage::serve(config)?;
     GrpcServer::serve(
-        args.listen_addr,
+        args.controller_listen_addr,
         BUILD_INFO.semver_version(),
         client,
         ProtoStorageServer::new,

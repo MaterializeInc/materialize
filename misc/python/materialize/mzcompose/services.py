@@ -86,7 +86,8 @@ class Materialized(Service):
             volumes.extend(volumes_extra)
 
         command_list = [
-            f"--data-directory={data_directory}",
+            f"--persist-blob-url=file://{data_directory}/persist/blob",
+            f"--orchestrator-process-data-directory={data_directory}",
         ]
 
         config_ports: List[Union[str, int]] = (
@@ -637,7 +638,7 @@ class Testdrive(Service):
 
         if validate_postgres_stash:
             entrypoint.append(
-                "--validate-postgres-stash=postgres://materialize@materialized/materialize?options=--search_path=catalog"
+                "--validate-postgres-stash=postgres://materialize@materialized/materialize?options=--search_path=adapter"
             )
 
         if no_reset:

@@ -563,7 +563,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 impl Runner {
     pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let (consensus_uri, catalog_postgres_stash, storage_postgres_stash) = {
+        let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
             let (client, conn) = tokio_postgres::connect(&postgres_url, NoTls).await?;
             task::spawn(|| "sqllogictest_connect", async move {
@@ -574,16 +574,16 @@ impl Runner {
             client
                 .batch_execute(&format!(
                     "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
-                     DROP SCHEMA IF EXISTS sqllogictest_catalog CASCADE;
+                     DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
                      CREATE SCHEMA sqllogictest_consensus;
-                     CREATE SCHEMA sqllogictest_catalog;
+                     CREATE SCHEMA sqllogictest_adapter;
                      CREATE SCHEMA sqllogictest_storage;",
                 ))
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
-                format!("{postgres_url}?options=--search_path=sqllogictest_catalog"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_adapter"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
             )
         };
@@ -601,7 +601,7 @@ impl Runner {
         let persist_clients = PersistClientCache::new(&metrics_registry);
         let persist_clients = Arc::new(Mutex::new(persist_clients));
         let server_config = mz_environmentd::Config {
-            catalog_postgres_stash,
+            adapter_stash_url,
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
@@ -612,7 +612,7 @@ impl Runner {
                     consensus_uri,
                 },
                 persist_clients,
-                storage_stash_url: storage_postgres_stash,
+                storage_stash_url,
             },
             secrets_controller: orchestrator,
             // Setting the port to 0 means that the OS will automatically

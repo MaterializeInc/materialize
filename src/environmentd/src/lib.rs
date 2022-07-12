@@ -66,8 +66,8 @@ pub struct Config {
     pub cors_allowed_origin: AllowOrigin,
 
     // === Storage options. ===
-    /// Postgres connection string for catalog's stash.
-    pub catalog_postgres_stash: String,
+    /// Postgres connection string for adapter's stash.
+    pub adapter_stash_url: String,
 
     // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
@@ -132,9 +132,9 @@ pub enum TlsMode {
 /// Start an `environmentd` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
-        &config.catalog_postgres_stash,
+        &config.adapter_stash_url,
     )?)?;
-    let stash = mz_stash::Postgres::new(config.catalog_postgres_stash.clone(), None, tls).await?;
+    let stash = mz_stash::Postgres::new(config.adapter_stash_url.clone(), None, tls).await?;
     let stash = mz_stash::Memory::new(stash);
 
     // Validate TLS configuration, if present.
