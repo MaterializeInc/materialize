@@ -170,6 +170,7 @@ impl<T> ActiveReplicationState<T>
 where
     T: Timestamp + Lattice,
 {
+    #[tracing::instrument(level = "debug", skip(self))]
     fn handle_command(
         &mut self,
         cmd: &ComputeCommand<T>,
@@ -466,6 +467,7 @@ where
     // it returns infallible values.
 
     /// Sends a command to all replicas.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn send(&mut self, cmd: ComputeCommand<T>) {
         let frontiers = self
             .replicas

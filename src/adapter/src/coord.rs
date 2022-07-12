@@ -89,7 +89,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{trace, warn, Instrument};
+use tracing::{event, warn, Instrument, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -1163,7 +1163,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     // Advance a local input (table). This downgrades the capabilitiy of a table,
     // which means that it can no longer produce new data before this timestamp.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "debug", skip_all, fields(num_tables = inputs.ids.len()))]
     async fn advance_local_input(&mut self, inputs: AdvanceLocalInput<mz_repr::Timestamp>) {
         // We split up table advancement into batches of requests so that user queries
         // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
@@ -1212,12 +1212,6 @@ impl<S: Append + 'static> Coordinator<S> {
         let num_updates = appends.len();
         self.controller.storage_mut().append(appends).await.unwrap();
         let elapsed = start.elapsed();
-        trace!(
-            "advance_local_inputs for {} tables to {} took: {} ms",
-            num_updates,
-            inputs.advance_to,
-            elapsed.as_millis()
-        );
         if elapsed > (MAX_WAIT + WINDOW) {
             self.advance_tables.decrease_batch();
         } else if elapsed < (MAX_WAIT - WINDOW) && num_updates == self.advance_tables.batch_size {
@@ -1231,6 +1225,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
+    #[tracing::instrument(level = "trace", skip(self))]
     async fn try_group_commit(&mut self) {
         if self.pending_writes.is_empty() {
             return;
@@ -1286,6 +1281,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the write.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn group_commit(&mut self) {
         if self.pending_writes.is_empty() {
             return;
@@ -1351,8 +1347,9 @@ impl<S: Append + 'static> Coordinator<S> {
         self.pending_writes.push(pending_write_txn);
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_controller(&mut self, message: ControllerResponse) {
+        event!(Level::TRACE, message = format!("{:?}", message));
         match message {
             ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
                 // We expect exactly one peek response, which we forward. Then we clean up the
@@ -1426,6 +1423,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self, tx, session))]
     async fn message_create_source_statement_ready(
         &mut self,
         CreateSourceStatementReady {
@@ -1474,6 +1472,7 @@ impl<S: Append + 'static> Coordinator<S> {
         tx.send(result, session);
     }
 
+    #[tracing::instrument(level = "debug", skip(self, tx, session))]
     async fn message_sink_connection_ready(
         &mut self,
         SinkConnectionReady {
@@ -1532,6 +1531,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(id, kind))]
     fn message_send_diffs(
         &mut self,
         SendDiffs {
@@ -1543,6 +1543,7 @@ impl<S: Append + 'static> Coordinator<S> {
             returning,
         }: SendDiffs,
     ) {
+        event!(Level::TRACE, diffs = format!("{:?}", diffs));
         match diffs {
             Ok(diffs) => {
                 tx.send(
@@ -1564,6 +1565,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn message_advance_timelines(&mut self) {
         // Convince the coordinator it needs to open a new timestamp
         // and advance inputs.
@@ -1636,6 +1638,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Remove all pending peeks that were initiated by `conn_id`.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn remove_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
         // The peek is present on some specific compute instance.
         // Allow dataflow to cancel any pending peeks.
@@ -1662,7 +1665,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_command(&mut self, cmd: Command) {
+        event!(Level::TRACE, cmd = format!("{:?}", cmd));
         match cmd {
             Command::Startup {
                 session,
@@ -1742,7 +1747,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
 
-                let span = tracing::debug_span!(parent: &span, "message_command");
+                let span = tracing::debug_span!(parent: &span, "message_command (execute)");
                 self.handle_execute(portal_name, session, tx)
                     .instrument(span)
                     .await;
@@ -1840,6 +1845,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
+        event!(Level::TRACE, event = format!("{:?}", event));
         self.catalog_transact(
             None,
             vec![catalog::Op::UpdateComputeInstanceStatus { event }],
@@ -1977,7 +1983,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Handles an execute command.
-    #[tracing::instrument(level = "debug", skip(self, tx, session))]
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn handle_execute(
         &mut self,
         portal_name: String,
@@ -2000,6 +2006,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.handle_execute_inner(stmt, params, session, tx).await
     }
 
+    #[tracing::instrument(level = "trace", skip(self, tx, session))]
     async fn handle_execute_inner(
         &mut self,
         stmt: Statement<Raw>,
@@ -2334,6 +2341,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(self.ship_dataflow(df, compute_instance).await)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_plan(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
@@ -2341,6 +2349,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
+        event!(Level::TRACE, plan = format!("{:?}", plan));
         match plan {
             Plan::CreateConnection(plan) => {
                 tx.send(
@@ -2632,7 +2641,6 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     // Returns the name of the portal to execute.
-    #[tracing::instrument(level = "debug", skip(self))]
     fn sequence_execute(
         &mut self,
         session: &mut Session,
@@ -3931,12 +3939,13 @@ impl<S: Append + 'static> Coordinator<S> {
     /// deploying the most efficient evaluation plan. The peek could evaluate to a constant,
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
-    #[tracing::instrument(level = "debug", skip(self, session))]
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_peek(
         &mut self,
         session: &mut Session,
         plan: PeekPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        event!(Level::TRACE, plan = format!("{:?}", plan));
         fn check_no_invalid_log_reads<S: Append>(
             catalog: &Catalog<S>,
             compute_instance: &ComputeInstance,
@@ -4925,6 +4934,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(send_immediate_rows(rows))
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn sequence_send_diffs(
         &mut self,
         session: &mut Session,
@@ -4962,6 +4972,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
             usize::try_from(affected_rows).expect("positive isize must fit")
         };
+        event!(
+            Level::TRACE,
+            affected_rows,
+            id = format!("{:?}", plan.id),
+            kind = format!("{:?}", plan.kind),
+            updates = plan.updates.len(),
+            returning = plan.returning.len(),
+        );
 
         session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
             id: plan.id,
@@ -5614,7 +5632,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(result)
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
         // table writes are not batched in a group commit. This is mostly due to the complexity
