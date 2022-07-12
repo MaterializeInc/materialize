@@ -16,8 +16,9 @@ use std::num::NonZeroUsize;
 
 use itertools::Itertools;
 use mz_ore::str::{bracketed, separated};
-use mz_repr::explain_new::{DisplayText, Explain, UnsupportedFormat, DisplayJson};
+use mz_repr::explain_new::{DisplayJson, DisplayText, Explain, Indent, UnsupportedFormat};
 use proptest_derive::Arbitrary;
+use serde::__private::de::Content;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -1991,22 +1992,33 @@ impl Explain<'_> for RowSetFinishing {
 }
 
 impl DisplayText for RowSetFinishing {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "row_set_finishing")?;
-        writeln!(f, "\torder_by: [{}]", bracketed("[", "]", separated(",", &self.order_by)))?;
+    type Context = Indent;
+    fn fmt_text(&self, ctx: &mut Self::Context, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{}row_set_finishing:", ctx)?;
+        *ctx += 1;
+        // order by
+        let order_by = bracketed("[", "]", separated(",", &self.order_by));
+        writeln!(f, "{}order_by: {}", ctx, order_by)?;
+        // limit
         if let Some(limit) = self.limit {
-            writeln!(f, "\tlimit: {}", limit)?;
+            writeln!(f, "{}limit: {}", ctx, limit)?;
         }
+        // offset
         if self.offset > 0 {
-            writeln!(f, "\toffset: {}", self.offset)?;
+            writeln!(f, "{}offset: {}", ctx, self.offset)?;
         }
+        // project
         // TODO: add an option for column ranges?
-        writeln!(f, "\toutput: {}", bracketed("[", "]", separated(",", &self.project)))
+        let project = bracketed("[", "]", separated(",", &self.project));
+        writeln!(f, "{}output: {}", ctx, project)?;
+        *ctx -= 1;
+        Ok(())
     }
 }
 
 impl DisplayJson for RowSetFinishing {
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    type Context = ();
+    fn fmt_json(&self, ctx: &mut Self::Context, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", serde_json::to_string(self).unwrap())
     }
 }
