@@ -34,6 +34,7 @@ use mz_expr::explain::{Indices, ViewExplanation};
 use mz_expr::{ExprHumanizer, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::result::ResultExt;
 use mz_ore::str::{bracketed, separated};
+use mz_repr::explain_new::{DisplayJson, DisplayText, Explain, UnsupportedFormat};
 use mz_repr::GlobalId;
 use mz_storage::client::transforms::LinearOperator;
 
@@ -232,6 +233,100 @@ impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> 
         }
         fmt::Display::fmt(&explain, f)
     }
+}
+
+pub struct ExplainContext<'a> {
+    used_indexes: Vec<GlobalId>,
+    // TODO: uncomment when fast_path_peek has been moved outside of coord.rs
+    //fast_path_plan: Option<fast_path_peek::Plan>,
+    row_set_finishing: Option<RowSetFinishing>,
+    humanizer: &'a dyn ExprHumanizer,
+}
+
+impl<'a> Explain<'a> for ExplainContext<'a> {
+    type Context = ();
+
+    type Text = ContextExplanation;
+
+    type Json = ContextExplanation;
+
+    type Dot = UnsupportedFormat;
+
+    fn explain_text(
+        & mut self,
+        _config: & mz_repr::explain_new::ExplainConfig,
+        _context: & Self::Context,
+    ) -> Result<Self::Text, mz_repr::explain_new::ExplainError> {
+        self.generate_context_explanation()
+    }
+
+    fn explain_json(
+        & mut self,
+        _config: & mz_repr::explain_new::ExplainConfig,
+        _context: & Self::Context,
+    ) -> Result<Self::Json, mz_repr::explain_new::ExplainError> {
+        self.generate_context_explanation()
+    }
+}
+
+impl ExplainContext<'_> {
+    fn generate_context_explanation(
+        &mut self,
+    ) -> Result<ContextExplanation, mz_repr::explain_new::ExplainError> {
+        let used_indexes_names = self
+            .used_indexes
+            .iter()
+            .map(|id| {
+                self.humanizer
+                    .humanize_id(*id)
+                    .unwrap_or_else(|| id.to_string())
+            })
+            .collect();
+        Ok(ContextExplanation {
+            used_indexes_names,
+            row_set_finishing: self.row_set_finishing.clone(),
+        })
+    }
+}
+
+pub struct ContextExplanation {
+    used_indexes_names: Vec<String>,
+    row_set_finishing: Option<RowSetFinishing>,
+}
+
+impl DisplayText for ContextExplanation {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        todo!()
+    }
+}
+
+impl DisplayJson for ContextExplanation {
+    fn fmt_json(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        todo!()
+    }
+}
+
+pub struct SinglePlan<T> {
+    plan: T,
+    // TODO: uncomment this when we want to restore support for typed
+    // somewhat hacky, based on pre-order of the items in the plans
+    // annotations: HashMap<usize, Attributes>
+}
+
+pub struct ExplainSinglePlan<T> {
+    context: ContextExplanation,
+    single_plan: SinglePlan<T>,
+}
+
+pub struct ExplainMultiPlan<T> {
+    context: ContextExplanation,
+    // Maps the names of the sources to the linear operators that will be
+    // on them.
+    // TODO: implement DisplayText and DisplayJson for LinearOperator
+    // there are plans to replace LinearOperator with MFP struct (#6657)
+    sources: Vec<(String, LinearOperator)>,
+    // elements of the vector are in topological order
+    plans: Vec<SinglePlan<T>>,
 }
 
 /// Information used when determining the timestamp for a query.
