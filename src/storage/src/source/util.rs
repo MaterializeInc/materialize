@@ -20,7 +20,7 @@ use timely::Data;
 use mz_ore::collections::CollectionExt;
 use mz_repr::Timestamp;
 
-use super::{SourceStatus, SourceToken};
+use super::SourceToken;
 
 /// Constructs a source named `name` in `scope` whose lifetime is controlled
 /// both internally and externally.
@@ -34,14 +34,13 @@ use super::{SourceStatus, SourceToken};
 /// logic makes sense for the source.
 ///
 /// If `tick` realizes it will never produce data again, it should indicate that
-/// fact by returning [`SourceStatus::Done`], which will immediately drop the
-/// capability and guarantee that `tick` is never called again.
+/// fact by downgrading the given `CapabilitySet` to the empty frontier before
+/// returning. This will guarantee that `tick` is never called again.
 ///
-/// Otherwise, `tick` should return [`SourceStatus::Alive`]. It is `tick`'s
-/// responsibility to inform Timely of its desire to be scheduled again by
-/// chatting with a [`timely::scheduling::activate::Activator`]. Returning
-/// [`SourceStatus::Alive`] does not alone cause the source to be scheduled
-/// again; it merely keeps the capability alive.
+/// It is `tick`'s responsibility to inform Timely of its desire to be scheduled
+/// again by chatting with a [`timely::scheduling::activate::Activator`].
+/// Holding on to capabilities using the `CapabilitySet` does not alone cause
+/// the source to be scheduled again; it merely keeps the source alive.
 ///
 /// The lifetime of the source is also controlled by the returned
 /// [`SourceToken`]. When the last clone of the `SourceToken` is dropped, the
@@ -58,7 +57,7 @@ where
     L: FnMut(
             &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
-        ) -> SourceStatus
+        ) -> ()
         + 'static,
 {
     let mut token = None;
@@ -95,7 +94,8 @@ where
             if let Some(cap) = &mut capability {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
-                if let SourceStatus::Done = tick(cap, &mut data_output.activate()) {
+                tick(cap, &mut data_output.activate());
+                if cap.is_empty() {
                     // The inner source is finished. Drop our capability.
                     capability = None;
                 }

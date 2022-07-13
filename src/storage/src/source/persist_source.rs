@@ -29,7 +29,7 @@ use mz_persist_client::read::ListenEvent;
 use mz_repr::{Diff, Row, Timestamp};
 
 use crate::controller::CollectionMetadata;
-use crate::source::{SourceStatus, YIELD_INTERVAL};
+use crate::source::YIELD_INTERVAL;
 use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 
@@ -131,7 +131,8 @@ where
                             cap_set.downgrade(upper.iter());
 
                             if upper.is_empty() {
-                                return SourceStatus::Done;
+                                // Return early because we're done now.
+                                return;
                             }
                         }
                         Some(Ok(ListenEvent::Updates(mut updates))) => {
@@ -176,15 +177,17 @@ where
                             // TODO(petrosagg): error handling
                             panic!("unexpected error from persist {e}");
                         }
-                        None => return SourceStatus::Done,
+                        None => {
+                            // Empty out the `CapabilitySet` to indicate that we're done.
+                            cap_set.downgrade(&[]);
+                            return;
+                        }
                     }
                     if timer.elapsed() > YIELD_INTERVAL {
                         activator.activate();
                         break;
                     }
                 }
-
-                SourceStatus::Alive
             }
         });
 

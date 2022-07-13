@@ -324,15 +324,6 @@ pub struct SourceToken {
     _activator: Rc<ActivateOnDrop<()>>,
 }
 
-/// The status of a source.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum SourceStatus {
-    /// The source is still alive.
-    Alive,
-    /// The source is complete.
-    Done,
-}
-
 /// Types that implement this trait expose a length function
 pub trait MaybeLength {
     /// Returns the size of the object
@@ -882,7 +873,9 @@ where
         let activator = scope.activator_for(&info.address[..]);
         move |cap_set, output| {
             if !active {
-                return SourceStatus::Done;
+                // Empty out the `CapabilitySet` to indicate that we're done.
+                cap_set.downgrade(&[]);
+                return;
             }
 
             // Accumulate updates to bytes_read for Prometheus metrics collection
@@ -893,7 +886,6 @@ where
             source_metrics.operator_scheduled_counter.inc();
 
             let mut context = Context::from_waker(&waker);
-            let mut source_status = SourceStatus::Alive;
 
             let timer = Instant::now();
 
@@ -907,10 +899,9 @@ where
 
                         cap_set.downgrade(upper.iter());
 
-                        // WIP: Can we remove the bit about SourceStatus::Done
-                        // now?
                         if upper.is_empty() {
-                            source_status = SourceStatus::Done;
+                            // Return early because this source is done now.
+                            break;
                         }
                     }
                     Event::Message(ts, message) => match message {
@@ -952,8 +943,6 @@ where
                     .cloned()
                     .unwrap_or(Timestamp::MAX),
             );
-
-            source_status
         }
     });
     let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", |r| r);
