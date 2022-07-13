@@ -18,4 +18,4 @@ COPY storaged /usr/local/bin/
 
 USER materialize
 
-ENTRYPOINT ["tini", "--", "storaged", "--controller-listen-addr=0.0.0.0:2100", "--internal-http-listen-addr=0.0.0.0:6877"]
+ENTRYPOINT ["tini", "--", "storaged", "--controller-listen-addr=0.0.0.0:2100", "--internal-http-listen-addr=0.0.0.0:6878"]

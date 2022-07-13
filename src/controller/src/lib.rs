@@ -297,7 +297,7 @@ where
                                 },
                                 ServicePort {
                                     name: "internal-http".into(),
-                                    port_hint: 6877,
+                                    port_hint: 6878,
                                 },
                             ],
                             cpu_limit: allocation.cpu_limit,

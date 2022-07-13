@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-args=(--controller-listen-addr=0.0.0.0:2100 --internal-http-listen-addr=0.0.0.0:6877)
+args=(--controller-listen-addr=0.0.0.0:2100 --internal-http-listen-addr=0.0.0.0:6878)
 if [[ "${KUBERNETES_SERVICE_HOST:-}" ]]; then
     # Hack: if running in Kubernetes, we parse the process index from the
     # hostname, if possible. At present this is the only known way to get the
