@@ -88,7 +88,7 @@ pub struct Args {
     shard_id: Option<String>,
 
     /// The address of the internal HTTP server.
-    #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
+    #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6878")]
     internal_http_listen_addr: SocketAddr,
 
     /// Path of a file to write metrics at the end of the run.

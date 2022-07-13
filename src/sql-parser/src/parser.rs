@@ -1940,7 +1940,7 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT, POSTGRES])? {
+        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT, POSTGRES, SSH])? {
             KAFKA => {
                 let with_options =
                     self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
@@ -1956,6 +1956,12 @@ impl<'a> Parser<'a> {
                 let with_options =
                     self.parse_comma_separated(Parser::parse_postgres_connection_options)?;
                 CreateConnection::Postgres { with_options }
+            }
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_ssh_connection_options)?;
+                CreateConnection::Ssh { with_options }
             }
             _ => unreachable!(),
         };
@@ -2029,12 +2035,16 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> Result<PostgresConnectionOption<Raw>, ParserError> {
         let name = match self
-            .expect_one_of_keywords(&[DATABASE, HOST, PASSWORD, PORT, SSL, USER, USERNAME])?
+            .expect_one_of_keywords(&[DATABASE, HOST, PASSWORD, PORT, SSH, SSL, USER, USERNAME])?
         {
             DATABASE => PostgresConnectionOptionName::Database,
             HOST => PostgresConnectionOptionName::Host,
             PASSWORD => PostgresConnectionOptionName::Password,
             PORT => PostgresConnectionOptionName::Port,
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                PostgresConnectionOptionName::SshTunnel
+            }
             SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
                 CERTIFICATE => {
                     if self.parse_keyword(AUTHORITY) {
@@ -2053,6 +2063,21 @@ impl<'a> Parser<'a> {
 
         let _ = self.consume_token(&Token::Eq);
         Ok(PostgresConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
+    fn parse_ssh_connection_options(&mut self) -> Result<SshConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[HOST, PORT, USER])? {
+            HOST => SshConnectionOptionName::Host,
+            PORT => SshConnectionOptionName::Port,
+            USER => SshConnectionOptionName::User,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(SshConnectionOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })

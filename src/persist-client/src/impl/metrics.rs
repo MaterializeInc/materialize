@@ -210,6 +210,7 @@ impl MetricsVecs {
             compare_and_append: self.cmd_metrics("compare_and_append"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
             expire_reader: self.cmd_metrics("expire_reader"),
+            expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
         }
     }
@@ -344,6 +345,7 @@ pub struct CmdsMetrics {
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
+    pub(crate) expire_writer: CmdMetrics,
     pub(crate) merge_res: CmdMetrics,
 }
 

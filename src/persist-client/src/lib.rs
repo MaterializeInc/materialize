@@ -34,9 +34,9 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::encoding::parse_id;
-use crate::r#impl::machine::{retry_external, Machine};
+use crate::r#impl::machine::{retry_external, system_time, Machine};
 use crate::read::{ReadHandle, ReaderId};
-use crate::write::WriteHandle;
+use crate::write::{WriteHandle, WriterId};
 
 pub mod batch;
 pub mod cache;
@@ -296,39 +296,10 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open shard_id={:?}", shard_id);
-        let mut machine = Machine::new(
-            shard_id,
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.metrics),
-        )
-        .await?;
-        let compactor = self.cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-            )
-        });
-        let reader_id = ReaderId::new();
-        let (shard_upper, read_cap) = machine.register(&reader_id).await;
-        let writer = WriteHandle {
-            cfg: self.cfg.clone(),
-            metrics: Arc::clone(&self.metrics),
-            machine: machine.clone(),
-            compactor,
-            blob: Arc::clone(&self.blob),
-            upper: shard_upper.0,
-        };
-        let reader = ReadHandle {
-            metrics: Arc::clone(&self.metrics),
-            reader_id,
-            machine,
-            blob: Arc::clone(&self.blob),
-            since: read_cap.since,
-            explicitly_expired: false,
-        };
-
-        Ok((writer, reader))
+        Ok((
+            self.open_writer(shard_id).await?,
+            self.open_reader(shard_id).await?,
+        ))
     }
 
     /// [Self::open], but returning only a [ReadHandle].
@@ -347,10 +318,24 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open_reader shard_id={:?}", shard_id);
-        // At the moment, writers aren't registered, so there's nothing special
-        // to do here. Introduce the method, though, so that code using persist
-        // doesn't have to change if we bring writer registration back.
-        let (_, reader) = self.open(shard_id).await?;
+        let mut machine = Machine::new(
+            shard_id,
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.metrics),
+        )
+        .await?;
+
+        let reader_id = ReaderId::new();
+        let (_, read_cap) = machine.register_reader(&reader_id).await;
+        let reader = ReadHandle {
+            metrics: Arc::clone(&self.metrics),
+            reader_id,
+            machine,
+            blob: Arc::clone(&self.blob),
+            since: read_cap.since,
+            explicitly_expired: false,
+        };
+
         Ok(reader)
     }
 
@@ -383,14 +368,17 @@ impl PersistClient {
                 Arc::clone(&self.metrics),
             )
         });
-        let shard_upper = machine.fetch_upper().await;
+        let writer_id = WriterId::new();
+        let (shard_upper, _) = machine.register_writer(&writer_id, system_time()).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
+            writer_id,
             machine,
             compactor,
             blob: Arc::clone(&self.blob),
-            upper: shard_upper,
+            upper: shard_upper.0,
+            explicitly_expired: false,
         };
         Ok(writer)
     }

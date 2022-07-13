@@ -31,9 +31,10 @@
 use std::fmt;
 
 use mz_expr::explain::{Indices, ViewExplanation};
-use mz_expr::{ExprHumanizer, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::result::ResultExt;
 use mz_ore::str::{bracketed, separated};
+use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::GlobalId;
 use mz_storage::client::transforms::LinearOperator;
 

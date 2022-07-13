@@ -22,7 +22,13 @@ count
 ----
 2001
 
-> CREATE MATERIALIZED VIEW delta_join (t1_f1, t1_f2, t2_f1, t2_f2) AS SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1;
+> CREATE VIEW delta_join (t1_f1, t1_f2, t2_f1, t2_f2) AS SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1;
+
+# This causes a delta join to be executed.
+> SELECT COUNT(*) FROM delta_join;
+count
+----
+1
 
 > EXPLAIN VIEW delta_join;
 "%0 =| Get t1| ArrangeBy (#0)%1 =| Get t2| ArrangeBy (#0)%2 =| Join %0 %1 (= #0 #2)| | implementation = DeltaQuery| |   delta %0 %1.(#0)| |   delta %1 %0.(#0)| Filter !(isnull(#0))| Project (#0, #1, #0, #3)"
@@ -58,37 +64,3 @@ count
   ORDER BY sent;
 sent
 ----
-
-
-> INSERT INTO t2 SELECT s, s FROM generate_series(2001, 4000) AS s;
-> SELECT count(*) AS count FROM t2;
-count
-----
-4001
-
-# The update stream in delta path 1 now projects the new 2000 t2 records
-# inserted after the view was created
-> SELECT
-    sum(sent) as sent
-  FROM
-    mz_catalog.mz_dataflow_channels AS channels
-    LEFT JOIN mz_catalog.mz_message_counts AS counts
-        ON channels.id = counts.channel AND channels.worker = counts.source_worker
-  WHERE id IN
-        (SELECT id
-         FROM mz_catalog.mz_dataflow_operator_addresses
-         WHERE address[1] =
-             (SELECT DISTINCT address[1]
-              FROM mz_catalog.mz_dataflow_operator_addresses
-              WHERE id =
-                  (SELECT DISTINCT id
-                   FROM mz_catalog.mz_dataflow_names
-                   WHERE name LIKE '%.delta_join%')))
-  GROUP BY id, source_node, target_node, source_port, target_port
-  HAVING sum(sent) > 100
-  ORDER BY sent;
-sent
-----
-2000
-2000
-2000

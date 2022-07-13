@@ -76,4 +76,5 @@ message ProtoPostgresConnection {
     mz_proto.tokio_postgres.ProtoSslMode tls_mode = 6;
     ProtoStringOrSecret tls_root_cert = 7;
     ProtoTlsIdentity tls_identity = 8;
+    optional string ssh_tunnel = 9;
 }

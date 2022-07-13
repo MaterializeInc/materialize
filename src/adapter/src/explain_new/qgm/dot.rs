@@ -9,6 +9,8 @@
 
 //! DOT format `EXPLAIN` support for `QGM` structures.
 
+use std::fmt;
+
 use mz_repr::explain_new::DisplayDot;
 
 /// A very naive way of representing a
@@ -37,8 +39,8 @@ impl From<String> for ModelDotExplanation {
     }
 }
 
-impl DisplayDot for ModelDotExplanation {
-    fn fmt_dot(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl DisplayDot<()> for ModelDotExplanation {
+    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         f.write_str(&self.0)
     }
 }

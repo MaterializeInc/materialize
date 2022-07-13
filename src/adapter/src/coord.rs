@@ -89,7 +89,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{event, warn, Instrument, Level};
+use tracing::{event, span, warn, Instrument, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -105,7 +105,7 @@ use mz_controller::{
     ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
 };
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
+    permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
@@ -115,6 +115,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::{stack, task};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
 };
@@ -166,7 +167,7 @@ use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprP
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_holds::ReadHolds;
 use crate::error::AdapterError;
-use crate::explain_new::{ExplainContext, Explainable};
+use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -179,7 +180,8 @@ pub mod id_bundle;
 mod dataflow_builder;
 mod indexes;
 
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1);
+/// The default is set to a second to track the default timestamp frequency for sources.
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
@@ -1121,6 +1123,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     Message::AdvanceLocalInput(inputs)
                 },
             };
+
+            // All message processing functions trace. Start a parent span for them to make
+            // it easy to find slow messages.
+            let span = span!(Level::DEBUG, "coordinator message processing");
+            let _enter = span.enter();
 
             match msg {
                 Message::Command(cmd) => self.message_command(cmd).await,
@@ -4618,7 +4625,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut raw_plan).explain(&format, &config, &context)?
@@ -4630,7 +4639,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut model).explain(&format, &config, &context)?
@@ -4643,7 +4654,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut model).explain(&format, &config, &context)?
@@ -4657,7 +4670,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -4671,7 +4686,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -4690,7 +4707,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
