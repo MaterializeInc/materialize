@@ -294,6 +294,49 @@ body {
     text-align: left;
 }
 
+.edit-page {
+    float: right;
+    margin-top: 80px;
+    font-size: 14px;
+
+    svg {
+            position: relative;
+            top: 6px;
+            color: $purple-v2;
+        }
+
+    .btn {
+        background-color: $light-grey-v2;
+        color: $medium-purple-v2;
+        border-radius: 4px;
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0.4375rem;
+        padding: 0.8125rem 1.625rem;
+        position: relative;
+        user-select: none;
+        z-index: 1;
+        transition: color 350ms ease, background-color 350ms ease;
+
+        &:hover {
+            opacity: 1;
+            color: $light-grey-v2;
+            background-color: $medium-purple-v2;
+
+            svg {
+                color: inherit;
+            }
+        }
+
+        svg {
+            position: relative;
+            top: 6px;
+            color: $purple-v2;
+            margin-right: 6px;
+        }
+    }
+}
+
 header {
     height: 105px;
 
