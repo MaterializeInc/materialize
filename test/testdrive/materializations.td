@@ -305,6 +305,8 @@ $ kafka-create-topic topic=mat
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mat-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
+> CREATE DEFAULT INDEX ON mat_data
+
 > SELECT * from mat_data
 
 $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=1

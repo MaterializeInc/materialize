@@ -141,6 +141,8 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
+> CREATE DEFAULT INDEX ON non_dbz_data_materialized
+
 # Propagating monotonicity analysis from a materialized source
 
 > CREATE VIEW v3 AS SELECT * FROM non_dbz_data_materialized ORDER BY b LIMIT 3

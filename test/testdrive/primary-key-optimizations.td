@@ -42,6 +42,8 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;
 
+> CREATE DEFAULT INDEX ON t1
+
 # Optimization is possible - no distinct is mentioned in the plan
 
 > EXPLAIN SELECT DISTINCT key1, key2 FROM t1;
@@ -146,6 +148,8 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
   'testdrive-t1-pkne-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE;
+
+> CREATE DEFAULT INDEX ON t1_pkne
 
 # Optimization is possible - no distinct is mentioned in the plan
 

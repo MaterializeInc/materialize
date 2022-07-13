@@ -96,6 +96,8 @@ $ kafka-create-topic topic=nums
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
 
+> CREATE DEFAULT INDEX ON nums
+
 # Disable logical compaction, to ensure we can view historical detail.
 > ALTER INDEX materialize.public.nums_primary_idx
   SET (LOGICAL COMPACTION WINDOW = 0)
