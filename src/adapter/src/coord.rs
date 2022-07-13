@@ -180,8 +180,6 @@ pub mod id_bundle;
 mod dataflow_builder;
 mod indexes;
 
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1);
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -1192,9 +1190,9 @@ impl<S: Append + 'static> Coordinator<S> {
             tokio::time::interval(self.catalog.config().timestamp_frequency);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
-        // TODO(jkosh44) don't hardcoded interval
         // Interval for updating compaction groups
-        let mut update_compaction_groups = tokio::time::interval(Duration::from_millis(1_0000));
+        let mut update_compaction_groups =
+            tokio::time::interval(self.catalog.config().timestamp_frequency);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -5581,9 +5579,9 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut options = Vec::with_capacity(plan.options.len());
         for o in plan.options {
             options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(Duration::from_millis),
-                ),
+                IndexOptionName::LogicalCompactionWindow => {
+                    IndexOption::LogicalCompactionWindow(None)
+                }
             });
         }
 
@@ -5992,9 +5990,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             ))]
                         }
                         None => {
-                            vec![ReadCapabilityUpdate::BasePolicy(Some(
-                                ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-                            ))]
+                            vec![ReadCapabilityUpdate::BasePolicy(None)]
                         }
                     };
                     needs.update(read_capability_updates);
