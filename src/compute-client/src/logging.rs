@@ -9,7 +9,7 @@
 
 //! Compute layer logging configuration.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 #[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub granularity_ns: u128,
-    pub active_logs: HashMap<LogVariant, GlobalId>,
+    pub active_logs: BTreeMap<LogVariant, GlobalId>,
     // Whether we should report logs for the log-processing dataflows
     pub log_logging: bool,
 }
@@ -71,7 +71,7 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoActiveLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum LogVariant {
     Timely(TimelyLog),
     Differential(DifferentialLog),
@@ -101,7 +101,7 @@ impl RustType<ProtoLogVariant> for LogVariant {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum TimelyLog {
     Operates,
     Channels,
@@ -149,7 +149,7 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum DifferentialLog {
     ArrangementBatches,
     ArrangementRecords,
@@ -181,7 +181,7 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum ComputeLog {
     DataflowCurrent,
     DataflowDependency,
