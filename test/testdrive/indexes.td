@@ -22,10 +22,23 @@ $ kafka-create-topic topic=data
 $ kafka-ingest topic=data format=avro schema=${writer-schema}
 {"a": 1, "b": 1}
 
-# Materialized sources are synonymous with having an index automatically created
-> CREATE SOURCE mz_data
+# Sources do not have indexes automatically created
+> CREATE SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${writer-schema}'
+
+> SHOW INDEXES FROM data
+cluster on_name  key_name  seq_in_index  column_name  expression  nullable
+--------------------------------------------------------------------------
+
+# Sources can have default indexes added
+> CREATE DEFAULT INDEX ON data
+
+> SHOW INDEXES FROM data
+cluster           on_name  key_name          seq_in_index column_name  expression  nullable
+-------------------------------------------------------------------------------------------
+<VARIABLE_OUTPUT> data     data_primary_idx  1            a            <null>      false
+<VARIABLE_OUTPUT> data     data_primary_idx  2            b            <null>      false
 
 > SELECT index_position FROM mz_index_columns WHERE index_id LIKE '%u%'
 index_position
@@ -38,40 +51,6 @@ position         name
 ----------------------
 1                a
 2                b
-
-> SHOW INDEXES FROM mz_data
-cluster on_name  key_name             seq_in_index  column_name  expression  nullable
----------------------------------------------------------------------------------------------
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx  1             a            <null>      false
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx  2             b            <null>      false
-
-# Non-materialized views do not have indexes automatically created
-> CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${writer-schema}'
-
-> SHOW INDEXES FROM data
-cluster on_name  key_name  seq_in_index  column_name  expression  nullable
-------------------------------------------------------------------------------------------
-
-# Views can have default indexes added
-> CREATE DEFAULT INDEX ON data
-
-> SHOW INDEXES FROM data
-cluster on_name  key_name          seq_in_index column_name  expression  nullable
-----------------------------------------------------------------------------------------
-<VARIABLE_OUTPUT> data     data_primary_idx  1            a            <null>      false
-<VARIABLE_OUTPUT> data     data_primary_idx  2            b            <null>      false
-
-> CREATE DEFAULT INDEX ON mz_data
-
-> SHOW INDEXES FROM mz_data
-cluster on_name  key_name              seq_in_index  column_name  expression  nullable
----------------------------------------------------------------------------------------------
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx   1             a            <null>      false
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx   2             b            <null>      false
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx1  1             a            <null>      false
-<VARIABLE_OUTPUT> mz_data  mz_data_primary_idx1  2             b            <null>      false
 
 # Materialized views are synonymous with having an index automatically created
 > CREATE MATERIALIZED VIEW matv AS

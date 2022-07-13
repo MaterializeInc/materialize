@@ -27,6 +27,8 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
+> CREATE DEFAULT INDEX ON mz_data
+
 > CREATE SINK sink1 FROM mz_data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
