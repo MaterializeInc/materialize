@@ -89,7 +89,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{event, warn, Instrument, Level};
+use tracing::{event, span, warn, Instrument, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -1036,6 +1036,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     Message::AdvanceLocalInput(inputs)
                 },
             };
+
+            // All message processing functions trace. Start a parent span for them to make
+            // it easy to find slow messages.
+            let span = span!(Level::DEBUG, "coordinator message processing");
+            let _enter = span.enter();
 
             match msg {
                 Message::Command(cmd) => self.message_command(cmd).await,
