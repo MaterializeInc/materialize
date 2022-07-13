@@ -1326,7 +1326,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(config).unwrap();
     let mut mz_client = server.connect(postgres::NoTls)?;
 
-    let pg_client = create_postgres_source_with_table(
+    let (pg_client, cleanup_fn) = create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         "v",
@@ -1348,13 +1348,21 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     }
 
     // Wait for view to be populated.
-    while mz_client
-        .query_one("SELECT COUNT(*) FROM v;", &[])?
-        .get::<_, i64>(0)
-        != source_rows
-    {
-        thread::sleep(Duration::from_millis(1));
-    }
+    Retry::default()
+        .retry(|_| {
+            let rows = mz_client
+                .query_one("SELECT COUNT(*) FROM v;", &[])
+                .unwrap()
+                .get::<_, i64>(0);
+            if rows == source_rows {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Waiting for {source_rows} rows to be ingested. Currently at {rows}."
+                ))
+            }
+        })
+        .unwrap();
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mut mz_join_client = server.connect(postgres::NoTls)?;
@@ -1364,7 +1372,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
             .get::<_, i64>(0))
     })?;
 
-    cleanup_postgres_source(&mut mz_client, "v", "mz_source")?;
+    cleanup_fn(&mut mz_client)?;
 
     Ok(())
 }
@@ -1410,14 +1418,21 @@ fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMil
 
 /// Helper function to create a Postgres source.
 ///
-/// IMPORTANT: Make sure to call `cleanup_postgres_source` at the end of the test.
+/// IMPORTANT: Make sure to call closure that is returned at
+/// the end of the test to clean up Postgres state.
 fn create_postgres_source_with_table(
     runtime: &Arc<Runtime>,
     mz_client: &mut postgres::Client,
     table_name: &str,
     table_schema: &str,
     source_name: &str,
-) -> Result<Client, Box<dyn Error>> {
+) -> Result<
+    (
+        Client,
+        impl FnOnce(&mut postgres::Client) -> Result<(), Box<dyn Error>>,
+    ),
+    Box<dyn Error>,
+> {
     let postgres_url = env::var("POSTGRES_URL")
         .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
 
@@ -1483,16 +1498,12 @@ fn create_postgres_source_with_table(
         "CREATE MATERIALIZED VIEWS FROM SOURCE {source_name} ({table_name});"
     ))?;
 
-    Ok(pg_client)
-}
-
-fn cleanup_postgres_source(
-    mz_client: &mut postgres::Client,
-    table_name: &str,
-    source_name: &str,
-) -> Result<(), Box<dyn Error>> {
-    mz_client.batch_execute(&format!("DROP VIEW {table_name};"))?;
-    mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
-    mz_client.batch_execute(&"DROP CONNECTION pgconn;")?;
-    Ok(())
+    let table_name = table_name.to_string();
+    let source_name = source_name.to_string();
+    Ok((pg_client, move |mz_client: &mut postgres::Client| {
+        mz_client.batch_execute(&format!("DROP VIEW {table_name};"))?;
+        mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
+        mz_client.batch_execute(&"DROP CONNECTION pgconn;")?;
+        Ok(())
+    }))
 }
