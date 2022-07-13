@@ -194,7 +194,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks { conn_id: ConnectionId },
-    UpdateReadHolds,
 }
 
 #[derive(Debug)]
@@ -1079,9 +1078,6 @@ impl<S: Append + 'static> Coordinator<S> {
             tokio::time::interval(self.catalog.config().timestamp_frequency);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
-        // Interval for updating read holds on all objects
-        let mut update_read_holds =
-            tokio::time::interval(self.catalog.config().timestamp_frequency);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1112,9 +1108,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
-                // `tick()` on `Interval` is cancel-safe:
-                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = update_read_holds.tick() => Message::UpdateReadHolds,
 
                 // At the lowest priority, process table advancements. This is a blocking
                 // HashMap instead of a channel so that we can delay the determination of
@@ -1179,9 +1172,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 // path that responds to the client (e.g. reporting an error).
                 Message::RemovePendingPeeks { conn_id } => {
                     self.remove_pending_peeks(conn_id).await;
-                }
-                Message::UpdateReadHolds => {
-                    self.message_update_read_holds().await;
                 }
             }
 
@@ -1622,31 +1612,32 @@ impl<S: Append + 'static> Coordinator<S> {
         // is in. We step back the value of `now()` so that the
         // next write can happen at `now()` and not a value above
         // `now()`
-        let nows: HashMap<_, _> = self
-            .global_timelines
-            .keys()
-            .cloned()
-            .map(|timeline| {
-                let now = if timeline == Timeline::EpochMilliseconds {
-                    let now = self.now();
-                    now.step_back().unwrap_or(now)
-                } else {
-                    // For non realtime sources, we define now as the largest timestamp, not in
-                    // advance of any object's upper. This is the largest timestamp that is closed
-                    // to writes.
-                    let id_bundle = self.ids_in_timeline(&timeline);
-                    self.largest_not_in_advance_of_upper(&id_bundle)
-                };
-                (timeline, now)
-            })
-            .collect();
-
-        for (timeline, TimelineState { oracle, .. }) in &mut self.global_timelines {
-            let now = nows[timeline];
+        let global_timelines = std::mem::take(&mut self.global_timelines);
+        for (
+            timeline,
+            TimelineState {
+                mut oracle,
+                read_holds,
+            },
+        ) in global_timelines
+        {
+            let now = if timeline == Timeline::EpochMilliseconds {
+                let now = self.now();
+                now.step_back().unwrap_or(now)
+            } else {
+                // For non realtime sources, we define now as the largest timestamp, not in
+                // advance of any object's upper. This is the largest timestamp that is closed
+                // to writes.
+                let id_bundle = self.ids_in_timeline(&timeline);
+                self.largest_not_in_advance_of_upper(&id_bundle)
+            };
             oracle
-                .fast_forward(now, |ts| self.catalog.persist_timestamp(timeline, ts))
+                .fast_forward(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
-            let _ = oracle.read_ts();
+            let read_ts = oracle.read_ts();
+            let read_holds = self.update_read_hold(read_holds, read_ts).await;
+            self.global_timelines
+                .insert(timeline, TimelineState { oracle, read_holds });
         }
     }
 
@@ -1898,24 +1889,6 @@ impl<S: Append + 'static> Coordinator<S> {
         )
         .await
         .expect("updating compute instance status cannot fail");
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn message_update_read_holds(&mut self) {
-        let global_timelines = std::mem::take(&mut self.global_timelines);
-        for (
-            timeline,
-            TimelineState {
-                mut oracle,
-                read_holds,
-            },
-        ) in global_timelines
-        {
-            let new_time = oracle.read_ts();
-            let read_holds = self.update_read_hold(read_holds, new_time).await;
-            self.global_timelines
-                .insert(timeline, TimelineState { oracle, read_holds });
-        }
     }
 
     async fn handle_statement(
