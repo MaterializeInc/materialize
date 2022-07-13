@@ -442,6 +442,13 @@ where
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
         if let Readiness::NotReady = self.readiness {
+            if self.compute.is_empty() {
+                // If there are no clients, block forever. This signals that
+                // there may be more work to do (e.g., if a compute instance
+                // is created). Calling `select_all` with an empty list of
+                // futures will panic.
+                future::pending().await
+            }
             // The underlying `ready` methods are cancellation safe, so it is
             // safe to construct this `select!`.
             let computes = future::select_all(

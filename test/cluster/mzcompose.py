@@ -76,6 +76,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-cluster",
         "test-github-12251",
         "test-remote-storaged",
+        "test-drop-default-cluster",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -204,3 +205,14 @@ def workflow_test_remote_storaged(c: Composition) -> None:
 
         c.up("storaged")
         c.run("testdrive", "storaged/04-after-storaged-restart.td")
+
+
+def workflow_test_drop_default_cluster(c: Composition) -> None:
+    """Test that the default cluster can be dropped"""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.wait_for_materialized()
+
+    c.sql("DROP CLUSTER default CASCADE")
+    c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
