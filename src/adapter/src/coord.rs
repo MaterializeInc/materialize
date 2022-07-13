@@ -5801,10 +5801,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect::<BTreeSet<_>>();
 
         let compute_ids = vec![(compute_instance, compute_ids)].into_iter().collect();
-        let since = self.least_valid_read(&CollectionIdBundle {
+        let id_bundle = CollectionIdBundle {
             storage_ids,
             compute_ids,
-        });
+        };
+        let since = self.least_valid_read(&id_bundle);
 
         // Ensure that the dataflow's `as_of` is at least `since`.
         if let Some(as_of) = &mut dataflow.as_of {
@@ -5818,8 +5819,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 since
             );
         } else {
-            // Bind the since frontier to the dataflow description.
-            dataflow.set_as_of(since);
+            // Bind the largest readable antichain to the dataflow description.
+            let mut as_of = Antichain::from_elem(self.largest_not_in_advance_of_upper(&id_bundle));
+            as_of.join_assign(&since);
+            dataflow.set_as_of(as_of);
         }
 
         mz_compute_client::plan::Plan::finalize_dataflow(dataflow)
