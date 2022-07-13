@@ -8,11 +8,9 @@
 # by the Apache License, Version 2.0.
 
 import time
-from pathlib import Path
 
 from pg8000.dbapi import ProgrammingError
 
-from materialize import spawn
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Computed,
@@ -74,40 +72,30 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    for name in [
+        "test-cluster",
+        "test-github-12251",
+        "test-remote-storaged",
+    ]:
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Run testdrive in a variety of compute cluster configurations."""
+
     parser.add_argument(
-        "--redpanda",
-        action="store_true",
-        help="run against Redpanda instead of the Confluent Platform",
+        "glob",
+        nargs="*",
+        default=["smoke/*.td"],
+        help="run against the specified files",
     )
     args = parser.parse_args()
 
-    # remote storaged tests
-    test_remote_storaged(c, args.redpanda)
     c.down(destroy_volumes=True)
-
-    # remote cluster tests
-    test_cluster(c, "smoke/*.td")
-    test_github_12251(c)
-
-
-def workflow_nightly(c: Composition) -> None:
-    """Run cluster testdrive"""
     c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", "localstack"]
     )
-    # Skip tests that use features that are not supported yet.
-    files = spawn.capture(
-        [
-            "sh",
-            "-c",
-            "grep -rLE 'mz_catalog|mz_records_' testdrive/*.td",
-        ],
-        cwd=Path(__file__).parent.parent,
-    ).split()
-    test_cluster(c, *files)
-
-
-def test_cluster(c: Composition, *glob: str) -> None:
     c.up("materialized")
     c.wait_for_materialized()
 
@@ -118,7 +106,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.sql(
         "CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100', 'computed_2:2100']));"
     )
-    c.run("testdrive", *glob)
+    c.run("testdrive", *args.glob)
 
     # Add a replica to that remote cluster and verify that tests still pass.
     c.up("computed_3")
@@ -126,20 +114,22 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.sql(
         "CREATE CLUSTER REPLICA cluster1.replica2 REMOTE ['computed_3:2100', 'computed_4:2100']"
     )
-    c.run("testdrive", *glob)
+    c.run("testdrive", *args.glob)
 
     # Kill one of the nodes in the first replica of the compute cluster and
     # verify that tests still pass.
     c.kill("computed_1")
-    c.run("testdrive", *glob)
+    c.run("testdrive", *args.glob)
 
     # Leave only replica 2 up and verify that tests still pass.
     c.sql("DROP CLUSTER REPLICA cluster1.replica1")
-    c.run("testdrive", *glob)
+    c.run("testdrive", *args.glob)
 
 
-# This tests that the client does not wait indefinitely on a resource that crashed
-def test_github_12251(c: Composition) -> None:
+def workflow_test_github_12251(c: Composition) -> None:
+    """Test that clients do not wait indefinitely for a crashed resource."""
+
+    c.down(destroy_volumes=True)
     c.up("materialized")
     c.wait_for_materialized()
     c.up("computed_1")
@@ -176,7 +166,11 @@ def test_github_12251(c: Composition) -> None:
     c.sql("SELECT * FROM log_table;")
 
 
-def test_remote_storaged(c: Composition, redpanda: bool) -> None:
+def workflow_test_remote_storaged(c: Composition) -> None:
+    """Test creating sources in a remote storaged process."""
+
+    c.down(destroy_volumes=True)
+
     with c.override(
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
         # Use a separate PostgreSQL service for persist rather than the one in
@@ -187,11 +181,14 @@ def test_remote_storaged(c: Composition, redpanda: bool) -> None:
             options="--persist-consensus-url=postgres://postgres:postgres@postgres"
         ),
     ):
-        dependencies = ["materialized", "postgres", "storaged"]
-        if redpanda:
-            dependencies += ["redpanda"]
-        else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies = [
+            "materialized",
+            "postgres",
+            "storaged",
+            "zookeeper",
+            "kafka",
+            "schema-registry",
+        ]
         c.start_and_wait_for_tcp(
             services=dependencies,
         )

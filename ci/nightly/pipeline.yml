@@ -185,7 +185,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
-          run: nightly
+          run: default
+          args: [testdrive/*.td]
 
   - id: testdrive-workers-1
     label: ":racing_car: testdrive with --workers 1"
