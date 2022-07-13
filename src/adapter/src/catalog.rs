@@ -414,7 +414,7 @@ impl CatalogState {
         let logging = match introspection {
             None => None,
             Some(introspection) => {
-                let mut active_logs = HashMap::new();
+                let mut active_logs = BTreeMap::new();
                 for (log, index_id) in introspection_sources {
                     let source_name = FullObjectName {
                         database: RawDatabaseSpecifier::Ambient,
