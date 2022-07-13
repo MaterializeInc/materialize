@@ -263,7 +263,8 @@ mod delta_queries {
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
     ///
-    /// The method returns `None` if it fails to find a sufficiently pleasing plan.
+    /// The method returns `Err` if it fails to find a sufficiently pleasing plan or
+    /// if any errors occur during planning.
     pub fn plan(
         join: &MirRelationExpr,
         input_mapper: &JoinInputMapper,
@@ -289,7 +290,7 @@ mod delta_queries {
                 )));
             }
 
-            // Determine a viable order for each relation, or return `None` if none found.
+            // Determine a viable order for each relation, or return `Err` if none found.
             let orders = super::optimize_orders(equivalences, available, unique_keys, input_mapper);
 
             // A viable delta query requires that, for every order,
