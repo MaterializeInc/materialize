@@ -17,12 +17,15 @@ use std::time::SystemTime;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, Indeterminate};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, info, instrument, trace};
+use tokio::runtime::Handle;
+use tracing::{debug, debug_span, info, instrument, trace, warn, Instrument};
+use uuid::Uuid;
 
 use crate::batch::{validate_truncate_batch, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
@@ -31,6 +34,28 @@ use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::{HollowBatch, Upper};
 use crate::PersistConfig;
+
+/// An opaque identifier for a writer of a persist durable TVC (aka shard).
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct WriterId(pub(crate) [u8; 16]);
+
+impl std::fmt::Display for WriterId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "w{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for WriterId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WriterId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl WriterId {
+    pub(crate) fn new() -> Self {
+        WriterId(*Uuid::new_v4().as_bytes())
+    }
+}
 
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
@@ -51,12 +76,18 @@ use crate::PersistConfig;
 pub struct WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
+    // These are only here so we can use them in the auto-expiring `Drop` impl.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) compactor: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) writer_id: WriterId,
+    pub(crate) explicitly_expired: bool,
 
     pub(crate) upper: Antichain<T>,
 }
@@ -392,11 +423,14 @@ where
 
         let res = self
             .machine
-            .compare_and_append(&HollowBatch {
-                desc: desc.clone(),
-                keys: batch.blob_keys.clone(),
-                len: batch.num_updates,
-            })
+            .compare_and_append(
+                &HollowBatch {
+                    desc: desc.clone(),
+                    keys: batch.blob_keys.clone(),
+                    len: batch.num_updates,
+                },
+                &self.writer_id,
+            )
             .await?;
 
         let merge_reqs = match res {
@@ -491,6 +525,21 @@ where
         builder.finish(upper.clone()).await
     }
 
+    /// Politely expires this writer, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop to expire a writer that wasn't
+    /// explictly expired with this method. When possible, explicit expiry is
+    /// still preferred because the Drop one is best effort and is dependant on
+    /// a tokio [Handle] being available in the TLC at the time of drop (which
+    /// is a bit subtle). Also, explicit expiry allows for control over when it
+    /// happens.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn expire(mut self) {
+        trace!("WriteHandle::expire");
+        self.machine.expire_writer(&self.writer_id).await;
+        self.explicitly_expired = true;
+    }
+
     /// Test helper for an [Self::append] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
@@ -542,6 +591,43 @@ where
         )
         .await
         .expect("invalid usage")
+    }
+}
+
+impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
+{
+    fn drop(&mut self) {
+        if self.explicitly_expired {
+            return;
+        }
+        let handle = match Handle::try_current() {
+            Ok(x) => x,
+            Err(_) => {
+                warn!("WriteHandle {} dropped without being explicitly expired, falling back to lease timeout", self.writer_id);
+                return;
+            }
+        };
+        let mut machine = self.machine.clone();
+        let writer_id = self.writer_id.clone();
+        // Spawn a best-effort task to expire this write handle. It's fine if
+        // this doesn't run to completion, we'd just have to wait out the lease
+        // before the shard-global since is unblocked.
+        //
+        // Intentionally create the span outside the task to set the parent.
+        let expire_span = debug_span!("drop::expire");
+        let _ = handle.spawn_named(
+            || format!("WriteHandle::expire ({})", self.writer_id),
+            async move {
+                trace!("WriteHandle::expire");
+                machine.expire_writer(&writer_id).await;
+            }
+            .instrument(expire_span),
+        );
     }
 }
 

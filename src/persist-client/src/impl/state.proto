@@ -43,6 +43,11 @@ message ProtoReader {
     uint64 seqno = 3;
 }
 
+message ProtoWriter {
+    string writer_id = 1;
+    uint64 last_heartbeat_timestamp_ms = 2;
+}
+
 message ProtoStateRollup {
     string shard_id = 1;
     string key_codec = 2;
@@ -52,6 +57,7 @@ message ProtoStateRollup {
     uint64 seqno = 6;
     ProtoTrace trace = 7;
     repeated ProtoReader readers = 8;
+    repeated ProtoWriter writers = 9;
 }
 
 message ProtoSnapshotSplit {
