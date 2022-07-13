@@ -22,11 +22,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use mz_expr::explain::Indices;
-use mz_expr::{ExprHumanizer, Id, LocalId, RowSetFinishing};
+use mz_expr::{Id, LocalId, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::str::{bracketed, separated};
-use mz_repr::{RelationType, ScalarType};
+use mz_repr::{explain_new::ExprHumanizer, RelationType, ScalarType};
 
 use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 

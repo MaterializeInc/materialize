@@ -30,14 +30,14 @@
 
 use std::fmt;
 
+use mz_compute_client::command::DataflowDescription;
 use mz_expr::explain::{Indices, ViewExplanation};
-use mz_expr::{ExprHumanizer, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::result::ResultExt;
 use mz_ore::str::{bracketed, separated};
+use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::GlobalId;
 use mz_storage::client::transforms::LinearOperator;
-
-use mz_compute_client::command::DataflowDescription;
 
 pub trait ViewFormatter<ViewExpr> {
     fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result;

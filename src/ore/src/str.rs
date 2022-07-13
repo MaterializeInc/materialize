@@ -145,3 +145,80 @@ where
         iter: iter.into_iter(),
     }
 }
+
+/// A helper struct to keep track of indentation levels.
+///
+/// This will be most often used as part of the rendering context
+/// type for various `Display$Format` implementation.
+#[derive(Debug)]
+pub struct Indent {
+    unit: String,
+    buff: String,
+}
+
+impl Indent {
+    /// Construct a new `Indent` where one level is represented
+    /// by the given `unit` repeated `step` times.
+    pub fn new(unit: char, step: usize) -> Indent {
+        Indent {
+            unit: std::iter::repeat(unit).take(step).collect::<String>(),
+            buff: String::with_capacity(unit.len_utf8()),
+        }
+    }
+
+    fn inc(&mut self, rhs: usize) {
+        for _ in 0..rhs {
+            self.buff += &self.unit;
+        }
+    }
+
+    fn dec(&mut self, rhs: usize) {
+        let tail = rhs.saturating_mul(self.unit.len());
+        let head = self.buff.len().saturating_sub(tail);
+        self.buff.truncate(head);
+    }
+}
+
+impl Default for Indent {
+    fn default() -> Self {
+        Indent::new(' ', 2)
+    }
+}
+
+impl std::ops::AddAssign<usize> for Indent {
+    fn add_assign(&mut self, rhs: usize) {
+        self.inc(rhs)
+    }
+}
+
+impl std::ops::SubAssign<usize> for Indent {
+    fn sub_assign(&mut self, rhs: usize) {
+        self.dec(rhs)
+    }
+}
+
+impl fmt::Display for Indent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.buff)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_indent() {
+        let mut indent = Indent::new('~', 3);
+        indent += 1;
+        assert_eq!(indent.to_string(), "~~~".to_string());
+        indent += 3;
+        assert_eq!(indent.to_string(), "~~~~~~~~~~~~".to_string());
+        indent -= 2;
+        assert_eq!(indent.to_string(), "~~~~~~".to_string());
+        indent -= 4;
+        assert_eq!(indent.to_string(), "".to_string());
+        indent += 1;
+        assert_eq!(indent.to_string(), "~~~".to_string());
+    }
+}

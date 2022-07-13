@@ -32,6 +32,10 @@
 
 use std::{collections::HashSet, fmt};
 
+use mz_ore::str::Indent;
+
+use crate::{ColumnType, GlobalId, ScalarType};
+
 /// Wraps a reference to a type that implements `Display$Format` for a specific
 /// [`ExplainFormat`] and implements [`fmt::Display`] by delegating to this
 /// implementation.
@@ -45,15 +49,19 @@ use std::{collections::HashSet, fmt};
 /// The same type can implement more than one `Display$Format` trait and
 /// thereby be plugged as an `Explanation` for more than one output format.
 #[allow(missing_debug_implementations)]
-pub enum Explanation<
-    'a,
-    Text = UnsupportedFormat,
-    Json = UnsupportedFormat,
-    Dot = UnsupportedFormat,
-> {
+enum Explanation<'a, Text = UnsupportedFormat, Json = UnsupportedFormat, Dot = UnsupportedFormat> {
     Text(&'a Text),
     Json(&'a Json),
     Dot(&'a Dot),
+}
+
+/// Wraps an instance of type `T` together with a lambda that produces its
+/// display context `C`.
+///
+/// Used internally by all `$format_string_at(T, Fn() -> C)` implementations.
+struct DisplayWithContext<'a, T, C, F: Fn() -> C> {
+    t: &'a T,
+    f: F,
 }
 
 impl<'a, T, J, D> fmt::Display for Explanation<'a, T, J, D>
@@ -64,9 +72,9 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Explanation::Text(explain) => explain.fmt_text(f),
-            Explanation::Json(explain) => explain.fmt_json(f),
-            Explanation::Dot(explain) => explain.fmt_dot(f),
+            Explanation::Text(explain) => explain.fmt_text(f, &mut ()),
+            Explanation::Json(explain) => explain.fmt_json(f, &mut ()),
+            Explanation::Dot(explain) => explain.fmt_dot(f, &mut ()),
         }
     }
 }
@@ -91,40 +99,112 @@ impl fmt::Display for ExplainFormat {
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Text`].
-pub trait DisplayText
+pub trait DisplayText<C = ()>
 where
     Self: Sized,
 {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
+}
 
-    fn str_text(&self) -> String {
-        Explanation::<'_, Self, UnsupportedFormat, UnsupportedFormat>::Text(self).to_string()
+pub fn text_string<T: DisplayText<()>>(t: &T) -> String {
+    Explanation::<'_, T, UnsupportedFormat, UnsupportedFormat>::Text(t).to_string()
+}
+
+pub fn text_string_at<'a, T: DisplayText<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
+    text_string(&DisplayWithContext { t, f })
+}
+
+impl<T: DisplayText<C>, C, F: Fn() -> C> DisplayText<()> for DisplayWithContext<'_, T, C, F> {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        let mut ctx = (self.f)();
+        self.t.fmt_text(f, &mut ctx)
+    }
+}
+
+impl<A, C> DisplayText<C> for Option<A>
+where
+    A: DisplayText<C>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        if let Some(val) = self {
+            val.fmt_text(f, ctx)
+        } else {
+            fmt::Result::Ok(())
+        }
     }
 }
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Json`].
-pub trait DisplayJson
+pub trait DisplayJson<C = ()>
 where
     Self: Sized,
 {
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
+}
 
-    fn str_json(&self) -> String {
-        Explanation::<'_, UnsupportedFormat, Self, UnsupportedFormat>::Json(self).to_string()
+pub fn json_string<T: DisplayJson<()>>(t: &T) -> String {
+    Explanation::<'_, UnsupportedFormat, T, UnsupportedFormat>::Json(t).to_string()
+}
+
+pub fn json_string_at<'a, T: DisplayJson<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
+    json_string(&DisplayWithContext { t, f })
+}
+
+impl<T: DisplayJson<C>, C, F: Fn() -> C> DisplayJson<()> for DisplayWithContext<'_, T, C, F> {
+    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        let mut ctx = (self.f)();
+        self.t.fmt_json(f, &mut ctx)
+    }
+}
+
+impl<A, C> DisplayJson<C> for Option<A>
+where
+    A: DisplayText<C>,
+{
+    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        if let Some(val) = self {
+            val.fmt_text(f, ctx)
+        } else {
+            fmt::Result::Ok(())
+        }
     }
 }
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Dot`].
-pub trait DisplayDot
+pub trait DisplayDot<C = ()>
 where
     Self: Sized,
 {
-    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
+}
 
-    fn str_dot(&self) -> String {
-        Explanation::<'_, UnsupportedFormat, UnsupportedFormat, Self>::Dot(self).to_string()
+pub fn dot_string<T: DisplayDot<()>>(t: &T) -> String {
+    Explanation::<'_, UnsupportedFormat, UnsupportedFormat, T>::Dot(t).to_string()
+}
+
+pub fn dot_string_at<'a, T: DisplayDot<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
+    dot_string(&DisplayWithContext { t, f })
+}
+
+impl<T: DisplayDot<C>, C, F: Fn() -> C> DisplayDot<()> for DisplayWithContext<'_, T, C, F> {
+    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        let mut ctx = (self.f)();
+        self.t.fmt_dot(f, &mut ctx)
+    }
+}
+
+impl<A, C> DisplayDot<C> for Option<A>
+where
+    A: DisplayDot<C>,
+{
+    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        if let Some(val) = self {
+            val.fmt_dot(f, ctx)
+        } else {
+            fmt::Result::Ok(())
+        }
     }
 }
 
@@ -135,19 +215,19 @@ where
 pub enum UnsupportedFormat {}
 
 impl DisplayText for UnsupportedFormat {
-    fn fmt_text(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         unreachable!()
     }
 }
 
 impl DisplayJson for UnsupportedFormat {
-    fn fmt_json(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_json(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         unreachable!()
     }
 }
 
 impl DisplayDot for UnsupportedFormat {
-    fn fmt_dot(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_dot(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         unreachable!()
     }
 }
@@ -194,8 +274,8 @@ impl From<anyhow::Error> for ExplainError {
     }
 }
 
-/// The type of the configuration supported by the [`Explanation`]
-/// variants that can be produced for this type.
+/// A configuration supported by all [`Explain`] implementations
+/// derived in this crate.
 #[derive(Debug)]
 pub struct ExplainConfig {
     pub types: bool,
@@ -260,9 +340,9 @@ pub trait Explain<'a>: 'a {
         context: &'a Self::Context,
     ) -> Result<String, ExplainError> {
         match format {
-            ExplainFormat::Text => self.explain_text(config, context).map(|e| e.str_text()),
-            ExplainFormat::Json => self.explain_json(config, context).map(|e| e.str_json()),
-            ExplainFormat::Dot => self.explain_dot(config, context).map(|e| e.str_dot()),
+            ExplainFormat::Text => self.explain_text(config, context).map(|e| text_string(&e)),
+            ExplainFormat::Json => self.explain_json(config, context).map(|e| json_string(&e)),
+            ExplainFormat::Dot => self.explain_dot(config, context).map(|e| dot_string(&e)),
         }
     }
 
@@ -327,6 +407,64 @@ pub trait Explain<'a>: 'a {
     }
 }
 
+/// A helper struct which will most commonly be used as the generic
+/// rendering context type `C` for various `Explain$Format`
+/// implementations.
+#[derive(Debug)]
+pub struct RenderingContext<'a> {
+    pub indent: Indent,
+    pub humanizer: &'a dyn ExprHumanizer,
+}
+
+impl<'a> RenderingContext<'a> {
+    pub fn new(indent: Indent, humanizer: &'a dyn ExprHumanizer) -> RenderingContext {
+        RenderingContext { indent, humanizer }
+    }
+}
+
+/// A trait for humanizing components of an expression.
+///
+/// This will be most often used as part of the rendering context
+/// type for various `Display$Format` implementation.
+pub trait ExprHumanizer: fmt::Debug {
+    /// Attempts to return the a human-readable string for the relation
+    /// identified by `id`.
+    fn humanize_id(&self, id: GlobalId) -> Option<String>;
+
+    /// Returns a human-readable name for the specified scalar type.
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
+
+    /// Returns a human-readable name for the specified scalar type.
+    fn humanize_column_type(&self, typ: &ColumnType) -> String {
+        format!(
+            "{}{}",
+            self.humanize_scalar_type(&typ.scalar_type),
+            if typ.nullable { "?" } else { "" }
+        )
+    }
+}
+
+/// A bare-minimum implementation of [`ExprHumanizer`].
+///
+/// The `DummyHumanizer` does a poor job of humanizing expressions. It is
+/// intended for use in contexts where polish is not required, like in tests or
+/// while debugging.
+#[derive(Debug)]
+pub struct DummyHumanizer;
+
+impl ExprHumanizer for DummyHumanizer {
+    fn humanize_id(&self, _: GlobalId) -> Option<String> {
+        // Returning `None` allows the caller to fall back to displaying the
+        // ID, if they so desire.
+        None
+    }
+
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+        // The debug implementation is better than nothing.
+        format!("{:?}", ty)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,7 +510,7 @@ mod tests {
     }
 
     impl<'a> DisplayText for TestExplanation<'a> {
-        fn fmt_text(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
             let lhs = &self.expr.lhs;
             let rhs = &self.expr.rhs;
             writeln!(f, "expr = {lhs} + {rhs}")?;

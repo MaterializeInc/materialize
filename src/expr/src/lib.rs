@@ -12,12 +12,11 @@
 #![warn(missing_debug_implementations)]
 
 use std::collections::BTreeSet;
-use std::fmt;
 use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
-use mz_repr::{ColumnType, GlobalId, ScalarType};
+use mz_repr::GlobalId;
 
 mod id;
 mod linear;
@@ -88,45 +87,5 @@ impl Deref for OptimizedMirRelationExpr {
 impl CollectionPlan for OptimizedMirRelationExpr {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         self.0.depends_on_into(out)
-    }
-}
-
-/// A trait for humanizing components of an expression.
-pub trait ExprHumanizer: fmt::Debug {
-    /// Attempts to return the a human-readable string for the relation
-    /// identified by `id`.
-    fn humanize_id(&self, id: GlobalId) -> Option<String>;
-
-    /// Returns a human-readable name for the specified scalar type.
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
-
-    /// Returns a human-readable name for the specified scalar type.
-    fn humanize_column_type(&self, typ: &ColumnType) -> String {
-        format!(
-            "{}{}",
-            self.humanize_scalar_type(&typ.scalar_type),
-            if typ.nullable { "?" } else { "" }
-        )
-    }
-}
-
-/// A bare-minimum implementation of [`ExprHumanizer`].
-///
-/// The `DummyHumanizer` does a poor job of humanizing expressions. It is
-/// intended for use in contexts where polish is not required, like in tests or
-/// while debugging.
-#[derive(Debug)]
-pub struct DummyHumanizer;
-
-impl ExprHumanizer for DummyHumanizer {
-    fn humanize_id(&self, _: GlobalId) -> Option<String> {
-        // Returning `None` allows the caller to fall back to displaying the
-        // ID, if they so desire.
-        None
-    }
-
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        // The debug implementation is better than nothing.
-        format!("{:?}", ty)
     }
 }

@@ -15,6 +15,8 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use itertools::Itertools;
+use mz_ore::str::{bracketed, separated, Indent};
+use mz_repr::explain_new::DisplayText;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -24,15 +26,13 @@ use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::visit::{Visit, VisitChildren};
-use crate::{
-    func as scalar_func, DummyHumanizer, EvalError, ExprHumanizer, Id, LocalId, MirScalarExpr,
-    UnaryFunc, VariadicFunc,
-};
+use crate::{func as scalar_func, EvalError, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc};
 
 pub mod canonicalize;
 pub mod func;
@@ -1962,6 +1962,34 @@ pub struct RowSetFinishing {
     pub project: Vec<usize>,
 }
 
+impl DisplayText<Indent> for RowSetFinishing {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut Indent) -> fmt::Result {
+        writeln!(f, "{}row_set_finishing:", ctx)?;
+        *ctx += 1;
+        // order by
+        if !self.order_by.is_empty() {
+            let order_by = bracketed("[", "]", separated(",", &self.order_by));
+            writeln!(f, "{}order_by: {}", ctx, order_by)?;
+        }
+        // limit
+        if let Some(limit) = self.limit {
+            writeln!(f, "{}limit: {}", ctx, limit)?;
+        }
+        // offset
+        if self.offset > 0 {
+            writeln!(f, "{}offset: {}", ctx, self.offset)?;
+        }
+        // project
+        {
+            // TODO: add an option for column ranges?
+            let project = bracketed("[", "]", separated(",", &self.project));
+            writeln!(f, "{}output: {}", ctx, project)?;
+        }
+        *ctx -= 1;
+        Ok(())
+    }
+}
+
 impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
     fn into_proto(&self) -> ProtoRowSetFinishing {
         ProtoRowSetFinishing {
@@ -2321,6 +2349,7 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
 mod tests {
     use super::*;
     use mz_proto::protobuf_roundtrip;
+    use mz_repr::explain_new::text_string_at;
     use proptest::prelude::*;
 
     proptest! {
@@ -2366,5 +2395,33 @@ mod tests {
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
+    }
+
+    #[test]
+    fn test_row_set_finishing_as_text() {
+        let finishing = RowSetFinishing {
+            order_by: vec![ColumnOrder {
+                column: 4,
+                desc: true,
+                nulls_last: true,
+            }],
+            limit: Some(7),
+            offset: Default::default(),
+            project: vec![1, 3, 5],
+        };
+
+        let act = text_string_at(&finishing, Indent::default);
+
+        let exp = {
+            use mz_ore::fmt::FormatBuffer;
+            let mut s = String::new();
+            writeln!(&mut s, "row_set_finishing:");
+            writeln!(&mut s, "  order_by: [#4 desc nulls_last]");
+            writeln!(&mut s, "  limit: 7");
+            writeln!(&mut s, "  output: [1,3,5]");
+            s
+        };
+
+        assert_eq!(act, exp);
     }
 }
