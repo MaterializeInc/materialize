@@ -237,6 +237,32 @@ where
         trace!("Listen::next");
 
         let batch = self.machine.next_listen_batch(&self.frontier).await;
+
+        // A lot of things across mz have to line up to hold the following
+        // invariant and violations only show up as subtle correctness errors,
+        // so explictly validate it here. Better to panic and roll back a
+        // release than be incorrect (also potentially corrupting a sink).
+        //
+        // Note that the since check is intentionally less_than, not less_equal.
+        // If a batch's since is X, that means we can no longer distinguish X
+        // (beyond self.frontier) from X-1 (not beyond self.frontier) to keep
+        // former and filter out the latter.
+        assert!(
+            // TODO: This batch.keys.is_empty() narrowing doesn't permit
+            // incorrect behavior (it doesn't matter if we can't recover
+            // timestamp if there are no updates) but it's also unexpected for
+            // an empty batch to pass this check. Sadly, it looks like something
+            // isn't lining up in mz with our since capabilities and our as_ofs,
+            // so it was necessary to get the rest of this check past CI. Figure
+            // out what is going on and remove it.
+            batch.keys.is_empty()
+                || batch.desc.lower() == &self.frontier
+                || PartialOrder::less_than(batch.desc.since(), &self.frontier),
+            "Listen received a batch {:?} advanced past the listen frontier {:?}",
+            batch.desc,
+            self.frontier
+        );
+
         let mut updates = Vec::new();
         for key in batch.keys.iter() {
             fetch_batch_part(
