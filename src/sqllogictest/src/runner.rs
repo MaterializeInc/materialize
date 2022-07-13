@@ -70,7 +70,9 @@ use mz_persist_client::PersistLocation;
 use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
+use mz_secrets::SecretsController;
 use mz_sql::ast::Statement;
+use mz_storage::client::connections::ConnectionContext;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -614,7 +616,7 @@ impl Runner {
                 persist_clients,
                 storage_stash_url,
             },
-            secrets_controller: orchestrator,
+            secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -630,7 +632,9 @@ impl Runner {
             replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             availability_zones: Default::default(),
-            connection_context: Default::default(),
+            connection_context: ConnectionContext::for_tests(
+                (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
+            ),
             otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
         };
         // We need to run the server on its own Tokio runtime, which in turn

@@ -14,12 +14,12 @@ use clap::ArgEnum;
 
 use mz_orchestrator_kubernetes::secrets::KubernetesSecretsReader;
 use mz_orchestrator_process::secrets::ProcessSecretsReader;
-use mz_secrets::{NullSecretsReader, SecretsReader};
+use mz_secrets::SecretsReader;
 
 #[derive(clap::Parser)]
 pub struct SecretsReaderCliArgs {
     /// The secrets reader implementation to use.
-    #[structopt(long, default_value = "null", arg_enum)]
+    #[structopt(long, arg_enum)]
     secrets_reader: SecretsReaderKind,
     /// When using the process secrets reader, the directory on the filesystem
     /// where secrets are stored.
@@ -33,7 +33,6 @@ pub struct SecretsReaderCliArgs {
 
 #[derive(ArgEnum, Debug, Clone)]
 enum SecretsReaderKind {
-    Null,
     Process,
     Kubernetes,
 }
@@ -42,7 +41,6 @@ impl SecretsReaderCliArgs {
     /// Loads the secrets reader specified by the command-line arguments.
     pub async fn load(self) -> Result<Arc<dyn SecretsReader>, anyhow::Error> {
         match self.secrets_reader {
-            SecretsReaderKind::Null => Ok(Arc::new(NullSecretsReader)),
             SecretsReaderKind::Process => {
                 let dir = self.secrets_reader_process_dir.expect("clap enforced");
                 Ok(Arc::new(ProcessSecretsReader::new(dir)))

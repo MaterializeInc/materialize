@@ -24,7 +24,9 @@ mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
+mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
+mz-storage = { path = "../storage" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 regex = "1.6.0"
 serde_json = "1.0.82"

@@ -27,7 +27,7 @@ use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
-use mz_secrets::{NullSecretsReader, SecretsReader};
+use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::KafkaConnectionOptionName;
 
 use crate::client::connections::aws::AwsExternalIdPrefix;
@@ -134,14 +134,13 @@ impl ConnectionContext {
             secrets_reader,
         }
     }
-}
 
-impl Default for ConnectionContext {
-    fn default() -> ConnectionContext {
+    /// Constructs a new connection context for usage in tests.
+    pub fn for_tests(secrets_reader: Arc<dyn SecretsReader>) -> ConnectionContext {
         ConnectionContext {
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
-            secrets_reader: Arc::new(NullSecretsReader),
+            secrets_reader,
         }
     }
 }

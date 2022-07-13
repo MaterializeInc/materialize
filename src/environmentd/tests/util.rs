@@ -35,6 +35,8 @@ use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
+use mz_secrets::SecretsController;
+use mz_storage::client::connections::ConnectionContext;
 
 pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
     Lazy::new(|| match env::var("KAFKA_ADDRS") {
@@ -173,7 +175,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             persist_clients,
             storage_stash_url,
         },
-        secrets_controller: orchestrator,
+        secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -187,7 +189,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: "1".into(),
         availability_zones: Default::default(),
-        connection_context: Default::default(),
+        connection_context: ConnectionContext::for_tests(
+            (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
+        ),
         otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
     }))?;
     let server = Server {
