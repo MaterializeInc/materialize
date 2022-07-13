@@ -463,9 +463,29 @@ impl<'a> Explanation<'a> {
             Literal(row, _) => write!(f, "{}", row.unpack_first()),
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
-                write!(f, "{}(", func)?;
-                self.fmt_scalar_expr(f, expr)?;
-                write!(f, ")")
+                if let mz_expr::UnaryFunc::Not(_) = *func {
+                    if let CallUnary {
+                        func,
+                        expr: inner_expr,
+                    } = &**expr
+                    {
+                        if let Some(is) = func.is() {
+                            write!(f, "(")?;
+                            self.fmt_scalar_expr(f, inner_expr)?;
+                            write!(f, ") IS NOT {}", is)?;
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Some(is) = func.is() {
+                    write!(f, "(")?;
+                    self.fmt_scalar_expr(f, expr)?;
+                    write!(f, ") IS {}", is)
+                } else {
+                    write!(f, "{}(", func)?;
+                    self.fmt_scalar_expr(f, expr)?;
+                    write!(f, ")")
+                }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {

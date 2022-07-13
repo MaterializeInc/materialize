@@ -3459,6 +3459,20 @@ derive_unary!(
     MzTypeName
 );
 
+impl UnaryFunc {
+    /// If the unary_func represents "IS X", return X.
+    ///
+    /// A helper method for being able to print Not(IsX) as IS NOT X.
+    pub fn is(&self) -> Option<&'static str> {
+        match self {
+            UnaryFunc::IsNull(_) => Some("NULL"),
+            UnaryFunc::IsTrue(_) => Some("TRUE"),
+            UnaryFunc::IsFalse(_) => Some("FALSE"),
+            _ => None,
+        }
+    }
+}
+
 /// An explicit [`Arbitrary`] implementation needed here because of a known
 /// `proptest` issue.
 ///

@@ -140,7 +140,7 @@ select coalesce(x.b, 0) from x full join y on x.a = y.a and x.c is not null;
 | Get ? (u1)
 
 %2 =
-| FullOuterJoin %0 %1 on ((#0 = #3) && NOT(isnull(#2)))
+| FullOuterJoin %0 %1 on ((#0 = #3) && (#2) IS NOT NULL)
 | Map coalesce(#1, integer_to_bigint(0))
 | Project (#6)
 ----
