@@ -2035,12 +2035,16 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> Result<PostgresConnectionOption<Raw>, ParserError> {
         let name = match self
-            .expect_one_of_keywords(&[DATABASE, HOST, PASSWORD, PORT, SSL, USER, USERNAME])?
+            .expect_one_of_keywords(&[DATABASE, HOST, PASSWORD, PORT, SSH, SSL, USER, USERNAME])?
         {
             DATABASE => PostgresConnectionOptionName::Database,
             HOST => PostgresConnectionOptionName::Host,
             PASSWORD => PostgresConnectionOptionName::Password,
             PORT => PostgresConnectionOptionName::Port,
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                PostgresConnectionOptionName::SshTunnel
+            }
             SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
                 CERTIFICATE => {
                     if self.parse_keyword(AUTHORITY) {

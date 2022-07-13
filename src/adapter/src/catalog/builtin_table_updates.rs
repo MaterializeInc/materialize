@@ -29,7 +29,7 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_RECORDED_VIEWS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS,
-    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTORS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, RecordedView,
@@ -331,7 +331,7 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_SSH_TUNNEL_CONNECTORS),
+            id: self.resolve_builtin_table(&MZ_SSH_TUNNEL_CONNECTIONS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(name),

@@ -251,10 +251,10 @@ importee1  importee2
     USER 'user',
     PORT 1
 
-> SELECT * from mz_ssh_tunnel_connectors
-id creature
+> SELECT name, public_key from mz_ssh_tunnel_connections
+name public_key
 -----------
-1  lizard
+ssh_conn TODO
 
 # Test invalid connection parameter combinations
 

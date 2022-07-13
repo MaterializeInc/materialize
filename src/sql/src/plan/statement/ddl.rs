@@ -2990,6 +2990,7 @@ generate_extracted_config!(
     (Host, String),
     (Password, with_options::Secret),
     (Port, u16, Default(5432_u16)),
+    (SshTunnel, String),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
     (SslKey, with_options::Secret),
@@ -3030,6 +3031,7 @@ impl TryFrom<PostgresConnectionOptionExtracted>
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
             password: options.password.map(|password| password.into()),
             port: options.port,
+            ssh_tunnel: options.ssh_tunnel,
             tls_mode,
             tls_root_cert: options.ssl_certificate_authority,
             tls_identity,
@@ -3062,7 +3064,7 @@ impl TryFrom<SshConnectionOptionExtracted> for mz_storage::client::connections::
                 .user
                 .ok_or_else(|| sql_err!("USER option is required"))?,
             public_key: "TODO".to_string(),
-            private_key: "TODO".to_string(),
+            private_key: GlobalId::Transient(0),
         })
     }
 }
@@ -3093,6 +3095,7 @@ pub fn plan_create_connection(
             Connection::Postgres(connection)
         }
         CreateConnection::Ssh { with_options } => {
+            scx.require_unsafe_mode("CREATE CONNECTION ... SSH")?;
             let c = SshConnectionOptionExtracted::try_from(with_options)?;
             let connection = mz_storage::client::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
