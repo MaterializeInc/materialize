@@ -62,7 +62,7 @@ struct Args {
         long,
         env = "INTERNAL_HTTP_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "127.0.0.1:6877"
+        default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
 
