@@ -52,7 +52,7 @@ use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::PersistLocation;
+use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
 
@@ -538,7 +538,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         }
     };
     let secrets_reader = secrets_controller.reader();
-    let persist_clients = PersistClientCache::new(&metrics_registry);
+    let now = SYSTEM_TIME.clone();
+    let persist_clients =
+        PersistClientCache::new(PersistConfig::new(now.clone()), &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let orchestrator = Arc::new(TracingOrchestrator::new(
         orchestrator,
@@ -655,7 +657,7 @@ max log level: {max_log_level}",
         secrets_controller,
         unsafe_mode: args.unsafe_mode,
         metrics_registry,
-        now: SYSTEM_TIME.clone(),
+        now,
         replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         availability_zones: args.availability_zone,

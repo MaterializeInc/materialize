@@ -66,7 +66,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use mz_persist_client::PersistLocation;
+use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
@@ -599,8 +599,10 @@ impl Runner {
             })
             .await?,
         );
+        let now = SYSTEM_TIME.clone();
         let metrics_registry = MetricsRegistry::new();
-        let persist_clients = PersistClientCache::new(&metrics_registry);
+        let persist_clients =
+            PersistClientCache::new(PersistConfig::new(now.clone()), &metrics_registry);
         let persist_clients = Arc::new(Mutex::new(persist_clients));
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
@@ -628,7 +630,7 @@ impl Runner {
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             metrics_registry,
-            now: SYSTEM_TIME.clone(),
+            now,
             replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             availability_zones: Default::default(),

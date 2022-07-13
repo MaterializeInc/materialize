@@ -34,7 +34,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::PersistLocation;
+use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
 
@@ -159,7 +159,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             command_wrapper: vec![],
         }))?,
     );
-    let persist_clients = PersistClientCache::new(&metrics_registry);
+    let persist_clients =
+        PersistClientCache::new(PersistConfig::new(config.now.clone()), &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
