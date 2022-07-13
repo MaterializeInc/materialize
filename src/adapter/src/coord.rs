@@ -1094,9 +1094,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `next()` on any stream is cancel-safe:
                 // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
                 Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
-                // `tick()` on `Interval` is cancel-safe:
-                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
                 // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
                 () = self.controller.ready() => {
@@ -1108,6 +1105,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
+                // `tick()` on `Interval` is cancel-safe:
+                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
 
                 // At the lowest priority, process table advancements. This is a blocking
                 // HashMap instead of a channel so that we can delay the determination of
