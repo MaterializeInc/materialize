@@ -117,6 +117,19 @@ impl<T: DisplayText<C>, C, F: Fn() -> C> DisplayText<()> for DisplayWithContext<
     }
 }
 
+impl<A, C> DisplayText<C> for Option<A>
+where
+    A: DisplayText<C>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        if let Some(val) = self {
+            val.fmt_text(f, ctx)
+        } else {
+            fmt::Result::Ok(())
+        }
+    }
+}
+
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Json`].
 pub trait DisplayJson<C = ()>
@@ -141,6 +154,19 @@ impl<T: DisplayJson<C>, C, F: Fn() -> C> DisplayJson<()> for DisplayWithContext<
     }
 }
 
+impl<A, C> DisplayJson<C> for Option<A>
+where
+    A: DisplayText<C>,
+{
+    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        if let Some(val) = self {
+            val.fmt_text(f, ctx)
+        } else {
+            fmt::Result::Ok(())
+        }
+    }
+}
+
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Dot`].
 pub trait DisplayDot<C = ()>
@@ -162,6 +188,19 @@ impl<T: DisplayDot<C>, C, F: Fn() -> C> DisplayDot<()> for DisplayWithContext<'_
     fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = (self.f)();
         self.t.fmt_dot(f, &mut ctx)
+    }
+}
+
+impl<A, C> DisplayDot<C> for Option<A>
+where
+    A: DisplayDot<C>,
+{
+    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        if let Some(val) = self {
+            val.fmt_dot(f, ctx)
+        } else {
+            fmt::Result::Ok(())
+        }
     }
 }
 
