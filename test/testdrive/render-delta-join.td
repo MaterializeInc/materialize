@@ -22,6 +22,10 @@ count
 ----
 2001
 
+# We sleep to allow the 1s compaction to force ADAPTER to construct the next dataflow
+# with an `as_of` that is not strictly prior to the update times of the writes above.
+SELECT mz_internal.mz_sleep(2)
+
 > CREATE MATERIALIZED VIEW delta_join (t1_f1, t1_f2, t2_f1, t2_f2) AS SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1;
 
 > EXPLAIN VIEW delta_join;
