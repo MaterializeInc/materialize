@@ -630,6 +630,7 @@ pub enum PostgresConnectionOptionName {
     Host,
     Password,
     Port,
+    SshTunnel,
     SslCertificate,
     SslCertificateAuthority,
     SslKey,
@@ -644,6 +645,7 @@ impl AstDisplay for PostgresConnectionOptionName {
             PostgresConnectionOptionName::Host => "HOST",
             PostgresConnectionOptionName::Password => "PASSWORD",
             PostgresConnectionOptionName::Port => "PORT",
+            PostgresConnectionOptionName::SshTunnel => "SSH TUNNEL",
             PostgresConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             PostgresConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
             PostgresConnectionOptionName::SslKey => "SSL KEY",
@@ -673,6 +675,42 @@ impl<T: AstInfo> AstDisplay for PostgresConnectionOption<T> {
 impl_display_t!(PostgresConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SshConnectionOptionName {
+    Host,
+    Port,
+    User,
+}
+
+impl AstDisplay for SshConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            SshConnectionOptionName::Host => "HOST",
+            SshConnectionOptionName::Port => "PORT",
+            SshConnectionOptionName::User => "USER",
+        })
+    }
+}
+impl_display!(SshConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CONNECTION...SSH`.
+pub struct SshConnectionOption<T: AstInfo> {
+    pub name: SshConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for SshConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(SshConnectionOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
     Kafka {
         with_options: Vec<KafkaConnectionOption<T>>,
@@ -682,6 +720,9 @@ pub enum CreateConnection<T: AstInfo> {
     },
     Postgres {
         with_options: Vec<PostgresConnectionOption<T>>,
+    },
+    Ssh {
+        with_options: Vec<SshConnectionOption<T>>,
     },
 }
 
@@ -698,6 +739,10 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
             }
             Self::Postgres { with_options } => {
                 f.write_str("POSTGRES ");
+                f.write_node(&display::comma_separated(&with_options));
+            }
+            Self::Ssh { with_options } => {
+                f.write_str("SSH TUNNEL ");
                 f.write_node(&display::comma_separated(&with_options));
             }
         }

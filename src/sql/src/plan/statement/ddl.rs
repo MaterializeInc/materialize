@@ -21,6 +21,7 @@ use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
+use mz_sql_parser::ast::SshConnectionOption;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
@@ -72,9 +73,9 @@ use crate::ast::{
     KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
     Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
-    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    Value, ViewDefinition, WithOptionValue,
+    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
+    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedObjectName, Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -2989,6 +2990,7 @@ generate_extracted_config!(
     (Host, String),
     (Password, with_options::Secret),
     (Port, u16, Default(5432_u16)),
+    (SshTunnel, String),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
     (SslKey, with_options::Secret),
@@ -3029,12 +3031,40 @@ impl TryFrom<PostgresConnectionOptionExtracted>
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
             password: options.password.map(|password| password.into()),
             port: options.port,
+            ssh_tunnel: options.ssh_tunnel,
             tls_mode,
             tls_root_cert: options.ssl_certificate_authority,
             tls_identity,
             user: options
                 .user
                 .ok_or_else(|| sql_err!("USER option is required"))?,
+        })
+    }
+}
+
+generate_extracted_config!(
+    SshConnectionOption,
+    (Host, String),
+    (Port, i32),
+    (User, String)
+);
+
+impl TryFrom<SshConnectionOptionExtracted> for mz_storage::client::connections::SshConnection {
+    type Error = PlanError;
+
+    fn try_from(options: SshConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(mz_storage::client::connections::SshConnection {
+            host: options
+                .host
+                .ok_or_else(|| sql_err!("HOST option is required"))?,
+            port: options
+                .port
+                .ok_or_else(|| sql_err!("PORT option is required"))?,
+            user: options
+                .user
+                .ok_or_else(|| sql_err!("USER option is required"))?,
+            public_key: "TODO".to_string(),
+            private_key: GlobalId::Transient(0),
         })
     }
 }
@@ -3063,6 +3093,12 @@ pub fn plan_create_connection(
             let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
             let connection = mz_storage::client::connections::PostgresConnection::try_from(c)?;
             Connection::Postgres(connection)
+        }
+        CreateConnection::Ssh { with_options } => {
+            scx.require_unsafe_mode("CREATE CONNECTION ... SSH")?;
+            let c = SshConnectionOptionExtracted::try_from(with_options)?;
+            let connection = mz_storage::client::connections::SshConnection::try_from(c)?;
+            Connection::Ssh(connection)
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;

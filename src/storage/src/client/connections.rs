@@ -150,6 +150,7 @@ pub enum Connection {
     Kafka(KafkaConnection),
     Csr(CsrConnection),
     Postgres(PostgresConnection),
+    Ssh(SshConnection),
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -597,7 +598,6 @@ pub trait PopulateClientConfig {
 
 /// A connection to a PostgreSQL server.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-
 pub struct PostgresConnection {
     /// The hostname of the server.
     pub host: String,
@@ -609,6 +609,8 @@ pub struct PostgresConnection {
     pub user: StringOrSecret,
     /// An optional password for authentication.
     pub password: Option<GlobalId>,
+    /// An optional named SSH tunnel connection.
+    pub ssh_tunnel: Option<String>,
     /// Whether to use TLS for encryption, authentication, or both.
     pub tls_mode: SslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
@@ -656,6 +658,7 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
             database: self.database.into_proto(),
             user: Some(self.user.into_proto()),
             password: self.password.into_proto(),
+            ssh_tunnel: self.ssh_tunnel.into_proto(),
             tls_mode: Some(self.tls_mode.into_proto()),
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
@@ -671,6 +674,7 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
                 .user
                 .into_rust_if_some("ProtoPostgresConnection::user")?,
             password: proto.password.into_rust()?,
+            ssh_tunnel: proto.ssh_tunnel.into_rust()?,
             tls_mode: proto
                 .tls_mode
                 .into_rust_if_some("ProtoPostgresConnection::tls_mode")?,
@@ -691,18 +695,30 @@ impl Arbitrary for PostgresConnection {
             any::<String>(),
             any::<StringOrSecret>(),
             any::<Option<GlobalId>>(),
+            any::<Option<String>>(),
             any_ssl_mode(),
             any::<Option<StringOrSecret>>(),
             any::<Option<TlsIdentity>>(),
         )
             .prop_map(
-                |(host, port, database, user, password, tls_mode, tls_root_cert, tls_identity)| {
+                |(
+                    host,
+                    port,
+                    database,
+                    user,
+                    password,
+                    ssh_tunnel,
+                    tls_mode,
+                    tls_root_cert,
+                    tls_identity,
+                )| {
                     PostgresConnection {
                         host,
                         port,
                         database,
                         user,
                         password,
+                        ssh_tunnel,
                         tls_mode,
                         tls_root_cert,
                         tls_identity,
@@ -711,4 +727,14 @@ impl Arbitrary for PostgresConnection {
             )
             .boxed()
     }
+}
+
+/// A connection to a SSH tunnel.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SshConnection {
+    pub host: String,
+    pub port: i32,
+    pub user: String,
+    pub public_key: String,
+    pub private_key: GlobalId,
 }
