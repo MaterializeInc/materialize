@@ -25,7 +25,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Materialized(),
-    Testdrive(),
+    Testdrive(volumes=["mzdata:/mzdata"]),
 ]
 
 
@@ -204,18 +204,22 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         Computed(
             name="computed_1_1",
             peers=["computed_1_1", "computed_1_2"],
+            options="--secrets-reader process --secrets-reader-process-dir mzdata/secrets",
         ),
         Computed(
             name="computed_1_2",
             peers=["computed_1_1", "computed_1_2"],
+            options="--secrets-reader process --secrets-reader-process-dir mzdata/secrets",
         ),
         Computed(
             name="computed_2_1",
             peers=["computed_2_1", "computed_2_2"],
+            options="--secrets-reader process --secrets-reader-process-dir mzdata/secrets",
         ),
         Computed(
             name="computed_2_2",
             peers=["computed_2_1", "computed_2_2"],
+            options="--secrets-reader process --secrets-reader-process-dir mzdata/secrets",
         ),
     ]
 
