@@ -3043,8 +3043,6 @@ pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("CREATE CONNECTION")?;
-
     let create_sql = normalize::create_statement(&scx, Statement::CreateConnection(stmt.clone()))?;
     let CreateConnectionStatement {
         name,
