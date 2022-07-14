@@ -121,6 +121,15 @@ impl<T: DisplayText<C>, C, F: Fn() -> C> DisplayText<()> for DisplayWithContext<
     }
 }
 
+impl<A, C> DisplayText<C> for Box<A>
+where
+    A: DisplayText<C>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        self.as_ref().fmt_text(f, ctx)
+    }
+}
+
 impl<A, C> DisplayText<C> for Option<A>
 where
     A: DisplayText<C>,
@@ -158,6 +167,15 @@ impl<T: DisplayJson<C>, C, F: Fn() -> C> DisplayJson<()> for DisplayWithContext<
     }
 }
 
+impl<A, C> DisplayJson<C> for Box<A>
+where
+    A: DisplayJson<C>,
+{
+    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        self.as_ref().fmt_json(f, ctx)
+    }
+}
+
 impl<A, C> DisplayJson<C> for Option<A>
 where
     A: DisplayJson<C>,
@@ -192,6 +210,15 @@ impl<T: DisplayDot<C>, C, F: Fn() -> C> DisplayDot<()> for DisplayWithContext<'_
     fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = (self.f)();
         self.t.fmt_dot(f, &mut ctx)
+    }
+}
+
+impl<A, C> DisplayDot<C> for Box<A>
+where
+    A: DisplayDot<C>,
+{
+    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        self.as_ref().fmt_dot(f, ctx)
     }
 }
 
