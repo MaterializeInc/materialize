@@ -74,7 +74,8 @@ impl BlobConfig {
                     .to_string();
                 let role_arn = query_params.remove("aws_role_arn").map(|x| x.into_owned());
                 let endpoint = query_params.remove("endpoint").map(|x| x.into_owned());
-                let config = S3BlobConfig::new(bucket, prefix, role_arn, endpoint).await?;
+                let region = query_params.remove("region").map(|x| x.into_owned());
+                let config = S3BlobConfig::new(bucket, prefix, role_arn, endpoint, region).await?;
                 Ok(BlobConfig::S3(config))
             }
             "mem" => {
