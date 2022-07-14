@@ -38,14 +38,18 @@ opt
 ----
 %0 =
 | Get x (u0)
-| Filter (((#0) IS NULL && (#1) IS NULL) || (#0 = #1)), (((#0) IS NULL && (#2) IS NULL) || (#0 = #2)), (((#1) IS NULL && (#2) IS NULL) || (#1 = #2))
+| Map (#0) IS NULL, (#1) IS NULL, (#2) IS NULL
+| Filter ((#3 && #4) || (#0 = #1)), ((#3 && #5) || (#0 = #2)), ((#4 && #5) || (#1 = #2))
+| Project (#0..=#2)
 
 opt
 (join [(get x)] [[#0 #2 #1 #2]])
 ----
 %0 =
 | Get x (u0)
-| Filter (((#0) IS NULL && (#1) IS NULL) || (#0 = #1)), (((#0) IS NULL && (#2) IS NULL) || (#0 = #2)), (((#1) IS NULL && (#2) IS NULL) || (#1 = #2))
+| Map (#0) IS NULL, (#1) IS NULL, (#2) IS NULL
+| Filter ((#3 && #4) || (#0 = #1)), ((#3 && #5) || (#0 = #2)), ((#4 && #5) || (#1 = #2))
+| Project (#0..=#2)
 
 opt
 (join [(get x)] [[#0 #1 5]])
@@ -117,8 +121,8 @@ opt
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| Filter (#1 < -(#1))
 | Map -(#1)
+| Filter (#1 < #5)
 | Project (#5, #1, #0, #0, #3, #4)
 ----
 ----
@@ -137,8 +141,8 @@ opt
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 < #0)
 | Map -(#1)
+| Filter (#1 < #0)
 | Project (#0, #1, #3)
 
 %1 =
@@ -189,8 +193,8 @@ opt
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #5 -(#1))
 | | implementation = Differential %1 %0.(#0) %2.(#0)
-| Filter (#1 < -(#1))
 | Map -(#1)
+| Filter (#1 < #7)
 | Project (#1, #7, #0, #0, #3, #4, #7, #6)
 ----
 ----
