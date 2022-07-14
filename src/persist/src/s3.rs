@@ -21,6 +21,7 @@ use aws_config::sts::AssumeRoleProvider;
 use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
+use aws_smithy_http::endpoint::Endpoint;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
@@ -54,6 +55,7 @@ impl S3BlobConfig {
         bucket: String,
         prefix: String,
         role_arn: Option<String>,
+        endpoint: Option<String>,
     ) -> Result<Self, Error> {
         let mut loader = aws_config::from_env();
         if let Some(role_arn) = role_arn {
@@ -65,6 +67,13 @@ impl S3BlobConfig {
                 SharedCredentialsProvider::new(credentials::default_provider().await);
             loader = loader.credentials_provider(role_provider.build(default_provider));
         }
+
+        if let Some(endpoint) = endpoint {
+            loader = loader.endpoint_resolver(Endpoint::immutable(
+                endpoint.parse().expect("valid S3 endpoint URI"),
+            ))
+        }
+
         let client = aws_sdk_s3::Client::new(&loader.load().await);
         Ok(S3BlobConfig {
             client,
@@ -125,7 +134,7 @@ impl S3BlobConfig {
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
         let role_arn = None;
-        let config = S3BlobConfig::new(bucket, prefix, role_arn).await?;
+        let config = S3BlobConfig::new(bucket, prefix, role_arn, None).await?;
         Ok(Some(config))
     }
 
