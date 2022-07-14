@@ -160,11 +160,11 @@ impl<T: DisplayJson<C>, C, F: Fn() -> C> DisplayJson<()> for DisplayWithContext<
 
 impl<A, C> DisplayJson<C> for Option<A>
 where
-    A: DisplayText<C>,
+    A: DisplayJson<C>,
 {
     fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         if let Some(val) = self {
-            val.fmt_text(f, ctx)
+            val.fmt_json(f, ctx)
         } else {
             fmt::Result::Ok(())
         }
