@@ -681,7 +681,7 @@ query T multiline
 explain select * from int_table, double_table where int_table.int_col = double_table.double_col;
 ----
 Source materialize.public.double_table (u5):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.int_table (u6):
@@ -694,7 +694,7 @@ Query:
 
 %1 =
 | Get materialize.public.double_table (u5)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= #1 integer_to_double(#0))

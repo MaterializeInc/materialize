@@ -51,7 +51,7 @@ Source materialize.public.t1 (UID):
 Query:
 %0 =
 | Get materialize.public.t1 (UID)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy ()
 
 %1 =

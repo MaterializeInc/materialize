@@ -95,7 +95,7 @@ LIMIT 10
 | Join %2 %14 (= #0 #2)
 | | implementation = Unimplemented
 | Project (#0, #1, #3)
-| Filter !(#2)
+| Filter NOT(#2)
 | Project (#0, #1)
 
 Finish order_by=() limit=10 offset=0 project=(#0, #1)
@@ -121,7 +121,7 @@ VIEW v
 | | implementation = Unimplemented
 | | types = (integer?, integer?)
 | | keys = ()
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | | types = (integer, integer?)
 | | keys = ()
 
@@ -146,7 +146,7 @@ RECORDED VIEW rv
 | | implementation = Unimplemented
 | | types = (integer?, integer?)
 | | keys = ()
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | | types = (integer, integer?)
 | | keys = ()
 

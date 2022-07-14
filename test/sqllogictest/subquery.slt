@@ -350,22 +350,22 @@ SELECT age, ascii_num * 2 as result FROM (
 )
 ----
 Source materialize.public.likes (u3):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.age (u5):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.likes (u3)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.age (u5)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= #0 #2)
@@ -583,7 +583,7 @@ Query:
 %9 =
 | Join %4 %8 (= #0 #1)
 | | implementation = Differential %8 %4.(#0)
-| Map !(#2)
+| Map NOT(#2)
 | Project (#3)
 
 EOF
@@ -639,7 +639,7 @@ Query:
 %9 =
 | Join %4 %8 (= #0 #1)
 | | implementation = Differential %8 %4.(#0)
-| Map !(#2)
+| Map NOT(#2)
 | Project (#3)
 
 EOF

@@ -469,7 +469,7 @@ digraph G {
     node [ shape = box ]
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: mz_logical_timestamp()| 1: if isnull(null) then \{(1 + 1)\} else \{coalesce(0, 2, 1)\} }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: mz_logical_timestamp()| 1: if (null) IS NULL then \{(1 + 1)\} else \{coalesce(0, 2, 1)\} }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -508,7 +508,7 @@ from (select false as a, null as b, null as c) x"
     }
     subgraph cluster3 {
         label = "Box3:Select"
-        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: if !(Q2.C0) then \{ltrim(\"e\", Q2.C1)\} else \{substr(Q2.C2, integer_to_bigint(3), integer_to_bigint(4))\}| 4: mz_logical_timestamp() }" ]
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| 3: if NOT(Q2.C0) then \{ltrim(\"e\", Q2.C1)\} else \{substr(Q2.C2, integer_to_bigint(3), integer_to_bigint(4))\}| 4: mz_logical_timestamp() }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -616,7 +616,7 @@ digraph G {
     }
     subgraph cluster3 {
         label = "Box3:Select"
-        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| !(isnull(Q2.C1)) }" ]
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q2.C0| 1: Q2.C1| 2: Q2.C2| (Q2.C1) IS NOT NULL }" ]
         {
             rank = same
             node [ shape = circle ]

@@ -31,11 +31,11 @@ query T multiline
 EXPLAIN SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#1)), (#0 > 0)
+| Filter (#1) IS NOT NULL, (#0 > 0)
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.t3 (u3):
@@ -45,12 +45,12 @@ Source materialize.public.t3 (u3):
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter (#0 > 0), !(isnull(#1))
+| Filter (#0 > 0), (#1) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | ArrangeBy (#1)
 
 %2 =
@@ -127,7 +127,7 @@ EXPLAIN SELECT * FROM lineitem
 
 %1 =
 | Get materialize.public.orders (u7)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0, date_to_timestamp(#3))
 
 %2 =

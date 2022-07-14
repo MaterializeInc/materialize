@@ -329,7 +329,7 @@ Query:
 
 %3 =
 | Get materialize.public.stock (u18)
-| Filter !(isnull(#2))
+| Filter (#2) IS NOT NULL
 | Project (#0, #2, #17)
 
 %4 =
@@ -357,7 +357,7 @@ Query:
 | Project (#0, #2)
 | Reduce group=(#0)
 | | agg min(#1)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | ArrangeBy (#0, #1)
 
 %9 =
@@ -404,7 +404,7 @@ Query:
 
 %2 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3)), (date_to_timestamp(#4) > 2007-01-02 00:00:00)
+| Filter (#3) IS NOT NULL, (date_to_timestamp(#4) > 2007-01-02 00:00:00)
 | Project (#0..=#4)
 | ArrangeBy (#0, #1, #2)
 
@@ -511,19 +511,19 @@ Source materialize.public.region (u26):
 Query:
 %0 =
 | Get materialize.public.customer (u4)
-| Filter !(isnull(#21))
+| Filter (#21) IS NOT NULL
 | Project (#0..=#2, #21)
 | ArrangeBy (#0, #1, #2)
 
 %1 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3)), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
+| Filter (#3) IS NOT NULL, (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
 | Project (#0..=#3)
 | ArrangeBy (#0, #1, #2)
 
 %2 =
 | Get materialize.public.orderline (u13)
-| Filter !(isnull(#4))
+| Filter (#4) IS NOT NULL
 | Project (#0..=#2, #4, #8)
 
 %3 =
@@ -637,18 +637,18 @@ ORDER BY su_nationkey, cust_nation, l_year
 
 %3 =
 | Get materialize.public.orderline (u13)
-| Filter !(isnull(#4)), !(isnull(#5)), (date_to_timestamp(#6) <= 2012-01-02 00:00:00), (date_to_timestamp(#6) >= 2007-01-02 00:00:00)
+| Filter (#4) IS NOT NULL, (#5) IS NOT NULL, (date_to_timestamp(#6) <= 2012-01-02 00:00:00), (date_to_timestamp(#6) >= 2007-01-02 00:00:00)
 | Project (#0..=#2, #4, #5, #8)
 
 %4 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3))
+| Filter (#3) IS NOT NULL
 | Project (#0..=#4)
 | ArrangeBy (#0, #1, #2)
 
 %5 =
 | Get materialize.public.customer (u4)
-| Filter !(isnull(#21))
+| Filter (#21) IS NOT NULL
 | Project (#0..=#2, #9, #21)
 | ArrangeBy (#0, #1, #2)
 
@@ -720,18 +720,18 @@ Query:
 
 %3 =
 | Get materialize.public.orderline (u13)
-| Filter (#4 < 1000), !(isnull(#5))
+| Filter (#4 < 1000), (#5) IS NOT NULL
 | Project (#0..=#2, #4, #5, #8)
 
 %4 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3)), (date_to_timestamp(#4) <= 2012-01-02 00:00:00), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
+| Filter (#3) IS NOT NULL, (date_to_timestamp(#4) <= 2012-01-02 00:00:00), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
 | Project (#0..=#4)
 | ArrangeBy (#0, #1, #2)
 
 %5 =
 | Get materialize.public.customer (u4)
-| Filter !(isnull(#21))
+| Filter (#21) IS NOT NULL
 | Project (#0..=#2, #21)
 | ArrangeBy (#0, #1, #2)
 
@@ -807,7 +807,7 @@ Query:
 
 %3 =
 | Get materialize.public.orderline (u13)
-| Filter !(isnull(#4)), !(isnull(#5))
+| Filter (#4) IS NOT NULL, (#5) IS NOT NULL
 | Project (#0..=#2, #4, #5, #8)
 
 %4 =
@@ -851,13 +851,13 @@ ORDER BY revenue DESC
 ----
 %0 =
 | Get materialize.public.customer (u4)
-| Filter !(isnull(#21))
+| Filter (#21) IS NOT NULL
 | Project (#0..=#2, #5, #8, #11, #21)
 | ArrangeBy (#0, #1, #2)
 
 %1 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3)), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
+| Filter (#3) IS NOT NULL, (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
 | Project (#0..=#4)
 | ArrangeBy (#0, #1, #2)
 
@@ -1164,7 +1164,7 @@ ORDER BY su_suppkey
 | Project (#1)
 | Reduce group=()
 | | agg max(#0)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %6 =
@@ -1194,7 +1194,7 @@ GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC
 ----
 Source materialize.public.item (u17):
-| Filter !("zz%" ~~(padchar(#4)))
+| Filter NOT("zz%" ~~(padchar(#4)))
 | Project (#0, #2..=#4)
 
 Query:
@@ -1204,7 +1204,7 @@ Query:
 
 %1 =
 | Get materialize.public.item (u17)
-| Filter !("zz%" ~~(padchar(#4)))
+| Filter NOT("zz%" ~~(padchar(#4)))
 | Project (#0, #2..=#4)
 | ArrangeBy (#0)
 
@@ -1346,7 +1346,7 @@ ORDER BY sum(ol_amount) DESC, o_entry_d
 
 %1 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3))
+| Filter (#3) IS NOT NULL
 | Project (#0..=#4, #6)
 | ArrangeBy (#0, #1, #2)
 
@@ -1554,7 +1554,7 @@ ORDER BY numwait DESC, su_name
 
 %1 =
 | Get materialize.public.orderline (u13)
-| Filter !(isnull(#4))
+| Filter (#4) IS NOT NULL
 | Project (#0..=#2, #4, #6)
 
 %2 =
@@ -1670,7 +1670,7 @@ ORDER BY substr(c_state, 1, 1)
 
 %5 =
 | Get materialize.public.order (u11)
-| Filter !(isnull(#3))
+| Filter (#3) IS NOT NULL
 | Project (#1..=#3)
 | Distinct group=(#2, #0, #1)
 | ArrangeBy (#0, #1, #2)

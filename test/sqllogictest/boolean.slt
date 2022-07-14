@@ -240,7 +240,7 @@ Source materialize.public.x (u2):
 Query:
 %0 =
 | Get materialize.public.x (u2)
-| Map (#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), !((#2 @> {}))
+| Map (#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), NOT((#2 @> {}))
 | Project (#4..=#9, #3, #10)
 
 EOF
@@ -276,7 +276,7 @@ Source materialize.public.y (u3):
 Query:
 %0 =
 | Get materialize.public.y (u3)
-| Map (null || (!(#1) || isnull(#1)))
+| Map (null || (NOT(#1) || (#1) IS NULL))
 | Project (#2)
 
 EOF
@@ -294,7 +294,7 @@ Source materialize.public.y (u3):
 Query:
 %0 =
 | Get materialize.public.y (u3)
-| Map (null && (#1 && !(isnull(#1))))
+| Map (null && (#1 && (#1) IS NOT NULL))
 | Project (#2)
 
 EOF
@@ -311,7 +311,7 @@ Source materialize.public.y (u3):
 Query:
 %0 =
 | Get materialize.public.y (u3)
-| Map (null || (#1 && !(isnull(#1))))
+| Map (null || (#1 && (#1) IS NOT NULL))
 | Project (#2)
 
 EOF
@@ -328,7 +328,7 @@ Source materialize.public.y (u3):
 Query:
 %0 =
 | Get materialize.public.y (u3)
-| Map (null && (!(#1) || isnull(#1)))
+| Map (null && (NOT(#1) || (#1) IS NULL))
 | Project (#2)
 
 EOF
@@ -344,7 +344,7 @@ Source materialize.public.y (u3):
 Query:
 %0 =
 | Get materialize.public.y (u3)
-| Map (!(#1) || isnull(#1))
+| Map (NOT(#1) || (#1) IS NULL)
 | Project (#2)
 
 EOF
@@ -361,13 +361,13 @@ FROM z
 WHERE CASE WHEN a > b THEN FALSE ELSE TRUE END
 ----
 Source materialize.public.z (u4):
-| Filter ((isnull(#0) || isnull(#1)) || (#0 <= #1))
+| Filter (((#0) IS NULL || (#1) IS NULL) || (#0 <= #1))
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.z (u4)
-| Filter ((isnull(#0) || isnull(#1)) || (#0 <= #1))
+| Filter (((#0) IS NULL || (#1) IS NULL) || (#0 <= #1))
 
 EOF
 

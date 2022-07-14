@@ -31,7 +31,7 @@ count
 1
 
 > EXPLAIN VIEW delta_join;
-"%0 =| Get t1| ArrangeBy (#0)%1 =| Get t2| ArrangeBy (#0)%2 =| Join %0 %1 (= #0 #2)| | implementation = DeltaQuery| |   delta %0 %1.(#0)| |   delta %1 %0.(#0)| Filter !(isnull(#0))| Project (#0, #1, #0, #3)"
+"%0 =| Get t1| ArrangeBy (#0)%1 =| Get t2| ArrangeBy (#0)%2 =| Join %0 %1 (= #0 #2)| | implementation = DeltaQuery| |   delta %0 %1.(#0)| |   delta %1 %0.(#0)| Filter (#0) IS NOT NULL| Project (#0, #1, #0, #3)"
 
 > SELECT count(*) AS count FROM delta_join;
 count

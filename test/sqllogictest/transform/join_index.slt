@@ -168,7 +168,7 @@ Query:
 
 %1 =
 | Get materialize.public.bar (u2)
-| Filter !(isnull(#0)), !(isnull(#1))
+| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
 
 %2 =
 | Get materialize.public.baz (u5)
@@ -225,7 +225,7 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #3 #4)
 | | implementation = Differential %0.(#0) %1.(#0) %2.(#0)
-| Filter !(isnull(#0)), !(isnull(#3))
+| Filter (#0) IS NOT NULL, (#3) IS NOT NULL
 | Project (#0, #5)
 
 EOF
@@ -266,7 +266,7 @@ where nullif(foo.a, 0) = -bar.a
 | | implementation = DeltaQuery
 | |   delta %0 %1.(-(#0))
 | |   delta %1 %0.(if (#0 = 0) then {null} else {#0})
-| Filter !(isnull(#2)), !(isnull(if (#0 = 0) then {null} else {#0}))
+| Filter (#2) IS NOT NULL, (if (#0 = 0) then {null} else {#0}) IS NOT NULL
 | Project (#1, #3)
 
 EOF
@@ -312,7 +312,7 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
 | | implementation = Differential %2.(#0) %0.((#0 + 4)) %1.(#0)
-| Filter !(isnull(#0)), !(isnull(#4))
+| Filter (#0) IS NOT NULL, (#4) IS NOT NULL
 | Project (#3, #1, #5)
 
 EOF
@@ -401,23 +401,23 @@ where foo.a = bar.a
   and foo.a + 4 = baz.a
 ----
 Source materialize.public.baz (u6):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.foo (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy ((#0 + 4))
 
 %1 =
 | Get materialize.public.bar (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.baz (u6)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))

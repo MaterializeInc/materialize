@@ -172,7 +172,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: isnull(Q0.C0) (boolean)| 3: !(isnull(Q0.C0)) (boolean) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: (Q0.C0) IS NULL (boolean)| 3: (Q0.C0) IS NOT NULL (boolean) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -212,7 +212,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: istrue(Q0.C0) (boolean)| 3: !(istrue(Q0.C0)) (boolean) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: (Q0.C0) IS TRUE (boolean)| 3: (Q0.C0) IS NOT TRUE (boolean) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -252,7 +252,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: isnull(Q0.C0) (boolean)| 3: !(isnull(Q0.C0)) (boolean) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: (Q0.C0) IS NULL (boolean)| 3: (Q0.C0) IS NOT NULL (boolean) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -630,7 +630,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: !(Q0.C0) (boolean?)| 3: !(Q0.C1) (boolean) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (boolean?)| 1: Q0.C1 (boolean)| 2: NOT(Q0.C0) (boolean?)| 3: NOT(Q0.C1) (boolean) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -1008,7 +1008,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: !((false \|\| (Q0.C1 = 1))) (boolean)| 3: !((false \|\| (1 = Q0.C1))) (boolean)| 4: !(((false \|\| (1 = 1)) \|\| (1 = Q0.C0))) (boolean?)| 5: !((false \|\| (1 = null))) (boolean?)| 6: !((false \|\| (null = 1))) (boolean?)| 7: !((false \|\| (null = Q0.C1))) (boolean?) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: NOT((false \|\| (Q0.C1 = 1))) (boolean)| 3: NOT((false \|\| (1 = Q0.C1))) (boolean)| 4: NOT(((false \|\| (1 = 1)) \|\| (1 = Q0.C0))) (boolean?)| 5: NOT((false \|\| (1 = null))) (boolean?)| 6: NOT((false \|\| (null = 1))) (boolean?)| 7: NOT((false \|\| (null = Q0.C1))) (boolean?) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -1202,7 +1202,7 @@ digraph G {
     }
     subgraph cluster7 {
         label = "Box7:Select"
-        boxhead7 [ shape = record, label = "{ Distinct: Preserve| 0: !(((1 = Q7.C0) && true)) (boolean) }" ]
+        boxhead7 [ shape = record, label = "{ Distinct: Preserve| 0: NOT(((1 = Q7.C0) && true)) (boolean) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -1254,7 +1254,7 @@ digraph G {
     }
     subgraph cluster3 {
         label = "Box3:Select"
-        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q3.C0 (integer?)| 1: Q3.C1 (integer)| 2: Q3.C2 (boolean)| 3: !(Q3.C2) (boolean) }" ]
+        boxhead3 [ shape = record, label = "{ Distinct: Preserve| 0: Q3.C0 (integer?)| 1: Q3.C1 (integer)| 2: Q3.C2 (boolean)| 3: NOT(Q3.C2) (boolean) }" ]
         {
             rank = same
             node [ shape = circle ]

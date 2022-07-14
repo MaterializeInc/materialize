@@ -26,19 +26,19 @@ Source materialize.public.t1 (u1):
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 = Let l0 =
@@ -88,23 +88,23 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 =
@@ -129,18 +129,18 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 = Let l0 =
@@ -195,18 +195,18 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 = Let l0 =
@@ -262,18 +262,18 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 = Let l0 =
@@ -348,7 +348,7 @@ Query:
 | Get materialize.public.t1 (u1)
 | Reduce group=(#0)
 | | agg sum(#1)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 
 EOF
 
@@ -357,23 +357,23 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 =
@@ -392,23 +392,23 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0 and sum(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 =
@@ -430,19 +430,19 @@ Source materialize.public.t1 (u1):
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #1)
@@ -487,23 +487,23 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= #0 #1)
@@ -521,23 +521,23 @@ query T multiline
 EXPLAIN select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 =
@@ -559,19 +559,19 @@ Source materialize.public.t1 (u1):
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 = Let l0 =
@@ -619,19 +619,19 @@ Source materialize.public.t1 (u1):
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #1)
@@ -673,19 +673,19 @@ Source materialize.public.t1 (u1):
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #1)
@@ -725,23 +725,23 @@ query T multiline
 EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f2) > 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= #0 #1)
@@ -759,22 +759,22 @@ query T multiline
 EXPLAIN select t1.f1, max(t1.f1 + t2.f2), sum(t1.f2 + t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t1.f1 + t2.f2) > 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= #0 #2)
@@ -823,18 +823,18 @@ Source materialize.public.t1 (u3):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u4):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u3)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | ArrangeBy (#1)
 
 %1 =
 | Get materialize.public.t2 (u4)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l0 =
 | Join %0 %1 (= #1 #2)
@@ -878,18 +878,18 @@ Source materialize.public.t1 (u3):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u4):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u3)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | ArrangeBy (#1)
 
 %1 =
 | Get materialize.public.t2 (u4)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l0 =
 | Join %0 %1 (= #1 #2)
@@ -932,22 +932,22 @@ query T multiline
 explain select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
 ----
 Source materialize.public.t1 (u3):
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.t2 (u4):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.t1 (u3)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | ArrangeBy (#1)
 
 %1 =
 | Get materialize.public.t2 (u4)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= #1 #2)
@@ -1099,7 +1099,7 @@ Query:
 | Reduce group=()
 | | agg count(true)
 | | agg max(#0)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | ArrangeBy (#1)
 
 %11 =

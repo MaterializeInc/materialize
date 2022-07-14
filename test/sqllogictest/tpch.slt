@@ -1003,7 +1003,7 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#1)
 | |   delta %1 %0.(#0)
-| Filter !("%special%requests%" ~~(varchar_to_text(#16)))
+| Filter NOT("%special%requests%" ~~(varchar_to_text(#16)))
 | Project (#0..=#8)
 
 %3 =
@@ -1202,7 +1202,7 @@ ORDER BY
     p_size
 ----
 Source materialize.public.part (u4):
-| Filter !("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), ((((((((#5 = 14) || (#5 = 49)) || (#5 = 23)) || (#5 = 45)) || (#5 = 19)) || (#5 = 3)) || (#5 = 36)) || (#5 = 9)), (#3 != "Brand#45")
+| Filter NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), ((((((((#5 = 14) || (#5 = 49)) || (#5 = 23)) || (#5 = 45)) || (#5 = 19)) || (#5 = 3)) || (#5 = 36)) || (#5 = 9)), (#3 != "Brand#45")
 | Project (#0, #3..=#5)
 
 Query:
@@ -1212,7 +1212,7 @@ Query:
 
 %1 =
 | Get materialize.public.part (u4)
-| Filter (#3 != "Brand#45"), !("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), ((((((((#5 = 14) || (#5 = 49)) || (#5 = 23)) || (#5 = 45)) || (#5 = 19)) || (#5 = 3)) || (#5 = 36)) || (#5 = 9))
+| Filter (#3 != "Brand#45"), NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), ((((((((#5 = 14) || (#5 = 49)) || (#5 = 23)) || (#5 = 45)) || (#5 = 19)) || (#5 = 3)) || (#5 = 36)) || (#5 = 9))
 | Project (#0, #3..=#5)
 | ArrangeBy (#0)
 

@@ -73,7 +73,7 @@ build apply=CanonicalizeMfp
 %0 =
 | Get x (u0)
 | Map hmac(#0, #1, #2), hmac(#0, #1)
-| Filter isnull(#3), isnull(#4)
+| Filter (#3) IS NULL, (#4) IS NULL
 | Project (#0, #3, #4)
 
 # both pushdown and retained filters with a map
@@ -91,7 +91,7 @@ build apply=CanonicalizeMfp
 | Get x (u0)
 | Filter (#0 < 1234)
 | Map hmac(#0, #1, #2)
-| Filter isnull(#3)
+| Filter (#3) IS NULL
 | Project (#0, #3)
 
 # regression test for #10000. Both pushdown and retained filters with a map.
@@ -122,7 +122,7 @@ build apply=CanonicalizeMfp
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
-| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+| Filter (#0) IS NOT NULL, ((#0 = 5) || (#0 = 1337))
 | Project (#0)
 ----
 ----
@@ -159,7 +159,7 @@ build apply=CanonicalizeMfp
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
-| Filter !(isnull(#0)), ((5 = (#0 + #1)) || (9 = (#0 + #1)))
+| Filter (#0) IS NOT NULL, ((5 = (#0 + #1)) || (9 = (#0 + #1)))
 | Project (#0)
 ----
 ----
@@ -204,7 +204,7 @@ build apply=CanonicalizeMfp
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
-| Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
+| Filter (#0) IS NOT NULL, ((#0 = 5) || (#0 = 1337))
 | Project (#0, #3)
 ----
 ----
@@ -252,7 +252,7 @@ build apply=CanonicalizeMfp
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Map (#0 + #2)
 | Filter ((#0 = 5) || (#0 = 1337))
 | Project (#4)

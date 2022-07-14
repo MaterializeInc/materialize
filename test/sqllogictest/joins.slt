@@ -111,13 +111,13 @@ FROM l as l1, l as l2, l as l3
 WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 ----
 Source materialize.public.l (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 = Let l0 =
 | Get materialize.public.l (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %1 = Let l1 =
 | Get %0 (l0)
@@ -179,14 +179,14 @@ Query:
 
 %5 =
 | Get %2 (l1)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#1)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %6 =
 | Get materialize.public.l (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | Distinct group=((#0 + 1))
 | ArrangeBy (#0)
@@ -326,18 +326,18 @@ Source materialize.public.l (u1):
 | Project (#0, #1)
 
 Source materialize.public.r (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.l (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.r (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
@@ -380,7 +380,7 @@ EXPLAIN PLAN FOR
 SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 ----
 Source materialize.public.l (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.r (u2):
@@ -389,12 +389,12 @@ Source materialize.public.r (u2):
 Query:
 %0 =
 | Get materialize.public.l (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.r (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
@@ -446,12 +446,12 @@ Source materialize.public.r (u2):
 Query:
 %0 =
 | Get materialize.public.l (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.r (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
@@ -521,22 +521,22 @@ query T multiline
 EXPLAIN PLAN FOR SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 ----
 Source materialize.public.l (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.r (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.l (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy ((#0 % 2))
 
 %1 =
 | Get materialize.public.r (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= (#0 % 2) (#2 % 2))
@@ -670,22 +670,22 @@ query T multiline
 EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra
 ----
 Source materialize.public.l3 (u10):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.r3 (u11):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
 %0 =
 | Get materialize.public.l3 (u10)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.r3 (u11)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Join %0 %1 (= #0 #2)

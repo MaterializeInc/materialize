@@ -25,7 +25,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # The simplest expression there could be
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL AND (col_null IS NULL AND col_not_null = 5);
-"%0 =| Get t1| Filter isnull(#0), (#1 = 5)"
+"%0 =| Get t1| Filter (#0) IS NULL, (#1 = 5)"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
 "%0 =| Get t1| Filter (#0 = 5), (#1 = 1)"
@@ -37,23 +37,23 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # OR/disjunction at the top level
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL AND col_not_null = 5);
-"%0 =| Get t1| Filter isnull(#0)"
+"%0 =| Get t1| Filter (#0) IS NULL"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL OR col_null IS NULL OR (col_null IS NULL AND col_not_null = 5);
-"%0 =| Get t1| Filter isnull(#0)"
+"%0 =| Get t1| Filter (#0) IS NULL"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL AND col_not_null = 5) OR (col_null IS NULL AND col_not_null = 6);
-"%0 =| Get t1| Filter isnull(#0)"
+"%0 =| Get t1| Filter (#0) IS NULL"
 
 # OR/disjunction at the lower level
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL AND (col_null IS NULL OR col_not_null = 5);
-"%0 =| Get t1| Filter isnull(#0)"
+"%0 =| Get t1| Filter (#0) IS NULL"
 
 # Nested OR/disjunctions are not optimized
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL OR col_not_null = 5);
-"%0 =| Get t1| Filter (isnull(#0) || (isnull(#0) || (#1 = 5)))"
+"%0 =| Get t1| Filter ((#0) IS NULL || ((#0) IS NULL || (#1 = 5)))"
 
 # A more complex expression
 

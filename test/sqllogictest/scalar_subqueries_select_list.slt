@@ -106,7 +106,7 @@ query T multiline
 EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
@@ -123,7 +123,7 @@ Query:
 
 %2 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %3 = Let l1 =
 | Join %1 %2 (= #0 #1)
@@ -185,7 +185,7 @@ query T multiline
 EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
@@ -198,11 +198,11 @@ Query:
 
 %1 = Let l1 =
 | Get %0 (l0)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l2 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %3 =
 | Get %1 (l1)
@@ -267,7 +267,7 @@ query T multiline
 EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
@@ -280,11 +280,11 @@ Query:
 
 %1 = Let l1 =
 | Get %0 (l0)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 = Let l2 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %3 =
 | Get %1 (l1)
@@ -379,7 +379,7 @@ query T multiline
 EXPLAIN SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
@@ -396,7 +396,7 @@ Query:
 
 %2 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %3 = Let l1 =
 | Join %1 %2 (= #0 #1)
@@ -474,7 +474,7 @@ query T multiline
 EXPLAIN SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
@@ -491,7 +491,7 @@ Query:
 
 %2 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %3 = Let l1 =
 | Join %1 %2 (= #0 #1)
@@ -583,11 +583,11 @@ query T multiline
 EXPLAIN SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f1) FROM t3
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t3 (u3):
@@ -604,7 +604,7 @@ Query:
 
 %2 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %3 = Let l1 =
 | Join %1 %2 (= #0 #1)
@@ -621,7 +621,7 @@ Query:
 
 %6 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %7 = Let l3 =
 | Join %5 %6 (= #0 #1)
@@ -716,7 +716,7 @@ query T multiline
 EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)) FROM t2;
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
@@ -729,7 +729,7 @@ Query:
 
 %1 = Let l1 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %2 =
 | Get %0 (l0)
@@ -865,11 +865,11 @@ EXPLAIN SELECT
 FROM t3
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t3 (u3):
@@ -886,12 +886,12 @@ Query:
 
 %2 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | ArrangeBy (#0)
 
 %3 =
 | Get materialize.public.t2 (u2)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %4 = Let l1 =
 | Join %1 %2 %3 (= #0 #1 #2)
@@ -959,7 +959,7 @@ EXPLAIN SELECT
 FROM t2, t3
 ----
 Source materialize.public.t1 (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 Source materialize.public.t2 (u2):
@@ -991,7 +991,7 @@ Query:
 
 %5 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %6 = Let l2 =
 | Join %4 %5 (= #0 #2)
