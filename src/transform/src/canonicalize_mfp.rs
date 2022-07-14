@@ -11,16 +11,9 @@
 //!
 //! This transform takes a sequence of Maps, Filters, and Projects and
 //! canonicalizes it to a sequence like this:
-//! | Filter
 //! | Map
 //! | Filter
 //! | Project
-//! The filters before the map are those that can be
-//! pushed down through a map according the rules of
-//! [crate::projection_pushdown::ProjectionPushdown.push_filters_through_map()].
-//! TODO: It would be nice to canonicalize it to just an MFP, but currently
-//! putting a filter after instead of before a Map can result in the loss of
-//! nullability information.
 //!
 //! After canonicalizing, this transform looks at the Map-Filter-Project
 //! subsequence and identifies common `ScalarExpr` expressions across and within
@@ -34,7 +27,6 @@
 //! expressions re-use complex subexpressions.
 
 use crate::{TransformArgs, TransformError};
-use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::visit::VisitChildren;
 use mz_expr::MirRelationExpr;
 
@@ -58,42 +50,17 @@ impl CanonicalizeMfp {
         relation.try_visit_mut_children(|e| self.action(e))?;
         mfp.optimize();
         if !mfp.is_identity() {
-            let (map, mut filter, project) = mfp.as_map_filter_project();
-            if !filter.is_empty() {
-                // Push down the predicates that can be pushed down, removing
-                // them from the mfp object to be optimized.
-                let mut relation_type = relation.typ();
-                for expr in map.iter() {
-                    relation_type.column_types.push(expr.typ(&relation_type));
-                }
-                canonicalize_predicates(&mut filter, &relation_type);
-                let all_errors = filter.iter().all(|p| p.is_literal_err());
-                let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown::default()
-                    .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors)?;
-                if !pushdown.is_empty() {
-                    *relation = relation.take_dangerous().filter(pushdown);
-                    crate::fusion::filter::Filter.action(relation);
-                }
-                mfp = mz_expr::MapFilterProject::new(mfp.input_arity)
-                    .map(map)
-                    .filter(retained)
-                    .project(project);
+            let (map, filter, project) = mfp.as_map_filter_project();
+            let total_arity = mfp.input_arity + map.len();
+            if !map.is_empty() {
+                *relation = relation.take_dangerous().map(map);
             }
-            mfp.optimize();
-            if !mfp.is_identity() {
-                let (map, filter, project) = mfp.as_map_filter_project();
-                let total_arity = mfp.input_arity + map.len();
-                if !map.is_empty() {
-                    *relation = relation.take_dangerous().map(map);
-                }
-                if !filter.is_empty() {
-                    *relation = relation.take_dangerous().filter(filter);
-                    crate::fusion::filter::Filter.action(relation);
-                }
-                if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o)
-                {
-                    *relation = relation.take_dangerous().project(project);
-                }
+            if !filter.is_empty() {
+                *relation = relation.take_dangerous().filter(filter);
+                crate::fusion::filter::Filter.action(relation);
+            }
+            if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o) {
+                *relation = relation.take_dangerous().project(project);
             }
         }
         Ok(())

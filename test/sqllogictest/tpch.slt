@@ -1812,55 +1812,56 @@ GROUP BY
 ORDER BY
     cntrycode
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.customer (u10)
 | Map substr(char_to_text(#4), 1, 2)
+
+%1 =
+| Get %0 (l0)
 | Filter (((((((#8 = "13") || (#8 = "31")) || (#8 = "23")) || (#8 = "29")) || (#8 = "30")) || (#8 = "18")) || (#8 = "17"))
 | Project (#0, #4, #5)
 
-%1 =
-| Get materialize.public.customer (u10)
-| Filter (#5 > 0)
-| Map substr(char_to_text(#4), 1, 2)
-| Filter (((((((#8 = "13") || (#8 = "31")) || (#8 = "23")) || (#8 = "29")) || (#8 = "30")) || (#8 = "18")) || (#8 = "17"))
+%2 =
+| Get %0 (l0)
+| Filter (#5 > 0), (((((((#8 = "13") || (#8 = "31")) || (#8 = "23")) || (#8 = "29")) || (#8 = "30")) || (#8 = "18")) || (#8 = "17"))
 | Project (#5)
 | Reduce group=()
 | | agg sum(#0)
 | | agg count(true)
 | ArrangeBy ()
 
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %0 %1.()
+%3 = Let l1 =
+| Join %1 %2
+| | implementation = Differential %1 %2.()
 | Filter (numeric_to_double(#2) > (numeric_to_double(#3) / bigint_to_double(if (#4 = 0) then {null} else {#4})))
 | Project (#0..=#2)
 
-%3 = Let l1 =
-| Get %2 (l0)
+%4 = Let l2 =
+| Get %3 (l1)
 | Project (#0)
 
-%4 =
-| Get %2 (l0)
+%5 =
+| Get %3 (l1)
 | ArrangeBy (#0)
 
-%5 =
+%6 =
 | Get materialize.public.orders (u12)
 | Project (#1)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%6 =
-| Join %3 %5 (= #0 #1)
-| | implementation = Differential %3 %5.(#0)
+%7 =
+| Join %4 %6 (= #0 #1)
+| | implementation = Differential %4 %6.(#0)
 | Project (#0)
 | Negate
 
-%7 =
-| Union %6 %3
-
 %8 =
-| Join %4 %7 (= #0 #3)
-| | implementation = Differential %7 %4.(#0)
+| Union %7 %4
+
+%9 =
+| Join %5 %8 (= #0 #3)
+| | implementation = Differential %8 %5.(#0)
 | Project (#1, #2)
 | Reduce group=(substr(char_to_text(#0), 1, 2))
 | | agg count(true)

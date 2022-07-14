@@ -671,7 +671,8 @@ SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
 | | implementation = DeltaQuery
 | |   delta %0 %0.(#0)
 | |   delta %0 %0.(#0)
-| Filter (#0) IS NOT NULL
+| Map (#0) IS NOT NULL
+| Filter #4
 | Project (#0, #1, #3)
 
 %2 =

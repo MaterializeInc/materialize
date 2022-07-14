@@ -125,41 +125,39 @@ Source materialize.public.t2 (u2):
 | Project (#0, #1)
 
 Query:
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy ()
 
-%2 =
+%1 =
 | Get materialize.public.t2 (u2)
 | Filter (#0 = 123)
 | Project (#1)
 
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 
-%4 =
-| Get %3 (l1)
+%3 =
+| Get %2 (l0)
 | Project (#1)
 | Negate
 | Map 123
 | Project (#1, #0)
 
-%5 =
-| Get %0 (l0)
+%4 =
+| Get materialize.public.t1 (u1)
 | Map 123
+| Filter (#0 = 123)
 | Project (#2, #1)
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 | Map null
 
-%7 =
-| Union %3 %6
+%6 =
+| Union %2 %5
 
 EOF
 

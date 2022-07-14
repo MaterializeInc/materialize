@@ -53,7 +53,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Nested OR/disjunctions are not optimized
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL OR col_not_null = 5);
-"%0 =| Get t1| Filter ((#0) IS NULL || ((#0) IS NULL || (#1 = 5)))"
+"%0 =| Get t1| Map (#0) IS NULL| Filter (#2 || (#2 || (#1 = 5)))| Project (#0, #1)"
 
 # A more complex expression
 
@@ -118,4 +118,4 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Not optimized in OR/disjunctions
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 OR TRUE IN (col_not_null = 1, col_not_null = 2)
-"%0 =| Get t1| Filter (((true = (#1 = 1)) || (true = (#1 = 2))) || (#1 = 1))"
+"%0 =| Get t1| Map (#1 = 1)| Filter (#2 || ((#2 = true) || (true = (#1 = 2))))| Project (#0, #1)"
