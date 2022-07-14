@@ -784,6 +784,8 @@ impl MapFilterProject {
         // count of one, and then removes any expressions that are not
         // referenced.
         self.memoize_expressions();
+        self.predicates.sort();
+        self.predicates.dedup();
         self.inline_expressions();
         self.remove_undemanded();
 
