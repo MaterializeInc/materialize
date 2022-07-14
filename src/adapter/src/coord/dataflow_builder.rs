@@ -435,29 +435,22 @@ pub fn prep_scalar_expr(
         ExprPrepStyle::OneShot {
             logical_time,
             session,
-        } => {
-            let mut res = Ok(());
-            #[allow(deprecated)]
-            expr.visit_mut_post_nolimit(&mut |e| {
-                if let MirScalarExpr::CallUnmaterializable(f) = e {
-                    match eval_unmaterializable_func(state, f, logical_time, session) {
-                        Ok(evaled) => *e = evaled,
-                        Err(e) => res = Err(e),
-                    }
-                }
-            });
-            res
-        }
+        } => expr.try_visit_mut_post(&mut |e| {
+            if let MirScalarExpr::CallUnmaterializable(f) = e {
+                *e = eval_unmaterializable_func(state, f, logical_time, session)?;
+            }
+            Ok(())
+        }),
 
         // Reject the query if it contains any unmaterializable function calls.
         ExprPrepStyle::Index | ExprPrepStyle::AsOf => {
             let mut last_observed_unmaterializable_func = None;
-            #[allow(deprecated)]
-            expr.visit_mut_post_nolimit(&mut |e| {
+            expr.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
                     last_observed_unmaterializable_func = Some(f.clone());
                 }
-            });
+            })?;
+
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
                     ExprPrepStyle::Index => AdapterError::UnmaterializableFunction(f),

@@ -128,17 +128,16 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
                 &mut id_gen,
             )?;
             // Install the `new_local` name wherever `global_id` was used.
-            #[allow(deprecated)]
             dataflow.objects_to_build[other]
                 .plan
                 .as_inner_mut()
-                .visit_mut_post_nolimit(&mut |expr| {
+                .visit_mut_post(&mut |expr| {
                     if let MirRelationExpr::Get { id, .. } = expr {
                         if id == &Id::Global(global_id) {
                             *id = Id::Local(new_local);
                         }
                     }
-                });
+                })?;
 
             // With identifiers rewritten, we can replace `other` with
             // a `MirRelationExpr::Let` binding, whose value is `index` and
@@ -266,14 +265,14 @@ where
             let projection_pushed_down = columns.iter().map(|c| *c).collect();
             // Push down the projection consisting of the entries of `columns`
             // in increasing order.
-            projection_pushdown.action(view, &projection_pushed_down, demand);
+            projection_pushdown.action(view, &projection_pushed_down, demand)?;
             applied_projection.insert(id, projection_pushed_down);
         } else if id == Id::Global(GlobalId::Explain) {
             // If we just want to explain the plan for a given view, then there
             // will be no upstream demand. Just demand all columns from views
             // that are not depended on by another view.
             let arity = view.arity();
-            projection_pushdown.action(view, &(0..arity).collect(), demand);
+            projection_pushdown.action(view, &(0..arity).collect(), demand)?;
         }
         view_refs.push(view);
     }
@@ -281,7 +280,7 @@ where
     let typ_update = crate::update_let::UpdateLet::default();
     for view in view_refs {
         // Update column references to views where projections were pushed down.
-        projection_pushdown.update_projection_around_get(view, &applied_projection);
+        projection_pushdown.update_projection_around_get(view, &applied_projection)?;
         // Types need to be updated after ProjectionPushdown
         // because the width of each view may have changed.
         typ_update.action(view, &mut HashMap::new(), &mut IdGen::default())?;
