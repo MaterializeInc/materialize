@@ -23,6 +23,7 @@ use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
 use aws_smithy_http::endpoint::Endpoint;
 use aws_types::credentials::SharedCredentialsProvider;
+use aws_types::region::Region;
 use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
 use mz_ore::task::RuntimeExt;
@@ -56,11 +57,18 @@ impl S3BlobConfig {
         prefix: String,
         role_arn: Option<String>,
         endpoint: Option<String>,
+        region: Option<String>,
     ) -> Result<Self, Error> {
-        let mut loader = aws_config::from_env();
+        let region = match region {
+            Some(region_name) => Some(Region::new(region_name)),
+            None => region::default_provider().region().await,
+        };
+
+        let mut loader = aws_config::from_env().region(region.clone());
+
         if let Some(role_arn) = role_arn {
             let mut role_provider = AssumeRoleProvider::builder(role_arn).session_name("persist");
-            if let Some(region) = region::default_provider().region().await {
+            if let Some(region) = region {
                 role_provider = role_provider.region(region);
             }
             let default_provider =
@@ -134,7 +142,7 @@ impl S3BlobConfig {
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
         let role_arn = None;
-        let config = S3BlobConfig::new(bucket, prefix, role_arn, None).await?;
+        let config = S3BlobConfig::new(bucket, prefix, role_arn, None, None).await?;
         Ok(Some(config))
     }
 
