@@ -440,7 +440,7 @@ header {
 }
 .btn {
     background-color: $light-grey-v2;
-    color: $medium-purple-v2 !important;
+    color: $medium-purple-v2;
     border-radius: 4px;
     display: inline-flex;
     justify-items: center;
@@ -456,14 +456,20 @@ header {
     transition: color 350ms ease, background-color 350ms ease;
     white-space: nowrap;
 
+    span {
+        color: $medium-purple-v2;
+    }
+
     &:hover {
         opacity: 1;
-        color: $light-grey-v2 !important;
         background-color: $medium-purple-v2;
         border: none !important;
 
         svg {
-            color: inherit;
+            color: $light-grey-v2;
+        }
+        span {
+            color: $light-grey-v2;
         }
     }
 
