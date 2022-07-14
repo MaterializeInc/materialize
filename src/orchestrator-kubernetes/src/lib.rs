@@ -20,8 +20,8 @@ use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, Pod, PodAffinityTerm, PodAntiAffinity, PodSpec,
-    PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
-    ServiceSpec, Volume, VolumeMount,
+    PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort, ServiceSpec,
+    Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -313,6 +313,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 let label_selector_requirements = label_selectors
                     .into_iter()
                     .map(label_selector_to_k8s)
+                    .map(|r| {
+                        r.map(|mut x| {
+                            x.key = format!(
+                                "{}.environmentd.materialize.cloud/{}",
+                                self.namespace, x.key
+                            );
+                            x
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 let ls = LabelSelector {
                     match_expressions: Some(label_selector_requirements),
