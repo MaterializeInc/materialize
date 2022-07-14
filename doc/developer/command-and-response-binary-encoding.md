@@ -513,7 +513,8 @@ enum $T {
   </tr>
   <tr>
    <td valign=top>
-<pre>HashMap<$K, $V></pre>
+<pre>HashMap<$K, $V>
+BTreeMap<$K, $V></pre>
    </td>
    <td valign=top>
 <pre>map<〚$K〛, 〚$V〛></pre>
@@ -522,7 +523,8 @@ enum $T {
   </tr>
   <tr>
    <td valign=top>
-<pre>HashMap<$K, $V></pre>
+<pre>HashMap<$K, $V>
+BTreeMap<$K, $V></pre>
    </td>
    <td valign=top>
 <pre>repeated 〚($K, $V)〛</pre>
