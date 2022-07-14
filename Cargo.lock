@@ -3122,6 +3122,7 @@ dependencies = [
  "mz-service",
  "mz-storage",
  "mz-timely-util",
+ "once_cell",
  "proptest",
  "proptest-derive",
  "prost",

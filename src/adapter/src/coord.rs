@@ -80,6 +80,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_compute_client::logging::LogVariant;
 use mz_repr::explain_new::Explain;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -103,7 +104,8 @@ use mz_compute_client::explain::{
 use mz_compute_client::response::PeekResponse;
 use mz_controller::{
     ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent,
-    ConcreteComputeInstanceReplicaConfig, ControllerResponse,
+    ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLocation,
+    ConcreteComputeInstanceReplicaLogging, ControllerResponse,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
@@ -326,9 +328,10 @@ fn concretize_replica_config(
     config: ReplicaConfig,
     replica_sizes: &ClusterReplicaSizeMap,
     availability_zones: &[String],
+    persisted_logs: Vec<(LogVariant, GlobalId)>,
 ) -> Result<ConcreteComputeInstanceReplicaConfig, AdapterError> {
-    let config = match config {
-        ReplicaConfig::Remote { addrs } => ConcreteComputeInstanceReplicaConfig::Remote { addrs },
+    let location = match config {
+        ReplicaConfig::Remote { addrs } => ConcreteComputeInstanceReplicaLocation::Remote { addrs },
         ReplicaConfig::Managed {
             size,
             availability_zone,
@@ -358,14 +361,17 @@ fn concretize_replica_config(
                     });
                 }
             }
-            ConcreteComputeInstanceReplicaConfig::Managed {
+            ConcreteComputeInstanceReplicaLocation::Managed {
                 size_config: *size_config,
                 size_name: size,
                 availability_zone,
             }
         }
     };
-    Ok(config)
+    Ok(ConcreteComputeInstanceReplicaConfig {
+        location,
+        persisted_logs: ConcreteComputeInstanceReplicaLogging::Concrete(persisted_logs),
+    })
 }
 
 /// Holds tables needing advancement.
@@ -730,13 +736,33 @@ impl<S: Append + 'static> Coordinator<S> {
                 .create_instance(instance.id, instance.logging.clone())
                 .await;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
+                let introspection_collections = replica
+                    .config
+                    .persisted_logs
+                    .get_logs()
+                    .iter()
+                    .map(|(variant, id)| {
+                        (
+                            *id,
+                            CollectionDescription {
+                                desc: variant.desc(),
+                                ingestion: None,
+                                remote_addr: None,
+                            },
+                        )
+                    })
+                    .collect();
+
+                // Create collections does not recreate existing collections, so it is safe to
+                // always call it.
                 self.controller
-                    .add_replica_to_instance(
-                        instance.id,
-                        replica_id,
-                        replica.config,
-                        replica.log_collections,
-                    )
+                    .storage_mut()
+                    .create_collections(introspection_collections)
+                    .await
+                    .unwrap();
+
+                self.controller
+                    .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -2772,37 +2798,40 @@ impl<S: Append + 'static> Coordinator<S> {
                 ReplicaConfig::Managed { size, .. } => Some(size.clone()),
                 ReplicaConfig::Remote { .. } => None,
             };
-            let replica_config = concretize_replica_config(
-                replica_config,
-                &self.replica_sizes,
-                &self.availability_zones,
-            )?;
 
-            // These are the persisted, per replica log collections
-            let log_collections = if compute_instance_config.is_some() {
-                self.catalog.allocate_introspection_source_indexes().await
+            // These are the persisted, per replica persisted logs
+            let persisted_logs = if compute_instance_config.is_some() {
+                self.catalog
+                    .allocate_persisted_introspection_source_indexes()
+                    .await
             } else {
                 Vec::new()
             };
-            tracing::debug!("allocated log collections {:?}", &log_collections);
+            tracing::debug!("allocated persisted_logs {:?}", &persisted_logs);
 
-            introspection_collections.extend(log_collections.iter().map(|(log, id)| {
+            introspection_collections.extend(persisted_logs.iter().map(|(variant, id)| {
                 (
                     *id,
                     CollectionDescription {
-                        desc: log.variant.desc(),
+                        desc: variant.desc(),
                         ingestion: None,
                         remote_addr: None,
                     },
                 )
             }));
 
+            let replica_config = concretize_replica_config(
+                replica_config,
+                &self.replica_sizes,
+                &self.availability_zones,
+                persisted_logs,
+            )?;
+
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
                 config: replica_config,
                 on_cluster_name: name.clone(),
                 logical_size,
-                log_collections,
             });
         }
 
@@ -2829,12 +2858,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
-                .add_replica_to_instance(
-                    instance.id,
-                    replica_id,
-                    replica.config,
-                    replica.log_collections,
-                )
+                .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -2864,26 +2888,34 @@ impl<S: Append + 'static> Coordinator<S> {
             ReplicaConfig::Managed { size, .. } => Some(size.clone()),
             ReplicaConfig::Remote { .. } => None,
         };
-        let config =
-            concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
 
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
 
-        // This vector collects introspection sources of all replicas of this compute instance
-        let log_collections = if instance.logging.is_some() {
-            self.catalog.allocate_introspection_source_indexes().await
+        let persisted_logs = if instance.logging.is_some() {
+            self.catalog
+                .allocate_persisted_introspection_source_indexes()
+                .await
         } else {
             Vec::new()
         };
-        let introspection_collection_ids: Vec<_> =
-            log_collections.iter().map(|(_, id)| *id).collect();
-        let introspection_collections = log_collections
+
+        let config = concretize_replica_config(
+            config,
+            &self.replica_sizes,
+            &self.availability_zones,
+            persisted_logs,
+        )?;
+
+        let persisted_log_ids = config.persisted_logs.get_log_ids();
+        let persisted_logs_collections = config
+            .persisted_logs
+            .get_logs()
             .iter()
-            .map(|(log, id)| {
+            .map(|(variant, id)| {
                 (
                     *id,
                     CollectionDescription {
-                        desc: log.variant.desc(),
+                        desc: variant.desc(),
                         ingestion: None,
                         remote_addr: None,
                     },
@@ -2895,7 +2927,6 @@ impl<S: Append + 'static> Coordinator<S> {
             name: name.clone(),
             config: config.clone(),
             on_cluster_name: of_cluster.clone(),
-            log_collections,
             logical_size,
         };
 
@@ -2904,7 +2935,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.controller
             .storage_mut()
-            .create_collections(introspection_collections)
+            .create_collections(persisted_logs_collections)
             .await
             .unwrap();
 
@@ -2915,7 +2946,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         if instance.logging.is_some() {
             self.initialize_compute_read_policies(
-                introspection_collection_ids,
+                persisted_log_ids,
                 instance_id,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
@@ -2923,12 +2954,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.controller
-            .add_replica_to_instance(
-                instance_id,
-                replica_id,
-                replica.config,
-                replica.log_collections,
-            )
+            .add_replica_to_instance(instance_id, replica_id, replica.config)
             .await
             .unwrap();
 

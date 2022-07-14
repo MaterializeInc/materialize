@@ -265,10 +265,10 @@ where
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
-        log_collections: HashMap<LogVariant, GlobalId>,
+        persisted_logs: HashMap<LogVariant, GlobalId>,
     ) {
         // Create ComputeState entries in ComputeController
-        for id in log_collections.values() {
+        for id in persisted_logs.values() {
             self.compute.collections.insert(
                 *id,
                 CollectionState::new(Antichain::from_elem(T::minimum()), Vec::new(), Vec::new()),
@@ -276,7 +276,7 @@ where
         }
 
         // Enrich log collections with metadata such that they can be sent over to computed
-        let log_collections = log_collections
+        let persisted_logs = persisted_logs
             .into_iter()
             .map(|(variant, id)| {
                 let meta = self
@@ -290,9 +290,7 @@ where
             .collect();
 
         // Add the replica
-        self.compute
-            .replicas
-            .add_replica(id, addrs, log_collections);
+        self.compute.replicas.add_replica(id, addrs, persisted_logs);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {

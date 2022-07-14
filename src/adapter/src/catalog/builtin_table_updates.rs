@@ -12,7 +12,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaConfig};
+use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -128,13 +128,13 @@ impl CatalogState {
         let id = instance.replica_id_by_name[name];
         let replica = &instance.replicas_by_id[&id];
 
-        let (size, az) = match &replica.config {
-            ConcreteComputeInstanceReplicaConfig::Managed {
+        let (size, az) = match &replica.config.location {
+            ConcreteComputeInstanceReplicaLocation::Managed {
                 size_config: _,
                 size_name,
                 availability_zone,
             } => (Some(&**size_name), availability_zone.as_deref()),
-            ConcreteComputeInstanceReplicaConfig::Remote { .. } => (None, None),
+            ConcreteComputeInstanceReplicaLocation::Remote { .. } => (None, None),
         };
 
         BuiltinTableUpdate {

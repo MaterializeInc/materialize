@@ -383,7 +383,7 @@ struct ReplicaState<T> {
     /// The network addresses of the processes that make up the replica.
     addrs: Vec<String>,
     /// Where to persist introspection sources
-    log_collections: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    persisted_logs: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
 impl<T> ReplicaState<T> {
@@ -396,7 +396,7 @@ impl<T> ReplicaState<T> {
         if let ComputeCommand::CreateInstance(config) = command {
             // Set sink_logs
             if let Some(logging) = &mut config.logging {
-                logging.sink_logs = self.log_collections.clone();
+                logging.sink_logs = self.persisted_logs.clone();
                 tracing::debug!(
                     "Enabling sink_logs at replica {:?}: {:?}",
                     replica_id,
@@ -429,7 +429,7 @@ where
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
-        log_collections: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
+        persisted_logs: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
     ) {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -453,7 +453,7 @@ where
             command_tx,
             response_rx,
             addrs,
-            log_collections,
+            persisted_logs,
         };
 
         // Replay the commands at the client, creating new dataflow identifiers.
@@ -488,9 +488,9 @@ where
 
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let addrs = self.replicas[&id].addrs.clone();
-        let log_collections = self.replicas[&id].log_collections.clone();
+        let persisted_logs = self.replicas[&id].persisted_logs.clone();
         self.remove_replica(id);
-        self.add_replica(id, addrs, log_collections);
+        self.add_replica(id, addrs, persisted_logs);
     }
 
     // We avoid implementing `GenericClient` here, because the protocol between

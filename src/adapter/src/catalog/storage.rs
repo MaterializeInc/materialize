@@ -15,6 +15,7 @@ use bytes::BufMut;
 use futures::future::BoxFuture;
 use itertools::max;
 use prost::{self, Message};
+use serde_json::json;
 use timely::progress::Timestamp;
 use uuid::Uuid;
 
@@ -272,6 +273,40 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                         )],
                     )
                     .await?;
+                Ok(())
+            })
+        },
+        // The replicas now write their introspection sources to a persist shard.
+        // The COLLECTION_COMPUTE_INSTANCE_REPLICAS stash contains the GlobalId of these persist
+        // shards.
+        //
+        //TODO(lh): CHECK VERSION
+        // Introduced in version <M2 TODO>
+        //
+        // The old content of ConcreteComputeInstanceReplicaConfig is now located
+        // in ConcreteComputeInstanceReplicaConfig::location, thus we construct a new JSON
+        // value that wraps the old value.
+        |stash| {
+            Box::pin(async {
+                let compute_instance_replicas =
+                    COLLECTION_COMPUTE_INSTANCE_REPLICAS.peek_one(stash).await?;
+
+                for (key, val) in compute_instance_replicas {
+                    let new_config = json!({
+                        "persisted_logs" : "Default",
+                        "location" : serde_json::from_str::<serde_json::Value>(&val.config).expect("valid json in stash")
+                    });
+
+                    let updated_val = ComputeInstanceReplicaValue {
+                        config: new_config.to_string(),
+                        ..val
+                    };
+
+                    COLLECTION_COMPUTE_INSTANCE_REPLICAS
+                        .upsert(stash, vec![(key, updated_val)])
+                        .await?
+                }
+
                 Ok(())
             })
         },
@@ -599,6 +634,29 @@ impl<S: Append> Connection<S> {
             .upsert(&mut self.stash, mappings)
             .await
             .map_err(|e| e.into())
+    }
+
+    /// Set the configuration of a replica.
+    /// This accepts only one item, as we currently use this only for the default cluster
+    pub async fn set_replica_config(
+        &mut self,
+        replica_id: ReplicaId,
+        compute_instance_id: ComputeInstanceId,
+        name: String,
+        config: &ConcreteComputeInstanceReplicaConfig,
+    ) -> Result<(), Error> {
+        let key = ComputeInstanceReplicaKey { id: replica_id };
+        let config = serde_json::to_string(config)
+            .map_err(|err| Error::from(StashError::from(err.to_string())))?;
+        let val = ComputeInstanceReplicaValue {
+            compute_instance_id,
+            name,
+            config,
+        };
+        COLLECTION_COMPUTE_INSTANCE_REPLICAS
+            .upsert_key(&mut self.stash, &key, &val)
+            .await?;
+        Ok(())
     }
 
     pub async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {

@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use mz_storage::client::controller::CollectionMetadata;
+use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -104,7 +105,7 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoActiveLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum LogVariant {
     Timely(TimelyLog),
     Differential(DifferentialLog),
@@ -134,7 +135,7 @@ impl RustType<ProtoLogVariant> for LogVariant {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum TimelyLog {
     Operates,
     Channels,
@@ -182,7 +183,7 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum DifferentialLog {
     ArrangementBatches,
     ArrangementRecords,
@@ -214,7 +215,7 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum ComputeLog {
     DataflowCurrent,
     DataflowDependency,
@@ -249,6 +250,30 @@ impl RustType<ProtoComputeLog> for ComputeLog {
         }
     }
 }
+
+pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
+    let default_logs = vec![
+        LogVariant::Timely(TimelyLog::Operates),
+        LogVariant::Timely(TimelyLog::Channels),
+        LogVariant::Timely(TimelyLog::Elapsed),
+        LogVariant::Timely(TimelyLog::Histogram),
+        LogVariant::Timely(TimelyLog::Addresses),
+        LogVariant::Timely(TimelyLog::Parks),
+        LogVariant::Timely(TimelyLog::MessagesSent),
+        LogVariant::Timely(TimelyLog::MessagesReceived),
+        LogVariant::Timely(TimelyLog::Reachability),
+        LogVariant::Differential(DifferentialLog::ArrangementBatches),
+        LogVariant::Differential(DifferentialLog::ArrangementRecords),
+        LogVariant::Differential(DifferentialLog::Sharing),
+        LogVariant::Compute(ComputeLog::DataflowCurrent),
+        LogVariant::Compute(ComputeLog::DataflowDependency),
+        LogVariant::Compute(ComputeLog::FrontierCurrent),
+        LogVariant::Compute(ComputeLog::PeekCurrent),
+        LogVariant::Compute(ComputeLog::PeekDuration),
+    ];
+
+    default_logs
+});
 
 impl LogVariant {
     /// By which columns should the logs be indexed.
