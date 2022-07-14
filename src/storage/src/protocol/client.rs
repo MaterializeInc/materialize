@@ -36,19 +36,12 @@ use mz_service::grpc::{
 };
 use mz_timely_util::progress::any_change_batch;
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::proto_storage_client::ProtoStorageClient;
-use crate::client::proto_storage_server::ProtoStorage;
-use crate::client::sources::IngestionDescription;
+use crate::controller::CollectionMetadata;
+use crate::protocol::client::proto_storage_client::ProtoStorageClient;
+use crate::protocol::client::proto_storage_server::ProtoStorage;
+use crate::types::sources::IngestionDescription;
 
-pub mod connections;
-pub mod controller;
-pub mod errors;
-pub mod sinks;
-pub mod sources;
-pub mod transforms;
-
-include!(concat!(env!("OUT_DIR"), "/mz_storage.client.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.protocol.client.rs"));
 
 /// A client to a storage server.
 pub trait StorageClient<T = mz_repr::Timestamp>:

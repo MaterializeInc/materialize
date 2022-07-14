@@ -29,7 +29,7 @@ use mz_sql_parser::ast::{
     IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
     UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
-use mz_storage::client::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
+use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 
 use crate::names::{
     Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,

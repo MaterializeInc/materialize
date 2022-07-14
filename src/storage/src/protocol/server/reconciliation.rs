@@ -34,9 +34,9 @@ use mz_service::client::GenericClient;
 use mz_service::frontiers::FrontierReconcile;
 use mz_service::grpc::GrpcServerCommand;
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::sources::IngestionDescription;
-use crate::client::{StorageClient, StorageCommand, StorageResponse};
+use crate::controller::CollectionMetadata;
+use crate::protocol::client::{StorageClient, StorageCommand, StorageResponse};
+use crate::types::sources::IngestionDescription;
 
 /// Reconcile commands targeted at a storage host.
 ///

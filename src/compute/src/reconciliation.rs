@@ -39,7 +39,7 @@ use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 use mz_service::frontiers::FrontierReconcile;
 use mz_service::grpc::GrpcServerCommand;
-use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::controller::CollectionMetadata;
 
 /// Reconcile commands targeted at a COMPUTE instance.
 ///

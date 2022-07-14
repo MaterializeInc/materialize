@@ -23,8 +23,8 @@ use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
-use mz_storage::client::connections::Connection;
-use mz_storage::client::sources::SourceDesc;
+use mz_storage::types::connections::Connection;
+use mz_storage::types::sources::SourceDesc;
 
 use crate::ast::Expr;
 use crate::catalog::{

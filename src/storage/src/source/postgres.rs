@@ -33,12 +33,12 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
-use crate::client::connections::ConnectionContext;
-use crate::client::errors::SourceErrorDetails;
-use crate::client::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
+use crate::types::connections::ConnectionContext;
+use crate::types::errors::SourceErrorDetails;
+use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
 
 mod metrics;
 

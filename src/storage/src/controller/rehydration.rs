@@ -33,7 +33,7 @@ use mz_ore::retry::Retry;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 
-use crate::client::{
+use crate::protocol::client::{
     IngestSourceCommand, StorageClient, StorageCommand, StorageGrpcClient, StorageResponse,
 };
 

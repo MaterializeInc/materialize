@@ -30,14 +30,11 @@ use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::KafkaConnectionOptionName;
 
-use crate::client::connections::aws::AwsExternalIdPrefix;
+use crate::types::connections::aws::AwsExternalIdPrefix;
 
 pub mod aws;
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage.client.connections.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.types.connections.rs"));
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum StringOrSecret {

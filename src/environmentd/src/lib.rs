@@ -36,7 +36,7 @@ use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryEnableCallback;
 use mz_secrets::SecretsController;
-use mz_storage::client::connections::ConnectionContext;
+use mz_storage::types::connections::ConnectionContext;
 use tracing::error;
 
 use crate::tcp_connection::ConnectionHandler;

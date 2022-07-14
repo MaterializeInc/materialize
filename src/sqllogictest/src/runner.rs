@@ -72,7 +72,7 @@ use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
 use mz_sql::ast::Statement;
-use mz_storage::client::connections::ConnectionContext;
+use mz_storage::types::connections::ConnectionContext;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;

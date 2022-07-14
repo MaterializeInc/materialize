@@ -34,8 +34,10 @@ use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
 use mz_repr::GlobalId;
 
-use crate::client::controller::rehydration::RehydratingStorageClient;
-use crate::client::{ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse};
+use crate::controller::rehydration::RehydratingStorageClient;
+use crate::protocol::client::{
+    ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
+};
 
 /// The network address of a storage host.
 pub type StorageHostAddr = String;

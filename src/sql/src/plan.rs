@@ -39,8 +39,8 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage::client::sinks::{SinkConnectionBuilder, SinkEnvelope};
-use mz_storage::client::sources::{SourceDesc, Timeline};
+use mz_storage::types::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
     ExplainOptions, ExplainStageNew, ExplainStageOld, Expr, FetchDirection, IndexOptionName,
@@ -491,7 +491,7 @@ pub struct Source {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage::client::connections::Connection,
+    pub connection: mz_storage::types::connections::Connection,
 }
 
 #[derive(Clone, Debug)]

@@ -12,11 +12,11 @@ syntax = "proto3";
 import "persist/src/persist.proto";
 import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
-import "storage/src/client/sources.proto";
+import "storage/src/types/sources.proto";
 
 import "google/protobuf/empty.proto";
 
-package mz_storage.client;
+package mz_storage.protocol.client;
 
 service ProtoStorage {
     rpc CommandResponseStream (stream ProtoStorageCommand) returns (stream ProtoStorageResponse);
@@ -33,7 +33,7 @@ message ProtoAllowCompaction {
 
 message ProtoIngestSourceCommand {
     mz_repr.global_id.ProtoGlobalId id = 1;
-    sources.ProtoIngestionDescription description = 2;
+    mz_storage.types.sources.ProtoIngestionDescription description = 2;
     mz_persist.gen.persist.ProtoU64Antichain resume_upper = 3;
 }
 

@@ -11,7 +11,7 @@ syntax = "proto3";
 
 import "expr/src/scalar.proto";
 
-package mz_storage.client.transforms;
+package mz_storage.types.transforms;
 
 message ProtoLinearOperator {
     repeated mz_expr.scalar.ProtoMirScalarExpr predicates = 1;

@@ -28,7 +28,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
-use mz_storage::client::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
+use mz_storage::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 

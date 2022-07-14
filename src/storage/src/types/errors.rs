@@ -19,7 +19,7 @@ use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage.client.errors.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.types.errors.rs"));
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeError {

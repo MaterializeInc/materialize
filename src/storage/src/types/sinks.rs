@@ -20,12 +20,12 @@ use timely::progress::frontier::Antichain;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
 
-use crate::client::connections::{
+use crate::controller::CollectionMetadata;
+use crate::types::connections::{
     CsrConnection, KafkaConnection, PopulateClientConfig, StringOrSecret,
 };
-use crate::client::controller::CollectionMetadata;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage.client.sinks.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sinks.rs"));
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![allow(missing_docs)]
+
 //! A controller that provides an interface to the storage layer.
 //!
 //! The storage controller curates the creation of sources, the progress of readers through these collections,
@@ -53,18 +55,18 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_stash::{self, StashError, TypedCollection};
 
-use crate::client::controller::hosts::{StorageHosts, StorageHostsConfig};
-use crate::client::errors::DataflowError;
-use crate::client::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
-use crate::client::{
+use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
+use crate::protocol::client::{
     IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse, StorageCommand,
     StorageResponse, Update,
 };
+use crate::types::errors::DataflowError;
+use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
 
 mod hosts;
 mod rehydration;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage.client.controller.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.controller.rs"));
 
 static METADATA_COLLECTION: TypedCollection<GlobalId, CollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");

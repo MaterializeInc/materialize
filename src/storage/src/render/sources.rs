@@ -26,10 +26,7 @@ use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::errors::{DataflowError, DecodeError};
-use crate::client::sources::{encoding::*, *};
-use crate::client::transforms::LinearOperator;
+use crate::controller::CollectionMetadata;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::persist_source;
 use crate::source::{
@@ -37,6 +34,9 @@ use crate::source::{
     PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
     SourceOutput,
 };
+use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::sources::{encoding::*, *};
+use crate::types::transforms::LinearOperator;
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///

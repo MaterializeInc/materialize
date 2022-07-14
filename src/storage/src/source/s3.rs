@@ -54,13 +54,13 @@ use mz_repr::GlobalId;
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
-use crate::client::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use crate::client::connections::ConnectionContext;
-use crate::client::sources::encoding::SourceDataEncoding;
-use crate::client::sources::{Compression, MzOffset, S3KeySource, SourceConnection};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
+use crate::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use crate::types::connections::ConnectionContext;
+use crate::types::sources::encoding::SourceDataEncoding;
+use crate::types::sources::{Compression, MzOffset, S3KeySource, SourceConnection};
 
 use super::metrics::SourceBaseMetrics;
 

@@ -28,8 +28,8 @@ use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
-use mz_storage::client::connections::Connection;
-use mz_storage::client::sources::SourceDesc;
+use mz_storage::types::connections::Connection;
+use mz_storage::types::sources::SourceDesc;
 use uuid::Uuid;
 
 use crate::func::Func;

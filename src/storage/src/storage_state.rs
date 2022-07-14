@@ -24,8 +24,8 @@ use tokio::sync::{mpsc, Mutex};
 use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
 
-use crate::client::connections::ConnectionContext;
-use crate::client::{StorageCommand, StorageResponse};
+use crate::protocol::client::{StorageCommand, StorageResponse};
+use crate::types::connections::ConnectionContext;
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;

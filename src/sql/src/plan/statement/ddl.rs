@@ -35,19 +35,19 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
-use mz_storage::client::connections::{
+use mz_storage::types::connections::{
     Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
     StringOrSecret, TlsIdentity,
 };
-use mz_storage::client::sinks::{
+use mz_storage::types::sinks::{
     KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
     SinkConnectionBuilder, SinkEnvelope,
 };
-use mz_storage::client::sources::encoding::{
+use mz_storage::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage::client::sources::{
+use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
     KinesisSourceConnection, MzOffset, PostgresSourceConnection, PostgresSourceDetails,
@@ -538,12 +538,12 @@ pub fn plan_create_source(
             for ks in key_sources {
                 let dtks = match ks {
                     mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        mz_storage::client::sources::S3KeySource::Scan {
+                        mz_storage::types::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
                     mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        mz_storage::client::sources::S3KeySource::SqsNotifications {
+                        mz_storage::types::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -568,8 +568,8 @@ pub fn plan_create_source(
                     .map_err(|e| sql_err!("parsing glob: {e}"))?,
                 aws,
                 compression: match compression {
-                    Compression::Gzip => mz_storage::client::sources::Compression::Gzip,
-                    Compression::None => mz_storage::client::sources::Compression::None,
+                    Compression::Gzip => mz_storage::types::sources::Compression::Gzip,
+                    Compression::None => mz_storage::types::sources::Compression::None,
                 },
             });
             (connection, encoding)
@@ -1123,7 +1123,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_storage::client::connections::CsrConnection>,
+    pub csr_connection: Option<mz_storage::types::connections::CsrConnection>,
     pub confluent_wire_format: bool,
 }
 
@@ -2953,7 +2953,7 @@ generate_extracted_config!(
     (Password, with_options::Secret)
 );
 
-impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::CsrConnection {
+impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::types::connections::CsrConnection {
     type Error = PlanError;
     fn try_from(ccsr_options: CsrConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let url = match ccsr_options.url {
@@ -2975,7 +2975,7 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::
             username,
             password: ccsr_options.password.map(|secret| secret.into()),
         });
-        Ok(mz_storage::client::connections::CsrConnection {
+        Ok(mz_storage::types::connections::CsrConnection {
             url,
             tls_root_cert: ccsr_options.ssl_certificate_authority,
             tls_identity,
@@ -2999,7 +2999,7 @@ generate_extracted_config!(
 );
 
 impl TryFrom<PostgresConnectionOptionExtracted>
-    for mz_storage::client::connections::PostgresConnection
+    for mz_storage::types::connections::PostgresConnection
 {
     type Error = PlanError;
 
@@ -3022,7 +3022,7 @@ impl TryFrom<PostgresConnectionOptionExtracted>
             }
             Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
         };
-        Ok(mz_storage::client::connections::PostgresConnection {
+        Ok(mz_storage::types::connections::PostgresConnection {
             database: options
                 .database
                 .ok_or_else(|| sql_err!("DATABASE option is required"))?,
@@ -3049,11 +3049,11 @@ generate_extracted_config!(
     (User, String)
 );
 
-impl TryFrom<SshConnectionOptionExtracted> for mz_storage::client::connections::SshConnection {
+impl TryFrom<SshConnectionOptionExtracted> for mz_storage::types::connections::SshConnection {
     type Error = PlanError;
 
     fn try_from(options: SshConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(mz_storage::client::connections::SshConnection {
+        Ok(mz_storage::types::connections::SshConnection {
             host: options
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
@@ -3086,18 +3086,18 @@ pub fn plan_create_connection(
         }
         CreateConnection::Csr { with_options } => {
             let c = CsrConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::client::connections::CsrConnection::try_from(c)?;
+            let connection = mz_storage::types::connections::CsrConnection::try_from(c)?;
             Connection::Csr(connection)
         }
         CreateConnection::Postgres { with_options } => {
             let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::client::connections::PostgresConnection::try_from(c)?;
+            let connection = mz_storage::types::connections::PostgresConnection::try_from(c)?;
             Connection::Postgres(connection)
         }
         CreateConnection::Ssh { with_options } => {
             scx.require_unsafe_mode("CREATE CONNECTION ... SSH")?;
             let c = SshConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::client::connections::SshConnection::try_from(c)?;
+            let connection = mz_storage::types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
         }
     };

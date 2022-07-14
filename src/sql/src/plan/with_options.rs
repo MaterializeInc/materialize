@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::GlobalId;
-use mz_storage::client::connections::StringOrSecret;
+use mz_storage::types::connections::StringOrSecret;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
 use crate::names::ResolvedObjectName;

@@ -34,9 +34,9 @@ use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
 use mz_repr::strconv;
-use mz_storage::client::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_storage::client::connections::{Connection, ConnectionContext};
-use mz_storage::client::sources::PostgresSourceDetails;
+use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_storage::types::connections::{Connection, ConnectionContext};
+use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
@@ -101,7 +101,7 @@ pub async fn purify_create_source(
                         KafkaAddrs::from_str(&broker)?.to_string().into(),
                     );
 
-                    mz_storage::client::connections::KafkaConnection::try_from(
+                    mz_storage::types::connections::KafkaConnection::try_from(
                         &mut connection_options,
                     )?
                 }
