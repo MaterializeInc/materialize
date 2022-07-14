@@ -39,6 +39,7 @@ use mz_storage::client::controller::CollectionMetadata;
 use mz_storage::client::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
+use tracing::{span, Level};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
@@ -230,6 +231,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
             self.send_peek_response(peek, response);
         } else {
+            peek.span = span!(parent: &peek.span, Level::DEBUG, "pending peek");
             self.compute_state.pending_peeks.push(peek);
         }
     }
