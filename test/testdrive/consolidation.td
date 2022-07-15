@@ -180,24 +180,10 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":6},"time":4,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[4],"upper":[5],"counts":[{"time":4,"count":2}]}}
 
-# Data from older transactions should be immediately compacted to the timestamp
-# of the latest transaction (i.e., 4).
-
-! SELECT * FROM nums AS OF 2
-contains:Timestamp (2) is not valid for all inputs
-! SELECT * FROM nums AS OF 3
-contains:Timestamp (3) is not valid for all inputs
-> SELECT * FROM nums AS OF 4
-6
-
 # Set the compaction window back to off and advance the number in transactions 5 and 6.
 
 > ALTER INDEX materialize.public.nums_primary_idx
   SET (LOGICAL COMPACTION WINDOW = 0)
-
-# But also create an index that compacts frequently.
-> CREATE VIEW nums_compacted AS SELECT * FROM nums
-> CREATE DEFAULT INDEX ON nums_compacted WITH (LOGICAL COMPACTION WINDOW = '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":6},"time":5,"diff":-1}]}
@@ -214,11 +200,4 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 > SELECT * FROM nums AS OF 5
 7
 > SELECT * FROM nums AS OF 6
-8
-
-! SELECT * FROM nums_compacted AS OF 4
-contains:Timestamp (4) is not valid for all inputs
-! SELECT * FROM nums_compacted AS OF 5
-contains:Timestamp (5) is not valid for all inputs
-> SELECT * FROM nums_compacted AS OF 6
 8

@@ -151,8 +151,15 @@ $ kafka-verify format=avro sink=materialize.public.snk6
 
 > CREATE SINK snk7 FROM src_materialized
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk7'
+  WITH (reuse_topic = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITHOUT SNAPSHOT
+
+> CREATE MATERIALIZED SOURCE snk7_check
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'snk7'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE
 
 > CREATE SINK snk8 FROM src_materialized
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk8'
@@ -162,8 +169,14 @@ $ kafka-verify format=avro sink=materialize.public.snk6
 $ kafka-ingest topic=test format=bytes
 extra,row
 
-$ kafka-verify format=avro sink=materialize.public.snk7
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 3}}}
+> SELECT (after).a FROM snk7_check WHERE (after).offset = 3 LIMIT 1
+"extra"
+
+> SELECT (after).b FROM snk7_check WHERE (after).offset = 3 LIMIT 1
+"row"
+
+> SELECT MAX((after).offset) FROM snk7_check
+3
 
 $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 3}}}
