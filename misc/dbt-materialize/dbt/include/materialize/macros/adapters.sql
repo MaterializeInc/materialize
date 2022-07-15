@@ -35,6 +35,16 @@
     {{ sql }}
 {%- endmacro %}
 
+{% macro materialize__create_views(relation, upstream_tables_list) -%}
+  {% set upstream_tables = upstream_tables_list | join(", ") %}
+  {%- call statement('create_views') -%}
+    create views if not exists from source {{ relation }}
+    {% if upstream_tables -%}
+      ({{ upstream_tables }})
+    {%- endif -%}
+  {%- endcall -%}
+{%- endmacro %}
+
 {% macro materialize__rename_relation(from_relation, to_relation) -%}
   {% set target_name = adapter.quote_as_configured(to_relation.identifier, 'identifier') %}
   {% call statement('rename_relation') -%}
