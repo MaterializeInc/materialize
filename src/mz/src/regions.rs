@@ -17,6 +17,7 @@ fn parse_cloud_provider_region(cloud_provider_region: CloudProviderRegion) -> St
     }
 }
 
+// TODO: ec.0 is dynamic.
 fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
     format!("https://ec.0.{}.aws.staging.cloud.materialize.com/api/environment", parse_cloud_provider_region(cloud_provider_region))
 }
@@ -36,6 +37,7 @@ pub(crate) async fn enable_region(client: Client, cloud_provider_region: CloudPr
 
     let headers = build_region_request_headers(authorization);
     let mut body = HashMap::new();
+    // TODO: Version is dynamic
     body.insert("coordd_image_ref", &"materialize/environmentd:unstable-45e2acde087c27a661b5e67db587375c0b628fde");
 
     client.post(region_url)
@@ -52,7 +54,7 @@ pub(crate) async fn warning_delete_region(cloud_provider_region: CloudProviderRe
 
     println!();
     println!("**** WARNING ****");
-    println!("Are you sure? Destroying this region is irreversible.");
+    println!("Are you sure? Deleting a region is irreversible.");
     println!("Enter {:?} to proceed:", region);
 
     // Handle user input

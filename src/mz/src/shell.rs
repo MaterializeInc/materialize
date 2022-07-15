@@ -1,5 +1,6 @@
 use std::future::Future;
 use reqwest::{Client, Error};
+use subprocess::Exec;
 use crate::{CloudProvider, CloudProviderRegion, FronteggAuthMachine, Profile, Region};
 use crate::regions::{list_cloud_providers, list_regions, enable_region, cloud_provider_region_details};
 use crate::utils::{trim_newline};
@@ -89,62 +90,31 @@ pub(crate) async fn shell(
                     }
                     None => {}
                 }
+
+                println!("Region details: {:?}", region);
+                // TODO: Replace -U with user email
+                // TODO: Control size check
+                let host = &region.coordd_pgwire_address[..region.coordd_pgwire_address.len() - 5];
+                let port = &region.coordd_pgwire_address[region.coordd_pgwire_address.len() - 4..region.coordd_pgwire_address.len()];
+
+                let output = Exec::cmd("psql")
+                    .arg("-U")
+                    .arg("joaquin@materialize.com")
+                    .arg("-h")
+                    .arg(host)
+                    .arg("-p")
+                    .arg(port)
+                    .arg("materialize")
+                    .env("PGPASSWORD", password_from_profile(profile))
+                    .join()
+                    .expect("failed to execute process");
+
+                println!("status: {}", output.success());
+
+                assert!(output.success());
             } else {
-                println!("There are no regions created. Please, type the default region you wish to create [{:?}]",
-                         cloud_provider_str
-                );
-
-                let _ = std::io::stdout().flush();
-                std::io::stdin().read_line(&mut region_input).unwrap();
-                trim_newline(&mut region_input);
-
-                println!("Region input: {:?}", region_input);
-
-                if region_input == "eu-west-1" {
-                    cloud_provider = CloudProviderRegion::euWest_1;
-                } else if region_input == "us-east-1" {
-                    cloud_provider = CloudProviderRegion::usEast_1;
-                } else {
-                    println!("Invalid region name.");
-                    exit(0);
-                }
-
-                match enable_region(
-                    client.clone(),
-                    cloud_provider,
-                    frontegg_auth_machine
-                ).await {
-                    Ok(new_region) => {
-                        println!("Region enabled: {:?}", new_region);
-                        region = new_region;
-                    },
-                    Err(error) => panic!("Error enabling region: {:?}", error),
-                }
+                println!("There are no regions created. Please, create one to run the shell.");
             }
-
-            println!("Region details: {:?}", region);
-            // TODO: Replace -U with user email
-            // TODO: Control size check
-            let host = &region.coordd_pgwire_address[..region.coordd_pgwire_address.len() - 5];
-            let port = &region.coordd_pgwire_address[region.coordd_pgwire_address.len() - 4..region.coordd_pgwire_address.len()];
-            use std::process::Command;
-            let output = Command::new("psql")
-                .arg("-U")
-                .arg("joaquin@materialize.com")
-                .arg("-h")
-                .arg(host)
-                .arg("-p")
-                .arg(port)
-                .arg("materialize")
-                .env("PGPASSWORD", password_from_profile(profile))
-                .output()
-                .expect("failed to execute process");
-
-            println!("status: {}", output.status);
-            println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-            println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-
-            assert!(output.status.success());
         },
         Err(error) => panic!("Error retrieving cloud providers: {:?}", error)
     }
