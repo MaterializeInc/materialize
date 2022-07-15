@@ -147,6 +147,8 @@ class Computed(Service):
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
         workers: Optional[int] = None,
+        secrets_reader: str = "process",
+        secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
         if environment is None:
             environment = [
@@ -183,6 +185,11 @@ class Computed(Service):
             command_list.append(f"--process {peers.index(name)}")
             command_list.append(" ".join(f"{peer}:2102" for peer in peers))
 
+        command_list.append(f"--secrets-reader {secrets_reader}")
+        command_list.append(
+            f"--secrets-reader-process-dir {secrets_reader_process_dir}"
+        )
+
         config.update(
             {
                 "command": " ".join(command_list),
@@ -207,6 +214,8 @@ class Storaged(Service):
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
         workers: Optional[int] = None,
+        secrets_reader: str = "process",
+        secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
         if environment is None:
             environment = [
@@ -238,6 +247,11 @@ class Storaged(Service):
 
         if workers:
             command_list.append(f"--workers {workers}")
+
+        command_list.append(f"--secrets-reader {secrets_reader}")
+        command_list.append(
+            f"--secrets-reader-process-dir {secrets_reader_process_dir}"
+        )
 
         config.update(
             {
