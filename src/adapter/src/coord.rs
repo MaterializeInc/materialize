@@ -1645,9 +1645,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
 
             let read_ts = oracle.read_ts();
-            let new_time =
-                read_ts - (read_ts % UPDATE_READ_HOLDS_INTERVAL) - UPDATE_READ_HOLDS_INTERVAL;
-            if new_time != read_holds.time {
+            // Round down to a multiple of `UPDATE_READ_HOLDS_INTERVAL` and subtract one interval.
+            // This limits the amount of updates sent out and increases the leniency of choosing
+            // a timestamp for non-strict serializable queries.
+            let new_time = read_ts
+                .saturating_sub(read_ts % UPDATE_READ_HOLDS_INTERVAL)
+                .saturating_sub(UPDATE_READ_HOLDS_INTERVAL);
+            if new_time > read_holds.time {
                 read_holds = self.update_read_hold(read_holds, read_ts).await;
             }
             self.global_timelines
