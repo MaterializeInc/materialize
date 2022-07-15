@@ -32,7 +32,6 @@ pub(crate) async fn authenticate_profile(
     client: Client,
     profile: Profile,
 ) -> Result<FronteggAuthMachine, Error> {
-
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("clientId", profile.client_id);
     access_token_request_body.insert("secret", profile.secret);

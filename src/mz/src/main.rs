@@ -176,23 +176,17 @@ async fn main() {
             match regions_cmd.command {
                 RegionsCommands::Enable {
                     cloud_provider_region,
-                } => {
-                    match validate_profile(client.clone()).await {
-                        Some(frontegg_auth_machine) => {
-                            match enable_region(
-                                client,
-                                cloud_provider_region,
-                                frontegg_auth_machine,
-                            )
+                } => match validate_profile(client.clone()).await {
+                    Some(frontegg_auth_machine) => {
+                        match enable_region(client, cloud_provider_region, frontegg_auth_machine)
                             .await
-                            {
-                                Ok(region) => println!("Region enabled: {:?}", region),
-                                Err(e) => panic!("Error enabling region: {:?}", e),
-                            }
+                        {
+                            Ok(region) => println!("Region enabled: {:?}", region),
+                            Err(e) => panic!("Error enabling region: {:?}", e),
                         }
-                        None => {}
                     }
-                }
+                    None => {}
+                },
                 RegionsCommands::Delete {
                     cloud_provider_region,
                 } => {
@@ -246,7 +240,9 @@ async fn main() {
                 Some(profile) => {
                     let client = Client::new();
                     match authenticate_profile(client.clone(), profile.clone()).await {
-                        Ok(frontegg_auth_machine) => shell(client, profile, frontegg_auth_machine).await,
+                        Ok(frontegg_auth_machine) => {
+                            shell(client, profile, frontegg_auth_machine).await
+                        }
                         Err(error) => panic!("Error authenticating profile : {:?}", error),
                     }
                 }

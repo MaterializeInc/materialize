@@ -14,13 +14,14 @@ use std::{collections::HashMap, io::Write};
 use crate::profiles::save_profile;
 use crate::utils::trim_newline;
 use crate::{
-    BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL, USER_AUTH_URL, WEB_LOGIN_URL
+    BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL,
+    USER_AUTH_URL, WEB_LOGIN_URL,
 };
 use actix_web::{get, web, App, HttpRequest, HttpServer, Responder};
 use open;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
-use tokio::time::{sleep};
+use tokio::time::sleep;
 
 /// ----------------------------
 ///  Login code using browser
