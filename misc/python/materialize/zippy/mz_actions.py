@@ -37,3 +37,15 @@ class MzStop(Action):
 
     def removes(self) -> Set[Type[Capability]]:
         return {MzIsRunning}
+
+
+class KillStoraged(Action):
+    """Kills the storaged processes in the environmentd container. The process orchestrator will restart them."""
+
+    @classmethod
+    def requires(self) -> Set[Type[Capability]]:
+        return {MzIsRunning}
+
+    def run(self, c: Composition) -> None:
+        # Depending on the workload, storaged may not be running, hence the || true
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged` || true")

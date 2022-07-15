@@ -37,6 +37,7 @@ steps:
           - { value: checks-drop-create-default-replica }
           - { value: checks-restart-computed }
           - { value: checks-restart-entire-mz }
+          - { value: checks-kill-storaged }
           - { value: secrets }
           - { value: unused-deps }
         multiple: true
@@ -285,6 +286,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartEntireMz]
+
+  - id: checks-kill-storaged
+    label: "Checks + kill storaged"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=KillStoraged]
 
   - id: secrets
     label: "Secrets"
