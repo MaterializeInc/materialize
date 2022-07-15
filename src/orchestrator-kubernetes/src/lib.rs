@@ -21,7 +21,6 @@ use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, Pod, PodAffinityTerm, PodAntiAffinity, PodSpec,
     PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort, ServiceSpec,
-    Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -144,6 +143,7 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
 
 fn label_selector_to_k8s(
     MzLabelSelector { label_name, logic }: MzLabelSelector,
+    prefix: &str,
 ) -> Result<LabelSelectorRequirement, anyhow::Error> {
     let (operator, values) = match logic {
         LabelSelectionLogic::Eq { value } => Ok(("In", vec![value])),
@@ -170,7 +170,7 @@ fn label_selector_to_k8s(
         }
     }?;
     let lsr = LabelSelectorRequirement {
-        key: label_name,
+        key: format!("{prefix}/{label_name}"),
         operator: operator.to_string(),
         values: Some(values),
     };
@@ -312,16 +312,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .map(|label_selectors| -> Result<_, anyhow::Error> {
                 let label_selector_requirements = label_selectors
                     .into_iter()
-                    .map(label_selector_to_k8s)
-                    .map(|r| {
-                        r.map(|mut x| {
-                            x.key = format!(
-                                "{}.environmentd.materialize.cloud/{}",
-                                self.namespace, x.key
-                            );
-                            x
-                        })
-                    })
+                    .map(|ls| label_selector_to_k8s(ls, &self.namespace))
                     .collect::<Result<Vec<_>, _>>()?;
                 let ls = LabelSelector {
                     match_expressions: Some(label_selector_requirements),

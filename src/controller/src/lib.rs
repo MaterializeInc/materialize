@@ -309,6 +309,15 @@ where
                                 "type".into() => "cluster".into(),
                             },
                             availability_zone,
+                            // This constrains the orchestrator
+                            // (for those orchestrators that support anti-affinity, today just k8s)
+                            // to never schedule pods for different replicas of the same cluster
+                            // on the same node. Pods from the _same_ replica are fine;
+                            // pods from different clusters are also fine.
+                            //
+                            // The point is that if pods of two replicas are on the same node,
+                            // that node going down would kill both replicas, and so the replication
+                            // factor of the cluster in question is illusory.
                             anti_affinity: Some(vec![
                                 LabelSelector {
                                     label_name: "cluster-id".to_string(),
