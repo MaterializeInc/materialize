@@ -185,10 +185,17 @@ A
 
 > CREATE SINK sink1 FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink1'
+  WITH (reuse_topic = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-$ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
-{"before": null, "after": {"row":{"c1": 3}}}
+> CREATE MATERIALIZED SOURCE sink1_check
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'sink1'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE
+
+> SELECT MAX((after).c1) FROM sink1_check
+3
 """,
     )
 
