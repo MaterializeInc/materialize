@@ -444,7 +444,8 @@ ORDER BY o_ol_cnt
 ----
 %0 = Let l0 =
 | Get materialize.public.order (u11)
-| Filter (date_to_timestamp(#4) < 2012-01-02 00:00:00), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
+| Map date_to_timestamp(#4)
+| Filter (#8 < 2012-01-02 00:00:00), (#8 >= 2007-01-02 00:00:00)
 
 %1 =
 | Get %0 (l0)
@@ -569,7 +570,8 @@ AND ol_quantity BETWEEN 1 AND 100000
 ----
 %0 = Let l0 =
 | Get materialize.public.orderline (u13)
-| Filter (#7 <= 100000), (#7 >= 1), (date_to_timestamp(#6) < 2020-01-01 00:00:00), (date_to_timestamp(#6) >= 1999-01-01 00:00:00)
+| Map date_to_timestamp(#6)
+| Filter (#10 < 2020-01-01 00:00:00), (#7 <= 100000), (#7 >= 1), (#10 >= 1999-01-01 00:00:00)
 | Project (#8)
 | Reduce group=()
 | | agg sum(#0)
@@ -637,7 +639,8 @@ ORDER BY su_nationkey, cust_nation, l_year
 
 %3 =
 | Get materialize.public.orderline (u13)
-| Filter (#4) IS NOT NULL, (#5) IS NOT NULL, (date_to_timestamp(#6) <= 2012-01-02 00:00:00), (date_to_timestamp(#6) >= 2007-01-02 00:00:00)
+| Map date_to_timestamp(#6)
+| Filter (#10 <= 2012-01-02 00:00:00), (#10 >= 2007-01-02 00:00:00), (#4) IS NOT NULL, (#5) IS NOT NULL
 | Project (#0..=#2, #4, #5, #8)
 
 %4 =
@@ -725,7 +728,8 @@ Query:
 
 %4 =
 | Get materialize.public.order (u11)
-| Filter (#3) IS NOT NULL, (date_to_timestamp(#4) <= 2012-01-02 00:00:00), (date_to_timestamp(#4) >= 2007-01-02 00:00:00)
+| Map date_to_timestamp(#4)
+| Filter (#8 <= 2012-01-02 00:00:00), (#8 >= 2007-01-02 00:00:00), (#3) IS NOT NULL
 | Project (#0..=#4)
 | ArrangeBy (#0, #1, #2)
 
@@ -1075,7 +1079,8 @@ Query:
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
-| Filter (date_to_timestamp(#6) < 2020-01-02 00:00:00), (date_to_timestamp(#6) >= 2007-01-02 00:00:00)
+| Map date_to_timestamp(#6)
+| Filter (#12 < 2020-01-02 00:00:00), (#12 >= 2007-01-02 00:00:00)
 | Project (#8, #11)
 | Reduce group=()
 | | agg sum(if "PR%" ~~(padchar(#1)) then {#0} else {0})
@@ -1415,9 +1420,8 @@ Query:
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
-| Filter (#7 <= 10), (#7 >= 1)
 | Map padchar(#11), (#2 = 1), (#2 = 3), (#13 || (#2 = 2))
-| Filter (("%c" ~~(#12) && (#14 || (#13 || (#2 = 5)))) || (("%a" ~~(#12) && (#14 || #15)) || ("%b" ~~(#12) && (#15 || (#2 = 4)))))
+| Filter (#7 <= 10), (#7 >= 1), (("%c" ~~(#12) && (#14 || (#13 || (#2 = 5)))) || (("%a" ~~(#12) && (#14 || #15)) || ("%b" ~~(#12) && (#15 || (#2 = 4)))))
 | Project (#8)
 | Reduce group=()
 | | agg sum(#0)
@@ -1637,56 +1641,57 @@ AND NOT EXISTS (
 GROUP BY substr(c_state, 1, 1)
 ORDER BY substr(c_state, 1, 1)
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.customer (u4)
 | Map substr(char_to_text(#11), 1, 1)
+
+%1 =
+| Get %0 (l0)
 | Filter (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
 | Project (#0..=#2, #9, #16)
 
-%1 =
-| Get materialize.public.customer (u4)
-| Filter (#16 > 0)
-| Map substr(char_to_text(#11), 1, 1)
-| Filter (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
+%2 =
+| Get %0 (l0)
+| Filter (#16 > 0), (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
 | Project (#16)
 | Reduce group=()
 | | agg sum(#0)
 | | agg count(true)
 | ArrangeBy ()
 
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %0 %1.()
+%3 = Let l1 =
+| Join %1 %2
+| | implementation = Differential %1 %2.()
 | Filter (numeric_to_double(#4) > (numeric_to_double(#5) / bigint_to_double(if (#6 = 0) then {null} else {#6})))
 | Project (#0..=#4)
 
-%3 = Let l1 =
-| Get %2 (l0)
+%4 = Let l2 =
+| Get %3 (l1)
 | Project (#0..=#2)
 
-%4 =
-| Get %2 (l0)
+%5 =
+| Get %3 (l1)
 | ArrangeBy (#0, #1, #2)
 
-%5 =
+%6 =
 | Get materialize.public.order (u11)
 | Filter (#3) IS NOT NULL
 | Project (#1..=#3)
 | Distinct group=(#2, #0, #1)
 | ArrangeBy (#0, #1, #2)
 
-%6 =
-| Join %3 %5 (= #0 #3) (= #1 #4) (= #2 #5)
-| | implementation = Differential %3 %5.(#0, #1, #2)
+%7 =
+| Join %4 %6 (= #0 #3) (= #1 #4) (= #2 #5)
+| | implementation = Differential %4 %6.(#0, #1, #2)
 | Project (#0..=#2)
 | Negate
 
-%7 =
-| Union %6 %3
-
 %8 =
-| Join %4 %7 (= #0 #5) (= #1 #6) (= #2 #7)
-| | implementation = Differential %7 %4.(#0, #1, #2)
+| Union %7 %4
+
+%9 =
+| Join %5 %8 (= #0 #5) (= #1 #6) (= #2 #7)
+| | implementation = Differential %8 %5.(#0, #1, #2)
 | Project (#3, #4)
 | Reduce group=(substr(char_to_text(#0), 1, 1))
 | | agg count(true)

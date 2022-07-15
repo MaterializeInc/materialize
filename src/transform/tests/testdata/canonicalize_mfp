@@ -43,8 +43,8 @@ build apply=CanonicalizeMfp
 ----
 %0 =
 | Get x (u0)
-| Filter ((#0 + #1) < 4321), ((#0 + #1) > 1234)
 | Map (#0 + #1)
+| Filter (#3 < 4321), (#3 > 1234)
 | Project (#3)
 
 # multiple pushdown filters without a map. filters should be fused and re-sorted least to greatest
@@ -76,7 +76,6 @@ build apply=CanonicalizeMfp
 | Filter (#3) IS NULL, (#4) IS NULL
 | Project (#0, #3, #4)
 
-# both pushdown and retained filters with a map
 build apply=CanonicalizeMfp
 (project
     (filter
@@ -89,12 +88,11 @@ build apply=CanonicalizeMfp
 ----
 %0 =
 | Get x (u0)
-| Filter (#0 < 1234)
 | Map hmac(#0, #1, #2)
-| Filter (#3) IS NULL
+| Filter (#3) IS NULL, (#0 < 1234)
 | Project (#0, #3)
 
-# regression test for #10000. Both pushdown and retained filters with a map.
+# regression test for #10000.
 # Even though there is no map in the test, the duplicated predicates cause the creation
 # of a map via memoizing common subexpressions that then gets optimized away.
 build apply=CanonicalizeMfp
@@ -159,13 +157,13 @@ build apply=CanonicalizeMfp
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
-| Filter (#0) IS NOT NULL, ((5 = (#0 + #1)) || (9 = (#0 + #1)))
+| Map (#0 + #1)
+| Filter (#0) IS NOT NULL, ((#4 = 5) || (#4 = 9))
 | Project (#0)
 ----
 ----
 
-# consecutive levels of map-filter-project. outermost mfp is the same as the #10000 regression test, and
-# the innermost mfp for `t1` should inline (#0 + #1) expression and push predicate down
+# consecutive levels of map-filter-project. outermost mfp is the same as the #10000 regression test.
 build apply=CanonicalizeMfp
 (project
     (filter
@@ -193,8 +191,8 @@ build apply=CanonicalizeMfp
 ----
 %0 =
 | Get t1 (u1)
-| Filter ((#0 + #1) > 1234)
 | Map (#0 + #1)
+| Filter (#2 > 1234)
 | Project (#2)
 
 %1 =
@@ -209,22 +207,6 @@ build apply=CanonicalizeMfp
 ----
 ----
 
-# TODO (#10130): both filters should be fused and pushed through map. currently the duplicated predicate ((#0 ==5) || (#0 == 1337))
-#                causes one of its instances to be considered retained rather than pushdown
-#
-#                After fixing #10130 the expected output should be:
-#                %0 =
-#                | Get t1 (u1)
-#
-#                %1 =
-#                | Get t2 (u2)
-#
-#                %2 =
-#                | Join %0 %1 (= #0 #2)
-#                | | implementation = Unimplemented
-#                | Filter !(isnull(#0)), ((#0 = 5) || (#0 = 1337))
-#                | Map (#0 + #2)
-#                | Project (#4)
 build apply=CanonicalizeMfp
 (project
     (map
@@ -252,9 +234,8 @@ build apply=CanonicalizeMfp
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
-| Filter (#0) IS NOT NULL
 | Map (#0 + #2)
-| Filter ((#0 = 5) || (#0 = 1337))
+| Filter (#0) IS NOT NULL, ((#0 = 5) || (#0 = 1337))
 | Project (#4)
 ----
 ----

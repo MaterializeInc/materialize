@@ -979,8 +979,8 @@ Source materialize.public.t1 (u5):
 Query:
 %0 =
 | Get materialize.public.t1 (u5)
-| Filter (0 = integer_to_bigint(#0))
 | Map 123, 0
+| Filter (0 = integer_to_bigint(#0))
 | Project (#1, #2, #0)
 
 EOF

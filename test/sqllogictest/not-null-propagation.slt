@@ -707,15 +707,7 @@ Query:
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%10 = Let l4 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Filter (#1 = 1)
-| | types = (integer?, integer)
-| | keys = ((#0))
-
-%11 =
+%10 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
@@ -723,7 +715,7 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%12 =
+%11 =
 | Get %4 (l1)
 | | types = (integer?, boolean?)
 | | keys = ()
@@ -734,32 +726,38 @@ Query:
 | | types = (integer?)
 | | keys = ()
 
-%13 =
-| Union %12 %0
+%12 =
+| Union %11 %0
 | | types = (integer?)
 | | keys = ()
 | Map null
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%14 =
-| Union %4 %13
+%13 =
+| Union %4 %12
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%15 =
-| Get %10 (l4)
+%14 =
+| Get %5 (l2)
 | | types = (integer?, integer)
-| | keys = ((#0))
+| | keys = ((#0, #1))
 | Map 1, true
+| | types = (integer?, integer, integer, boolean)
+| | keys = ((#0, #1))
+| Filter (#1 = 1)
 | | types = (integer?, integer, integer, boolean)
 | | keys = ((#0))
 | Project (#0, #2, #3)
 | | types = (integer?, integer, boolean)
 | | keys = ((#0))
 
-%16 =
-| Get %10 (l4)
+%15 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (#1 = 1)
 | | types = (integer?, integer)
 | | keys = ((#0))
 | Project (#0)
@@ -772,23 +770,23 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%17 =
-| Union %16 %5
+%16 =
+| Union %15 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map false
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%18 =
-| Union %15 %17
+%17 =
+| Union %14 %16
 | | types = (integer?, integer, boolean)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%19 =
+%18 =
 | Get %9 (l3)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
@@ -799,25 +797,25 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%20 =
-| Union %19 %5
+%19 =
+| Union %18 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map null
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%21 =
-| Union %9 %20
+%20 =
+| Union %9 %19
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%22 =
-| Join %11 %14 %18 %21 (= #0 #2 #4 #7) (= #1 #5 #8)
-| | implementation = Differential %14 %11.(#0) %18.(#0, #1) %21.(#0, #1)
+%21 =
+| Join %10 %13 %17 %20 (= #0 #2 #4 #7) (= #1 #5 #8)
+| | implementation = Differential %13 %10.(#0) %17.(#0, #1) %20.(#0, #1)
 | | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?)
 | | keys = ()
 | Map null, null
@@ -927,15 +925,7 @@ Query:
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%12 = Let l6 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Filter (1 > #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%13 =
+%12 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
@@ -943,7 +933,7 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%14 =
+%13 =
 | Get %4 (l1)
 | | types = (integer?, boolean?)
 | | keys = ()
@@ -954,52 +944,58 @@ Query:
 | | types = (integer?)
 | | keys = ()
 
-%15 =
-| Union %14 %0
+%14 =
+| Union %13 %0
 | | types = (integer?)
 | | keys = ()
 | Map null
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%16 =
-| Union %4 %15
+%15 =
+| Union %4 %14
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%17 =
-| Get %12 (l6)
+%16 =
+| Get %5 (l2)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 | Map true
 | | types = (integer?, integer, boolean)
 | | keys = ((#0, #1))
+| Filter (1 > #1)
+| | types = (integer?, integer, boolean)
+| | keys = ((#0, #1))
 
-%18 =
-| Get %12 (l6)
+%17 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (1 > #1)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 | Negate
 | | types = (integer?, integer)
 | | keys = ()
 
-%19 =
-| Union %18 %5
+%18 =
+| Union %17 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map false
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%20 =
-| Union %17 %19
+%19 =
+| Union %16 %18
 | | types = (integer?, integer, boolean)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%21 =
+%20 =
 | Get %9 (l4)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
@@ -1010,23 +1006,23 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%22 =
-| Union %21 %5
+%21 =
+| Union %20 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map null
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%23 =
-| Union %9 %22
+%22 =
+| Union %9 %21
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%24 =
+%23 =
 | Get %11 (l5)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
@@ -1037,25 +1033,25 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%25 =
-| Union %24 %5
+%24 =
+| Union %23 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map null
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%26 =
-| Union %11 %25
+%25 =
+| Union %11 %24
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%27 =
-| Join %13 %16 %20 %23 %26 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
-| | implementation = Differential %16 %13.(#0) %20.(#0, #1) %23.(#0, #1) %26.(#0, #1)
+%26 =
+| Join %12 %15 %19 %22 %25 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
+| | implementation = Differential %15 %12.(#0) %19.(#0, #1) %22.(#0, #1) %25.(#0, #1)
 | | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
 | | keys = ()
 | Map null, null
@@ -1164,15 +1160,7 @@ Query:
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%12 = Let l6 =
-| Get %5 (l2)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Filter (1 >= #1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-
-%13 =
+%12 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
@@ -1180,7 +1168,7 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%14 =
+%13 =
 | Get %4 (l1)
 | | types = (integer?, boolean?)
 | | keys = ()
@@ -1191,52 +1179,58 @@ Query:
 | | types = (integer?)
 | | keys = ()
 
-%15 =
-| Union %14 %0
+%14 =
+| Union %13 %0
 | | types = (integer?)
 | | keys = ()
 | Map null
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%16 =
-| Union %4 %15
+%15 =
+| Union %4 %14
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%17 =
-| Get %12 (l6)
+%16 =
+| Get %5 (l2)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 | Map true
 | | types = (integer?, integer, boolean)
 | | keys = ((#0, #1))
+| Filter (1 >= #1)
+| | types = (integer?, integer, boolean)
+| | keys = ((#0, #1))
 
-%18 =
-| Get %12 (l6)
+%17 =
+| Get %5 (l2)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (1 >= #1)
 | | types = (integer?, integer)
 | | keys = ((#0, #1))
 | Negate
 | | types = (integer?, integer)
 | | keys = ()
 
-%19 =
-| Union %18 %5
+%18 =
+| Union %17 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map false
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%20 =
-| Union %17 %19
+%19 =
+| Union %16 %18
 | | types = (integer?, integer, boolean)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%21 =
+%20 =
 | Get %9 (l4)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
@@ -1247,23 +1241,23 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%22 =
-| Union %21 %5
+%21 =
+| Union %20 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map null
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%23 =
-| Union %9 %22
+%22 =
+| Union %9 %21
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%24 =
+%23 =
 | Get %11 (l5)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
@@ -1274,25 +1268,25 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%25 =
-| Union %24 %5
+%24 =
+| Union %23 %5
 | | types = (integer?, integer)
 | | keys = ()
 | Map null
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%26 =
-| Union %11 %25
+%25 =
+| Union %11 %24
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
 | | keys = ()
 
-%27 =
-| Join %13 %16 %20 %23 %26 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
-| | implementation = Differential %16 %13.(#0) %20.(#0, #1) %23.(#0, #1) %26.(#0, #1)
+%26 =
+| Join %12 %15 %19 %22 %25 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
+| | implementation = Differential %15 %12.(#0) %19.(#0, #1) %22.(#0, #1) %25.(#0, #1)
 | | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
 | | keys = ()
 | Map NOT(#6), null, null
@@ -1836,15 +1830,7 @@ Query:
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%9 = Let l5 =
-| Get %1 (l1)
-| | types = (integer?, integer)
-| | keys = ((#0, #1))
-| Filter (#1 = 1)
-| | types = (integer?, integer)
-| | keys = ((#0))
-
-%10 =
+%9 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
@@ -1852,7 +1838,7 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%11 =
+%10 =
 | Get %0 (l0)
 | | types = ()
 | | keys = (())
@@ -1860,7 +1846,7 @@ Query:
 | | types = (boolean)
 | | keys = (())
 
-%12 =
+%11 =
 | Get %0 (l0)
 | | types = ()
 | | keys = (())
@@ -1868,37 +1854,43 @@ Query:
 | | types = ()
 | | keys = ()
 
-%13 =
+%12 =
 | Constant ()
 | | types = ()
 | | keys = (())
 
-%14 =
-| Union %12 %13
+%13 =
+| Union %11 %12
 | | types = ()
 | | keys = ()
 | Map false
 | | types = (boolean)
 | | keys = ()
 
-%15 =
-| Union %11 %14
+%14 =
+| Union %10 %13
 | | types = (boolean)
 | | keys = ()
 
-%16 =
-| Get %9 (l5)
+%15 =
+| Get %1 (l1)
 | | types = (integer?, integer)
-| | keys = ((#0))
+| | keys = ((#0, #1))
 | Map 1, true
+| | types = (integer?, integer, integer, boolean)
+| | keys = ((#0, #1))
+| Filter (#1 = 1)
 | | types = (integer?, integer, integer, boolean)
 | | keys = ((#0))
 | Project (#0, #2, #3)
 | | types = (integer?, integer, boolean)
 | | keys = ((#0))
 
-%17 =
-| Get %9 (l5)
+%16 =
+| Get %1 (l1)
+| | types = (integer?, integer)
+| | keys = ((#0, #1))
+| Filter (#1 = 1)
 | | types = (integer?, integer)
 | | keys = ((#0))
 | Project (#0)
@@ -1911,23 +1903,23 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 
-%18 =
-| Union %17 %1
+%17 =
+| Union %16 %1
 | | types = (integer?, integer)
 | | keys = ()
 | Map false
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%19 =
-| Union %16 %18
+%18 =
+| Union %15 %17
 | | types = (integer?, integer, boolean)
 | | keys = ()
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean)
 | | keys = ()
 
-%20 =
+%19 =
 | Get %8 (l4)
 | | types = (integer?, boolean?)
 | | keys = ()
@@ -1938,25 +1930,25 @@ Query:
 | | types = (integer?)
 | | keys = ()
 
-%21 =
-| Union %20 %2
+%20 =
+| Union %19 %2
 | | types = (integer?)
 | | keys = ()
 | Map null
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%22 =
-| Union %8 %21
+%21 =
+| Union %8 %20
 | | types = (integer?, boolean?)
 | | keys = ()
 | ArrangeBy (#0)
 | | types = (integer?, boolean?)
 | | keys = ()
 
-%23 =
-| Join %10 %15 %19 %22 (= #0 #3 #6) (= #1 #4)
-| | implementation = Differential %15 %10.() %19.(#0, #1) %22.(#0)
+%22 =
+| Join %9 %14 %18 %21 (= #0 #3 #6) (= #1 #4)
+| | implementation = Differential %14 %9.() %18.(#0, #1) %21.(#0)
 | | types = (integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)
 | | keys = ()
 | Project (#2, #5, #7)

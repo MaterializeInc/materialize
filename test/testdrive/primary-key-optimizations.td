@@ -66,7 +66,7 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 "%0 =| Get t1"
 
 > EXPLAIN SELECT key1, key2 FROM t1 GROUP BY key1, key2 HAVING key1 = 'a';
-"%0 =| Get t1| Filter (#0 = \"a\")| Map \"a\"| Project (#3, #1)"
+"%0 =| Get t1| Map \"a\"| Filter (#0 = \"a\")| Project (#3, #1)"
 
 # Optimization not possible - explicit distinct is present in plan
 
@@ -171,7 +171,7 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 "%0 =| Get t1_pkne"
 
 > EXPLAIN SELECT key1, key2 FROM t1_pkne GROUP BY key1, key2 HAVING key1 = 'a';
-"%0 =| Get t1_pkne| Filter (#0 = \"a\")| Map \"a\"| Project (#3, #1)"
+"%0 =| Get t1_pkne| Map \"a\"| Filter (#0 = \"a\")| Project (#3, #1)"
 
 # Optimization not possible - explicit distinct is present in plan
 

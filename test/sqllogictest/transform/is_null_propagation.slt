@@ -105,8 +105,8 @@ Query:
 
 %8 =
 | Get %1 (l1)
-| Filter (#0 = 0)
 | Map 0
+| Filter (#0 = 0)
 | Project (#1)
 
 %9 =

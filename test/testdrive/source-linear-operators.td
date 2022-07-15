@@ -225,25 +225,23 @@ Source materialize.public.data (UID):
 | Project (#0..=#2)
 
 Query:
-%0 = Let l0 =
+%0 =
 | Get materialize.public.data (UID)
 | Filter (#0 = 1)
-
-%1 =
-| Get %0 (l0)
 | Project (#1)
 | Reduce group=()
 | | agg sum(#0)
 | Map 1
 | Project (#1, #0)
 
-%2 =
-| Get %0 (l0)
+%1 =
+| Get materialize.public.data (UID)
 | Map bigint_to_numeric((1 + #2))
+| Filter (#0 = 1)
 | Project (#0, #4)
 
-%3 =
-| Union %1 %2
+%2 =
+| Union %0 %1
 
 > SELECT * FROM mv
 1 3
