@@ -327,21 +327,11 @@ name
 data
 mat_data
 
-> SHOW MATERIALIZED SOURCES
-name
-----
-mat_data
-
 > SHOW FULL SOURCES
-name     type materialized  type
----------------------------------
-data     user false         kafka
-mat_data user true          kafka
-
-> SHOW FULL MATERIALIZED SOURCES
-name     type  type
---------------------
-mat_data user  kafka
+name     type type
+-------------------
+data     user kafka
+mat_data user kafka
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the
