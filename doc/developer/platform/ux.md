@@ -319,9 +319,8 @@ today, with the following changes:
   * The addition of commands to create, drop, and inspect clusters.
   * The addition of a `cluster` session variable that specifies the active
     cluster.
-  * The modification of `CREATE MATERIALIZED SOURCE`, `CREATE MATERIALIZED
-    VIEW`, `CREATE INDEX`, and `CREATE SINK` to associate the created index with
-    the active cluster.
+  * The modification of `CREATE MATERIALIZED VIEW`, `CREATE INDEX`, and
+    `CREATE SINK` to associate the created index with the active cluster.
   * The addition of commands to create, drop, and inspect secrets.
 
 These changes are described in more detail in the [Cluster](#cluster),
@@ -569,17 +568,12 @@ engineers and service accounts.
 
 ### Source
 
-The user experience of a source is largely unchanged.
+Source data is persisted to storage, and therefore materialized, upon
+ingestion. Therefore, they can be queried without an index.
 
-The existing `CREATE MATERIALIZED SOURCE` statement is extended to support
-specifying the cluster in which to create the index:
-
-```
-CREATE MATERIALIZED SOURCE <name> FROM ... [IN CLUSTER <cluster>]
-```
-
-If no cluster is explicitly specified, the active cluster is used. If there is
-no active cluster, the statement is rejected.
+It is still possible to create indexes on sources, to speed up queries, but the
+special syntax to do so during source creation, `CREATE MATERIALIZED SOURCE`,
+is removed.
 
 Users cannot read data from a source on which they do not have the `SELECT`
 privilege.

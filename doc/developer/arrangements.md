@@ -35,7 +35,7 @@ There are several diagnostic views in `mz_catalog` that connect this information
 
 ## Which operators need Arrangements?
 
-We create more arrangements that just those to house materialized sources and views.
+We create more arrangements than just those to house indexes and materialized views.
 Many internal operators require arrangements so that they can respond efficiently to changes.
 For example, the differential dataflow `join` operator requires that each of its two inputs be an arrangement.
 Specifically, each arrangement must have as its `key` the fields that will be equated by the join.
@@ -242,7 +242,7 @@ For each of these relational operators, the associated memory footprint should d
 ## Caveats: Shared Arrangements
 
 Arrangements may be shared between operators in the same dataflow, or across dataflows if an arrangement is published by the dataflow that creates it.
-Arrangements are most commonly published by the creation of indexes, materialized sources, and materialized views.
+Arrangements are most commonly published by the creation of indexes and materialized views.
 Materialize does not currently publish other arrangements.
 
 The `Join` operator requires arrangements each with `key` equal to the columns that will be equated.
