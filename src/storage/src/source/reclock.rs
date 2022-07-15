@@ -31,8 +31,8 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::Timestamp;
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::sources::MzOffset;
+use crate::controller::CollectionMetadata;
+use crate::types::sources::MzOffset;
 
 /// The reclock operator reclocks a stream that is timestamped with some timestamp `SourceTime`
 /// into another time domain that is timestamped with some timestamp `DestTime`.

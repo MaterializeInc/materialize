@@ -35,7 +35,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
-use mz_storage::client::sources::Timeline;
+use mz_storage::types::sources::Timeline;
 
 use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};

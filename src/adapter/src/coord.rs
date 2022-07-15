@@ -145,13 +145,13 @@ use mz_sql::plan::{
     StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
-use mz_storage::client::connections::ConnectionContext;
-use mz_storage::client::controller::{CollectionDescription, ReadPolicy};
-use mz_storage::client::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
-use mz_storage::client::sources::{
+use mz_storage::controller::{CollectionDescription, ReadPolicy};
+use mz_storage::protocol::client::Update;
+use mz_storage::types::connections::ConnectionContext;
+use mz_storage::types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
+use mz_storage::types::sources::{
     IngestionDescription, PostgresSourceConnection, SourceConnection, Timeline,
 };
-use mz_storage::client::Update;
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -2363,7 +2363,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(session, ops, |txn| {
                 let mut builder = txn.dataflow_builder(compute_instance);
                 let from_entry = builder.catalog.get_entry(&sink.from);
-                let sink_description = mz_storage::client::sinks::SinkDesc {
+                let sink_description = mz_storage::types::sinks::SinkDesc {
                     from: sink.from,
                     from_desc: from_entry
                         .desc(
@@ -3169,7 +3169,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .build_sink_dataflow(
                             "dummy".into(),
                             id,
-                            mz_storage::client::sinks::SinkDesc {
+                            mz_storage::types::sinks::SinkDesc {
                                 from: sink.from,
                                 from_desc: from_entry
                                     .desc(

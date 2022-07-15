@@ -7,17 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+//! The communication protocol between the storaged server and the storage controller
 
-//! Materialize's storage layer.
-
-pub mod controller;
-pub mod decode;
-pub mod protocol;
-pub mod render;
-pub mod source;
-pub mod storage_state;
-pub mod types;
-
-pub use decode::metrics::DecodeMetrics;
-pub use protocol::server::{serve, Config, Server};
+pub mod client;
+pub(crate) mod server;

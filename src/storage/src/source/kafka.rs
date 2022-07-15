@@ -28,12 +28,12 @@ use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
-use crate::client::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
-use crate::client::sources::encoding::SourceDataEncoding;
-use crate::client::sources::{KafkaOffset, KafkaSourceConnection, MzOffset, SourceConnection};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
+use crate::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use crate::types::sources::encoding::SourceDataEncoding;
+use crate::types::sources::{KafkaOffset, KafkaSourceConnection, MzOffset, SourceConnection};
 
 use self::metrics::KafkaPartitionMetrics;
 
@@ -527,7 +527,7 @@ fn create_kafka_config(
 ) -> ClientConfig {
     let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
 
-    crate::client::connections::populate_client_config(
+    crate::types::connections::populate_client_config(
         kafka_connection.clone(),
         options,
         std::collections::HashSet::new(),

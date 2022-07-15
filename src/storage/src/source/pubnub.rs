@@ -20,9 +20,9 @@ use tracing::info;
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
-use crate::client::connections::ConnectionContext;
-use crate::client::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
 use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
+use crate::types::connections::ConnectionContext;
+use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {

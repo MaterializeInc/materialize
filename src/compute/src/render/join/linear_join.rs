@@ -23,7 +23,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 use mz_compute_client::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_client::plan::join::JoinClosure;
 use mz_repr::{DatumVec, Diff, Row, RowArena};
-use mz_storage::client::errors::DataflowError;
+use mz_storage::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::{

@@ -20,7 +20,7 @@ use mz_repr::GlobalId;
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_storage.client.connections.aws.rs"
+    "/mz_storage.types.connections.aws.rs"
 ));
 
 /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
@@ -67,7 +67,7 @@ impl RustType<ProtoSerdeUri> for SerdeUri {
 /// `AwsExternalIdPrefix`. The only approved way to construct an `AwsExternalIdPrefix`
 /// is via [`ConnectionContext::from_cli_args`].
 ///
-/// [`ConnectionContext::from_cli_args`]: crate::client::connections::ConnectionContext::from_cli_args
+/// [`ConnectionContext::from_cli_args`]: crate::types::connections::ConnectionContext::from_cli_args
 /// [external ID]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AwsExternalIdPrefix(pub(super) String);

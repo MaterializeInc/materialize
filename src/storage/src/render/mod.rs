@@ -109,9 +109,9 @@ use timely::worker::Worker as TimelyWorker;
 
 use mz_repr::GlobalId;
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::sources::IngestionDescription;
+use crate::controller::CollectionMetadata;
 use crate::storage_state::StorageState;
+use crate::types::sources::IngestionDescription;
 
 mod debezium;
 mod persist_sink;

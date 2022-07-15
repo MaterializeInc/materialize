@@ -44,14 +44,14 @@ use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::metrics::DecodeMetrics;
 use self::protobuf::ProtobufDecoderState;
-use crate::client::connections::ConnectionContext;
-use crate::client::errors::DecodeError;
-use crate::client::sources::encoding::{
+use crate::source::{DecodeResult, SourceOutput};
+use crate::types::connections::ConnectionContext;
+use crate::types::errors::DecodeError;
+use crate::types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
-use crate::client::sources::{IncludedColumnSource, MzOffset};
-use crate::client::transforms::LinearOperator;
-use crate::source::{DecodeResult, SourceOutput};
+use crate::types::sources::{IncludedColumnSource, MzOffset};
+use crate::types::transforms::LinearOperator;
 
 mod avro;
 mod csv;

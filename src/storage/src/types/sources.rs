@@ -32,12 +32,12 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType}
 
 pub mod encoding;
 
-use crate::client::connections::aws::AwsConfig;
-use crate::client::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
-use crate::client::controller::CollectionMetadata;
-use crate::client::errors::DataflowError;
+use crate::controller::CollectionMetadata;
+use crate::types::connections::aws::AwsConfig;
+use crate::types::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
+use crate::types::errors::DataflowError;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage.client.sources.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sources.rs"));
 
 /// A description of a source ingestion
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

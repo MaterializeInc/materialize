@@ -61,8 +61,8 @@ use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::GlobalId;
-use mz_storage::client::controller::StorageController;
-use mz_storage::client::{
+use mz_storage::controller::StorageController;
+use mz_storage::protocol::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 
@@ -503,7 +503,7 @@ where
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig) -> Self {
-        let storage_controller = mz_storage::client::controller::Controller::new(
+        let storage_controller = mz_storage::controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
             config.persist_location,

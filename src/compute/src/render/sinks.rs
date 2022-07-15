@@ -21,9 +21,9 @@ use timely::dataflow::Scope;
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use mz_storage::client::controller::CollectionMetadata;
-use mz_storage::client::errors::DataflowError;
-use mz_storage::client::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::types::errors::DataflowError;
+use mz_storage::types::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
 
 use crate::render::context::Context;
 

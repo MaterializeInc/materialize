@@ -19,12 +19,12 @@ use timely::dataflow::{Scope, ScopeParent, Stream};
 use mz_expr::EvalError;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
-use crate::client::errors::{DataflowError, DecodeError};
-use crate::client::sources::{
+use crate::source::DecodeResult;
+use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, MzOffset,
 };
-use crate::source::DecodeResult;
 
 pub(crate) fn render<G: Scope>(
     envelope: &DebeziumEnvelope,

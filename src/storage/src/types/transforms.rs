@@ -15,7 +15,7 @@ use mz_expr::{MapFilterProject, MirScalarExpr};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, RelationType};
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage.client.transforms.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_storage.types.transforms.rs"));
 
 // TODO: change contract to ensure that the operator is always applied to
 // streams of rows

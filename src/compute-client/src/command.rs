@@ -29,10 +29,10 @@ use mz_expr::{
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationType, Row};
-use mz_storage::client::controller::CollectionMetadata;
-use mz_storage::client::sinks::SinkDesc;
-use mz_storage::client::transforms::LinearOperator;
-use mz_storage::client::ProtoAllowCompaction;
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::protocol::client::ProtoAllowCompaction;
+use mz_storage::types::sinks::SinkDesc;
+use mz_storage::types::transforms::LinearOperator;
 
 use crate::command::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,

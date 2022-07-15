@@ -22,7 +22,7 @@ use std::fmt;
 use mz_expr::RowSetFinishing;
 use mz_repr::explain_new::{DisplayText, ExprHumanizer};
 use mz_repr::GlobalId;
-use mz_storage::client::transforms::LinearOperator;
+use mz_storage::types::transforms::LinearOperator;
 
 use crate::coord::fast_path_peek;
 

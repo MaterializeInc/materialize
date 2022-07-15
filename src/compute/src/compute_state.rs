@@ -34,9 +34,9 @@ use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, TailResponse};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::client::connections::ConnectionContext;
-use mz_storage::client::controller::CollectionMetadata;
-use mz_storage::client::errors::DataflowError;
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::types::connections::ConnectionContext;
+use mz_storage::types::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
 

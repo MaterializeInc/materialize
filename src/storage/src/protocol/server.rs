@@ -23,11 +23,11 @@ use mz_service::client::GenericClient;
 use mz_service::grpc::GrpcServerCommand;
 use mz_service::local::LocalClient;
 
-use crate::client::connections::ConnectionContext;
-use crate::client::{StorageCommand, StorageResponse};
-use crate::server::reconciliation::StorageCommandReconcile;
+use crate::protocol::client::{StorageCommand, StorageResponse};
+use crate::protocol::server::reconciliation::StorageCommandReconcile;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::{StorageState, Worker};
+use crate::types::connections::ConnectionContext;
 use crate::DecodeMetrics;
 
 mod reconciliation;

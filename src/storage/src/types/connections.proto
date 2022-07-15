@@ -13,9 +13,9 @@ import "kafka-util/src/addr.proto";
 import "repr/src/global_id.proto";
 import "repr/src/url.proto";
 import "proto/src/tokio_postgres.proto";
-import "storage/src/client/errors.proto";
+import "storage/src/types/errors.proto";
 
-package mz_storage.client.connections;
+package mz_storage.types.connections;
 
 message ProtoStringOrSecret {
     oneof kind {

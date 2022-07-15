@@ -29,7 +29,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_service::client::GenericClient;
 use mz_service::grpc::GrpcServerCommand;
 use mz_service::local::LocalClient;
-use mz_storage::client::connections::ConnectionContext;
+use mz_storage::types::connections::ConnectionContext;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;

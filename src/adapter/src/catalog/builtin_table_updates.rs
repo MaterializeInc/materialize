@@ -22,7 +22,7 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage::client::sinks::KafkaSinkConnection;
+use mz_storage::types::sinks::KafkaSinkConnection;
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
@@ -307,17 +307,17 @@ impl CatalogState {
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
                 Datum::String(match connection.connection {
-                    mz_storage::client::connections::Connection::Kafka { .. } => "kafka",
-                    mz_storage::client::connections::Connection::Csr { .. } => {
+                    mz_storage::types::connections::Connection::Kafka { .. } => "kafka",
+                    mz_storage::types::connections::Connection::Csr { .. } => {
                         "confluent-schema-registry"
                     }
-                    mz_storage::client::connections::Connection::Postgres { .. } => "postgres",
-                    mz_storage::client::connections::Connection::Ssh { .. } => "ssh",
+                    mz_storage::types::connections::Connection::Postgres { .. } => "postgres",
+                    mz_storage::types::connections::Connection::Ssh { .. } => "ssh",
                 }),
             ]),
             diff,
         }];
-        if let mz_storage::client::connections::Connection::Ssh(ssh) = &connection.connection {
+        if let mz_storage::types::connections::Connection::Ssh(ssh) = &connection.connection {
             updates.extend(self.pack_ssh_tunnel_connection_update(id, name, &ssh.public_key, diff));
         }
         updates

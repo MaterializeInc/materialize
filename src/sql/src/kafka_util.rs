@@ -23,7 +23,7 @@ use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::Value;
-use mz_storage::client::connections::{
+use mz_storage::types::connections::{
     CsrConnection, CsrConnectionHttpAuth, KafkaConnection, StringOrSecret, TlsIdentity,
 };
 
@@ -224,7 +224,7 @@ pub async fn create_consumer(
     secrets_reader: &dyn SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, PlanError> {
     let mut config = create_new_client_config(librdkafka_log_level);
-    mz_storage::client::connections::populate_client_config(
+    mz_storage::types::connections::populate_client_config(
         kafka_connection.clone(),
         options,
         std::collections::HashSet::new(),

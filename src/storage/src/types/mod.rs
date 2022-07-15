@@ -7,17 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+#![allow(missing_docs)]
 
-//! Materialize's storage layer.
-
-pub mod controller;
-pub mod decode;
-pub mod protocol;
-pub mod render;
-pub mod source;
-pub mod storage_state;
-pub mod types;
-
-pub use decode::metrics::DecodeMetrics;
-pub use protocol::server::{serve, Config, Server};
+pub mod connections;
+pub mod errors;
+pub mod sinks;
+pub mod sources;
+pub mod transforms;

@@ -37,8 +37,8 @@ use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row};
-use mz_storage::client::controller::{ReadPolicy, StorageController, StorageError};
-use mz_storage::client::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
+use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
+use mz_storage::types::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 
 use crate::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
