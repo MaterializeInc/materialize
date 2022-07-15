@@ -204,6 +204,8 @@ class KafkaPartitions(Generator):
             """
         )
 
+        print("> CREATE DEFAULT INDEX ON s1")
+
         print(
             f"$ kafka-add-partitions topic=kafka-partitions total-partitions={cls.COUNT}"
         )
