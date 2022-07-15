@@ -23,7 +23,6 @@ This page describes how to connect Materialize to a PostgreSQL (10+) database to
 
 Field | Use
 ------|-----
-**MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. For more information, see [Key Concepts &mdash; Materialized sources](/overview/key-concepts/#materialized-sources).
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **CONNECTION** _connection_info_ | Postgres connection parameters. See the Postgres documentation on [supported connection parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.

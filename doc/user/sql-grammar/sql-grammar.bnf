@@ -67,7 +67,7 @@ create_sink ::=
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
     ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
 create_source_kafka ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
@@ -76,25 +76,25 @@ create_source_kafka ::=
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
 create_source_kinesis ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' format_spec
   ('ENVELOPE NONE')?
 create_source_postgres ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES'
   'CONNECTION' connection_info
   'PUBLICATION' publication_name
   ('WITH timestamp_frequency_ms =' int)?
 create_source_pubnub ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'PUBNUB' 'SUBSCRIBE KEY' key 'CHANNEL' channel
   'FORMAT' 'TEXT'
   ('ENVELOPE' 'NONE')?
 create_source_s3 ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'S3' 'DISCOVER OBJECTS'
   ('MATCHING' pattern)?
@@ -313,7 +313,7 @@ show_schemas ::=
 show_sinks ::=
    'SHOW' 'FULL'? 'SINKS' ('FROM' schema_name)?
 show_sources ::=
-  'SHOW' 'FULL'? 'MATERIALIZED'? 'SOURCES' ('FROM' schema_name)?
+  'SHOW' 'FULL'? 'SOURCES' ('FROM' schema_name)?
 show_tables ::=
   'SHOW' 'EXTENDED'? 'FULL'? 'TABLES' ('FROM' schema_name)?
 show_types ::=
