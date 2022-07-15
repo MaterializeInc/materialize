@@ -16,18 +16,21 @@ Licensor:                  Materialize, Inc.
 Licensed Work:             Materialize Version 20220920
                            The Licensed Work is © 2022 Materialize, Inc.
 
-Additional Use Grant:      You may use one single server instance of the
-                           Licensed Work for any purpose and you may
-                           concurrently use multiple single server instances of
-                           the Licensed Work in isolation, subject to each of
-                           the following conditions: (a) you may not cluster any
-                           server instances of the Licensed Work together for
-                           one use; and (b) you may not use the Licensed Work
+Additional Use Grant:      Within a single installation of Materialize, you
+                           may create one compute cluster with one
+                           single-process replica for any purpose and you may
+                           concurrently use multiple such installations,
+                           subject to each of the following conditions:
+                           (a) you may not create installations with multiple
+                           clusters, nor compute clusters with multiple
+                           replicas, nor compute cluster replicas with multiple
+                           processes; and (b) you may not use the Licensed Work
                            for a Database Service. A “Database Service” is a
                            commercial offering that allows third parties (other
                            than your employees and contractors) to access the
                            functionality of the Licensed Work by creating views
-                           whose schemas are controlled by such third parties.
+                           whose definitions are controlled by such third
+                           parties.
 
 Change Date:               September 20, 2026
 
