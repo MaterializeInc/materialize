@@ -21,6 +21,7 @@ async fn request(req: HttpRequest) -> impl Responder {
     let api_token = web::Query::<BrowserAPIToken>::from_query(req.query_string()).unwrap();
 
     let profile = Profile {
+        email: api_token.email.to_string(),
         secret: api_token.secret.to_string(),
         client_id: api_token.client_id.to_string(),
         default_region: None
@@ -115,10 +116,11 @@ pub(crate) async fn login_with_console() -> Result<(), reqwest::Error> {
 
     // Check if there is a secret somewhere.
     // If there is none save the api token someone on the root folder.
-    let auth_user = authenticate_user(&client, email, password).await?;
+    let auth_user = authenticate_user(&client, email.clone(), password).await?;
     let api_token = generate_api_token(&client, auth_user).await?;
     println!("ID: {:?} - Secret: {:?}", api_token.client_id, api_token.secret);
     let profile = Profile {
+        email: email.to_string(),
         secret: api_token.secret,
         client_id: api_token.client_id,
         default_region: None

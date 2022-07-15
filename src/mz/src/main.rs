@@ -136,6 +136,7 @@ struct FronteggAPIToken {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserAPIToken {
+    email: String,
     client_id: String,
     description: String,
     secret: String,
@@ -143,6 +144,7 @@ struct BrowserAPIToken {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Profile {
+    email: String,
     client_id: String,
     secret: String,
     default_region: Option<String>

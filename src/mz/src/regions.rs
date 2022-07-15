@@ -94,10 +94,10 @@ pub(crate) async fn cloud_provider_region_details(
 ) -> Result<Option<Vec<Region>>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
     let headers = build_region_request_headers(authorization);
-    let mut regionApiUrl = cloud_provider_region.environment_controller_url.clone();
-    regionApiUrl.push_str("/api/environment");
+    let mut region_api_url = cloud_provider_region.environment_controller_url.clone();
+    region_api_url.push_str("/api/environment");
 
-    let response = client.get(regionApiUrl)
+    let response = client.get(region_api_url)
         .headers(headers)
         .send()
         .await?;

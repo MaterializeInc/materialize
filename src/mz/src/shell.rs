@@ -1,10 +1,8 @@
-use std::future::Future;
-use reqwest::{Client, Error};
+use reqwest::{Client};
 use subprocess::Exec;
-use crate::{CloudProvider, CloudProviderRegion, FronteggAuthMachine, Profile, Region};
-use crate::regions::{list_cloud_providers, list_regions, enable_region, cloud_provider_region_details};
+use crate::{FronteggAuthMachine, Profile, Region};
+use crate::regions::{list_cloud_providers, list_regions, cloud_provider_region_details};
 use crate::utils::{trim_newline};
-use std::process::{Command, exit, Output};
 use std::io::Write;
 
 /// ----------------------------
@@ -45,7 +43,6 @@ pub(crate) async fn shell(
                 .join("\", \"");
             let mut region: Region = Region { coordd_pgwire_address: "".to_string(), coordd_https_address: "".to_string() };
             let mut region_input = String::new();
-            let mut cloud_provider: CloudProviderRegion;
 
             // TODO: Very similar code for both cases
             if regions.len() > 0 {
@@ -57,17 +54,8 @@ pub(crate) async fn shell(
 
                 println!("Region input: {:?}", region_input);
 
-                if region_input == "eu-west-1" {
-                    cloud_provider = CloudProviderRegion::euWest_1;
-                } else if region_input == "us-east-1" {
-                    cloud_provider = CloudProviderRegion::usEast_1;
-                } else {
-                    println!("Invalid region name.");
-                    exit(0);
-                }
-
                 // TODO: A map would be more efficient.
-                let mut selected_cloud_provider_filtered = cloud_providers
+                let selected_cloud_provider_filtered = cloud_providers
                     .into_iter()
                     .find(| cloud_provider| cloud_provider.region == region_input);
 
