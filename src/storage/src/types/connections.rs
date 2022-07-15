@@ -156,12 +156,35 @@ pub struct KafkaTlsConfig {
     pub root_cert: Option<StringOrSecret>,
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SaslConfig {
     pub mechanisms: String,
     pub username: StringOrSecret,
     pub password: GlobalId,
-    pub tls_root_cert: StringOrSecret,
+    pub tls_root_cert: Option<StringOrSecret>,
+}
+
+impl Arbitrary for SaslConfig {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<String>(),
+            StringOrSecret::arbitrary(),
+            GlobalId::arbitrary(),
+            proptest::option::of(any::<StringOrSecret>()),
+        )
+            .prop_map(
+                |(mechanisms, username, password, tls_root_cert)| SaslConfig {
+                    mechanisms,
+                    username,
+                    password,
+                    tls_root_cert,
+                },
+            )
+            .boxed()
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -242,7 +265,9 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
                 );
                 r.insert(SaslUsername.config_key(), username);
                 r.insert(SaslPassword.config_key(), StringOrSecret::Secret(password));
-                r.insert(SslCertificateAuthority.config_key(), certificate_authority);
+                if let Some(certificate_authority) = certificate_authority {
+                    r.insert(SslCertificateAuthority.config_key(), certificate_authority);
+                }
             }
             None => {}
         }
@@ -284,7 +309,7 @@ impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
                         key: key_or_err(config, map, SslKey)?.unwrap_secret(),
                         cert: key_or_err(config, map, SslCertificate)?,
                     }),
-                    root_cert: Some(key_or_err(config, map, SslCertificateAuthority)?),
+                    root_cert: map.remove(&SslCertificateAuthority.config_key()),
                 })),
                 config @ "sasl_ssl" => Some(KafkaSecurity::Sasl(SaslConfig {
                     mechanisms: key_or_err(config, map, SaslMechanisms)?
@@ -292,7 +317,7 @@ impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
                         .to_string(),
                     username: key_or_err(config, map, SaslUsername)?,
                     password: key_or_err(config, map, SaslPassword)?.unwrap_secret(),
-                    tls_root_cert: key_or_err(config, map, SslCertificateAuthority)?,
+                    tls_root_cert: map.remove(&SslCertificateAuthority.config_key()),
                 })),
                 o => bail!("unsupported security.protocol: {}", o),
             }
@@ -335,7 +360,7 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
             mechanisms: self.mechanisms.into_proto(),
             username: Some(self.username.into_proto()),
             password: Some(self.password.into_proto()),
-            tls_root_cert: Some(self.tls_root_cert.into_proto()),
+            tls_root_cert: self.tls_root_cert.into_proto(),
         }
     }
 
@@ -348,9 +373,7 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
             password: proto
                 .password
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::password")?,
-            tls_root_cert: proto
-                .tls_root_cert
-                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::tls_root_cert")?,
+            tls_root_cert: proto.tls_root_cert.into_rust()?,
         })
     }
 }

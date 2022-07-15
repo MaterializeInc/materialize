@@ -127,3 +127,23 @@ a
       ssl_ca_pem = '${arg.ca}'
   )
 contains:cannot set option security.protocol for SOURCE using CONNECTION materialize.public.kafka_sasl
+
+
+# Ensure that connectors do not require the certificate authority
+> CREATE CONNECTION kafka_sasl_no_ca
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = 'PLAIN',
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET sasl_password;
+
+# This ensures that the error is not that the CA was required, but simply that
+# not providing it prohibits connecting.
+! CREATE SOURCE connector_source
+  FROM KAFKA CONNECTION kafka_sasl_no_ca
+  TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_ca_pem = '${arg.ca}'
+  )
+contains: broker certificate could not be verified
