@@ -37,7 +37,7 @@ class RenameSource(Check):
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema} publish=true
                 {"f1": "A"}
 
-                > CREATE MATERIALIZED SOURCE rename_source1
+                > CREATE SOURCE rename_source1
                   FROM KAFKA BROKER '${testdrive.kafka-addr}'
                   TOPIC 'testdrive-rename-source-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
