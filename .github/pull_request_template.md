@@ -52,7 +52,7 @@ Delete this section if no tips.
 
 ### Backward compatibility
 
-- [ ] This PR evolves [an existing `$T ⇔ Proto$T` mapping](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/command-and-response-binary-encoding.md) (possibly in a backwards-incompatible way) and threrefore is tagged with a `T-protobuf` label.
+- [ ] This PR evolves [an existing `$T ⇔ Proto$T` mapping](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/command-and-response-binary-encoding.md) (possibly in a backwards-incompatible way) and therefore is tagged with a `T-protobuf` label.
 
 ### Release notes
 
