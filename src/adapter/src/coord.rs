@@ -1858,7 +1858,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } => {
                 let now = self.now_datetime();
                 let session = match implicit {
-                    None => session.start_transaction(now, None),
+                    None => session.start_transaction(now, None, None),
                     Some(stmts) => session.start_transaction_implicit(now, stmts),
                 };
                 let _ = tx.send(Response {
@@ -2513,7 +2513,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(self.now_datetime(), plan.access);
+                let session = session.start_transaction(
+                    self.now_datetime(),
+                    plan.access,
+                    plan.isolation_level,
+                );
                 tx.send(
                     Ok(ExecuteResponse::StartedTransaction { duplicated }),
                     session,

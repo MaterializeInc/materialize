@@ -17,6 +17,7 @@ use uncased::UncasedStr;
 
 use mz_ore::cast;
 use mz_sql::DEFAULT_SCHEMA;
+use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::error::AdapterError;
 use crate::session::EndTransactionAction;
@@ -1186,22 +1187,31 @@ impl Value for TimeZone {
 /// List of valid isolation levels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IsolationLevel {
+    ReadUncommitted,
+    ReadCommitted,
+    RepeatableRead,
     Serializable,
     StrictSerializable,
 }
 
 impl IsolationLevel {
-    fn as_str(&self) -> &'static str {
+    pub(super) fn as_str(&self) -> &'static str {
         match self {
-            IsolationLevel::Serializable => "SERIALIZABLE",
-            IsolationLevel::StrictSerializable => "STRICT_SERIALIZABLE",
+            Self::ReadUncommitted => "READ_UNCOMMITTED",
+            Self::ReadCommitted => "READ_COMMITTED",
+            Self::RepeatableRead => "REPEATABLE_READ",
+            Self::Serializable => "SERIALIZABLE",
+            Self::StrictSerializable => "STRICT_SERIALIZABLE",
         }
     }
 
     fn valid_values() -> Vec<&'static str> {
         vec![
-            IsolationLevel::Serializable.as_str(),
-            IsolationLevel::StrictSerializable.as_str(),
+            Self::ReadUncommitted.as_str(),
+            Self::ReadCommitted.as_str(),
+            Self::RepeatableRead.as_str(),
+            Self::Serializable.as_str(),
+            Self::StrictSerializable.as_str(),
         ]
     }
 }
@@ -1212,10 +1222,16 @@ impl Value for IsolationLevel {
     fn parse(s: &str) -> Result<Self::Owned, ()> {
         let s = UncasedStr::new(s);
 
-        if s == IsolationLevel::Serializable.as_str() {
-            Ok(IsolationLevel::Serializable)
-        } else if s == IsolationLevel::StrictSerializable.as_str() {
-            Ok(IsolationLevel::StrictSerializable)
+        if s == Self::ReadUncommitted.as_str() {
+            Ok(Self::ReadUncommitted)
+        } else if s == Self::ReadCommitted.as_str() {
+            Ok(Self::ReadCommitted)
+        } else if s == Self::RepeatableRead.as_str() {
+            Ok(Self::RepeatableRead)
+        } else if s == Self::Serializable.as_str() {
+            Ok(Self::Serializable)
+        } else if s == Self::StrictSerializable.as_str() {
+            Ok(Self::StrictSerializable)
         } else {
             Err(())
         }
@@ -1223,5 +1239,17 @@ impl Value for IsolationLevel {
 
     fn format(&self) -> String {
         self.as_str().into()
+    }
+}
+
+impl From<TransactionIsolationLevel> for IsolationLevel {
+    fn from(transaction_isolation_level: TransactionIsolationLevel) -> Self {
+        match transaction_isolation_level {
+            TransactionIsolationLevel::ReadUncommitted => Self::ReadUncommitted,
+            TransactionIsolationLevel::ReadCommitted => Self::ReadCommitted,
+            TransactionIsolationLevel::RepeatableRead => Self::RepeatableRead,
+            TransactionIsolationLevel::Serializable => Self::Serializable,
+            TransactionIsolationLevel::StrictSerializable => Self::StrictSerializable,
+        }
     }
 }

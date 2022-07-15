@@ -68,6 +68,7 @@ pub(crate) mod with_options;
 pub use self::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 pub use error::PlanError;
 pub use explain::Explanation;
+use mz_sql_parser::ast::TransactionIsolationLevel;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
@@ -131,6 +132,7 @@ pub enum Plan {
 #[derive(Debug)]
 pub struct StartTransactionPlan {
     pub access: Option<TransactionAccessMode>,
+    pub isolation_level: Option<TransactionIsolationLevel>,
 }
 
 #[derive(Debug)]

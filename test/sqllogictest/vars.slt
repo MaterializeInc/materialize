@@ -147,8 +147,8 @@ SHOW transaction_isolation
 ----
 STRICT_SERIALIZABLE
 
-statement error invalid value for parameter "transaction_isolation": "read_committed"
-SET transaction_isolation = READ_COMMITTED
+statement error invalid value for parameter "transaction_isolation": "snapshot_isolation"
+SET transaction_isolation = SNAPSHOT_ISOLATION
 
 # Test that a failed transaction will not commit var changes.
 
