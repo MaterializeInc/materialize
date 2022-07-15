@@ -1,3 +1,12 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 use std::process::exit;
 use std::time::Duration;
 use std::{collections::HashMap, io::Write};
@@ -11,7 +20,7 @@ use actix_web::{get, web, App, HttpRequest, HttpServer, Responder};
 use open;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
-use tokio::time::{sleep, Sleep};
+use tokio::time::{sleep};
 
 /// ----------------------------
 ///  Login code using browser
