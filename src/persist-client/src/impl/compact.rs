@@ -75,8 +75,11 @@ impl Compactor {
         Compactor { cfg, blob, metrics }
     }
 
-    pub fn compact_and_apply<K, V, T, D>(&self, machine: &Machine<K, V, T, D>, req: CompactReq<T>)
-    where
+    pub fn compact_and_apply_background<K, V, T, D>(
+        &self,
+        machine: &Machine<K, V, T, D>,
+        req: CompactReq<T>,
+    ) where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,

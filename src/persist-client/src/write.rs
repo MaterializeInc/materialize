@@ -84,7 +84,7 @@ where
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) compactor: Option<Compactor>,
+    pub(crate) compact: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) writer_id: WriterId,
     pub(crate) explicitly_expired: bool,
@@ -449,14 +449,14 @@ where
         };
 
         // If the compactor isn't enabled, just ignore the requests.
-        if let Some(compactor) = self.compactor.as_ref() {
+        if let Some(compactor) = self.compact.as_ref() {
             for req in merge_reqs {
                 let req = CompactReq {
                     shard_id: self.machine.shard_id(),
                     desc: req.desc,
                     inputs: req.inputs,
                 };
-                compactor.compact_and_apply(&self.machine, req);
+                compactor.compact_and_apply_background(&self.machine, req);
             }
         }
 

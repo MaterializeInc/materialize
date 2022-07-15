@@ -42,6 +42,8 @@ pub struct Metrics {
     pub user: BatchWriteMetrics,
     /// Metrics for compaction.
     pub compaction: CompactionMetrics,
+    /// Metrics for garbage collection.
+    pub gc: GcMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
 }
@@ -58,6 +60,7 @@ impl Metrics {
             codecs: vecs.codecs_metrics(),
             user: BatchWriteMetrics::new(registry, "user"),
             compaction: CompactionMetrics::new(registry),
+            gc: GcMetrics::new(registry),
             _vecs: vecs,
         }
     }
@@ -232,7 +235,6 @@ impl MetricsVecs {
                 apply_unbatched_cmd_cas: self.retry_metrics("apply_unbatched_cmd::cas"),
             },
             external: RetryExternal {
-                apply_unbatched_cmd_truncate: self.retry_metrics("apply_unbatched_cmd::truncate"),
                 batch_set: self.retry_metrics("batch::set"),
                 blob_open: self.retry_metrics("blob::open"),
                 consensus_open: self.retry_metrics("consensus::open"),
@@ -240,6 +242,9 @@ impl MetricsVecs {
                 fetch_batch_get: self.retry_metrics("fetch_batch::get"),
                 maybe_init_state_cas: self.retry_metrics("maybe_init_state::cas"),
                 maybe_init_state_head: self.retry_metrics("maybe_init_state::head"),
+                gc_scan: self.retry_metrics("gc::scan"),
+                gc_delete: self.retry_metrics("gc::delete"),
+                gc_truncate: self.retry_metrics("gc::truncate"),
             },
             append_batch: self.retry_metrics("append_batch"),
             fetch_batch_part: self.retry_metrics("fetch_batch_part"),
@@ -371,7 +376,6 @@ pub struct RetryDeterminate {
 
 #[derive(Debug)]
 pub struct RetryExternal {
-    pub(crate) apply_unbatched_cmd_truncate: RetryMetrics,
     pub(crate) batch_set: RetryMetrics,
     pub(crate) blob_open: RetryMetrics,
     pub(crate) consensus_open: RetryMetrics,
@@ -379,6 +383,9 @@ pub struct RetryExternal {
     pub(crate) fetch_batch_get: RetryMetrics,
     pub(crate) maybe_init_state_cas: RetryMetrics,
     pub(crate) maybe_init_state_head: RetryMetrics,
+    pub(crate) gc_scan: RetryMetrics,
+    pub(crate) gc_delete: RetryMetrics,
+    pub(crate) gc_truncate: RetryMetrics,
 }
 
 #[derive(Debug)]
@@ -456,6 +463,37 @@ impl CompactionMetrics {
                 help: "time spent in compaction",
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GcMetrics {
+    pub(crate) skipped: IntCounter,
+    pub(crate) started: IntCounter,
+    pub(crate) finished: IntCounter,
+    pub(crate) seconds: Counter,
+}
+
+impl GcMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        GcMetrics {
+            skipped: registry.register(metric!(
+                name: "mz_persist_gc_skipped",
+                help: "count of garbage collections skipped due to heuristics",
+            )),
+            started: registry.register(metric!(
+                name: "mz_persist_gc_started",
+                help: "count of garbage collections started",
+            )),
+            finished: registry.register(metric!(
+                name: "mz_persist_gc_finished",
+                help: "count of garbage collections finished",
+            )),
+            seconds: registry.register(metric!(
+                name: "mz_persist_gc_seconds",
+                help: "time spent in garbage collections",
+            )),
         }
     }
 }
