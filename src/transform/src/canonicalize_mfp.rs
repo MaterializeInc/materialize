@@ -15,7 +15,7 @@
 //! | Filter
 //! | Project
 //!
-//! After canonicalizing, this transform looks at the Map-Filter-Project
+//! As part of canonicalizing, this transform looks at the Map-Filter-Project
 //! subsequence and identifies common `ScalarExpr` expressions across and within
 //! expressions that are arguments to the Map-Filter-Project. It reforms the
 //! `Map-Filter-Project` subsequence to build each distinct expression at most
