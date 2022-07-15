@@ -68,6 +68,12 @@ class RestartMz(Action):
         c.wait_for_materialized()
 
 
+class KillStoraged(Action):
+    def execute(self, c: Composition) -> None:
+        # Depending on the workload, storaged may not be running, hence the || true
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged` || true")
+
+
 class DropCreateDefaultReplica(Action):
     def execute(self, c: Composition) -> None:
         c.sql(
