@@ -32,7 +32,6 @@ pub(crate) async fn authenticate_profile(
     client: Client,
     profile: Profile,
 ) -> Result<FronteggAuthMachine, Error> {
-    println!("Authenticating profile in Frontegg");
 
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("clientId", profile.client_id);
@@ -58,8 +57,6 @@ fn create_profile_dir_if_not_exists() {
 
     // Check if path exists
     if fs::metadata(config_path.clone()).is_err() {
-        println!("Creating dir!");
-
         fs::create_dir_all(config_path.as_path()).unwrap();
     };
 }
@@ -74,16 +71,12 @@ fn write_profile(profile: Profile) -> std::io::Result<()> {
 }
 
 pub(crate) fn save_profile(profile: Profile) -> std::io::Result<()> {
-    println!("Creating profile.");
     create_profile_dir_if_not_exists();
 
-    println!("Writing profile to file.");
     write_profile(profile)
 }
 
 pub(crate) fn get_local_profile() -> Option<Profile> {
-    println!("Retrieving local profile");
-
     // Check if path exists
     create_profile_dir_if_not_exists();
 
@@ -109,14 +102,12 @@ pub(crate) fn get_local_profile() -> Option<Profile> {
 }
 
 pub(crate) async fn validate_profile(client: Client) -> Option<FronteggAuthMachine> {
-    println!("Validating profile");
-
     match get_local_profile() {
         Some(profile) => match authenticate_profile(client, profile).await {
             Ok(frontegg_auth_machine) => {
                 return Some(frontegg_auth_machine);
             }
-            Err(error) => println!("Error authenticating profile : {:?}", error),
+            Err(error) => panic!("Error authenticating profile : {:?}", error),
         },
         None => println!("Profile not found. Please, login using `mz login`."),
     }

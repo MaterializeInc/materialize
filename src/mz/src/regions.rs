@@ -28,7 +28,7 @@ fn parse_cloud_provider_region(cloud_provider_region: CloudProviderRegion) -> St
 // TODO: ec.0 is dynamic.
 fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
     format!(
-        "https://ec.0.{}.aws.staging.cloud.materialize.com/api/environment",
+        "https://ec.0.{}.aws.cloud.materialize.com/api/environment",
         parse_cloud_provider_region(cloud_provider_region)
     )
 }

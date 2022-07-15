@@ -23,9 +23,6 @@ use subprocess::Exec;
  ** Runs psql as a subprocess command
  **/
 fn run_psql_shell(profile: Profile, region: Region) {
-    println!("Region details: {:?}", region);
-    // TODO: Replace -U with user email
-    // TODO: Control size check
     let host = &region.coordd_pgwire_address[..region.coordd_pgwire_address.len() - 5];
     let port = &region.coordd_pgwire_address
         [region.coordd_pgwire_address.len() - 4..region.coordd_pgwire_address.len()];
@@ -42,8 +39,6 @@ fn run_psql_shell(profile: Profile, region: Region) {
         .env("PGPASSWORD", password_from_profile(profile))
         .join()
         .expect("failed to execute process");
-
-    println!("status: {}", output.success());
 
     assert!(output.success());
 }

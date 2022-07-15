@@ -14,7 +14,7 @@ use std::{collections::HashMap, io::Write};
 use crate::profiles::save_profile;
 use crate::utils::trim_newline;
 use crate::{
-    BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL, USER_AUTH_URL,
+    BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL, USER_AUTH_URL, WEB_LOGIN_URL
 };
 use actix_web::{get, web, App, HttpRequest, HttpServer, Responder};
 use open;
@@ -28,11 +28,7 @@ use tokio::time::{sleep};
 
 #[get("/")]
 async fn request(req: HttpRequest) -> impl Responder {
-    println!("Getting token.");
     let query_string = req.query_string();
-
-    println!("Query string: {:?}", query_string);
-    println!("Headers: {:?}", req.headers());
 
     if query_string != "cancel" {
         let api_token = web::Query::<BrowserAPIToken>::from_query(query_string).unwrap();
@@ -59,12 +55,10 @@ pub(crate) async fn login_with_browser() -> Result<(), std::io::Error> {
     /*
      * Open the browser to login user
      */
-    let path = "http://localhost:8000/account/login?redirectUrl=/access/cli";
+    let path = WEB_LOGIN_URL;
     match open::that(path) {
         Err(err) => panic!("An error occurred when opening '{}': {}", path, err),
-        _ => {
-            println!("Browser open.");
-        }
+        _ => {}
     }
 
     /*
@@ -135,6 +129,7 @@ async fn authenticate_user(
 pub(crate) async fn login_with_console() -> Result<(), reqwest::Error> {
     // Handle user input
     let mut email = String::new();
+
     print!("Email: ");
     let _ = std::io::stdout().flush();
     std::io::stdin().read_line(&mut email).unwrap();
@@ -144,17 +139,13 @@ pub(crate) async fn login_with_console() -> Result<(), reqwest::Error> {
     let _ = std::io::stdout().flush();
     let password = rpassword::read_password().unwrap();
 
-    println!("Email: {:?} - Password: {:?} ", email, password);
     let client = Client::new();
 
     // Check if there is a secret somewhere.
     // If there is none save the api token someone on the root folder.
     let auth_user = authenticate_user(&client, email.clone(), password).await?;
     let api_token = generate_api_token(&client, auth_user).await?;
-    println!(
-        "ID: {:?} - Secret: {:?}",
-        api_token.client_id, api_token.secret
-    );
+
     let profile = Profile {
         email: email.to_string(),
         secret: api_token.secret,
