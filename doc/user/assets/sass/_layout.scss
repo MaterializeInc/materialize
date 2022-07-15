@@ -290,8 +290,10 @@ body {
 .footer {
     color: $grey-dark;
     font-size: 14px;
-    margin: 50px 0 10px;
+    margin: 25px -30px 10px 0;
     text-align: left;
+    display:flex;
+    align-items: center;
 }
 
 header {
@@ -436,33 +438,42 @@ header {
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
-
 .btn {
     background-color: $light-grey-v2;
     color: $medium-purple-v2;
     border-radius: 4px;
+    display: inline-flex;
+    justify-items: center;
+    align-items: center;
     font-size: 13px;
     font-weight: 600;
+    line-height: 1.4;
     margin: 0.4375rem;
     padding: 0.8125rem 1.625rem;
     position: relative;
     user-select: none;
     z-index: 1;
     transition: color 350ms ease, background-color 350ms ease;
+    white-space: nowrap;
+
+    span {
+        color: $medium-purple-v2;
+    }
 
     &:hover {
         opacity: 1;
-        color: $light-grey-v2;
         background-color: $medium-purple-v2;
+        border: none !important;
 
         svg {
-            color: inherit;
+            color: $light-grey-v2;
+        }
+        span {
+            color: $light-grey-v2;
         }
     }
 
     svg {
-        position: relative;
-        top: 6px;
         color: $purple-v2;
         margin-right: 6px;
     }
