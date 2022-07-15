@@ -120,6 +120,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::source::persist_source;
 use mz_storage::types::errors::DataflowError;
+use tracing::{info_span, Span};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -144,6 +145,23 @@ pub fn build_compute_dataflow<A: Allocate>(
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<Plan, CollectionMetadata>,
 ) {
+    // Some dataflows live indefinitely (for example maintaining an INDEX), but
+    // some are short lived (created on behalf of a peek) and we'd like
+    // different tracing behavior for each. For the latter, we want to attach
+    // all tracing to a single root span (so they can ultimately be connected to
+    // the peek). But there shouldn't be a single root for long-lived dataflows
+    // (our tracing library, and the tracing ecosystem in general, is built
+    // around short-lived requests and responses).
+    //
+    // Sniff between these two cases with a heuristic that assumes any dataflow
+    // exporting a transient id is itself transient.
+    let is_transient_dataflow = dataflow.export_ids().any(|id| id.is_transient());
+    let worker_span = if is_transient_dataflow {
+        info_span!("transient_dataflow")
+    } else {
+        Span::none()
+    };
+
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
 
@@ -153,6 +171,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
+            let _span_guard = worker_span.enter();
             let mut context = crate::render::context::Context::for_dataflow(
                 &dataflow,
                 scope.addr().into_element(),

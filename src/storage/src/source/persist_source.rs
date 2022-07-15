@@ -21,7 +21,7 @@ use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::sync::Mutex;
-use tracing::trace;
+use tracing::{info_span, trace, Instrument, Span};
 
 use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
@@ -58,6 +58,16 @@ where
 {
     let worker_index = scope.index();
 
+    // For the same reasons mentioned at the top of `build_compute_dataflow`, we
+    // only want to attach persist traces to a single root span if we're in a
+    // short-lived dataflow. We can sniff that out by whether we already have a
+    // root span or not.
+    let persist_source_span = if Span::current().is_none() {
+        Span::none()
+    } else {
+        info_span!("persist_source")
+    };
+
     // This source is split into two parts: a first part that sets up `async_stream` and a timely
     // source operator that the continuously reads from that stream.
     //
@@ -76,38 +86,49 @@ where
             return;
         }
 
-        let mut read = persist_clients
-            .lock()
-            .await
-            .open(metadata.persist_location)
-            .await
-            .expect("could not open persist client")
-            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(metadata.data_shard)
-            .await
-            .expect("could not open persist shard");
+        let (mut snapshot_iter, mut listen) = async {
+            let mut read = persist_clients
+                .lock()
+                .await
+                .open(metadata.persist_location)
+                .await
+                .expect("could not open persist client")
+                .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
+                    metadata.data_shard,
+                )
+                .await
+                .expect("could not open persist shard");
 
-        /// Aggressively downgrade `since`, to not hold back compaction.
-        read.downgrade_since(as_of.clone()).await;
+            /// Aggressively downgrade `since`, to not hold back compaction.
+            read.downgrade_since(as_of.clone()).await;
 
-        let mut snapshot_iter = read
-            .snapshot(as_of.clone())
-            .await
-            .expect("cannot serve requested as_of");
+            let snapshot_iter = read
+                .snapshot(as_of.clone())
+                .await
+                .expect("cannot serve requested as_of");
+
+            let listen = read
+                .listen(as_of)
+                .await
+                .expect("cannot serve requested as_of");
+            (snapshot_iter, listen)
+        }
+        .instrument(persist_source_span.clone())
+        .await;
 
         // First, yield all the updates from the snapshot.
-        while let Some(next) = snapshot_iter.next().await {
+        while let Some(next) = snapshot_iter
+            .next()
+            .instrument(persist_source_span.clone())
+            .await
+        {
             yield ListenEvent::Updates(next);
         }
 
         // Then, listen continously and yield any new updates. This loop is expected to never
         // finish.
-        let mut listen = read
-            .listen(as_of)
-            .await
-            .expect("cannot serve requested as_of");
-
         loop {
-            for event in listen.next().await {
+            for event in listen.next().instrument(persist_source_span.clone()).await {
                 // TODO(petrosagg): We are incorrectly NOT downgrading the since frontier of this
                 // read handle which will hold back compaction in persist. This is currently a
                 // necessary evil to avoid too much contension on persist's consensus
