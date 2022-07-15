@@ -2859,16 +2859,11 @@ impl KafkaConnectionOptionExtracted {
     }
     pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
-        HashSet::from([SslKey, SslCertificate, SslCertificateAuthority])
+        HashSet::from([SslKey, SslCertificate])
     }
     pub fn sasl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
-        HashSet::from([
-            SaslMechanisms,
-            SaslUsername,
-            SaslPassword,
-            SslCertificateAuthority,
-        ])
+        HashSet::from([SaslMechanisms, SaslUsername, SaslPassword])
     }
 }
 
@@ -2895,7 +2890,7 @@ impl From<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
                 mechanisms: k.sasl_mechanisms.clone().unwrap(),
                 username: k.sasl_username.clone().unwrap(),
                 password: k.sasl_password.unwrap().into(),
-                tls_root_cert: k.ssl_certificate_authority.clone().unwrap(),
+                tls_root_cert: k.ssl_certificate_authority.clone(),
             })
         } else {
             None
