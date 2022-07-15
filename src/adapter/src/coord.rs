@@ -4521,11 +4521,12 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&upper);
         }
 
-        if strict_serializable {
+        if strict_serializable && matches!(when, QueryWhen::Immediately) {
             assert!(
                 since.less_equal(&candidate),
-                "the strict serializable isolation level guarantees that the timestamp chosen is \
-                greater than or equal to since via read holds"
+                "the strict serializable isolation level guarantees that the timestamp chosen \
+                ({candidate}) is greater than or equal to since ({:?}) via read holds",
+                since
             )
         }
 
