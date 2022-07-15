@@ -20,6 +20,8 @@ $ kafka-ingest topic=static format=bytes
   TOPIC 'testdrive-static-${testdrive.seed}'
   FORMAT TEXT
 
+> CREATE DEFAULT INDEX ON indexed
+
 > CREATE SOURCE unindexed (c)
   FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-static-${testdrive.seed}'
