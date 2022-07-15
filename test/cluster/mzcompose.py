@@ -32,26 +32,22 @@ SERVICES = [
     Localstack(),
     Computed(
         name="computed_1",
-        options="--workers 2 --process 0 --secrets-reader process --secrets-reader-process-dir mzdata/secrets "
-        "computed_1:2102 computed_2:2102 ",
+        options="--workers 2 --process 0 computed_1:2102 computed_2:2102 ",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_2",
-        options="--workers 2 --process 1 --secrets-reader process --secrets-reader-process-dir mzdata/secrets "
-        "computed_1:2102 computed_2:2102",
+        options="--workers 2 --process 1 computed_1:2102 computed_2:2102",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_3",
-        options="--workers 2 --process 0 --secrets-reader process --secrets-reader-process-dir mzdata/secrets "
-        "computed_3:2102 computed_4:2102",
+        options="--workers 2 --process 0 computed_3:2102 computed_4:2102",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_4",
-        options="--workers 2 --process 1 --secrets-reader process --secrets-reader-process-dir mzdata/secrets "
-        "computed_3:2102 computed_4:2102",
+        options="--workers 2 --process 1 computed_3:2102 computed_4:2102",
         ports=[2100, 2102],
     ),
     Materialized(),
@@ -65,9 +61,7 @@ SERVICES = [
         ],
         materialize_params={"cluster": "cluster1"},
     ),
-    Storaged(
-        options="--secrets-reader process --secrets-reader-process-dir mzdata/secrets"
-    ),
+    Storaged(),
 ]
 
 
