@@ -187,6 +187,18 @@ pub enum ComputeInstanceReplicaConfig {
     },
 }
 
+impl ComputeInstanceReplicaConfig {
+    pub fn get_az(&self) -> Option<&str> {
+        match self {
+            ComputeInstanceReplicaConfig::Remote { addrs: _ } => None,
+            ComputeInstanceReplicaConfig::Managed {
+                size: _,
+                availability_zone,
+            } => availability_zone.as_deref(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct CreateSourcePlan {
     pub name: QualifiedObjectName,

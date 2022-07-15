@@ -278,6 +278,64 @@ async fn migrate<S: Append>(
         // release, after which they must never be removed, only patched by future
         // migrations. Migrations must be transactional or idempotent (in case of
         // midway failure).
+
+        // Fill in non-optional availability zone
+        // Introduced in alpha.4
+        |txn: &mut Transaction<'_, S>, bootstrap_args| {
+            txn.compute_instance_replicas.update(|_k, v| {
+                let mut config: serde_json::Value =
+                    serde_json::de::from_str(&v.config).expect("valid JSON");
+                let managed = config
+                    .as_object_mut()
+                    .expect("compute instance replica config must be a JSON object")
+                    .get_mut("location")
+                    .expect("'location' field must exist")
+                    .as_object_mut()
+                    .expect("'location' field must be a JSON object")
+                    .get_mut("Managed")?
+                    .as_object_mut()
+                    .expect("'Managed' field's value must be a JSON object");
+                const AZ_KEY: &'static str = "availability_zone";
+                const AZ_USER_SPECIFIED_KEY: &'static str = "az_user_specified";
+                let has_az = managed
+                    .get(AZ_KEY)
+                    .map(|v| v != &serde_json::Value::Null)
+                    .unwrap_or(false);
+                let config_updated = if has_az {
+                    if !managed.contains_key(AZ_USER_SPECIFIED_KEY) {
+                        // Old version of this struct - if we contain an AZ,
+                        // it was user-specified.
+                        managed.insert(
+                            AZ_USER_SPECIFIED_KEY.to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    // Old version of this struct - there is no AZ, so choose one arbitrarily,
+                    // and record that it was arbitrary by setting az_user_specified to `false`.
+                    managed.insert(
+                        AZ_KEY.to_string(),
+                        serde_json::Value::String(bootstrap_args.default_availability_zone.clone()),
+                    );
+                    managed.insert(
+                        AZ_USER_SPECIFIED_KEY.to_string(),
+                        serde_json::Value::Bool(false),
+                    );
+                    true
+                };
+                if config_updated {
+                    let mut v = v.clone();
+                    v.config = serde_json::ser::to_string(&config).unwrap();
+                    Some(v)
+                } else {
+                    None
+                }
+            })?;
+            Ok(())
+        },
     ];
 
     let mut txn = transaction(stash).await?;
@@ -295,6 +353,7 @@ async fn migrate<S: Append>(
 
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
+    pub default_availability_zone: String,
 }
 
 #[derive(Debug)]
