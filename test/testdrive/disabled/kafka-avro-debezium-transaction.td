@@ -9,6 +9,9 @@
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 
+# This test is broken.
+# See: https://github.com/MaterializeInc/materialize/issues/13629
+
 $ set schema={
     "type": "record",
     "name": "envelope",

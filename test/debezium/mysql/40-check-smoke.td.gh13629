@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# This test is broken and therefore disabled.
+# See: https://github.com/MaterializeInc/materialize/issues/13629
+
 $ schema-registry-wait-schema schema=mysql.test.t1-value
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}

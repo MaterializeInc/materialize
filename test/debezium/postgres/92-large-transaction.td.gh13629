@@ -9,6 +9,9 @@
 #
 # Test that large transactions are properly replicated
 
+# This test is broken and therefore disabled.
+# See: https://github.com/MaterializeInc/materialize/issues/13629
+
 $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/config content-type=application/json
 {
   "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
