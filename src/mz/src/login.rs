@@ -1,9 +1,12 @@
 use std::{io::{Write}, collections::HashMap};
+use std::process::exit;
+use std::time::Duration;
 
 use open;
 use actix_web::{get, App, HttpServer, Responder, HttpRequest, web };
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT, AUTHORIZATION};
 use reqwest::{Client};
+use tokio::time::sleep;
 use crate::{API_TOKEN_AUTH_URL, BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, USER_AUTH_URL};
 use crate::profiles::{save_profile};
 use crate::utils:: {trim_newline};
@@ -15,18 +18,28 @@ use crate::utils:: {trim_newline};
 #[get("/")]
 async fn request(req: HttpRequest) -> impl Responder {
     println!("Getting token.");
-    println!("Query string: {:?}", req.query_string());
+    let query_string = req.query_string();
+
+    println!("Query string: {:?}", query_string);
     println!("Headers: {:?}", req.headers());
 
-    let api_token = web::Query::<BrowserAPIToken>::from_query(req.query_string()).unwrap();
+    if query_string != "cancel" {
+        let api_token = web::Query::<BrowserAPIToken>::from_query(query_string).unwrap();
 
-    let profile = Profile {
-        email: api_token.email.to_string(),
-        secret: api_token.secret.to_string(),
-        client_id: api_token.client_id.to_string(),
-        default_region: None
-    };
-    save_profile(profile).unwrap();
+        let profile = Profile {
+            email: api_token.email.to_string(),
+            secret: api_token.secret.to_string(),
+            client_id: api_token.client_id.to_string(),
+            default_region: None
+        };
+        save_profile(profile).unwrap();
+    }
+
+    let _ = tokio::spawn(async {
+        // 200ms
+        sleep(Duration::new(0, 200000000));
+        exit(0);
+    });
 
     "You can now close the tab."
 }

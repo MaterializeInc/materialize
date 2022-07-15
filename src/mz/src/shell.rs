@@ -4,10 +4,39 @@ use crate::{FronteggAuthMachine, Profile, Region};
 use crate::regions::{list_cloud_providers, list_regions, cloud_provider_region_details};
 use crate::utils::{trim_newline};
 use std::io::Write;
+use std::process::exit;
 
 /// ----------------------------
 /// Shell command
 /// ----------------------------
+
+/**
+ ** Runs psql as a subprocess command
+ **/
+fn run_psql_shell(profile: Profile, region: Region) {
+    println!("Region details: {:?}", region);
+    // TODO: Replace -U with user email
+    // TODO: Control size check
+    let host = &region.coordd_pgwire_address[..region.coordd_pgwire_address.len() - 5];
+    let port = &region.coordd_pgwire_address[region.coordd_pgwire_address.len() - 4..region.coordd_pgwire_address.len()];
+    let email = profile.email.clone();
+
+    let output = Exec::cmd("psql")
+        .arg("-U")
+        .arg(email)
+        .arg("-h")
+        .arg(host)
+        .arg("-p")
+        .arg(port)
+        .arg("materialize")
+        .env("PGPASSWORD", password_from_profile(profile))
+        .join()
+        .expect("failed to execute process");
+
+    println!("status: {}", output.success());
+
+    assert!(output.success());
+}
 
 /**
  ** Turn a profile into a Materialize cloud instance password
@@ -41,7 +70,6 @@ pub(crate) async fn shell(
                 .map(|cloud_provider| cloud_provider.region.clone())
                 .collect::<Vec<String>>()
                 .join("\", \"");
-            let mut region: Region = Region { coordd_pgwire_address: "".to_string(), coordd_https_address: "".to_string() };
             let mut region_input = String::new();
 
             // TODO: Very similar code for both cases
@@ -68,38 +96,19 @@ pub(crate) async fn shell(
                         ).await {
                             Ok(Some(mut cloud_provider_regions)) => {
                                 match cloud_provider_regions.pop() {
-                                    Some(region_details) => region = region_details,
-                                    None => {}
+                                    Some(region) => run_psql_shell(profile, region),
+                                    None => {
+                                        println!("The region is not enabled.");
+                                        exit(0);
+                                    }
                                 }
                             }
                             Err(error) => { panic!("Error retrieving region details: {:?}", error); }
-                            _ => {}
+                            _ => { }
                         }
                     }
-                    None => {}
+                    None => { println!("Unknown region.");  }
                 }
-
-                println!("Region details: {:?}", region);
-                // TODO: Replace -U with user email
-                // TODO: Control size check
-                let host = &region.coordd_pgwire_address[..region.coordd_pgwire_address.len() - 5];
-                let port = &region.coordd_pgwire_address[region.coordd_pgwire_address.len() - 4..region.coordd_pgwire_address.len()];
-
-                let output = Exec::cmd("psql")
-                    .arg("-U")
-                    .arg("joaquin@materialize.com")
-                    .arg("-h")
-                    .arg(host)
-                    .arg("-p")
-                    .arg(port)
-                    .arg("materialize")
-                    .env("PGPASSWORD", password_from_profile(profile))
-                    .join()
-                    .expect("failed to execute process");
-
-                println!("status: {}", output.success());
-
-                assert!(output.success());
             } else {
                 println!("There are no regions created. Please, create one to run the shell.");
             }
