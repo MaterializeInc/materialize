@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
@@ -34,7 +35,7 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::encoding::parse_id;
-use crate::r#impl::machine::{retry_external, system_time, Machine};
+use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
 
@@ -144,6 +145,8 @@ impl ShardId {
 /// The tunable knobs for persist.
 #[derive(Debug, Clone)]
 pub struct PersistConfig {
+    /// A clock to use for all leasing and other non-debugging use.
+    pub now: NowFn,
     /// A target maximum size of blob payloads in bytes. If a logical "batch" is
     /// bigger than this, it will be broken up into smaller, independent pieces.
     /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen
@@ -209,12 +212,14 @@ pub struct PersistConfig {
 //   an `O(n*log(n))` upper bound on the number of unconsolidated updates that
 //   would be consolidated if we compacted as the in-mem Spine does. The initial
 //   value is a placeholder and should be revisited at some point.
-impl Default for PersistConfig {
-    fn default() -> Self {
+impl PersistConfig {
+    /// Returns a new instance of [PersistConfig] with default tuning.
+    pub fn new(now: NowFn) -> Self {
         // Escape hatch in case we need to disable compaction.
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         const MB: usize = 1024 * 1024;
         Self {
+            now,
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
@@ -369,7 +374,7 @@ impl PersistClient {
             )
         });
         let writer_id = WriterId::new();
-        let (shard_upper, _) = machine.register_writer(&writer_id, system_time()).await;
+        let (shard_upper, _) = machine.register_writer(&writer_id, (self.cfg.now)()).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),

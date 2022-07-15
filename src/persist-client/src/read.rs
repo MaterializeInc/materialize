@@ -754,6 +754,7 @@ fn decode_inline_desc<T: Timestamp + Codec64>(desc: &Description<u64>) -> Descri
 #[cfg(test)]
 mod tests {
     use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
     use mz_persist::location::Consensus;
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
@@ -784,12 +785,16 @@ mod tests {
         let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
             as Arc<dyn Consensus + Send + Sync>;
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-        let (mut write, read) =
-            PersistClient::new(PersistConfig::default(), blob, consensus, metrics)
-                .await
-                .expect("client construction failed")
-                .expect_open::<String, String, u64, i64>(ShardId::new())
-                .await;
+        let (mut write, read) = PersistClient::new(
+            PersistConfig::new(SYSTEM_TIME.clone()),
+            blob,
+            consensus,
+            metrics,
+        )
+        .await
+        .expect("client construction failed")
+        .expect_open::<String, String, u64, i64>(ShardId::new())
+        .await;
 
         write.expect_compare_and_append(&data[0..1], 0, 1).await;
         write.expect_compare_and_append(&data[1..2], 1, 2).await;

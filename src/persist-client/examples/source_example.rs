@@ -195,7 +195,13 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
         Arc::new(UnreliableBlob::new(blob, unreliable.clone())) as Arc<dyn Blob + Send + Sync>;
     let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
         as Arc<dyn Consensus + Send + Sync>;
-    PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await
+    PersistClient::new(
+        PersistConfig::new(SYSTEM_TIME.clone()),
+        blob,
+        consensus,
+        metrics,
+    )
+    .await
 }
 
 mod api {

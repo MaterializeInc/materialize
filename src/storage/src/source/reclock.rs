@@ -492,13 +492,18 @@ mod tests {
     use std::time::Duration;
 
     use itertools::Itertools;
+    use mz_ore::now::SYSTEM_TIME;
     use once_cell::sync::Lazy;
 
     use mz_ore::metrics::MetricsRegistry;
-    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
 
-    static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> =
-        Lazy::new(|| Arc::new(Mutex::new(PersistClientCache::new(&MetricsRegistry::new()))));
+    static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> = Lazy::new(|| {
+        Arc::new(Mutex::new(PersistClientCache::new(
+            PersistConfig::new(SYSTEM_TIME.clone()),
+            &MetricsRegistry::new(),
+        )))
+    });
 
     async fn make_test_operator(shard: ShardId, as_of: Antichain<Timestamp>) -> ReclockOperator {
         let start = tokio::time::Instant::now();

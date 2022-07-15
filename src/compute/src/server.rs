@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
+use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::execute::execute_from;
@@ -110,7 +111,10 @@ pub fn serve(
     let (builders, other) =
         initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
 
-    let persist_clients = PersistClientCache::new(&config.metrics_registry);
+    let persist_clients = PersistClientCache::new(
+        PersistConfig::new(config.now.clone()),
+        &config.metrics_registry,
+    );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
 
     let worker_guards = execute_from(

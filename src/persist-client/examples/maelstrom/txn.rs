@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -451,7 +452,13 @@ impl Service for TransactorService {
 
         // Wire up the TransactorService.
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-        let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
+        let client = PersistClient::new(
+            PersistConfig::new(SYSTEM_TIME.clone()),
+            blob,
+            consensus,
+            metrics,
+        )
+        .await?;
         let transactor = Transactor::new(&client, shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)

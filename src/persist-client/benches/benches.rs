@@ -12,6 +12,7 @@ use std::sync::Arc;
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion};
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use tempfile::TempDir;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Runtime;
@@ -98,7 +99,13 @@ async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
     let consensus = Arc::new(MemConsensus::default());
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-    PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await
+    PersistClient::new(
+        PersistConfig::new(SYSTEM_TIME.clone()),
+        blob,
+        consensus,
+        metrics,
+    )
+    .await
 }
 
 async fn create_file_pg_client(
@@ -114,7 +121,13 @@ async fn create_file_pg_client(
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-    let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
+    let client = PersistClient::new(
+        PersistConfig::new(SYSTEM_TIME.clone()),
+        blob,
+        consensus,
+        metrics,
+    )
+    .await?;
     Ok(Some((postgres_consensus, client, dir)))
 }
 
@@ -133,7 +146,13 @@ async fn create_s3_pg_client(
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-    let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
+    let client = PersistClient::new(
+        PersistConfig::new(SYSTEM_TIME.clone()),
+        blob,
+        consensus,
+        metrics,
+    )
+    .await?;
     Ok(Some((postgres_consensus, client)))
 }
 

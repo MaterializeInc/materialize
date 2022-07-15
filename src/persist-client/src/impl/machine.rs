@@ -623,15 +623,6 @@ where
     }
 }
 
-pub fn system_time() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("failed to get millis since epoch")
-        .as_millis()
-        .try_into()
-        .expect("current time did not fit into u64")
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -678,7 +669,8 @@ mod tests {
             let mut client = new_test_client().await;
             // Reset blob_target_size. Individual batch writes and compactions
             // can override it with an arg.
-            client.cfg.blob_target_size = PersistConfig::default().blob_target_size;
+            client.cfg.blob_target_size =
+                PersistConfig::new(client.cfg.now.clone()).blob_target_size;
 
             let state = Arc::new(Mutex::new(DatadrivenState::default()));
 
