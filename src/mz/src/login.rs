@@ -1,15 +1,17 @@
-use std::{io::{Write}, collections::HashMap};
 use std::process::exit;
 use std::time::Duration;
+use std::{collections::HashMap, io::Write};
 
+use crate::profiles::save_profile;
+use crate::utils::trim_newline;
+use crate::{
+    BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL, USER_AUTH_URL,
+};
+use actix_web::{get, web, App, HttpRequest, HttpServer, Responder};
 use open;
-use actix_web::{get, App, HttpServer, Responder, HttpRequest, web };
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT, AUTHORIZATION};
-use reqwest::{Client};
-use tokio::time::sleep;
-use crate::{API_TOKEN_AUTH_URL, BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, USER_AUTH_URL};
-use crate::profiles::{save_profile};
-use crate::utils:: {trim_newline};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use reqwest::Client;
+use tokio::time::{sleep, Sleep};
 
 /// ----------------------------
 ///  Login code using browser
@@ -30,12 +32,12 @@ async fn request(req: HttpRequest) -> impl Responder {
             email: api_token.email.to_string(),
             secret: api_token.secret.to_string(),
             client_id: api_token.client_id.to_string(),
-            default_region: None
+            default_region: None,
         };
         save_profile(profile).unwrap();
     }
 
-    let _ = tokio::spawn(async {
+    let _ = tokio::join!(async {
         // 200ms
         sleep(Duration::new(0, 200000000));
         exit(0);
@@ -59,14 +61,11 @@ pub(crate) async fn login_with_browser() -> Result<(), std::io::Error> {
     /*
      * Start the server to handle the request response
      */
-    HttpServer::new(|| {
-        App::new()
-            // .app_data(app_data)
-            .service(request)
-    })
+    HttpServer::new(|| App::new().service(request))
         .bind(("127.0.0.1", 8808))?
         .run()
-        .await.unwrap();
+        .await
+        .unwrap();
 
     Ok(())
 }
@@ -75,17 +74,24 @@ pub(crate) async fn login_with_browser() -> Result<(), std::io::Error> {
 ///  Login code using console
 /// ----------------------------
 
-async fn generate_api_token(client: &Client, access_token_response: FronteggAuthUser) -> Result<FronteggAPIToken, reqwest::Error> {
+async fn generate_api_token(
+    client: &Client,
+    access_token_response: FronteggAuthUser,
+) -> Result<FronteggAPIToken, reqwest::Error> {
     let authorization: String = format!("Bearer {}", access_token_response.access_token);
 
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(AUTHORIZATION, HeaderValue::from_str(authorization.as_str()).unwrap());
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(authorization.as_str()).unwrap(),
+    );
     let mut body = HashMap::new();
     body.insert("description", &"Token for the CLI");
 
-    client.post(API_TOKEN_AUTH_URL)
+    client
+        .post(API_TOKEN_AUTH_URL)
         .headers(headers)
         .json(&body)
         .send()
@@ -94,7 +100,11 @@ async fn generate_api_token(client: &Client, access_token_response: FronteggAuth
         .await
 }
 
-async fn authenticate_user(client: &Client, email: String, password: String) -> Result<FronteggAuthUser, reqwest::Error> {
+async fn authenticate_user(
+    client: &Client,
+    email: String,
+    password: String,
+) -> Result<FronteggAuthUser, reqwest::Error> {
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("email", email);
     access_token_request_body.insert("password", password);
@@ -103,7 +113,8 @@ async fn authenticate_user(client: &Client, email: String, password: String) -> 
     headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    client.post(USER_AUTH_URL)
+    client
+        .post(USER_AUTH_URL)
         .headers(headers)
         .json(&access_token_request_body)
         .send()
@@ -131,12 +142,15 @@ pub(crate) async fn login_with_console() -> Result<(), reqwest::Error> {
     // If there is none save the api token someone on the root folder.
     let auth_user = authenticate_user(&client, email.clone(), password).await?;
     let api_token = generate_api_token(&client, auth_user).await?;
-    println!("ID: {:?} - Secret: {:?}", api_token.client_id, api_token.secret);
+    println!(
+        "ID: {:?} - Secret: {:?}",
+        api_token.client_id, api_token.secret
+    );
     let profile = Profile {
         email: email.to_string(),
         secret: api_token.secret,
         client_id: api_token.client_id,
-        default_region: None
+        default_region: None,
     };
     save_profile(profile).unwrap();
     Ok(())

@@ -1,10 +1,12 @@
-use std::path::PathBuf;
-use std::fs;
-use std::{collections::HashMap};
+use crate::{
+    FronteggAuthMachine, Profile, MACHINE_AUTH_URL, PROFILES_DIR_NAME, PROFILES_FILE_NAME,
+};
 use dirs::config_dir;
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error};
-use crate::{FronteggAuthMachine, MACHINE_AUTH_URL, Profile, PROFILES_DIR_NAME, PROFILES_FILE_NAME};
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 
 /// ----------------------------
 ///  Profiles handling
@@ -13,11 +15,14 @@ use crate::{FronteggAuthMachine, MACHINE_AUTH_URL, Profile, PROFILES_DIR_NAME, P
 fn get_config_path() -> PathBuf {
     match config_dir() {
         Some(path) => path,
-        None => panic!("Problem trying to find the config dir.")
+        None => panic!("Problem trying to find the config dir."),
     }
 }
 
-pub(crate) async fn authenticate_profile(client: Client, profile: Profile) -> Result<FronteggAuthMachine, Error> {
+pub(crate) async fn authenticate_profile(
+    client: Client,
+    profile: Profile,
+) -> Result<FronteggAuthMachine, Error> {
     println!("Authenticating profile in Frontegg");
 
     let mut access_token_request_body = HashMap::new();
@@ -28,7 +33,8 @@ pub(crate) async fn authenticate_profile(client: Client, profile: Profile) -> Re
     headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    client.post(MACHINE_AUTH_URL)
+    client
+        .post(MACHINE_AUTH_URL)
         .headers(headers)
         .json(&access_token_request_body)
         .send()
@@ -84,13 +90,11 @@ pub(crate) fn get_local_profile() -> Option<Profile> {
     } else {
         // Return profile
         match fs::read_to_string(config_path.as_path()) {
-            Ok(profiles_serialized) => {
-                match toml::from_str(&*profiles_serialized) {
-                    Ok(profile) => Some(profile),
-                    Err(error) => panic!("Problem parsing the profiles: {:?}", error)
-                }
-            }
-            Err(error) => panic!("Problem opening the profiles file: {:?}", error)
+            Ok(profiles_serialized) => match toml::from_str(&*profiles_serialized) {
+                Ok(profile) => Some(profile),
+                Err(error) => panic!("Problem parsing the profiles: {:?}", error),
+            },
+            Err(error) => panic!("Problem opening the profiles file: {:?}", error),
         }
     }
 }
@@ -99,15 +103,13 @@ pub(crate) async fn validate_profile(client: Client) -> Option<FronteggAuthMachi
     println!("Validating profile");
 
     match get_local_profile() {
-        Some(profile) => {
-            match authenticate_profile(client, profile).await {
-                Ok(frontegg_auth_machine) => {
-                    return Some(frontegg_auth_machine);
-                }
-                Err(error) => println!("Error authenticating profile : {:?}", error)
+        Some(profile) => match authenticate_profile(client, profile).await {
+            Ok(frontegg_auth_machine) => {
+                return Some(frontegg_auth_machine);
             }
-        }
-        None => println!("Profile not found. Please, login using `mz login`.")
+            Err(error) => println!("Error authenticating profile : {:?}", error),
+        },
+        None => println!("Profile not found. Please, login using `mz login`."),
     }
 
     None
