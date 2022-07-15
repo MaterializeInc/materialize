@@ -182,6 +182,8 @@ mod indexes;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
+/// The interval that read holds are updated.
+pub const UPDATE_READ_HOLDS_INTERVAL: Timestamp = 60 * 1_000;
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
@@ -1624,7 +1626,7 @@ impl<S: Append + 'static> Coordinator<S> {
             timeline,
             TimelineState {
                 mut oracle,
-                read_holds,
+                mut read_holds,
             },
         ) in global_timelines
         {
@@ -1641,8 +1643,13 @@ impl<S: Append + 'static> Coordinator<S> {
             oracle
                 .fast_forward(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
+
             let read_ts = oracle.read_ts();
-            let read_holds = self.update_read_hold(read_holds, read_ts).await;
+            let new_time =
+                read_ts - (read_ts % UPDATE_READ_HOLDS_INTERVAL) - UPDATE_READ_HOLDS_INTERVAL;
+            if new_time != read_holds.time {
+                read_holds = self.update_read_hold(read_holds, read_ts).await;
+            }
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
         }
