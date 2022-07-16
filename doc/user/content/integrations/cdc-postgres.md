@@ -20,7 +20,7 @@ There are two ways to connect Materialize to a Postgres database for CDC:
 
 ## Direct Postgres source
 
-If Kafka is not part of your stack, you can use the [Postgres source](/sql/create-source/postgres) to connect directly to Materialize (v0.8.2+). This source uses Postgres’ native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database.
+If Kafka is not part of your stack, you can use the [Postgres source](/sql/create-source/postgres) to connect directly to Materialize. This source uses Postgres’ native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database.
 
 ### Database setup
 
@@ -76,7 +76,9 @@ As a _superuser_:
 
 ### Create a source
 
-Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple replication slots and minimize the required bandwidth. To create a source in Materialize:
+Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple replication slots and minimize the required bandwidth.
+
+To create a source in Materialize:
 
 ```sql
 CREATE SOURCE mz_source
@@ -86,10 +88,10 @@ CREATE SOURCE mz_source
 ```
 
 {{< note >}}
-Materialize performs an initial sync of all tables in the publication before it starts ingesting change events. You should expect increased disk usage during this phase.
+Materialize performs an initial sync of all tables in the publication before it starts ingesting change events.
 {{</ note >}}
 
-The next step is to break down this source into views that reproduce the publication’s original tables and can be used as a base for your materialized view.
+The next step is to break down this source into views that reproduce the publication’s original tables and can be used as a base for your materialized views.
 
 #### Create replication views
 
@@ -109,9 +111,9 @@ CREATE VIEWS FROM SOURCE mz_source;
 
 Under the hood, Materialize parses this statement into view definitions for each table (so you don't have to!).
 
-### Create a materialized view
+### Create materialized views
 
-Any materialized view defined on top of this source will be incrementally updated as new change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
+Any materialized view that depends on replication views will be incrementally updated as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
 
 ```sql
 CREATE MATERIALIZED VIEW cnt_view1 AS

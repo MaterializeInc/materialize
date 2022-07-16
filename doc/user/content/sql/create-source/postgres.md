@@ -23,7 +23,6 @@ This page describes how to connect Materialize to a PostgreSQL (10+) database to
 
 Field | Use
 ------|-----
-**MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. For more information, see [Key Concepts &mdash; Materialized sources](/overview/key-concepts/#materialized-sources).
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **CONNECTION** _connection_info_ | Postgres connection parameters. See the Postgres documentation on [supported connection parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.
@@ -92,7 +91,7 @@ _Create views for all tables_
 CREATE VIEWS FROM SOURCE mz_source;
 ```
 
-Under the hood, Materialize parses this statement into view definitions for each table that can be used as a base for your materialized view.
+Under the hood, Materialize parses this statement into view definitions for each table that can be used as a base for your materialized views.
 
 ##### Postgres schemas
 
@@ -113,19 +112,17 @@ CREATE VIEWS FROM SOURCE mz_source
 
 #### Creating materialized views
 
-To produce correct results, Postgres sources can only be materialized _once_. As soon as you define a materialized view, Materialize:
+As soon as you define a Postgres source, Materialize will:
 
-1. Creates a replication slot in the upstream Postgres database (see [Postgres replication slots](#postgres-replication-slots)). The name of the replication slots created by Materialize is prefixed with `materialize_` for easy identification.
+1. Create a replication slot in the upstream Postgres database (see [Postgres replication slots](#postgres-replication-slots)). The name of the replication slots created by Materialize is prefixed with `materialize_` for easy identification.
 
-1. Performs an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
+1. Perform an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
 
-   **Note:** During this phase, **disk space** consumption may increase proportionally to the size of the upstream database before returning to a steady state. To profile disk usage, see [Troubleshooting](/ops/troubleshooting/#how-much-disk-space-is-materialize-using).
-
-1. Incrementally updates the view as new change events stream in as a result of `INSERT`, `UPDATE` and `DELETE` operations in the upstream Postgres database.
+1. Incrementally update any materialized views that depend on the source as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
 
 ##### Postgres replication slots
 
-Each Materialize replication slot can be used to source data for a single materialized view. You can create multiple non-materialized views for the same replication slot using the [`CREATE VIEWS`](/sql/create-views) statement.
+Each source ingests the raw replication stream data for all tables in the specified publication using **a single** replication slot. This allows you to minimize the performance impact on the upstream database, as well as reuse the same source across multiple materializations.
 
 {{< warning >}}
 Make sure to delete any replication slots if you stop using Materialize, or if either the Materialize or Postgres instances crash.
@@ -143,7 +140,7 @@ Materialize does not support changes to schemas for existing publications, and w
 
 ##### Supported types
 
-Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types will fail with an error.
+Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types (like `enum` {{% gh 12689 %}}) will fail with an error.
 
 ##### Truncation
 
