@@ -72,7 +72,7 @@ impl BlobConfig {
                     .strip_prefix('/')
                     .unwrap_or_else(|| url.path())
                     .to_string();
-                let role_arn = query_params.remove("aws_role_arn").map(|x| x.into_owned());
+                let role_arn = query_params.remove("role_arn").map(|x| x.into_owned());
                 let endpoint = query_params.remove("endpoint").map(|x| x.into_owned());
                 let region = query_params.remove("region").map(|x| x.into_owned());
 
