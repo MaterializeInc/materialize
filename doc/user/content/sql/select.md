@@ -6,9 +6,11 @@ menu:
     parent: commands
 ---
 
+[//]: # "TODO(morsapaes) Rewrite once details about persistence, indexing and performance are clearer (DevEx #165)."
+
 `SELECT` is used in a few ways within Materialize. You can use it to:
 
-- Query materialized views and materialized sources, e.g. `SELECT * FROM
+- Query materialized views and sources, e.g. `SELECT * FROM
   some_view;`
 - Describe a view you want to materialize. e.g. `CREATE MATERIALIZED VIEW
   some_view AS SELECT...`
@@ -38,12 +40,12 @@ Materialize handles `SELECT` in different circumstances.
 Scenario | `SELECT` behavior
 ---------|------------------
 **Creating view** | The query description is bound to the name given to it by `CREATE VIEW`.
-**Reading from a materialized source or view** | Reads directly from the maintained data.
-**Querying non-materialized sources and views** | Constructs a dataflow, which is torn down after returning results to the client.
+**Reading from a source or materialized view** | Reads directly from the maintained data.
+**Querying non-materialized views** | Constructs a dataflow, which is torn down after returning results to the client.
 
 ### `SELECT` + clusters
 
-As mentioned above, queries over non-materialized sources and views must create
+As mentioned above, queries over non-materialized views must create
 a dataflow to compute the results. Each dataflow must belong to a
 [cluster](/overview/key-concepts#clusters).
 
@@ -95,12 +97,12 @@ check out our [architecture overview](../../overview/architecture).
 
 ### Reading from sources and views
 
-Performing a `SELECT * FROM` a materialized source or materialized view is
+Performing a `SELECT * FROM` an indexed source or materialized view is
 Materialize's ideal operation. When Materialize receives such a `SELECT` query,
-it quickly returns the maintained results from memory, with no re-execution.
+it quickly returns the maintained results from memory.
 
 Materialize also quickly returns results for queries that only filter, project,
-and re-order results of materialized sources or materialized views.
+and re-order results of sources or materialized views.
 
 ### Querying sources and views
 
@@ -118,8 +120,7 @@ it returns the query results to you.
 
 When you perform a `SELECT` query, all of your inputs must be *queryable*. An
 input is queryable if it is a constant collection, materialized, or it depends
-only on queryable inputs itself. The main reason an input might not be queryable
-is it if relies on an unmaterialized source for its definition.
+only on queryable inputs itself.
 
 You can create a materialized view out of any query using [`CREATE MATERIALIZED
 VIEW`](../create-materialized-view), and it will always then be queryable.

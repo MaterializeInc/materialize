@@ -9,7 +9,7 @@ menu:
 
 This guide goes through the required steps to connect Materialize to an AWS MSK cluster, including some of the more complicated bits around configuring security settings in MSK.
 
-If you already have an MSK cluster, you can skip step 1 and directly move on to [Make the cluster public and enable SASL](#make-the-cluster-public-and-enable-sasl). You can also skip steps 3 and 4 if you already have Kafka installed and running, and have created a topic that you want to create a materialized source for.
+If you already have an MSK cluster, you can skip step 1 and directly move on to [Make the cluster public and enable SASL](#make-the-cluster-public-and-enable-sasl). You can also skip steps 3 and 4 if you already have Kafka installed and running, and have created a topic that you want to create a source for.
 
 The process to connect Materialize to Amazon MSK consists of the following steps:
 1. #### Create an Amazon MSK cluster
@@ -126,7 +126,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
     Otherwise, you can install Kafka on your client machine from the previous step and create a topic. You can find more information about how to do that [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-topic.html).
 
 
-5. #### Create a Materialized source
+5. #### Create a source in Materialize
     a. Open the [Amazon MSK console](https://console.aws.amazon.com/msk/) and select your cluster
 
     b. Click on **View client information**

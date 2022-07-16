@@ -15,8 +15,8 @@ existence of these additional views may itself affect performance.
 
 ### How fast are my sources loading data?
 
-You can count the number of records accepted in a materialized source or view.
-Note that this makes less sense for a non-materialized source or view,
+You can count the number of records accepted in a source or materialized view.
+Note that this makes less sense for a non-materialized view,
 as invoking it will create a new dataflow and run it to the point that
 it is caught up with its sources; that elapsed time may be informative,
 but it tells you something other than how fast a collection is populated.
