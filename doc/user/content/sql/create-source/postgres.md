@@ -118,9 +118,7 @@ As soon as you define a Postgres source, Materialize will:
 
 1. Perform an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
 
-   **Note:** During this phase, **disk space** consumption may increase proportionally to the size of the upstream database before returning to a steady state. To profile disk usage, see [Troubleshooting](/ops/troubleshooting/#how-much-disk-space-is-materialize-using).
-
-1. Incrementally update any materialized views that depend on the source as new change events stream in (as a result of `INSERT`, `UPDATE` and `DELETE` operations in the upstream Postgres database).
+1. Incrementally update any materialized views that depend on the source as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
 
 ##### Postgres replication slots
 
