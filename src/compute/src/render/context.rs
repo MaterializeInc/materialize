@@ -27,6 +27,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
+use tracing::{span, Level, Span};
 
 use mz_compute_client::command::DataflowDescription;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -80,6 +81,17 @@ where
     pub as_of_frontier: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
+    /// A tracing span that records the execution of the dataflow.
+    ///
+    /// Operators that call into `tracing`-instrumented code are encouraged (but
+    /// not required) to enter this span before performing work.
+    ///
+    /// Note that work associated with the rendering of the dataflow (rather
+    /// than runtime) should *not* enter this span. This can be tricky to
+    /// assess. Closures passed to `Scope::region` are executed during
+    /// rendering, for example, but closures passed to `Collection::map` are
+    /// executed during runtime.
+    pub tracing_execution_span: Span,
 }
 
 impl<S: Scope, V: Data> Context<S, V>
@@ -96,11 +108,22 @@ where
             .clone()
             .unwrap_or_else(|| Antichain::from_elem(0));
 
+        // Create a tracing span that timely operators can enter when performing
+        // work on behalf of this dataflow.
+        let tracing_execution_span = span!(
+            parent: None,
+            Level::INFO,
+            "compute_dataflow_execution",
+            id = dataflow_id
+        );
+        tracing_execution_span.follows_from(Span::current());
+
         Self {
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             as_of_frontier,
             bindings: BTreeMap::new(),
+            tracing_execution_span,
         }
     }
 }

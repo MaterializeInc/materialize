@@ -21,7 +21,7 @@ use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::sync::Mutex;
-use tracing::trace;
+use tracing::{info_span, trace, Span};
 
 use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
@@ -48,6 +48,7 @@ pub fn persist_source<G>(
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
     as_of: Antichain<Timestamp>,
+    tracing_execution_span: Span,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -130,6 +131,7 @@ where
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures_util::task::waker(waker_activator);
             let activator = scope.activator_for(&info.address[..]);
+            let span = info_span!(parent: tracing_execution_span, "persist_source");
 
             // There is a bit of a mismatch: listening on a ReadHandle will give us an Antichain<T>
             // as a frontier in `Progress` messages while a timely source usually only has a single
@@ -141,6 +143,8 @@ where
             let mut current_ts = 0;
 
             move |cap, output| {
+                let _span_guard = span.enter();
+
                 let mut context = Context::from_waker(&waker);
                 // Bound execution of operator to prevent a single operator from hogging
                 // the CPU if there are many messages to process

@@ -106,6 +106,7 @@ use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use tracing::{span, Level, Span};
 
 use mz_repr::GlobalId;
 
@@ -132,6 +133,17 @@ pub fn build_storage_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
+
+    // Create a tracing span that timely operators can enter when performing
+    // work on behalf of this dataflow.
+    let tracing_execution_span = span!(
+        parent: None,
+        Level::INFO,
+        "storage_dataflow_execution",
+        id = id.to_string()
+    );
+    tracing_execution_span.follows_from(Span::current());
+
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
@@ -149,6 +161,7 @@ pub fn build_storage_dataflow<A: Allocate>(
                 // NOTE: For now sources never have LinearOperators but might have in the future
                 None,
                 storage_state,
+                tracing_execution_span.clone(),
             );
 
             let source_data = ok.map(Ok).concat(&err.map(Err));
@@ -160,6 +173,7 @@ pub fn build_storage_dataflow<A: Allocate>(
                 source_data,
                 storage_state,
                 Rc::clone(&token),
+                tracing_execution_span,
             );
 
             storage_state.source_tokens.insert(id, token);
