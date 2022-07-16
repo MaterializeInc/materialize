@@ -41,6 +41,7 @@ use mz_sql_parser::ast::{
     SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
+use mz_storage::types::connections::aws::AwsCredentials;
 use mz_storage::types::connections::{
     Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
     StringOrSecret, TlsIdentity,
@@ -64,7 +65,8 @@ use mz_storage::types::sources::{
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
-    AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
+    AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
+    AwsConnectionOptionName, ClusterOption, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
@@ -529,7 +531,10 @@ pub fn plan_create_source(
 
             (connection, encoding)
         }
-        CreateSourceConnection::Kinesis { arn, .. } => {
+        CreateSourceConnection::Kinesis {
+            connection: aws_connection,
+            arn,
+        } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM KINESIS")?;
             let arn: AmazonResourceName = arn
                 .parse()
@@ -546,19 +551,37 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| sql_err!("Provided ARN does not include an AWS region"))?;
 
-            let aws = normalize::aws_config(&mut legacy_with_options, Some(region.into()))?;
+            let item = scx.get_item_by_resolved_name(&aws_connection)?;
+            let aws_connection = match item.connection()? {
+                Connection::Aws(connection) => connection.clone(),
+                _ => sql_bail!("{} is not an AWS connection", item.name()),
+            };
+
+            let aws = normalize::aws_config(
+                &mut legacy_with_options,
+                Some(region.into()),
+                Some(aws_connection),
+            )?;
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
             (connection, encoding)
         }
         CreateSourceConnection::S3 {
+            connection: aws_connection,
             key_sources,
             pattern,
             compression,
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
-            let aws = normalize::aws_config(&mut legacy_with_options, None)?;
+
+            let item = scx.get_item_by_resolved_name(&aws_connection)?;
+            let aws_connection = match item.connection()? {
+                Connection::Aws(connection) => connection.clone(),
+                _ => sql_bail!("{} is not an AWS connection", item.name()),
+            };
+
+            let aws = normalize::aws_config(&mut legacy_with_options, None, Some(aws_connection))?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
@@ -3080,6 +3103,30 @@ impl TryFrom<SshConnectionOptionExtracted> for mz_storage::types::connections::S
     }
 }
 
+generate_extracted_config!(
+    AwsConnectionOption,
+    (AccessKeyId, StringOrSecret),
+    (SecretAccessKey, with_options::Secret),
+    (Token, StringOrSecret)
+);
+
+impl TryFrom<AwsConnectionOptionExtracted> for AwsCredentials {
+    type Error = PlanError;
+
+    fn try_from(options: AwsConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(AwsCredentials::Static {
+            access_key_id: options
+                .access_key_id
+                .ok_or_else(|| sql_err!("ACCESS KEY ID option is required"))?,
+            secret_access_key: options
+                .secret_access_key
+                .ok_or_else(|| sql_err!("SECRET ACCESS KEY option is required"))?
+                .into(),
+            session_token: options.token,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -3104,6 +3151,11 @@ pub fn plan_create_connection(
             let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
             let connection = mz_storage::types::connections::PostgresConnection::try_from(c)?;
             Connection::Postgres(connection)
+        }
+        CreateConnection::Aws { with_options } => {
+            let c = AwsConnectionOptionExtracted::try_from(with_options)?;
+            let connection = AwsCredentials::try_from(c)?;
+            Connection::Aws(connection)
         }
         CreateConnection::Ssh { with_options } => {
             scx.require_unsafe_mode("CREATE CONNECTION ... SSH")?;
