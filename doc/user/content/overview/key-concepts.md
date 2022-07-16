@@ -29,7 +29,7 @@ Component | Use
 
 ## Sources
 
-Source describe external systems you want Materialize to read data from, and provide details about how to decode and interpret that data. A simplistic way to think of this is that sources represent streams and their schemas; this isn't entirely accurate, but provides an illustrative mental model.
+Sources describe external systems you want Materialize to read data from, and provide details about how to decode and interpret that data. A simplistic way to think of this is that sources represent streams and their schemas; this isn't entirely accurate, but provides an illustrative mental model.
 
 In terms of SQL, sources are similar to a combination of tables and
 clients.
