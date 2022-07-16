@@ -623,6 +623,7 @@ pub(crate) fn ensure_empty_options<V>(
 pub fn aws_config(
     options: &mut BTreeMap<String, SqlValueOrSecret>,
     region: Option<String>,
+    connection: Option<AwsCredentials>,
 ) -> Result<AwsConfig, PlanError> {
     let mut extract = |key| match options.remove(key) {
         // TODO: support secrets in S3
@@ -639,44 +640,15 @@ pub fn aws_config(
 
     let credentials = match extract("profile")? {
         Some(profile_name) => {
-            for name in &["access_key_id", "secret_access_key", "token"] {
-                let extracted = extract(name);
-                if matches!(extracted, Ok(Some(_)) | Err(_)) {
-                    sql_bail!(
-                        "AWS profile cannot be set in combination with '{0}', \
-                         configure '{0}' inside the profile file",
-                        name
-                    );
-                }
+            if connection.is_some() {
+                sql_bail!("AWS profile cannot be set in combination with CONNECTION");
             }
             AwsCredentials::Profile { profile_name }
         }
-        None => {
-            let access_key_id = extract("access_key_id")?;
-            let secret_access_key = extract("secret_access_key")?;
-            let session_token = extract("token")?;
-            let credentials = match (access_key_id, secret_access_key, session_token) {
-                (None, None, None) => AwsCredentials::Default,
-                (Some(access_key_id), Some(secret_access_key), session_token) => {
-                    AwsCredentials::Static {
-                        access_key_id,
-                        secret_access_key,
-                        session_token,
-                    }
-                }
-                (Some(_), None, _) => {
-                    sql_bail!("secret_access_key must be specified if access_key_id is specified")
-                }
-                (None, Some(_), _) => {
-                    sql_bail!("secret_access_key cannot be specified without access_key_id")
-                }
-                (None, None, Some(_)) => {
-                    sql_bail!("token cannot be specified without access_key_id")
-                }
-            };
-
-            credentials
-        }
+        None => match connection {
+            Some(connection) => connection,
+            None => sql_bail!("Must specify an S3 CONNECTION"),
+        },
     };
 
     let region = match region {

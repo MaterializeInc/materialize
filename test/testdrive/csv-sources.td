@@ -16,41 +16,42 @@ New York,NY,10004
 "bad,
 place""",CA,92679
 
+> CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
+
+> CREATE CONNECTION s3_conn FOR AWS
+  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+  TOKEN = '${testdrive.aws-token}';
+
 # We should refuse to create a source with invalid WITH options
 ! CREATE SOURCE invalid_with_option
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}',
     badoption = true
   )
   FORMAT CSV WITH 3 COLUMNS
 contains:unexpected parameters for CREATE SOURCE: badoption
 
 > CREATE SOURCE mismatched_column_count
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH 2 COLUMNS
 ! SELECT * FROM mismatched_column_count
 contains:CSV error at record number 1: expected 2 columns, got 3.
 
 > CREATE SOURCE matching_column_names
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 
@@ -60,13 +61,11 @@ city state zip
 Rochester NY 14618
 
 > CREATE SOURCE matching_column_names_alias (a, b, c)
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 
@@ -76,26 +75,22 @@ a b c
 Rochester NY 14618
 
 > CREATE SOURCE mismatched_column_names
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (cities, country, zip)
 ! SELECT * FROM mismatched_column_names
 contains:first mismatched column at index 1 expected=cities actual="city"
 
 > CREATE SOURCE mismatched_column_names_count
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (cities, state)
 ! SELECT * FROM mismatched_column_names_count
@@ -103,13 +98,11 @@ contains:CSV error at record number 1: expected 2 columns, got 3
 
 # Static CSV without headers.
 > CREATE SOURCE static_csv
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH 3 COLUMNS
 
@@ -122,13 +115,11 @@ Rochester      NY        14618
 "bad,\nplace\""  CA      92679
 
 ! CREATE SOURCE static_csv_nothing_demanded_src
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER
 contains:Expected a list of columns in parentheses, found EOF
@@ -141,13 +132,11 @@ $ set-regex match=(\d{13}|u\d{1,3}) replacement=<>
 
 # Static CSV with manual headers.
 > CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 
@@ -194,13 +183,11 @@ dollars,category
 badint,
 
 > CREATE SOURCE malformed_csv
-  FROM S3 DISCOVER OBJECTS MATCHING 'malformed.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'malformed.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (dollars, category)
 
@@ -213,13 +200,11 @@ dollars,category
 5161669,\x80
 
 > CREATE SOURCE bad_text_csv
-  FROM S3 DISCOVER OBJECTS MATCHING 'bad-text.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'bad-text.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (dollars, category)
 
@@ -231,13 +216,11 @@ contains:Decode error: Text: CSV error at record number 2: invalid UTF-8
 $ kafka-create-topic topic=static-csv-pkne-sink
 
 > CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 

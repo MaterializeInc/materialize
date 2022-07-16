@@ -10,6 +10,7 @@
 //! AWS configuration for sources and sinks.
 
 use http::Uri;
+use mz_secrets::SecretsReader;
 use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::URL_PATTERN;
 use mz_repr::GlobalId;
+
+use super::StringOrSecret;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -113,7 +116,7 @@ impl RustType<ProtoAwsConfig> for AwsConfig {
 }
 
 /// AWS credentials for a source or sink.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AwsCredentials {
     /// Look for credentials using the [default credentials chain][credchain]
     ///
@@ -123,9 +126,9 @@ pub enum AwsCredentials {
     Profile { profile_name: String },
     /// Use the enclosed static credentials
     Static {
-        access_key_id: String,
-        secret_access_key: String,
-        session_token: Option<String>,
+        access_key_id: StringOrSecret,
+        secret_access_key: GlobalId,
+        session_token: Option<StringOrSecret>,
     },
 }
 
@@ -141,9 +144,9 @@ impl RustType<ProtoAwsCredentials> for AwsCredentials {
                     secret_access_key,
                     session_token,
                 } => Kind::Static(ProtoStatic {
-                    access_key_id: access_key_id.clone(),
-                    secret_access_key: secret_access_key.clone(),
-                    session_token: session_token.clone(),
+                    access_key_id: Some(access_key_id.into_proto()),
+                    secret_access_key: Some(secret_access_key.into_proto()),
+                    session_token: session_token.into_proto(),
                 }),
             }),
         }
@@ -162,9 +165,11 @@ impl RustType<ProtoAwsCredentials> for AwsCredentials {
                 secret_access_key,
                 session_token,
             }) => AwsCredentials::Static {
-                access_key_id,
-                secret_access_key,
-                session_token,
+                access_key_id: access_key_id
+                    .into_rust_if_some("ProtoAwsCredentials::access_key_id")?,
+                secret_access_key: secret_access_key
+                    .into_rust_if_some("ProtoAwsCredentials::secret_access_key")?,
+                session_token: session_token.into_rust()?,
             },
         })
     }
@@ -196,6 +201,7 @@ impl AwsConfig {
         &self,
         external_id_prefix: Option<&AwsExternalIdPrefix>,
         external_id_suffix: Option<&GlobalId>,
+        secrets_reader: &dyn SecretsReader,
     ) -> aws_types::SdkConfig {
         use aws_config::default_provider::credentials::DefaultCredentialsChain;
         use aws_config::default_provider::region::DefaultRegionChain;
@@ -234,9 +240,15 @@ impl AwsConfig {
                 secret_access_key,
                 session_token,
             } => SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
-                access_key_id,
-                secret_access_key,
-                session_token.clone(),
+                access_key_id.get_string(secrets_reader).await.unwrap(),
+                secrets_reader
+                    .read_string(*secret_access_key)
+                    .await
+                    .unwrap(),
+                match session_token {
+                    Some(t) => Some(t.get_string(secrets_reader).await.unwrap()),
+                    None => None,
+                },
             )),
         };
 

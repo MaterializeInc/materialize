@@ -31,6 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
 use std::ops::AddAssign;
+use std::sync::Arc;
 
 use async_compression::tokio::bufread::GzipDecoder;
 use aws_sdk_s3::error::{GetObjectError, ListObjectsV2Error};
@@ -40,6 +41,7 @@ use aws_sdk_sqs::model::{ChangeMessageVisibilityBatchRequestEntry, Message as Sq
 use aws_sdk_sqs::Client as SqsClient;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use globset::GlobMatcher;
+use mz_secrets::SecretsReader;
 use timely::scheduling::SyncActivator;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -131,9 +133,14 @@ async fn download_objects_task(
     activator: SyncActivator,
     compression: Compression,
     metrics: SourceBaseMetrics,
+    secrets_reader: Arc<dyn SecretsReader>,
 ) {
     let config = aws_config
-        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .load(
+            aws_external_id_prefix.as_ref(),
+            Some(&source_id),
+            &*secrets_reader,
+        )
         .await;
     let client = aws_sdk_s3::Client::new(&config);
 
@@ -247,9 +254,14 @@ async fn scan_bucket_task(
     aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     tx: Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
+    secrets_reader: Arc<dyn SecretsReader>,
 ) {
     let config = aws_config
-        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .load(
+            aws_external_id_prefix.as_ref(),
+            Some(&source_id),
+            &*secrets_reader,
+        )
         .await;
     let client = aws_sdk_s3::Client::new(&config);
 
@@ -365,6 +377,7 @@ async fn read_sqs_task(
     tx: Sender<S3Result<KeyInfo>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
+    secrets_reader: Arc<dyn SecretsReader>,
 ) {
     debug!(
         "source_id={} starting read sqs task queue={}",
@@ -372,7 +385,11 @@ async fn read_sqs_task(
     );
 
     let config = aws_config
-        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .load(
+            aws_external_id_prefix.as_ref(),
+            Some(&source_id),
+            &*secrets_reader,
+        )
         .await;
     let client = aws_sdk_sqs::Client::new(&config);
 
@@ -811,8 +828,8 @@ impl SourceReader for S3SourceReader {
             let (shutdowner, shutdown_rx) = tokio::sync::watch::channel(DataflowStatus::Running);
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
 
-            task::spawn(
-                || format!("s3_download:{}", source_id),
+            task::spawn(|| format!("s3_download:{}", source_id), {
+                let secrets_reader = Arc::clone(&connection_context.secrets_reader);
                 download_objects_task(
                     source_id,
                     keys_rx,
@@ -823,8 +840,9 @@ impl SourceReader for S3SourceReader {
                     consumer_activator,
                     s3_conn.compression,
                     metrics.clone(),
-                ),
-            );
+                    secrets_reader,
+                )
+            });
             for key_source in s3_conn.key_sources {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
@@ -834,8 +852,8 @@ impl SourceReader for S3SourceReader {
                         );
                         // TODO(guswynn): see if we can avoid this formatting
                         let task_name = format!("s3_scan:{}:{}", source_id, bucket);
-                        task::spawn(
-                            || task_name,
+                        task::spawn(|| task_name, {
+                            let secrets_reader = Arc::clone(&connection_context.secrets_reader);
                             scan_bucket_task(
                                 bucket,
                                 source_id,
@@ -844,16 +862,17 @@ impl SourceReader for S3SourceReader {
                                 connection_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 metrics.clone(),
-                            ),
-                        );
+                                secrets_reader,
+                            )
+                        });
                     }
                     S3KeySource::SqsNotifications { queue } => {
                         debug!(
                             "source_id={} reading sqs queue={} worker={}",
                             source_id, queue, worker_id
                         );
-                        task::spawn(
-                            || format!("s3_read_sqs:{}", source_id),
+                        task::spawn(|| format!("s3_read_sqs:{}", source_id), {
+                            let secrets_reader = Arc::clone(&connection_context.secrets_reader);
                             read_sqs_task(
                                 source_id,
                                 glob.clone(),
@@ -863,8 +882,9 @@ impl SourceReader for S3SourceReader {
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
                                 metrics.clone(),
-                            ),
-                        );
+                                secrets_reader,
+                            )
+                        });
                     }
                 }
             }

@@ -1956,31 +1956,37 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT, POSTGRES, SSH])? {
-            KAFKA => {
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
-                CreateConnection::Kafka { with_options }
-            }
-            CONFLUENT => {
-                self.expect_keywords(&[SCHEMA, REGISTRY])?;
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_csr_connection_options)?;
-                CreateConnection::Csr { with_options }
-            }
-            POSTGRES => {
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_postgres_connection_options)?;
-                CreateConnection::Postgres { with_options }
-            }
-            SSH => {
-                self.expect_keyword(TUNNEL)?;
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_ssh_connection_options)?;
-                CreateConnection::Ssh { with_options }
-            }
-            _ => unreachable!(),
-        };
+        let connection =
+            match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
+                AWS => {
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_aws_connection_options)?;
+                    CreateConnection::Aws { with_options }
+                }
+                KAFKA => {
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
+                    CreateConnection::Kafka { with_options }
+                }
+                CONFLUENT => {
+                    self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_csr_connection_options)?;
+                    CreateConnection::Csr { with_options }
+                }
+                POSTGRES => {
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_postgres_connection_options)?;
+                    CreateConnection::Postgres { with_options }
+                }
+                SSH => {
+                    self.expect_keyword(TUNNEL)?;
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_ssh_connection_options)?;
+                    CreateConnection::Ssh { with_options }
+                }
+                _ => unreachable!(),
+            };
         Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection,
@@ -2079,6 +2085,27 @@ impl<'a> Parser<'a> {
 
         let _ = self.consume_token(&Token::Eq);
         Ok(PostgresConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
+    fn parse_aws_connection_options(&mut self) -> Result<AwsConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[ACCESS, SECRET, TOKEN])? {
+            ACCESS => {
+                self.expect_keywords(&[KEY, ID])?;
+                AwsConnectionOptionName::AccessKeyId
+            }
+            SECRET => {
+                self.expect_keywords(&[ACCESS, KEY])?;
+                AwsConnectionOptionName::SecretAccessKey
+            }
+            TOKEN => AwsConnectionOptionName::Token,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(AwsConnectionOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })
@@ -2314,15 +2341,21 @@ impl<'a> Parser<'a> {
                 }))
             }
             KINESIS => {
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_raw_name()?;
+
                 self.expect_keyword(ARN)?;
                 let arn = self.parse_literal_string()?;
-                Ok(CreateSourceConnection::Kinesis { arn })
+                Ok(CreateSourceConnection::Kinesis { connection, arn })
             }
             S3 => {
-                // FROM S3 DISCOVER OBJECTS
+                // FROM S3 CONNECTION <aws CONNECTION> DISCOVER OBJECTS
                 // (MATCHING '<pattern>')?
                 // USING
                 // (BUCKET SCAN '<bucket>' | SQS NOTIFICATIONS '<channel>')+
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_raw_name()?;
+
                 self.expect_keywords(&[DISCOVER, OBJECTS])?;
                 let pattern = if self.parse_keyword(MATCHING) {
                     Some(self.parse_literal_string()?)
@@ -2358,6 +2391,7 @@ impl<'a> Parser<'a> {
                     Compression::None
                 };
                 Ok(CreateSourceConnection::S3 {
+                    connection,
                     key_sources,
                     pattern,
                     compression,

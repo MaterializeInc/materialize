@@ -23,6 +23,7 @@
 #
 # For details on the code that is generated, see keywords.rs.
 
+Access
 All
 Alter
 And
@@ -37,6 +38,7 @@ Auction
 Authority
 Availability
 Avro
+Aws
 Begin
 Between
 Bigint
@@ -312,6 +314,7 @@ Timeout
 Timestamp
 Timing
 To
+Token
 Topic
 Trace
 Trailing

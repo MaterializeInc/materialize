@@ -689,6 +689,42 @@ impl<T: AstInfo> AstDisplay for PostgresConnectionOption<T> {
 impl_display_t!(PostgresConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AwsConnectionOptionName {
+    AccessKeyId,
+    SecretAccessKey,
+    Token,
+}
+
+impl AstDisplay for AwsConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            AwsConnectionOptionName::AccessKeyId => "ACCESS KEY ID",
+            AwsConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
+            AwsConnectionOptionName::Token => "TOKEN",
+        })
+    }
+}
+impl_display!(AwsConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CONNECTION...AWS`.
+pub struct AwsConnectionOption<T: AstInfo> {
+    pub name: AwsConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for AwsConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(AwsConnectionOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SshConnectionOptionName {
     Host,
     Port,
@@ -726,6 +762,9 @@ impl_display_t!(SshConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
+    Aws {
+        with_options: Vec<AwsConnectionOption<T>>,
+    },
     Kafka {
         with_options: Vec<KafkaConnectionOption<T>>,
     },
@@ -753,6 +792,10 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
             }
             Self::Postgres { with_options } => {
                 f.write_str("POSTGRES ");
+                f.write_node(&display::comma_separated(&with_options));
+            }
+            Self::Aws { with_options } => {
+                f.write_str("AWS ");
                 f.write_node(&display::comma_separated(&with_options));
             }
             Self::Ssh { with_options } => {
@@ -798,9 +841,13 @@ pub struct KafkaSourceConnection<T: AstInfo> {
 pub enum CreateSourceConnection<T: AstInfo> {
     Kafka(KafkaSourceConnection<T>),
     Kinesis {
+        /// The AWS connection.
+        connection: T::ObjectName,
         arn: String,
     },
     S3 {
+        /// The AWS connection.
+        connection: T::ObjectName,
         /// The arguments to `DISCOVER OBJECTS USING`: `BUCKET SCAN` or `SQS NOTIFICATIONS`
         key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
@@ -840,17 +887,22 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                     f.write_str(")");
                 }
             }
-            CreateSourceConnection::Kinesis { arn } => {
-                f.write_str("KINESIS ARN '");
+            CreateSourceConnection::Kinesis { connection, arn } => {
+                f.write_str("KINESIS CONNECTION ");
+                f.write_node(connection);
+                f.write_str(" ARN '");
                 f.write_node(&display::escape_single_quote_string(arn));
                 f.write_str("'");
             }
             CreateSourceConnection::S3 {
+                connection,
                 key_sources,
                 pattern,
                 compression,
             } => {
-                f.write_str("S3 DISCOVER OBJECTS");
+                f.write_str("S3 CONNECTION ");
+                f.write_node(connection);
+                f.write_str(" DISCOVER OBJECTS");
                 if let Some(pattern) = pattern {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));

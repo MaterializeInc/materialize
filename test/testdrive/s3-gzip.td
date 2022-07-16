@@ -21,15 +21,20 @@ b1
 b2
 b3
 
+> CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
+
+> CREATE CONNECTION s3_conn FOR AWS
+  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+  TOKEN = '${testdrive.aws-token}';
+
 > CREATE SOURCE s3_all_none
-  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-no-compression-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-no-compression-${testdrive.seed}'
   COMPRESSION NONE
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT TEXT;
 
@@ -59,14 +64,12 @@ b2
 b3
 
 > CREATE SOURCE s3_all_gzip
-  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-gzip-compression-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-gzip-compression-${testdrive.seed}'
   COMPRESSION GZIP
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT TEXT;
 

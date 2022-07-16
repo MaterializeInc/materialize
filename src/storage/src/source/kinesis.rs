@@ -24,6 +24,7 @@ use tracing::error;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
+use mz_secrets::SecretsReader;
 
 use crate::source::metrics::KinesisMetrics;
 use crate::source::{
@@ -147,6 +148,7 @@ impl SourceReader for KinesisSourceReader {
             kc,
             connection_context.aws_external_id_prefix.as_ref(),
             source_id,
+            &*connection_context.secrets_reader,
         ));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceReader {
@@ -281,6 +283,7 @@ async fn create_state(
     c: KinesisSourceConnection,
     aws_external_id_prefix: Option<&AwsExternalIdPrefix>,
     source_id: GlobalId,
+    secrets_reader: &dyn SecretsReader,
 ) -> Result<
     (
         KinesisClient,
@@ -290,7 +293,10 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let config = c.aws.load(aws_external_id_prefix, Some(&source_id)).await;
+    let config = c
+        .aws
+        .load(aws_external_id_prefix, Some(&source_id), secrets_reader)
+        .await;
     let kinesis_client = aws_sdk_kinesis::Client::new(&config);
 
     let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;

@@ -316,6 +316,7 @@ impl CatalogState {
                         "confluent-schema-registry"
                     }
                     mz_storage::types::connections::Connection::Postgres { .. } => "postgres",
+                    mz_storage::types::connections::Connection::Aws(..) => "aws",
                     mz_storage::types::connections::Connection::Ssh { .. } => "ssh",
                 }),
             ]),

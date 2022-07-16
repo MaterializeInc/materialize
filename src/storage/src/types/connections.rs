@@ -32,6 +32,8 @@ use mz_sql_parser::ast::KafkaConnectionOptionName;
 
 use crate::types::connections::aws::AwsExternalIdPrefix;
 
+use self::aws::AwsCredentials;
+
 pub mod aws;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.types.connections.rs"));
@@ -148,6 +150,7 @@ pub enum Connection {
     Csr(CsrConnection),
     Postgres(PostgresConnection),
     Ssh(SshConnection),
+    Aws(AwsCredentials),
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
