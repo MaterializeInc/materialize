@@ -623,7 +623,7 @@ pub(crate) fn ensure_empty_options<V>(
 pub fn aws_config(
     options: &mut BTreeMap<String, SqlValueOrSecret>,
     region: Option<String>,
-    connection: Option<AwsCredentials>,
+    credentials: AwsCredentials,
 ) -> Result<AwsConfig, PlanError> {
     let mut extract = |key| match options.remove(key) {
         // TODO: support secrets in S3
@@ -636,19 +636,6 @@ pub fn aws_config(
         }
         Some(_) => sql_bail!("{} must be a string", key),
         _ => Ok(None),
-    };
-
-    let credentials = match extract("profile")? {
-        Some(profile_name) => {
-            if connection.is_some() {
-                sql_bail!("AWS profile cannot be set in combination with CONNECTION");
-            }
-            AwsCredentials::Profile { profile_name }
-        }
-        None => match connection {
-            Some(connection) => connection,
-            None => sql_bail!("Must specify an S3 CONNECTION"),
-        },
     };
 
     let region = match region {

@@ -117,60 +117,30 @@ impl RustType<ProtoAwsConfig> for AwsConfig {
 
 /// AWS credentials for a source or sink.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum AwsCredentials {
-    /// Look for credentials using the [default credentials chain][credchain]
-    ///
-    /// [credchain]: aws_config::default_provider::credentials::DefaultCredentialsChain
-    Default,
-    /// Load credentials using the given named profile
-    Profile { profile_name: String },
-    /// Use the enclosed static credentials
-    Static {
-        access_key_id: StringOrSecret,
-        secret_access_key: GlobalId,
-        session_token: Option<StringOrSecret>,
-    },
+pub struct AwsCredentials {
+    pub access_key_id: StringOrSecret,
+    pub secret_access_key: GlobalId,
+    pub session_token: Option<StringOrSecret>,
 }
 
 impl RustType<ProtoAwsCredentials> for AwsCredentials {
     fn into_proto(&self) -> ProtoAwsCredentials {
-        use proto_aws_credentials::{Kind, ProtoStatic};
         ProtoAwsCredentials {
-            kind: Some(match self {
-                AwsCredentials::Default => Kind::Default(()),
-                AwsCredentials::Profile { profile_name } => Kind::Profile(profile_name.clone()),
-                AwsCredentials::Static {
-                    access_key_id,
-                    secret_access_key,
-                    session_token,
-                } => Kind::Static(ProtoStatic {
-                    access_key_id: Some(access_key_id.into_proto()),
-                    secret_access_key: Some(secret_access_key.into_proto()),
-                    session_token: session_token.into_proto(),
-                }),
-            }),
+            access_key_id: Some(self.access_key_id.into_proto()),
+            secret_access_key: Some(self.secret_access_key.into_proto()),
+            session_token: self.session_token.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoAwsCredentials) -> Result<Self, TryFromProtoError> {
-        use proto_aws_credentials::{Kind, ProtoStatic};
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoAwsCredentials::kind"))?;
-        Ok(match kind {
-            Kind::Default(()) => AwsCredentials::Default,
-            Kind::Profile(profile_name) => AwsCredentials::Profile { profile_name },
-            Kind::Static(ProtoStatic {
-                access_key_id,
-                secret_access_key,
-                session_token,
-            }) => AwsCredentials::Static {
-                access_key_id: access_key_id
-                    .into_rust_if_some("ProtoAwsCredentials::access_key_id")?,
-                secret_access_key: secret_access_key
-                    .into_rust_if_some("ProtoAwsCredentials::secret_access_key")?,
-                session_token: session_token.into_rust()?,
-            },
+        Ok(AwsCredentials {
+            access_key_id: proto
+                .access_key_id
+                .into_rust_if_some("ProtoAwsCredentials::access_key_id")?,
+            secret_access_key: proto
+                .secret_access_key
+                .into_rust_if_some("ProtoAwsCredentials::secret_access_key")?,
+            session_token: proto.session_token.into_rust()?,
         })
     }
 }
@@ -203,7 +173,6 @@ impl AwsConfig {
         external_id_suffix: Option<&GlobalId>,
         secrets_reader: &dyn SecretsReader,
     ) -> aws_types::SdkConfig {
-        use aws_config::default_provider::credentials::DefaultCredentialsChain;
         use aws_config::default_provider::region::DefaultRegionChain;
         use aws_config::sts::AssumeRoleProvider;
         use aws_smithy_http::endpoint::Endpoint;
@@ -213,44 +182,28 @@ impl AwsConfig {
         let region = match &self.region {
             Some(region) => Some(Region::new(region.clone())),
             _ => {
-                let mut rc = DefaultRegionChain::builder();
-                if let AwsCredentials::Profile { profile_name } = &self.credentials {
-                    rc = rc.profile_name(profile_name);
-                }
+                let rc = DefaultRegionChain::builder();
                 rc.build().region().await
             }
         };
 
-        let mut cred_provider = match &self.credentials {
-            AwsCredentials::Default => SharedCredentialsProvider::new(
-                DefaultCredentialsChain::builder()
-                    .region(region.clone())
-                    .build()
-                    .await,
-            ),
-            AwsCredentials::Profile { profile_name } => SharedCredentialsProvider::new(
-                DefaultCredentialsChain::builder()
-                    .profile_name(profile_name)
-                    .region(region.clone())
-                    .build()
-                    .await,
-            ),
-            AwsCredentials::Static {
-                access_key_id,
-                secret_access_key,
-                session_token,
-            } => SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
-                access_key_id.get_string(secrets_reader).await.unwrap(),
-                secrets_reader
-                    .read_string(*secret_access_key)
-                    .await
-                    .unwrap(),
-                match session_token {
-                    Some(t) => Some(t.get_string(secrets_reader).await.unwrap()),
-                    None => None,
-                },
-            )),
-        };
+        let AwsCredentials {
+            access_key_id,
+            secret_access_key,
+            session_token,
+        } = &self.credentials;
+
+        let mut cred_provider = SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
+            access_key_id.get_string(secrets_reader).await.unwrap(),
+            secrets_reader
+                .read_string(*secret_access_key)
+                .await
+                .unwrap(),
+            match session_token {
+                Some(t) => Some(t.get_string(secrets_reader).await.unwrap()),
+                None => None,
+            },
+        ));
 
         if let Some(AwsAssumeRole { arn }) = &self.role {
             let mut role = AssumeRoleProvider::builder(arn).session_name("materialize");
