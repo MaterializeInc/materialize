@@ -156,7 +156,7 @@ pub async fn purify_create_source(
                 }
             };
 
-            let aws_config = normalize::aws_config(&mut with_options_map, None, Some(connection))?;
+            let aws_config = normalize::aws_config(&mut with_options_map, None, connection)?;
             validate_aws_credentials(
                 &aws_config,
                 connection_context.aws_external_id_prefix.as_ref(),
@@ -180,11 +180,8 @@ pub async fn purify_create_source(
                 }
             };
 
-            let aws_config = normalize::aws_config(
-                &mut with_options_map,
-                Some(region.into()),
-                Some(connection),
-            )?;
+            let aws_config =
+                normalize::aws_config(&mut with_options_map, Some(region.into()), connection)?;
             validate_aws_credentials(
                 &aws_config,
                 connection_context.aws_external_id_prefix.as_ref(),

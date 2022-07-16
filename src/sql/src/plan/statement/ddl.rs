@@ -560,7 +560,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(
                 &mut legacy_with_options,
                 Some(region.into()),
-                Some(aws_connection),
+                aws_connection,
             )?;
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
@@ -581,7 +581,7 @@ pub fn plan_create_source(
                 _ => sql_bail!("{} is not an AWS connection", item.name()),
             };
 
-            let aws = normalize::aws_config(&mut legacy_with_options, None, Some(aws_connection))?;
+            let aws = normalize::aws_config(&mut legacy_with_options, None, aws_connection)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
@@ -3114,7 +3114,7 @@ impl TryFrom<AwsConnectionOptionExtracted> for AwsCredentials {
     type Error = PlanError;
 
     fn try_from(options: AwsConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(AwsCredentials::Static {
+        Ok(AwsCredentials {
             access_key_id: options
                 .access_key_id
                 .ok_or_else(|| sql_err!("ACCESS KEY ID option is required"))?,

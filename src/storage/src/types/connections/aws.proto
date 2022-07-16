@@ -28,16 +28,9 @@ message ProtoAwsConfig {
 }
 
 message ProtoAwsCredentials {
-    message ProtoStatic {
-        mz_storage.types.connections.ProtoStringOrSecret access_key_id = 1;
-        mz_repr.global_id.ProtoGlobalId secret_access_key = 2;
-        optional mz_storage.types.connections.ProtoStringOrSecret session_token = 3;
-    }
-    oneof kind {
-        google.protobuf.Empty default = 1;
-        string profile = 2;
-        ProtoStatic static = 3;
-    }
+    mz_storage.types.connections.ProtoStringOrSecret access_key_id = 1;
+    mz_repr.global_id.ProtoGlobalId secret_access_key = 2;
+    optional mz_storage.types.connections.ProtoStringOrSecret session_token = 3;
 }
 
 message ProtoAwsAssumeRole {
