@@ -66,7 +66,10 @@ async fn migrate<S: Append>(
     bootstrap_args: &BootstrapArgs,
 ) -> Result<(), catalog::error::Error> {
     // Initial state.
-    let migrations: &[for<'a> fn(&mut Transaction<'a, S>, &'a BootstrapArgs) -> Result<(), ()>] = &[
+    let migrations: &[for<'a> fn(
+        &mut Transaction<'a, S>,
+        &'a BootstrapArgs,
+    ) -> Result<(), StashError>] = &[
         |txn: &mut Transaction<'_, S>, bootstrap_args| {
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -256,8 +259,7 @@ async fn migrate<S: Append>(
         .enumerate()
         .skip(usize::cast_from(version))
     {
-        (migration)(&mut txn, bootstrap_args)
-            .map_err(|_| StashError::from("uniqueness violation"))?;
+        (migration)(&mut txn, bootstrap_args)?;
         txn.update_user_version(u64::cast_from(i))?;
     }
     txn.commit().await?;
@@ -751,7 +753,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             },
         ) {
             Ok(_) => Ok(DatabaseId::new(id)),
-            Err(()) => Err(Error::new(ErrorKind::DatabaseAlreadyExists(
+            Err(_) => Err(Error::new(ErrorKind::DatabaseAlreadyExists(
                 database_name.to_owned(),
             ))),
         }
@@ -771,7 +773,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             },
         ) {
             Ok(_) => Ok(SchemaId::new(id)),
-            Err(()) => Err(Error::new(ErrorKind::SchemaAlreadyExists(
+            Err(_) => Err(Error::new(ErrorKind::SchemaAlreadyExists(
                 schema_name.to_owned(),
             ))),
         }
@@ -786,7 +788,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             },
         ) {
             Ok(_) => Ok(id),
-            Err(()) => Err(Error::new(ErrorKind::RoleAlreadyExists(
+            Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(
                 role_name.to_owned(),
             ))),
         }
@@ -889,7 +891,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             },
         ) {
             Ok(_) => Ok(()),
-            Err(()) => Err(Error::new(ErrorKind::ItemAlreadyExists(
+            Err(_) => Err(Error::new(ErrorKind::ItemAlreadyExists(
                 item_name.to_owned(),
             ))),
         }
