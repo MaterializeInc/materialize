@@ -137,18 +137,21 @@ RESET does_not_exist
 query T
 SHOW transaction_isolation
 ----
-SERIALIZABLE
+STRICT_SERIALIZABLE
 
 statement ok
-SET transaction_isolation = STRICT_SERIALIZABLE
+SET transaction_isolation = SERIALIZABLE
 
 query T
 SHOW transaction_isolation
 ----
-STRICT_SERIALIZABLE
+SERIALIZABLE
 
 statement error invalid value for parameter "transaction_isolation": "snapshot_isolation"
 SET transaction_isolation = SNAPSHOT_ISOLATION
+
+statement ok
+SET transaction_isolation = STRICT_SERIALIZABLE
 
 # Test that a failed transaction will not commit var changes.
 

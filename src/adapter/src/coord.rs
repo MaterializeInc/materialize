@@ -4524,7 +4524,7 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&upper);
         }
 
-        if use_timestamp_oracle {
+        if use_timestamp_oracle && when == &QueryWhen::Immediately {
             assert!(
                 since.less_equal(&candidate),
                 "the strict serializable isolation level guarantees that the timestamp chosen \
