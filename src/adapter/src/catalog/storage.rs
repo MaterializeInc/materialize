@@ -12,13 +12,13 @@ use std::hash::Hash;
 use std::iter::once;
 
 use bytes::BufMut;
-use futures::future::BoxFuture;
 use itertools::max;
 use prost::{self, Message};
 use serde_json::json;
 use timely::progress::Timestamp;
 use uuid::Uuid;
 
+use crate::catalog;
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::ComputeInstanceId;
@@ -64,221 +64,172 @@ async fn migrate<S: Append>(
     stash: &mut S,
     version: u64,
     bootstrap_args: &BootstrapArgs,
-) -> Result<(), StashError> {
+) -> Result<(), catalog::error::Error> {
     // Initial state.
-    let migrations: &[for<'a> fn(
-        &'a mut S,
-        &'a BootstrapArgs,
-    ) -> BoxFuture<'a, Result<(), StashError>>] = &[
-        |stash, bootstrap_args| {
-            Box::pin(async {
-                // Bump uppers so peek works.
-                COLLECTION_SETTING.upsert(stash, vec![]).await?;
-                COLLECTION_SYSTEM_GID_MAPPING.upsert(stash, vec![]).await?;
-                COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
-                    .upsert(stash, vec![])
-                    .await?;
-                COLLECTION_ITEM.upsert(stash, vec![]).await?;
-                COLLECTION_AUDIT_LOG.upsert(stash, vec![]).await?;
-
-                COLLECTION_ID_ALLOC
-                    .upsert(
-                        stash,
-                        vec![
-                            (
-                                IdAllocKey {
-                                    name: "user".into(),
-                                },
-                                IdAllocValue { next_id: 1 },
-                            ),
-                            (
-                                IdAllocKey {
-                                    name: "system".into(),
-                                },
-                                IdAllocValue { next_id: 1 },
-                            ),
-                            (
-                                IdAllocKey {
-                                    name: DATABASE_ID_ALLOC_KEY.into(),
-                                },
-                                IdAllocValue {
-                                    next_id: MATERIALIZE_DATABASE_ID + 1,
-                                },
-                            ),
-                            (
-                                IdAllocKey {
-                                    name: SCHEMA_ID_ALLOC_KEY.into(),
-                                },
-                                IdAllocValue {
-                                    next_id: max(&[
-                                        MZ_CATALOG_SCHEMA_ID,
-                                        PG_CATALOG_SCHEMA_ID,
-                                        PUBLIC_SCHEMA_ID,
-                                        MZ_INTERNAL_SCHEMA_ID,
-                                        INFORMATION_SCHEMA_ID,
-                                    ])
-                                    .unwrap()
-                                        + 1,
-                                },
-                            ),
-                            (
-                                IdAllocKey {
-                                    name: ROLE_ID_ALLOC_KEY.into(),
-                                },
-                                IdAllocValue {
-                                    next_id: MATERIALIZE_ROLE_ID + 1,
-                                },
-                            ),
-                            (
-                                IdAllocKey {
-                                    name: COMPUTE_ID_ALLOC_KEY.into(),
-                                },
-                                IdAllocValue {
-                                    next_id: DEFAULT_COMPUTE_INSTANCE_ID + 1,
-                                },
-                            ),
-                            (
-                                IdAllocKey {
-                                    name: REPLICA_ID_ALLOC_KEY.into(),
-                                },
-                                IdAllocValue {
-                                    next_id: DEFAULT_REPLICA_ID + 1,
-                                },
-                            ),
-                            (
-                                IdAllocKey {
-                                    name: AUDIT_LOG_ID_ALLOC_KEY.into(),
-                                },
-                                IdAllocValue { next_id: 1 },
-                            ),
-                        ],
-                    )
-                    .await?;
-                COLLECTION_DATABASE
-                    .upsert(
-                        stash,
-                        vec![(
-                            DatabaseKey {
-                                id: MATERIALIZE_DATABASE_ID,
-                            },
-                            DatabaseValue {
-                                name: "materialize".into(),
-                            },
-                        )],
-                    )
-                    .await?;
-                COLLECTION_SCHEMA
-                    .upsert(
-                        stash,
-                        vec![
-                            (
-                                SchemaKey {
-                                    id: MZ_CATALOG_SCHEMA_ID,
-                                },
-                                SchemaValue {
-                                    database_id: None,
-                                    name: "mz_catalog".into(),
-                                },
-                            ),
-                            (
-                                SchemaKey {
-                                    id: PG_CATALOG_SCHEMA_ID,
-                                },
-                                SchemaValue {
-                                    database_id: None,
-                                    name: "pg_catalog".into(),
-                                },
-                            ),
-                            (
-                                SchemaKey {
-                                    id: PUBLIC_SCHEMA_ID,
-                                },
-                                SchemaValue {
-                                    database_id: Some(1),
-                                    name: "public".into(),
-                                },
-                            ),
-                            (
-                                SchemaKey {
-                                    id: MZ_INTERNAL_SCHEMA_ID,
-                                },
-                                SchemaValue {
-                                    database_id: None,
-                                    name: "mz_internal".into(),
-                                },
-                            ),
-                            (
-                                SchemaKey {
-                                    id: INFORMATION_SCHEMA_ID,
-                                },
-                                SchemaValue {
-                                    database_id: None,
-                                    name: "information_schema".into(),
-                                },
-                            ),
-                        ],
-                    )
-                    .await?;
-                COLLECTION_ROLE
-                    .upsert(
-                        stash,
-                        vec![(
-                            RoleKey {
-                                id: MATERIALIZE_ROLE_ID,
-                            },
-                            RoleValue {
-                                name: "materialize".into(),
-                            },
-                        )],
-                    )
-                    .await?;
-                COLLECTION_COMPUTE_INSTANCES
-                    .upsert(
-                        stash,
-                        vec![(
-                            ComputeInstanceKey { id: DEFAULT_COMPUTE_INSTANCE_ID },
-                            ComputeInstanceValue {
-                        name: "default".into(),
-                        config: Some(
-                            "{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}".into(),
-                        ),
-                    },
-                )],
-                    )
-                    .await?;
-                COLLECTION_COMPUTE_INSTANCE_REPLICAS
-                    .upsert(
-                        stash,
-                        vec![(
-                            ComputeInstanceReplicaKey {
-                                id: DEFAULT_REPLICA_ID,
-                            },
-                            ComputeInstanceReplicaValue {
-                                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
-                                name: "default_replica".into(),
-                                config: json!({"Managed": {
-                                    "size": bootstrap_args.default_cluster_replica_size,
-                                }})
-                                .to_string(),
-                            },
-                        )],
-                    )
-                    .await?;
-                COLLECTION_TIMESTAMP
-                    .upsert(
-                        stash,
-                        vec![(
-                            TimestampKey {
-                                id: Timeline::EpochMilliseconds.to_string(),
-                            },
-                            TimestampValue {
-                                ts: mz_repr::Timestamp::minimum(),
-                            },
-                        )],
-                    )
-                    .await?;
-                Ok(())
-            })
+    let migrations: &[for<'a> fn(&mut Transaction<'a, S>, &'a BootstrapArgs) -> Result<(), ()>] = &[
+        |txn: &mut Transaction<'_, S>, bootstrap_args| {
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: "user".into(),
+                },
+                IdAllocValue { next_id: 1 },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: "system".into(),
+                },
+                IdAllocValue { next_id: 1 },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: DATABASE_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue {
+                    next_id: MATERIALIZE_DATABASE_ID + 1,
+                },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: SCHEMA_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue {
+                    next_id: max(&[
+                        MZ_CATALOG_SCHEMA_ID,
+                        PG_CATALOG_SCHEMA_ID,
+                        PUBLIC_SCHEMA_ID,
+                        MZ_INTERNAL_SCHEMA_ID,
+                        INFORMATION_SCHEMA_ID,
+                    ])
+                    .unwrap()
+                        + 1,
+                },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: ROLE_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue {
+                    next_id: MATERIALIZE_ROLE_ID + 1,
+                },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: COMPUTE_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue {
+                    next_id: DEFAULT_COMPUTE_INSTANCE_ID + 1,
+                },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: REPLICA_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue {
+                    next_id: DEFAULT_REPLICA_ID + 1,
+                },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: AUDIT_LOG_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue { next_id: 1 },
+            )?;
+            txn.databases.insert(
+                DatabaseKey {
+                    id: MATERIALIZE_DATABASE_ID,
+                },
+                DatabaseValue {
+                    name: "materialize".into(),
+                },
+            )?;
+            txn.schemas.insert(
+                SchemaKey {
+                    id: MZ_CATALOG_SCHEMA_ID,
+                },
+                SchemaValue {
+                    database_id: None,
+                    name: "mz_catalog".into(),
+                },
+            )?;
+            txn.schemas.insert(
+                SchemaKey {
+                    id: PG_CATALOG_SCHEMA_ID,
+                },
+                SchemaValue {
+                    database_id: None,
+                    name: "pg_catalog".into(),
+                },
+            )?;
+            txn.schemas.insert(
+                SchemaKey {
+                    id: PUBLIC_SCHEMA_ID,
+                },
+                SchemaValue {
+                    database_id: Some(1),
+                    name: "public".into(),
+                },
+            )?;
+            txn.schemas.insert(
+                SchemaKey {
+                    id: MZ_INTERNAL_SCHEMA_ID,
+                },
+                SchemaValue {
+                    database_id: None,
+                    name: "mz_internal".into(),
+                },
+            )?;
+            txn.schemas.insert(
+                SchemaKey {
+                    id: INFORMATION_SCHEMA_ID,
+                },
+                SchemaValue {
+                    database_id: None,
+                    name: "information_schema".into(),
+                },
+            )?;
+            txn.roles.insert(
+                RoleKey {
+                    id: MATERIALIZE_ROLE_ID,
+                },
+                RoleValue {
+                    name: "materialize".into(),
+                },
+            )?;
+            txn.compute_instances.insert(
+                ComputeInstanceKey {
+                    id: DEFAULT_COMPUTE_INSTANCE_ID,
+                },
+                ComputeInstanceValue {
+                    name: "default".into(),
+                    config: Some(
+                        "{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}".into(),
+                    ),
+                },
+            )?;
+            txn.compute_instance_replicas.insert(
+                ComputeInstanceReplicaKey {
+                    id: DEFAULT_REPLICA_ID,
+                },
+                ComputeInstanceReplicaValue {
+                    compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                    name: "default_replica".into(),
+                    config: json!({"Managed": {
+                        "size": bootstrap_args.default_cluster_replica_size,
+                    }})
+                    .to_string(),
+                },
+            )?;
+            txn.timestamps.insert(
+                TimestampKey {
+                    id: Timeline::EpochMilliseconds.to_string(),
+                },
+                TimestampValue {
+                    ts: mz_repr::Timestamp::minimum(),
+                },
+            )?;
+            txn.configs
+                .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
+            Ok(())
         },
         // Add new migrations here.
         //
@@ -290,7 +241,8 @@ async fn migrate<S: Append>(
         //     >
         //     > Optional additional commentary about safety or approach.
         //
-        // Please include @benesch on any code reviews that add or edit migrations.
+        // Please include @mjibson and @jkosh44 on any code reviews that add or
+        // edit migrations.
         // Migrations must preserve backwards compatibility with all past releases
         // of Materialize. Migrations can be edited up until they ship in a
         // release, after which they must never be removed, only patched by future
@@ -298,22 +250,17 @@ async fn migrate<S: Append>(
         // midway failure).
     ];
 
+    let mut txn = transaction(stash).await?;
     for (i, migration) in migrations
         .iter()
         .enumerate()
         .skip(usize::cast_from(version))
     {
-        (migration)(stash, bootstrap_args).await?;
-        COLLECTION_CONFIG
-            .upsert_key(
-                stash,
-                &USER_VERSION.to_string(),
-                &ConfigValue {
-                    value: u64::cast_from(i),
-                },
-            )
-            .await?;
+        (migration)(&mut txn, bootstrap_args)
+            .map_err(|_| StashError::from("uniqueness violation"))?;
+        txn.update_user_version(u64::cast_from(i))?;
     }
+    txn.commit().await?;
     Ok(())
 }
 
@@ -335,9 +282,7 @@ impl<S: Append> Connection<S> {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
         // collection is empty.
-        let skip = if COLLECTION_CONFIG.upper(&mut stash).await?.elements()
-            == [mz_stash::Timestamp::MIN]
-        {
+        let skip = if is_collection_uninitialized(&mut stash, &COLLECTION_CONFIG).await? {
             0
         } else {
             // An advanced collection must have had its user version set, so the unwrap
@@ -349,6 +294,7 @@ impl<S: Append> Connection<S> {
                 .value
                 + 1
         };
+        initialize_stash(&mut stash).await?;
         migrate(&mut stash, skip, bootstrap_args).await?;
 
         let conn = Connection {
@@ -690,44 +636,50 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
-        let databases = COLLECTION_DATABASE.peek_one(&mut self.stash).await?;
-        let schemas = COLLECTION_SCHEMA.peek_one(&mut self.stash).await?;
-        let roles = COLLECTION_ROLE.peek_one(&mut self.stash).await?;
-        let items = COLLECTION_ITEM.peek_one(&mut self.stash).await?;
-        let compute_instances = COLLECTION_COMPUTE_INSTANCES
-            .peek_one(&mut self.stash)
-            .await?;
-        let compute_instance_replicas = COLLECTION_COMPUTE_INSTANCE_REPLICAS
-            .peek_one(&mut self.stash)
-            .await?;
-        let introspection_sources = COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
-            .peek_one(&mut self.stash)
-            .await?;
-        let id_allocator = COLLECTION_ID_ALLOC.peek_one(&mut self.stash).await?;
-
-        Ok(Transaction {
-            stash: &mut self.stash,
-            databases: TableTransaction::new(databases, |a, b| a.name == b.name),
-            schemas: TableTransaction::new(schemas, |a, b| {
-                a.database_id == b.database_id && a.name == b.name
-            }),
-            items: TableTransaction::new(items, |a, b| {
-                a.schema_id == b.schema_id && a.name == b.name
-            }),
-            roles: TableTransaction::new(roles, |a, b| a.name == b.name),
-            compute_instances: TableTransaction::new(compute_instances, |a, b| a.name == b.name),
-            compute_instance_replicas: TableTransaction::new(compute_instance_replicas, |a, b| {
-                a.compute_instance_id == b.compute_instance_id && a.name == b.name
-            }),
-            introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false),
-            id_allocator: TableTransaction::new(id_allocator, |_a, _b| false),
-            audit_log_updates: Vec::new(),
-        })
+        transaction(&mut self.stash).await
     }
 
     pub fn cluster_id(&self) -> Uuid {
         self.cluster_id
     }
+}
+
+pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<'a, S>, Error> {
+    let databases = COLLECTION_DATABASE.peek_one(stash).await?;
+    let schemas = COLLECTION_SCHEMA.peek_one(stash).await?;
+    let roles = COLLECTION_ROLE.peek_one(stash).await?;
+    let items = COLLECTION_ITEM.peek_one(stash).await?;
+    let compute_instances = COLLECTION_COMPUTE_INSTANCES.peek_one(stash).await?;
+    let compute_instance_replicas = COLLECTION_COMPUTE_INSTANCE_REPLICAS.peek_one(stash).await?;
+    let introspection_sources = COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
+        .peek_one(stash)
+        .await?;
+    let id_allocator = COLLECTION_ID_ALLOC.peek_one(stash).await?;
+    let collection_config = COLLECTION_CONFIG.peek_one(stash).await?;
+    let collection_setting = COLLECTION_SETTING.peek_one(stash).await?;
+    let collection_timestamps = COLLECTION_TIMESTAMP.peek_one(stash).await?;
+    let collection_system_gid_mapping = COLLECTION_SYSTEM_GID_MAPPING.peek_one(stash).await?;
+
+    Ok(Transaction {
+        stash,
+        databases: TableTransaction::new(databases, |a, b| a.name == b.name),
+        schemas: TableTransaction::new(schemas, |a, b| {
+            a.database_id == b.database_id && a.name == b.name
+        }),
+        items: TableTransaction::new(items, |a, b| a.schema_id == b.schema_id && a.name == b.name),
+        roles: TableTransaction::new(roles, |a, b| a.name == b.name),
+        compute_instances: TableTransaction::new(compute_instances, |a, b| a.name == b.name),
+        compute_instance_replicas: TableTransaction::new(compute_instance_replicas, |a, b| {
+            a.compute_instance_id == b.compute_instance_id && a.name == b.name
+        }),
+        introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false),
+        id_allocator: TableTransaction::new(id_allocator, |_a, _b| false),
+        configs: TableTransaction::new(collection_config, |_a, _b| false),
+        settings: TableTransaction::new(collection_setting, |_a, _b| false),
+        timestamps: TableTransaction::new(collection_timestamps, |_a, _b| false),
+        system_gid_mapping: TableTransaction::new(collection_system_gid_mapping, |_a, _b| false),
+        audit_log_updates: Vec::new(),
+    })
 }
 
 pub struct Transaction<'a, S> {
@@ -742,6 +694,10 @@ pub struct Transaction<'a, S> {
     introspection_sources:
         TableTransaction<ComputeIntrospectionSourceIndexKey, ComputeIntrospectionSourceIndexValue>,
     id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
+    configs: TableTransaction<String, ConfigValue>,
+    settings: TableTransaction<SettingKey, SettingValue>,
+    timestamps: TableTransaction<TimestampKey, TimestampValue>,
+    system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(AuditLogKey, (), i64)>,
@@ -1065,6 +1021,18 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
+    pub fn update_user_version(&mut self, version: u64) -> Result<(), Error> {
+        let n = self.configs.update(|k, _v| {
+            if k == USER_VERSION {
+                Some(ConfigValue { value: version })
+            } else {
+                None
+            }
+        })?;
+        assert_eq!(n, 1);
+        Ok(())
+    }
+
     pub async fn commit(self) -> Result<(), Error> {
         let mut batches = Vec::new();
         async fn add_batch<K, V, S, I>(
@@ -1150,6 +1118,34 @@ impl<'a, S: Append> Transaction<'a, S> {
         add_batch(
             self.stash,
             &mut batches,
+            &COLLECTION_CONFIG,
+            self.configs.pending(),
+        )
+        .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_SETTING,
+            self.settings.pending(),
+        )
+        .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_TIMESTAMP,
+            self.timestamps.pending(),
+        )
+        .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_SYSTEM_GID_MAPPING,
+            self.system_gid_mapping.pending(),
+        )
+        .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
             &COLLECTION_AUDIT_LOG,
             self.audit_log_updates,
         )
@@ -1159,6 +1155,60 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
         self.stash.append(batches).await.map_err(|e| e.into())
     }
+}
+
+/// Returns true if collection is uninitialized, false otherwise.
+pub async fn is_collection_uninitialized<K, V, S>(
+    stash: &mut S,
+    collection: &TypedCollection<K, V>,
+) -> Result<bool, Error>
+where
+    K: mz_stash::Data,
+    V: mz_stash::Data,
+    S: Append,
+{
+    Ok(collection.upper(stash).await?.elements() == [mz_stash::Timestamp::MIN])
+}
+
+/// Inserts empty values into all new collections, so the collections are readable.
+pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
+    let mut batches = Vec::new();
+    async fn add_batch<K, V, S>(
+        stash: &mut S,
+        batches: &mut Vec<AppendBatch>,
+        collection: &TypedCollection<K, V>,
+    ) -> Result<(), Error>
+    where
+        K: mz_stash::Data,
+        V: mz_stash::Data,
+        S: Append,
+    {
+        if is_collection_uninitialized(stash, collection).await? {
+            let collection = collection.get(stash).await?;
+            let batch = collection.make_batch(stash).await?;
+            batches.push(batch);
+        }
+        Ok(())
+    }
+    add_batch(stash, &mut batches, &COLLECTION_CONFIG).await?;
+    add_batch(stash, &mut batches, &COLLECTION_SETTING).await?;
+    add_batch(stash, &mut batches, &COLLECTION_ID_ALLOC).await?;
+    add_batch(stash, &mut batches, &COLLECTION_SYSTEM_GID_MAPPING).await?;
+    add_batch(stash, &mut batches, &COLLECTION_COMPUTE_INSTANCES).await?;
+    add_batch(
+        stash,
+        &mut batches,
+        &COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX,
+    )
+    .await?;
+    add_batch(stash, &mut batches, &COLLECTION_COMPUTE_INSTANCE_REPLICAS).await?;
+    add_batch(stash, &mut batches, &COLLECTION_DATABASE).await?;
+    add_batch(stash, &mut batches, &COLLECTION_SCHEMA).await?;
+    add_batch(stash, &mut batches, &COLLECTION_ITEM).await?;
+    add_batch(stash, &mut batches, &COLLECTION_ROLE).await?;
+    add_batch(stash, &mut batches, &COLLECTION_TIMESTAMP).await?;
+    add_batch(stash, &mut batches, &COLLECTION_AUDIT_LOG).await?;
+    stash.append(batches).await.map_err(|e| e.into())
 }
 
 macro_rules! impl_codec {
@@ -1415,6 +1465,6 @@ static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
 static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollection::new("schema");
 static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
 static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
-static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
 static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
     TypedCollection::new("timestamp");
+static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
