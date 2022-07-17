@@ -135,7 +135,7 @@ contains:Expected a list of columns in parentheses, found EOF
 
 # The timestamp chosen when reading from a static CSV should be the end of time,
 # since the definition of "static" means "will never change again".
-> SELECT count(*), mz_logical_timestamp() FROM static_csv
+> EXPLAIN TIMESTAMP FOR SELECT * FROM static_csv
 4  18446744073709551615
 
 # Static CSV with manual headers.
