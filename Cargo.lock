@@ -3495,6 +3495,7 @@ dependencies = [
  "futures",
  "k8s-openapi",
  "kube",
+ "maplit",
  "mz-orchestrator",
  "mz-repr",
  "mz-secrets",

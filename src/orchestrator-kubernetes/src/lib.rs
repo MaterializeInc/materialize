@@ -29,6 +29,7 @@ use kube::client::Client;
 use kube::error::Error;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
+use maplit::btreemap;
 use sha2::{Digest, Sha256};
 
 use mz_orchestrator::LabelSelector as MzLabelSelector;
@@ -207,7 +208,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let name = format!("{}-{id}", self.namespace);
-        let mut labels = BTreeMap::new();
+        // The match labels should be the minimal set of labels that uniquely
+        // identify the pods in the stateful set. Changing these after the
+        // `StatefulSet` is created is not permitted by Kubernetes, and we're
+        // not yet smart enough to handle deleting and recreating the
+        // `StatefulSet`.
+        let match_labels = btreemap! {
+            "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
+            "environmentd.materialize.cloud/service-id".into() => id.into(),
+        };
+        let mut labels = match_labels.clone();
         for (key, value) in labels_in {
             labels.insert(
                 format!("{}.environmentd.materialize.cloud/{}", self.namespace, key),
@@ -220,14 +230,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 "true".into(),
             );
         }
-        labels.insert(
-            "environmentd.materialize.cloud/namespace".into(),
-            self.namespace.clone(),
-        );
-        labels.insert(
-            "environmentd.materialize.cloud/service-id".into(),
-            id.into(),
-        );
         for (key, value) in &self.config.service_labels {
             labels.insert(key.clone(), value.clone());
         }
@@ -261,7 +263,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         .collect(),
                 ),
                 cluster_ip: None,
-                selector: Some(labels.clone()),
+                selector: Some(match_labels.clone()),
                 ..Default::default()
             }),
             status: None,
@@ -390,7 +392,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             },
             spec: Some(StatefulSetSpec {
                 selector: LabelSelector {
-                    match_labels: Some(labels.clone()),
+                    match_labels: Some(match_labels),
                     ..Default::default()
                 },
                 service_name: name.clone(),
