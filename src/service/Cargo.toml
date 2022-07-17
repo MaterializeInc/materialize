@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.58"
 async-stream = "0.3.3"
 async-trait = "0.1.56"
-clap = { version = "3.2.8", features = ["env", "derive"] }
+clap = { version = "3.2.12", features = ["env", "derive"] }
 crossbeam-channel = "0.5.5"
 futures = "0.3.21"
 http = "0.2.8"
