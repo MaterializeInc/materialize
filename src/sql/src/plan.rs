@@ -582,8 +582,8 @@ impl QueryWhen {
     /// Returns whether the candidate must be advanced to the global timestamp.
     pub fn advance_to_global_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
-            QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately => true,
+            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
         }
     }
 }
