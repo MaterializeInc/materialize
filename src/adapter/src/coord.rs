@@ -4501,25 +4501,26 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let isolation_level = session.vars().transaction_isolation();
         let timeline = self.validate_timeline(id_bundle.iter())?;
-        let use_timestamp_oracle =
-            isolation_level == &vars::IsolationLevel::StrictSerializable && timeline.is_some();
+        let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
+            && timeline.is_some()
+            && when.advance_to_global_ts();
 
-        if !use_timestamp_oracle && when.advance_to_since() {
-            candidate.advance_by(since.borrow());
-        }
-        if use_timestamp_oracle && when.advance_to_global_ts() {
-            if let Some(timeline) = timeline {
-                let timestamp_oracle = &mut self
-                    .global_timelines
-                    .get_mut(&timeline)
-                    .expect("all timelines have a timestamp oracle")
-                    .oracle;
-                candidate.join_assign(&timestamp_oracle.read_ts());
+        if use_timestamp_oracle {
+            let timeline = timeline.expect("checked that timeline exists above");
+            let timestamp_oracle = &mut self
+                .global_timelines
+                .get_mut(&timeline)
+                .expect("all timelines have a timestamp oracle")
+                .oracle;
+            candidate.join_assign(&timestamp_oracle.read_ts());
+        } else {
+            if when.advance_to_since() {
+                candidate.advance_by(since.borrow());
             }
-        }
-        if !use_timestamp_oracle && when.advance_to_upper() {
-            let upper = self.largest_not_in_advance_of_upper(&id_bundle);
-            candidate.join_assign(&upper);
+            if when.advance_to_upper() {
+                let upper = self.largest_not_in_advance_of_upper(&id_bundle);
+                candidate.join_assign(&upper);
+            }
         }
 
         if use_timestamp_oracle && when == &QueryWhen::Immediately {
