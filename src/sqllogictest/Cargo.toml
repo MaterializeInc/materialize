@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.58"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.2.8", features = ["derive"] }
+clap = { version = "3.2.12", features = ["derive"] }
 fallible-iterator = "0.2.0"
 futures = "0.3.21"
 junit-report = "0.7.1"
