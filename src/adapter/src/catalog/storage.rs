@@ -282,7 +282,7 @@ impl<S: Append> Connection<S> {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
         // collection is empty.
-        let skip = if is_collection_uninitialized(&mut stash, &COLLECTION_CONFIG) {
+        let skip = if is_collection_uninitialized(&mut stash, &COLLECTION_CONFIG).await? {
             0
         } else {
             // An advanced collection must have had its user version set, so the unwrap
@@ -1161,7 +1161,12 @@ impl<'a, S: Append> Transaction<'a, S> {
 pub async fn is_collection_uninitialized<K, V, S>(
     stash: &mut S,
     collection: &TypedCollection<K, V>,
-) -> Result<bool, Error> {
+) -> Result<bool, Error>
+where
+    K: mz_stash::Data,
+    V: mz_stash::Data,
+    S: Append,
+{
     Ok(collection.upper(stash).await?.elements() == [mz_stash::Timestamp::MIN])
 }
 
@@ -1178,7 +1183,7 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
         V: mz_stash::Data,
         S: Append,
     {
-        if is_collection_uninitialized(stash, collection) {
+        if is_collection_uninitialized(stash, collection).await? {
             let collection = collection.get(stash).await?;
             let batch = collection.make_batch(stash).await?;
             batches.push(batch);
