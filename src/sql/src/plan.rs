@@ -566,27 +566,23 @@ impl QueryWhen {
         }
     }
     /// Returns whether the candidate must be advanced to the since.
-    pub fn advance_to_since(&self, strict_serializable: bool) -> bool {
+    pub fn advance_to_since(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => !strict_serializable,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the upper.
-    pub fn advance_to_upper(&self, uses_tables: bool, strict_serializable: bool) -> bool {
+    pub fn advance_to_upper(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => {
-                !uses_tables && !strict_serializable
-            }
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the global timestamp.
-    pub fn advance_to_global_ts(&self, uses_tables: bool, strict_serializable: bool) -> bool {
+    pub fn advance_to_global_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => {
-                uses_tables || strict_serializable
-            }
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }

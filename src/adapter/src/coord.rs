@@ -4499,14 +4499,17 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&ts);
         }
 
-        let strict_serializable =
-            session.vars().transaction_isolation() == &vars::IsolationLevel::StrictSerializable;
-        if when.advance_to_since(strict_serializable) {
+        let isolation_level = session.vars().transaction_isolation();
+        let timeline = self.validate_timeline(id_bundle.iter())?;
+        let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
+        let use_timestamp_oracle = (isolation_level == &vars::IsolationLevel::StrictSerializable
+            || uses_tables)
+            && timeline.is_some();
+
+        if !use_timestamp_oracle && when.advance_to_since() {
             candidate.advance_by(since.borrow());
         }
-        let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-        if when.advance_to_global_ts(uses_tables, strict_serializable) {
-            let timeline = self.validate_timeline(id_bundle.iter())?;
+        if use_timestamp_oracle && when.advance_to_global_ts() {
             if let Some(timeline) = timeline {
                 let timestamp_oracle = &mut self
                     .global_timelines
@@ -4516,12 +4519,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 candidate.join_assign(&timestamp_oracle.read_ts());
             }
         }
-        if when.advance_to_upper(uses_tables, strict_serializable) {
+        if !use_timestamp_oracle && when.advance_to_upper() {
             let upper = self.largest_not_in_advance_of_upper(&id_bundle);
             candidate.join_assign(&upper);
         }
 
-        if strict_serializable && matches!(when, QueryWhen::Immediately) {
+        if use_timestamp_oracle {
             assert!(
                 since.less_equal(&candidate),
                 "the strict serializable isolation level guarantees that the timestamp chosen \
