@@ -24,7 +24,7 @@ If Kafka is not part of your stack, you can use the [Postgres source](/sql/creat
 
 ### Database setup
 
-**Minimum requirements:** Postgres 10+
+**Minimum requirements:** PostgreSQL 10+
 
 Before creating a source in Materialize, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html).
 
@@ -129,7 +129,7 @@ If Kafka is part of your stack, you can use [Debezium](https://debezium.io/) and
 
 ### Database setup
 
-**Minimum requirements:** Postgres 10+
+**Minimum requirements:** PostgreSQL 10+
 
 Before deploying a Debezium connector, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html).
 
@@ -159,9 +159,9 @@ As a _superuser_:
 
 ### Deploy Debezium
 
-Debezium is deployed as a set of Kafka Connect-compatible connectors, so you first need to define a Postgres connector configuration and then start the connector by adding it to Kafka Connect.
+**Minimum requirements:** Debezium 1.5+
 
-{{< debezium-warning >}}
+Debezium is deployed as a set of Kafka Connect-compatible connectors, so you first need to define a Postgres connector configuration and then start the connector by adding it to Kafka Connect.
 
 {{< warning >}}
 If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html), you **must** override the default value of `After-state only` to `false`.
