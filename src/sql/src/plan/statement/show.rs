@@ -347,7 +347,7 @@ fn show_connections<'a>(
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
         FROM mz_catalog.mz_connections t
-        JOIN mz_catalog.mz_schemas on t.schema_id = s.id
+        JOIN mz_catalog.mz_schemas s on t.schema_id = s.id
         WHERE schema_id = {}",
         schema_spec,
     );
