@@ -48,7 +48,7 @@ mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-stash = { path = "../stash" }
 mz-storage = { path = "../storage" }
-nix = "0.24.1"
+nix = "0.24.2"
 num_cpus = "1.13.1"
 openssl = { version = "0.10.41", features = ["vendored"] }
 openssl-sys = { version = "0.9.75", features = ["vendored"] }
