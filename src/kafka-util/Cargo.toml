@@ -21,7 +21,7 @@ proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-serde = { version = "1.0.138", features = ["derive"] }
+serde = { version = "1.0.139", features = ["derive"] }
 serde_json = "1.0.82"
 tokio = { version = "1.19.2", features = ["macros"] }
 thiserror = "1.0.31"
