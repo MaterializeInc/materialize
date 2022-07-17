@@ -23,7 +23,7 @@ but it tells you something other than how fast a collection is populated.
 
 ```sql
 -- Report the number of records available from the materialization.
-select count(*) from my_materialized_source_or_view;
+select count(*) from my_source_or_materialized_view;
 ```
 
 This logging source indicates the upper frontier of materializations.
