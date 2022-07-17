@@ -109,8 +109,6 @@ Primary keys are **automatically** inferred for Kafka sources using the `UPSERT`
 
 {{< debezium-json >}}
 
-{{< debezium-warning >}}
-
 Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
 
 ```sql
