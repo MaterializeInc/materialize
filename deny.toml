@@ -17,9 +17,6 @@ skip = [
     # Waiting for vte to upgrade to v0.7.0.
     { name = "arrayvec", version = "0.5.2" },
 
-    # https://github.com/tokio-rs/tokio/pull/4521
-    { name = "tokio-util", version = "0.6.9" },
-
     # WASI dependencies from multiple sources.
     { name = "wasi", version = "0.10.0+wasi-snapshot-preview1" },
     { name = "windows-sys", version = "0.32.0" },
@@ -31,6 +28,12 @@ skip = [
 
     # Waiting on many dependencies throughout the ecosystem.
     { name = "uuid", version = "0.8.2" },
+
+    # Waiting on https://github.com/chronotope/chrono-tz/pull/100.
+    { name = "phf", version = "0.10.1" },
+    { name = "phf_codegen", version = "0.10.0" },
+    { name = "phf_generator", version = "0.10.0" },
+    { name = "phf_shared", version = "0.10.0" },
 ]
 
 # Use `tracing` instead.
