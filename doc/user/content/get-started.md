@@ -10,9 +10,9 @@ aliases:
   - /katacoda/
 ---
 
-This guide walks you through getting started with Materialize, from installing it to creating your first materialized view on top of streaming data. We'll cover:
+This guide walks you through getting started with Materialize, from enabling it to creating your first materialized view on top of streaming data. We'll cover:
 
-* Installing, running, and connecting to Materialize
+* Enabling and connecting to Materialize
 
 * Connecting to a streaming data source
 
@@ -20,89 +20,10 @@ This guide walks you through getting started with Materialize, from installing i
 
 * Exploring common patterns like joins and time-windowing
 
-## Install, run, connect
+## Enable and connect
 
-Select an environment and follow the instructions to get the latest stable release of Materialize ({{< version >}}).
-
-{{< tabs >}}
-{{< tab "Docker">}}
-
-1. Open a terminal and spin up a container running [`materialized`](https://hub.docker.com/r/materialize/materialized):
-
-    ```shell
-    docker run -p 6875:6875 materialize/materialized:{{< version >}}
-    ```
-
-    This starts a process that listens for SQL connections on port 6875 by default.
-
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you already have `psql` installed on your machine, connect using:
-
-    ```shell
-    psql -U materialize -h localhost -p 6875 materialize
-    ```
-
-    Otherwise, you can find the steps to install and use your CLI of choice under [Install](/install#cli-connections).
-
-{{< /tab >}}
-{{< tab "macOS">}}
-
-1. If you're using [Homebrew](https://brew.sh/), open a terminal and run:
-
-    ```shell
-    brew install MaterializeInc/materialize/materialized
-    ```
-
-1. Once the installation is complete, you can start the `materialized` process:
-
-    ```shell
-    materialized --workers 1
-    ```
-
-    This starts a process that listens for SQL connections on port 6875 by default.
-
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you have `psql` installed on your machine, connect using:
-
-    ```shell
-    psql -U materialize -h localhost -p 6875 materialize
-    ```
-
-    Otherwise, you can find the steps to install and use your CLI of choice under [Install](/install#cli-connections).
-
-{{< /tab >}}
-
-{{< tab "Linux">}}
-
-1. If you're using [apt](https://linuxize.com/post/how-to-use-apt-command/), open a terminal and run (as _root_):
-
-    ```shell
-    # Add the signing key for the Materialize apt repository
-    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
-    # Add and update the repository
-    sh -c 'echo "deb http://apt.materialize.com/ generic main" > /etc/apt/sources.list.d/materialize.list'
-    apt update
-    # Install materialized
-    apt install materialized
-    ```
-
-1. Once the installation is complete, you can start the `materialized` process:
-
-    ```shell
-    materialized
-    ```
-
-    This starts a process that listens for SQL connections on port 6875 by default.
-
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you have `psql` installed on your machine, connect using:
-
-    ```shell
-    psql -U materialize -h localhost -p 6875 materialize
-    ```
-
-    Otherwise, you can find the steps to install and use your CLI of choice under [Install](/install#cli-connections).
-
-{{< /tab >}}
-
-{{< /tabs >}}
+Enable a [region](https://cloud.materialize.com/) where Materialize will run.
+Follow instructions there to get a password and connect.
 
 ## Explore a streaming source
 
