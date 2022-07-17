@@ -863,14 +863,17 @@ where
     ///
     /// Returns an error if the uniqueness check failed or the key already exists.
     pub fn insert(&mut self, k: K, v: V) -> Result<(), StashError> {
-        let mut violation = false;
+        let mut violation = None;
         self.for_values(|for_k, for_v| {
-            if &k == for_k || (self.uniqueness_violation)(for_v, &v) {
-                violation = true;
+            if &k == for_k {
+                violation = Some(format!("duplicate key"));
+            }
+            if (self.uniqueness_violation)(for_v, &v) {
+                violation = Some(format!("uniqueness violation"));
             }
         });
-        if violation {
-            return Err(StashError::from("insert violation"));
+        if let Some(violation) = violation {
+            return Err(violation.into());
         }
         self.pending.insert(k, Some(v));
         soft_assert!(self.verify().is_ok());
