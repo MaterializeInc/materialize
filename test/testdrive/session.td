@@ -28,7 +28,7 @@ sql_safe_updates            off             "Prohibits SQL statements that may b
 standard_conforming_strings on              "Causes '...' strings to treat backslashes literally (PostgreSQL)."
 statement_timeout           "10 s"          "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations."
 TimeZone                    UTC             "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
-transaction_isolation       SERIALIZABLE    "Sets the current transaction's isolation level (PostgreSQL)."
+transaction_isolation       STRICT_SERIALIZABLE    "Sets the current transaction's isolation level (PostgreSQL)."
 
 > SET application_name = 'foo'
 
@@ -99,7 +99,7 @@ contains:invalid value for parameter "TimeZone": "nope"
 # The `transaction_isolation` variable has dedicated syntax as mandated by the
 # SQL standard.
 > SHOW TRANSACTION ISOLATION LEVEL
-SERIALIZABLE
+STRICT_SERIALIZABLE
 
 ! SET transaction_isolation = 'read committed'
 contains:invalid value for parameter "transaction_isolation": "read committed"
