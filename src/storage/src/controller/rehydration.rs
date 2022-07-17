@@ -63,6 +63,7 @@ where
             response_tx,
             ingestions: BTreeMap::new(),
             uppers: HashMap::new(),
+            initialized: false,
         };
         mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -98,6 +99,9 @@ struct RehydrationTask<T> {
     ingestions: BTreeMap<GlobalId, IngestSourceCommand<T>>,
     /// The upper frontier information received.
     uppers: HashMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>,
+    /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
+    /// observed.
+    initialized: bool,
 }
 
 enum RehydrationTaskState {
@@ -153,14 +157,13 @@ where
             .expect("retry retries forever");
 
         // Rehydrate all commands.
-        self.send_commands(
-            client,
-            vec![
-                StorageCommand::IngestSources(self.ingestions.values().cloned().collect()),
-                StorageCommand::InitializationComplete,
-            ],
-        )
-        .await
+        let mut commands = vec![StorageCommand::IngestSources(
+            self.ingestions.values().cloned().collect(),
+        )];
+        if self.initialized {
+            commands.push(StorageCommand::InitializationComplete)
+        }
+        self.send_commands(client, commands).await
     }
 
     async fn step_pump(&mut self, mut client: StorageGrpcClient) -> RehydrationTaskState {
@@ -230,7 +233,7 @@ where
 
     fn absorb_command(&mut self, command: &StorageCommand<T>) {
         match command {
-            StorageCommand::InitializationComplete => (),
+            StorageCommand::InitializationComplete => self.initialized = true,
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
                     self.ingestions.insert(ingestion.id, ingestion.clone());

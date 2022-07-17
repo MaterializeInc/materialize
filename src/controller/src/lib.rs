@@ -454,7 +454,7 @@ where
             }
             .initialization_complete();
         }
-        // TODO(benesch): Initialize STORAGE controller.
+        self.storage_mut().initialization_complete();
     }
 
     /// Waits until the controller is ready to process a response.
