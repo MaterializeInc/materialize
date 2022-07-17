@@ -37,7 +37,7 @@ ordered-float = { version = "3.0.0", features = ["serde"] }
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 regex = "1.6.0"
 ryu = "1.0.10"
-serde = { version = "1.0.138", features = ["derive"] }
+serde = { version = "1.0.139", features = ["derive"] }
 serde_json = { version = "1.0.82", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.9.0", features = ["serde", "union"] }
