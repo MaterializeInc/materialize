@@ -4501,10 +4501,8 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let isolation_level = session.vars().transaction_isolation();
         let timeline = self.validate_timeline(id_bundle.iter())?;
-        let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-        let use_timestamp_oracle = (isolation_level == &vars::IsolationLevel::StrictSerializable
-            || uses_tables)
-            && timeline.is_some();
+        let use_timestamp_oracle =
+            isolation_level == &vars::IsolationLevel::StrictSerializable && timeline.is_some();
 
         if !use_timestamp_oracle && when.advance_to_since() {
             candidate.advance_by(since.borrow());
