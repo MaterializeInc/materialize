@@ -47,7 +47,7 @@ SELECT * FROM mz_materializations
 # We sleep between checks to give dataflow logging time to catch up.
 
 statement ok
-SELECT mz_internal.mz_sleep(0.1)
+SELECT mz_internal.mz_sleep(1.1)
 
 query I
 SELECT sum(count) FROM mz_peek_durations
@@ -55,7 +55,7 @@ SELECT sum(count) FROM mz_peek_durations
 2
 
 statement ok
-SELECT mz_internal.mz_sleep(0.1)
+SELECT mz_internal.mz_sleep(1.1)
 
 query I
 SELECT sum(count) FROM mz_peek_durations
@@ -63,7 +63,7 @@ SELECT sum(count) FROM mz_peek_durations
 3
 
 statement ok
-SELECT mz_internal.mz_sleep(0.1)
+SELECT mz_internal.mz_sleep(1.1)
 
 query I
 SELECT sum(count) FROM mz_peek_durations

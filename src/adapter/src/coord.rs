@@ -6077,6 +6077,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     CatalogItem::Table(table) => {
                         timelines.insert(id, table.timeline());
                     }
+                    CatalogItem::Log(_) => {
+                        timelines.insert(id, Timeline::EpochMilliseconds);
+                    }
                     _ => {}
                 }
             }
