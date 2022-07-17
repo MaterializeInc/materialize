@@ -1328,7 +1328,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
 
     let view_name = "v_hold";
     let source_name = "source_hold";
-    let (pg_client, cleanup_fn) = create_postgres_source_with_table(
+    let (mut pg_client, cleanup_fn) = create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         view_name,
@@ -1349,23 +1349,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
             .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
     }
 
-    // Wait for view to be populated.
-    Retry::default()
-        .max_duration(Duration::from_secs(10))
-        .retry(|_| {
-            let rows = mz_client
-                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
-                .unwrap()
-                .get::<_, i64>(0);
-            if rows == source_rows {
-                Ok(())
-            } else {
-                Err(format!(
-                    "Waiting for {source_rows} rows to be ingested. Currently at {rows}."
-                ))
-            }
-        })
-        .unwrap();
+    wait_for_view_population(&mut mz_client, view_name, source_rows)?;
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mut mz_join_client = server.connect(postgres::NoTls)?;
@@ -1375,7 +1359,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
             .get::<_, i64>(0))
     })?;
 
-    cleanup_fn(&mut mz_client)?;
+    cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
 
     Ok(())
 }
@@ -1383,16 +1367,19 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_linearizability() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
-
-    let config = util::Config::default()
-        .with_now(NOW_ZERO.clone())
-        .unsafe_mode();
+    // Set the timestamp to zero for deterministic initial timestamps.
+    let now = Arc::new(Mutex::new(0));
+    let now_fn = {
+        let now = Arc::clone(&now);
+        NowFn::from(move || *now.lock().unwrap())
+    };
+    let config = util::Config::default().with_now(now_fn).unsafe_mode();
     let server = util::start_server(config)?;
     let mut mz_client = server.connect(postgres::NoTls)?;
 
     let view_name = "v_lin";
     let source_name = "source_lin";
-    let (pg_client, cleanup_fn) = create_postgres_source_with_table(
+    let (mut pg_client, cleanup_fn) = create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         view_name,
@@ -1408,23 +1395,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
     mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
 
-    // Wait for view to be populated.
-    Retry::default()
-        .max_duration(Duration::from_secs(10))
-        .retry(|_| {
-            let rows = mz_client
-                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
-                .unwrap()
-                .get::<_, i64>(0);
-            if rows == 1 {
-                Ok(())
-            } else {
-                Err(format!(
-                    "Waiting for 1 row to be ingested. Currently at {rows}."
-                ))
-            }
-        })
-        .unwrap();
+    wait_for_view_population(&mut mz_client, view_name, 1)?;
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
@@ -1454,7 +1425,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // If we go back to serializable, then timestamps can revert again.
     assert!(join_ts < view_ts);
 
-    cleanup_fn(&mut mz_client)?;
+    cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
 
     Ok(())
 }
@@ -1515,7 +1486,7 @@ fn create_postgres_source_with_table(
 ) -> Result<
     (
         Client,
-        impl FnOnce(&mut postgres::Client) -> Result<(), Box<dyn Error>>,
+        impl FnOnce(&mut postgres::Client, &mut Client, &Arc<Runtime>) -> Result<(), Box<dyn Error>>,
     ),
     Box<dyn Error>,
 > {
@@ -1590,10 +1561,51 @@ fn create_postgres_source_with_table(
 
     let table_name = table_name.to_string();
     let source_name = source_name.to_string();
-    Ok((pg_client, move |mz_client: &mut postgres::Client| {
-        mz_client.batch_execute(&format!("DROP VIEW {table_name};"))?;
-        mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
-        mz_client.batch_execute(&"DROP CONNECTION pgconn;")?;
-        Ok(())
-    }))
+    Ok((
+        pg_client,
+        move |mz_client: &mut postgres::Client, pg_client: &mut Client, runtime: &Arc<Runtime>| {
+            mz_client.batch_execute(&format!("DROP VIEW {table_name};"))?;
+            mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
+            mz_client.batch_execute(&"DROP CONNECTION pgconn;")?;
+
+            let _ = runtime
+                .block_on(pg_client.execute(&format!("DROP PUBLICATION {source_name};"), &[]))?;
+            let _ =
+                runtime.block_on(pg_client.execute(&format!("DROP TABLE {table_name};"), &[]))?;
+            let _ = runtime.block_on(pg_client.execute(
+                &format!("SELECT pg_drop_replication_slot(slot_name) from pg_replication_slots;"),
+                &[],
+            ))?;
+            Ok(())
+        },
+    ))
+}
+
+fn wait_for_view_population(
+    mz_client: &mut postgres::Client,
+    view_name: &str,
+    source_rows: i64,
+) -> Result<(), Box<dyn Error>> {
+    let _ = mz_client.query_one(&format!("SET transaction_isolation = SERIALIZABLE"), &[]);
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let rows = mz_client
+                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
+                .unwrap()
+                .get::<_, i64>(0);
+            if rows == source_rows {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Waiting for {source_rows} row to be ingested. Currently at {rows}."
+                ))
+            }
+        })
+        .unwrap();
+    let _ = mz_client.query_one(
+        &format!("SET transaction_isolation = STRICT_SERIALIZABLE"),
+        &[],
+    );
+    Ok(())
 }
