@@ -250,7 +250,7 @@ async fn migrate<S: Append>(
         // midway failure).
     ];
 
-    let mut txn = transaction_empty(stash).await?;
+    let mut txn = transaction(stash).await?;
     for (i, migration) in migrations
         .iter()
         .enumerate()
@@ -260,7 +260,7 @@ async fn migrate<S: Append>(
             .map_err(|_| StashError::from("uniqueness violation"))?;
         txn.update_user_version(u64::cast_from(i))?;
     }
-    txn.commit_empty().await?;
+    txn.commit().await?;
     Ok(())
 }
 
@@ -282,9 +282,7 @@ impl<S: Append> Connection<S> {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
         // collection is empty.
-        let skip = if COLLECTION_CONFIG.upper(&mut stash).await?.elements()
-            == [mz_stash::Timestamp::MIN]
-        {
+        let skip = if is_collection_uninitialized(&mut stash, &COLLECTION_CONFIG) {
             0
         } else {
             // An advanced collection must have had its user version set, so the unwrap
@@ -296,6 +294,7 @@ impl<S: Append> Connection<S> {
                 .value
                 + 1
         };
+        initialize_stash(&mut stash).await?;
         migrate(&mut stash, skip, bootstrap_args).await?;
 
         let conn = Connection {
@@ -643,70 +642,6 @@ impl<S: Append> Connection<S> {
     pub fn cluster_id(&self) -> Uuid {
         self.cluster_id
     }
-}
-
-/// Same as [`transaction`], except it will read an empty collection if it fails to read an initial
-/// collection state. This is because a collection is not readable until it is written to for the
-/// first time.
-///
-/// This method should only be used during migrations, when Stash may have never been written to.
-pub async fn transaction_empty<'a, S: Append>(
-    stash: &'a mut S,
-) -> Result<Transaction<'a, S>, Error> {
-    let databases = COLLECTION_DATABASE
-        .peek_one(stash)
-        .await
-        .unwrap_or_default();
-    let schemas = COLLECTION_SCHEMA.peek_one(stash).await.unwrap_or_default();
-    let roles = COLLECTION_ROLE.peek_one(stash).await.unwrap_or_default();
-    let items = COLLECTION_ITEM.peek_one(stash).await.unwrap_or_default();
-    let compute_instances = COLLECTION_COMPUTE_INSTANCES
-        .peek_one(stash)
-        .await
-        .unwrap_or_default();
-    let compute_instance_replicas = COLLECTION_COMPUTE_INSTANCE_REPLICAS
-        .peek_one(stash)
-        .await
-        .unwrap_or_default();
-    let introspection_sources = COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
-        .peek_one(stash)
-        .await
-        .unwrap_or_default();
-    let id_allocator = COLLECTION_ID_ALLOC
-        .peek_one(stash)
-        .await
-        .unwrap_or_default();
-    let collection_config = COLLECTION_CONFIG.peek_one(stash).await.unwrap_or_default();
-    let collection_setting = COLLECTION_SETTING.peek_one(stash).await.unwrap_or_default();
-    let collection_timestamps = COLLECTION_TIMESTAMP
-        .peek_one(stash)
-        .await
-        .unwrap_or_default();
-    let collection_system_gid_mapping = COLLECTION_SYSTEM_GID_MAPPING
-        .peek_one(stash)
-        .await
-        .unwrap_or_default();
-
-    Ok(Transaction {
-        stash,
-        databases: TableTransaction::new(databases, |a, b| a.name == b.name),
-        schemas: TableTransaction::new(schemas, |a, b| {
-            a.database_id == b.database_id && a.name == b.name
-        }),
-        items: TableTransaction::new(items, |a, b| a.schema_id == b.schema_id && a.name == b.name),
-        roles: TableTransaction::new(roles, |a, b| a.name == b.name),
-        compute_instances: TableTransaction::new(compute_instances, |a, b| a.name == b.name),
-        compute_instance_replicas: TableTransaction::new(compute_instance_replicas, |a, b| {
-            a.compute_instance_id == b.compute_instance_id && a.name == b.name
-        }),
-        introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false),
-        id_allocator: TableTransaction::new(id_allocator, |_a, _b| false),
-        configs: TableTransaction::new(collection_config, |_a, _b| false),
-        settings: TableTransaction::new(collection_setting, |_a, _b| false),
-        timestamps: TableTransaction::new(collection_timestamps, |_a, _b| false),
-        system_gid_mapping: TableTransaction::new(collection_system_gid_mapping, |_a, _b| false),
-        audit_log_updates: Vec::new(),
-    })
 }
 
 pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<'a, S>, Error> {
@@ -1098,23 +1033,13 @@ impl<'a, S: Append> Transaction<'a, S> {
         Ok(())
     }
 
-    /// Same as [`Self::commit`], but includes empty batches.
-    pub async fn commit_empty(self) -> Result<(), Error> {
-        self.commit_inner(true).await
-    }
-
     pub async fn commit(self) -> Result<(), Error> {
-        self.commit_inner(false).await
-    }
-
-    async fn commit_inner(self, include_empty: bool) -> Result<(), Error> {
         let mut batches = Vec::new();
         async fn add_batch<K, V, S, I>(
             stash: &mut S,
             batches: &mut Vec<AppendBatch>,
             collection: &TypedCollection<K, V>,
             changes: I,
-            include_empty: bool,
         ) -> Result<(), Error>
         where
             K: mz_stash::Data,
@@ -1123,7 +1048,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             I: IntoIterator<Item = (K, V, mz_stash::Diff)>,
         {
             let mut changes = changes.into_iter().peekable();
-            if !include_empty && changes.peek().is_none() {
+            if changes.peek().is_none() {
                 return Ok(());
             }
             let collection = collection.get(stash).await?;
@@ -1139,7 +1064,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_DATABASE,
             self.databases.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1147,7 +1071,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_SCHEMA,
             self.schemas.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1155,7 +1078,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_ITEM,
             self.items.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1163,7 +1085,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_ROLE,
             self.roles.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1171,7 +1092,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_COMPUTE_INSTANCES,
             self.compute_instances.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1179,7 +1099,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_COMPUTE_INSTANCE_REPLICAS,
             self.compute_instance_replicas.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1187,7 +1106,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX,
             self.introspection_sources.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1195,7 +1113,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_ID_ALLOC,
             self.id_allocator.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1203,7 +1120,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_CONFIG,
             self.configs.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1211,7 +1127,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_SETTING,
             self.settings.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1219,7 +1134,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_TIMESTAMP,
             self.timestamps.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1227,7 +1141,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_SYSTEM_GID_MAPPING,
             self.system_gid_mapping.pending(),
-            include_empty,
         )
         .await?;
         add_batch(
@@ -1235,14 +1148,62 @@ impl<'a, S: Append> Transaction<'a, S> {
             &mut batches,
             &COLLECTION_AUDIT_LOG,
             self.audit_log_updates,
-            include_empty,
         )
         .await?;
-        if !include_empty && batches.is_empty() {
+        if batches.is_empty() {
             return Ok(());
         }
         self.stash.append(batches).await.map_err(|e| e.into())
     }
+}
+
+/// Returns true if collection is uninitialized, false otherwise.
+pub async fn is_collection_uninitialized<K, V, S>(
+    stash: &mut S,
+    collection: &TypedCollection<K, V>,
+) -> Result<bool, Error> {
+    Ok(collection.upper(stash).await?.elements() == [mz_stash::Timestamp::MIN])
+}
+
+/// Inserts empty values into all new collections, so the collections are readable.
+pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
+    let mut batches = Vec::new();
+    async fn add_batch<K, V, S>(
+        stash: &mut S,
+        batches: &mut Vec<AppendBatch>,
+        collection: &TypedCollection<K, V>,
+    ) -> Result<(), Error>
+    where
+        K: mz_stash::Data,
+        V: mz_stash::Data,
+        S: Append,
+    {
+        if is_collection_uninitialized(stash, collection) {
+            let collection = collection.get(stash).await?;
+            let batch = collection.make_batch(stash).await?;
+            batches.push(batch);
+        }
+        Ok(())
+    }
+    add_batch(stash, &mut batches, &COLLECTION_CONFIG).await?;
+    add_batch(stash, &mut batches, &COLLECTION_SETTING).await?;
+    add_batch(stash, &mut batches, &COLLECTION_ID_ALLOC).await?;
+    add_batch(stash, &mut batches, &COLLECTION_SYSTEM_GID_MAPPING).await?;
+    add_batch(stash, &mut batches, &COLLECTION_COMPUTE_INSTANCES).await?;
+    add_batch(
+        stash,
+        &mut batches,
+        &COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX,
+    )
+    .await?;
+    add_batch(stash, &mut batches, &COLLECTION_COMPUTE_INSTANCE_REPLICAS).await?;
+    add_batch(stash, &mut batches, &COLLECTION_DATABASE).await?;
+    add_batch(stash, &mut batches, &COLLECTION_SCHEMA).await?;
+    add_batch(stash, &mut batches, &COLLECTION_ITEM).await?;
+    add_batch(stash, &mut batches, &COLLECTION_ROLE).await?;
+    add_batch(stash, &mut batches, &COLLECTION_TIMESTAMP).await?;
+    add_batch(stash, &mut batches, &COLLECTION_AUDIT_LOG).await?;
+    stash.append(batches).await.map_err(|e| e.into())
 }
 
 macro_rules! impl_codec {
@@ -1499,6 +1460,6 @@ static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
 static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollection::new("schema");
 static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
 static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
-static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
 static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
     TypedCollection::new("timestamp");
+static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
