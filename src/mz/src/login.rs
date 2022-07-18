@@ -45,7 +45,7 @@ async fn request(req: HttpRequest) -> impl Responder {
 
     let _ = tokio::join!(async {
         // 200ms
-        sleep(Duration::new(0, 200000000));
+        sleep(Duration::from_millis(200));
         exit(0);
     });
 

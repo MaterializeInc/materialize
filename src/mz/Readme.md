@@ -20,7 +20,6 @@ cargo build --package mz --release
 After a succesfull build. Make the binary executable:
 
 ```bash
-chmod +X ./target/release/mz
 
 cd ./target/release
 ```
