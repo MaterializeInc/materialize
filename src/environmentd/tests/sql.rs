@@ -1524,10 +1524,6 @@ fn create_postgres_source_with_table(
         runtime.block_on(pg_client.execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[]))?;
     let _ = runtime
         .block_on(pg_client.execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[]))?;
-    let _ = runtime.block_on(pg_client.execute(
-        &format!("SELECT pg_drop_replication_slot(slot_name) from pg_replication_slots;"),
-        &[],
-    ))?;
     let _ = runtime
         .block_on(pg_client.execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[]))?;
     let _ = runtime.block_on(pg_client.execute(
@@ -1572,10 +1568,6 @@ fn create_postgres_source_with_table(
                 .block_on(pg_client.execute(&format!("DROP PUBLICATION {source_name};"), &[]))?;
             let _ =
                 runtime.block_on(pg_client.execute(&format!("DROP TABLE {table_name};"), &[]))?;
-            let _ = runtime.block_on(pg_client.execute(
-                &format!("SELECT pg_drop_replication_slot(slot_name) from pg_replication_slots;"),
-                &[],
-            ))?;
             Ok(())
         },
     ))
