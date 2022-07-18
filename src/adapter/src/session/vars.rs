@@ -1222,13 +1222,13 @@ impl Value for IsolationLevel {
     fn parse(s: &str) -> Result<Self::Owned, ()> {
         let s = UncasedStr::new(s);
 
-        if s == Self::ReadUncommitted.as_str() {
-            Ok(Self::ReadUncommitted)
-        } else if s == Self::ReadCommitted.as_str() {
-            Ok(Self::ReadCommitted)
-        } else if s == Self::RepeatableRead.as_str() {
-            Ok(Self::RepeatableRead)
-        } else if s == Self::Serializable.as_str() {
+        // We don't have any optimizations for levels below Serializable,
+        // so we upgrade them all to Serializable.
+        if s == Self::ReadUncommitted.as_str()
+            || s == Self::ReadCommitted.as_str()
+            || s == Self::RepeatableRead.as_str()
+            || s == Self::Serializable.as_str()
+        {
             Ok(Self::Serializable)
         } else if s == Self::StrictSerializable.as_str() {
             Ok(Self::StrictSerializable)

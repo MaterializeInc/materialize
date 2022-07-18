@@ -147,6 +147,14 @@ SHOW transaction_isolation
 ----
 SERIALIZABLE
 
+statement ok
+SET transaction_isolation = READ_COMMITTED
+
+query T
+SHOW transaction_isolation
+----
+SERIALIZABLE
+
 statement error invalid value for parameter "transaction_isolation": "snapshot_isolation"
 SET transaction_isolation = SNAPSHOT_ISOLATION
 
