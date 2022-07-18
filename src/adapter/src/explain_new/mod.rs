@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use mz_expr::RowSetFinishing;
-use mz_repr::explain_new::{DisplayText, ExprHumanizer};
+use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer};
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
@@ -62,6 +62,7 @@ impl<'a, T> From<&'a T> for Displayable<'a, T> {
 #[derive(Debug)]
 #[allow(dead_code)] // TODO (#13299)
 pub(crate) struct ExplainContext<'a> {
+    pub(crate) config: &'a ExplainConfig,
     pub(crate) humanizer: &'a dyn ExprHumanizer,
     pub(crate) used_indexes: UsedIndexes,
     pub(crate) finishing: Option<RowSetFinishing>,

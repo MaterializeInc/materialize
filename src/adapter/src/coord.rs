@@ -4592,6 +4592,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
                     used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
@@ -4606,6 +4607,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
                     used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
@@ -4621,6 +4623,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
                     used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
@@ -4637,6 +4640,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
                     used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
@@ -4653,6 +4657,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
                     used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
@@ -4674,6 +4679,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
                     used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
