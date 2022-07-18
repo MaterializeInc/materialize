@@ -41,6 +41,10 @@ create_cluster_replica ::=
 replica_option ::=
     'SIZE' size |
     'AVAILABILITY' 'ZONE' az
+create_connection ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'FOR'
+  ( 'KAFKA' | 'CONFLUENT' 'SCHEMA' 'REGISTRY' | 'POSTGRES' | 'SSH' 'TUNNEL' )
+  field '='? val ( ',' field '='? val )*
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
