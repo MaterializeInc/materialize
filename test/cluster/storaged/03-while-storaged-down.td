@@ -10,6 +10,8 @@
 # Verify that the data ingested before `storaged` crashed is still present but
 # that newly ingested data does not appear.
 
+> SET transaction_isolation = SERIALIZABLE
+
 > SELECT * from remote1
 one
 two
@@ -28,3 +30,5 @@ two
 > SELECT * from remote2
 one
 two
+
+> SET transaction_isolation = STRICT_SERIALIZABLE
