@@ -248,17 +248,15 @@ where
         // (beyond self.frontier) from X-1 (not beyond self.frontier) to keep
         // former and filter out the latter.
         assert!(
-            // TODO: This batch.keys.is_empty() narrowing doesn't permit
-            // incorrect behavior (it doesn't matter if we can't recover
-            // timestamp if there are no updates) but it's also unexpected for
-            // an empty batch to pass this check. Sadly, it looks like something
-            // isn't lining up in mz with our since capabilities and our as_ofs,
-            // so it was necessary to get the rest of this check past CI. Figure
-            // out what is going on and remove it.
-            batch.keys.is_empty()
-                || batch.desc.lower() == &self.frontier
-                || PartialOrder::less_than(batch.desc.since(), &self.frontier),
-            "Listen received a batch {:?} advanced past the listen frontier {:?}",
+            PartialOrder::less_than(batch.desc.since(), &self.frontier)
+                // Special case when the frontier == the as_of (i.e. the first
+                // time this is called on a new Listen). Because as_of is
+                // _exclusive_, we don't need to be able to distinguish X from
+                // X-1.
+                || (self.frontier == self.as_of
+                    && PartialOrder::less_equal(batch.desc.since(), &self.frontier)),
+            "Listen on {} received a batch {:?} advanced past the listen frontier {:?}",
+            self.machine.shard_id(),
             batch.desc,
             self.frontier
         );
