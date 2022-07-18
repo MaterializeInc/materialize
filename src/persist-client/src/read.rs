@@ -237,6 +237,30 @@ where
         trace!("Listen::next");
 
         let batch = self.machine.next_listen_batch(&self.frontier).await;
+
+        // A lot of things across mz have to line up to hold the following
+        // invariant and violations only show up as subtle correctness errors,
+        // so explictly validate it here. Better to panic and roll back a
+        // release than be incorrect (also potentially corrupting a sink).
+        //
+        // Note that the since check is intentionally less_than, not less_equal.
+        // If a batch's since is X, that means we can no longer distinguish X
+        // (beyond self.frontier) from X-1 (not beyond self.frontier) to keep
+        // former and filter out the latter.
+        assert!(
+            PartialOrder::less_than(batch.desc.since(), &self.frontier)
+                // Special case when the frontier == the as_of (i.e. the first
+                // time this is called on a new Listen). Because as_of is
+                // _exclusive_, we don't need to be able to distinguish X from
+                // X-1.
+                || (self.frontier == self.as_of
+                    && PartialOrder::less_equal(batch.desc.since(), &self.frontier)),
+            "Listen on {} received a batch {:?} advanced past the listen frontier {:?}",
+            self.machine.shard_id(),
+            batch.desc,
+            self.frontier
+        );
+
         let mut updates = Vec::new();
         for key in batch.keys.iter() {
             fetch_batch_part(
