@@ -52,8 +52,8 @@ use mz_compute_client::response::{
 };
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
-    CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
-    ServicePort,
+    CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, NamespacedOrchestrator,
+    Orchestrator, ServiceConfig, ServiceEvent, ServicePort,
 };
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
@@ -311,10 +311,34 @@ where
                             memory_limit: allocation.memory_limit,
                             scale: allocation.scale,
                             labels: hashmap! {
+                                "replica-id".into() => replica_id.to_string(),
                                 "cluster-id".into() => instance_id.to_string(),
                                 "type".into() => "cluster".into(),
                             },
                             availability_zone,
+                            // This constrains the orchestrator
+                            // (for those orchestrators that support anti-affinity, today just k8s)
+                            // to never schedule pods for different replicas of the same cluster
+                            // on the same node. Pods from the _same_ replica are fine;
+                            // pods from different clusters are also fine.
+                            //
+                            // The point is that if pods of two replicas are on the same node,
+                            // that node going down would kill both replicas, and so the replication
+                            // factor of the cluster in question is illusory.
+                            anti_affinity: Some(vec![
+                                LabelSelector {
+                                    label_name: "cluster-id".to_string(),
+                                    logic: LabelSelectionLogic::Eq {
+                                        value: instance_id.to_string(),
+                                    },
+                                },
+                                LabelSelector {
+                                    label_name: "replica-id".into(),
+                                    logic: LabelSelectionLogic::NotEq {
+                                        value: replica_id.to_string(),
+                                    },
+                                },
+                            ]),
                         },
                     )
                     .await?;
