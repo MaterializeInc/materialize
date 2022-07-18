@@ -197,7 +197,7 @@ where
     async fn send_commands(
         &mut self,
         mut client: StorageGrpcClient,
-        commands: Vec<StorageCommand<T>>,
+        commands: impl IntoIterator<Item = StorageCommand<T>>,
     ) -> RehydrationTaskState {
         for command in commands {
             if let Err(e) = client.send(command).await {
