@@ -21,7 +21,6 @@ use crate::{
     USER_AUTH_URL, WEB_LOGIN_URL,
 };
 use mz_ore::task;
-use open;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
 use tokio::time::sleep;
