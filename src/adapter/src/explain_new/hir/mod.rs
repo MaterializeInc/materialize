@@ -11,40 +11,32 @@
 
 pub(crate) mod text;
 
-use mz_ore::id_gen::IdGen;
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_sql::plan::HirRelationExpr;
-use std::collections::{BTreeMap, HashMap};
-use text::HirRelationExprExplanation;
 
-use super::{ExplainContext, Explainable};
+use super::{AnnotatedPlan, ExplainContext, ExplainSinglePlan, Explainable};
 
 impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
     type Context = ExplainContext<'a>;
 
-    type Text = HirRelationExprExplanation<'a>;
+    type Text = ExplainSinglePlan<'a, HirRelationExpr>;
 
     type Json = UnsupportedFormat;
 
     type Dot = UnsupportedFormat;
 
+    #[allow(unused_variables)] // TODO (#13299)
     fn explain_text(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
-        let mut explanation = HirRelationExprExplanation::new(
-            self.0,
-            context.humanizer,
-            &mut IdGen::default(),
-            HashMap::new(),
-        );
-        if let Some(finishing) = context.finishing.clone() {
-            explanation.explain_row_set_finishing(finishing);
-        }
-        if config.types {
-            explanation.explain_types(&BTreeMap::new());
-        }
-        Ok(explanation)
+        // TODO: use config values to infer requested
+        // plan annotations
+        let plan = AnnotatedPlan {
+            plan: self.0,
+            annotations: Default::default(),
+        };
+        Ok(ExplainSinglePlan { context, plan })
     }
 }

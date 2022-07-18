@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use mz_expr::RowSetFinishing;
-use mz_ore::str::Indent;
+use mz_ore::str::{Indent, IndentLike};
 use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer};
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
@@ -112,16 +112,27 @@ pub(crate) struct ExplainSinglePlan<'a, T> {
 
 impl<'a, T: 'a> DisplayText<()> for ExplainSinglePlan<'a, T>
 where
-    Explainable<'a, T>: DisplayText,
+    Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        let mut ctx = PlanRenderingContext::new(
+            Indent::default(),
+            self.context.humanizer,
+            self.plan.annotations.clone(),
+            self.context.config,
+        );
+
+        if let Some(finishing) = &self.context.finishing {
+            finishing.fmt_text(f, &mut ctx.indent)?;
+            ctx.indented(|ctx| Displayable::from(self.plan.plan).fmt_text(f, ctx))?;
+        } else {
+            Displayable::from(self.plan.plan).fmt_text(f, &mut ctx)?;
+        }
+        // writeln!(f, "")?;
+
         // TODO (#13472)
-        let mut context = Default::default();
-        self.context.finishing.fmt_text(f, &mut context)?;
-        // writeln!(f, "")?;
-        // self.plan.fmt_text(..., f)?;
-        // writeln!(f, "")?;
         // self.context.used_indexes.fmt_text(..., f)?;
+
         Ok(())
     }
 }
@@ -144,18 +155,19 @@ pub(crate) struct ExplainMultiPlan<'a, T> {
 
 impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
 where
-    Explainable<'a, T>: DisplayText,
+    Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
 {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         // TODO (#13472)
-        let mut context = Default::default();
-        self.context.finishing.fmt_text(f, &mut context)?;
+        // let mut context = RenderingContext::new(Indent::default(), self.context.humanizer);
+        // self.context.finishing.fmt_text(f, &mut context.indent)?;
         // writeln!(f, "")?;
         // self.plans.fmt_text(..., f)?;
         // writeln!(f, "")?;
         // self.sources.used_indexes.fmt_text(..., f)?;
         // writeln!(f, "")?;
         // self.context.used_indexes.fmt_text(..., f)?;
+
         Ok(())
     }
 }
