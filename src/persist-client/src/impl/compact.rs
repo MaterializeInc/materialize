@@ -29,7 +29,7 @@ use crate::r#impl::machine::Machine;
 use crate::r#impl::state::HollowBatch;
 use crate::r#impl::trace::FueledMergeRes;
 use crate::read::fetch_batch_part;
-use crate::{Metrics, PersistConfig, ShardId};
+use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
 ///
@@ -64,6 +64,7 @@ pub struct Compactor {
     cfg: PersistConfig,
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
+    writer_id: WriterId,
 }
 
 impl Compactor {
@@ -71,8 +72,14 @@ impl Compactor {
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
+        writer_id: WriterId,
     ) -> Self {
-        Compactor { cfg, blob, metrics }
+        Compactor {
+            cfg,
+            blob,
+            metrics,
+            writer_id,
+        }
     }
 
     pub fn compact_and_apply_background<K, V, T, D>(
@@ -104,6 +111,7 @@ impl Compactor {
         let blob = Arc::clone(&self.blob);
         let metrics = Arc::clone(&self.metrics);
         let mut machine = machine.clone();
+        let writer_id = self.writer_id.clone();
 
         // Spawn compaction in a background task, so the write that triggered it
         // isn't blocked on it.
@@ -116,9 +124,15 @@ impl Compactor {
             async move {
                 metrics.compaction.started.inc();
                 let start = Instant::now();
-                let res =
-                    Self::compact::<T, D>(cfg, Handle::current(), blob, Arc::clone(&metrics), req)
-                        .await;
+                let res = Self::compact::<T, D>(
+                    cfg,
+                    Handle::current(),
+                    blob,
+                    Arc::clone(&metrics),
+                    req,
+                    writer_id,
+                )
+                .await;
                 metrics
                     .compaction
                     .seconds
@@ -151,6 +165,7 @@ impl Compactor {
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         req: CompactReq<T>,
+        writer_id: WriterId,
     ) -> Result<CompactRes<T>, anyhow::Error>
     where
         T: Timestamp + Lattice + Codec64,
@@ -163,6 +178,7 @@ impl Compactor {
                 cfg.batch_builder_max_outstanding_parts,
                 Arc::clone(&metrics),
                 req.shard_id,
+                writer_id,
                 req.desc.lower().clone(),
                 Arc::clone(&blob),
                 &metrics.compaction.batch,
@@ -180,7 +196,7 @@ impl Compactor {
                         &req.shard_id,
                         blob.as_ref(),
                         &metrics,
-                        &key,
+                        key,
                         &part.desc,
                         |k, v, mut t, d| {
                             t.advance_by(req.desc.since().borrow());
@@ -313,6 +329,7 @@ mod tests {
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             req.clone(),
+            write.writer_id.clone(),
         )
         .await
         .expect("compaction failed");
@@ -321,7 +338,11 @@ mod tests {
         assert_eq!(res.output.len, 1);
         assert_eq!(res.output.keys.len(), 1);
         let key = &res.output.keys[0];
-        let (part, updates) = expect_fetch_part(write.blob.as_ref(), key).await;
+        let (part, updates) = expect_fetch_part(
+            write.blob.as_ref(),
+            &key.complete(&write.machine.shard_id()),
+        )
+        .await;
         assert_eq!(part.desc, res.output.desc);
         assert_eq!(updates, all_ok(&data, 10));
     }

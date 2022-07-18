@@ -33,7 +33,7 @@ use crate::r#impl::compact::{CompactReq, Compactor};
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::{HollowBatch, Upper};
-use crate::PersistConfig;
+use crate::{parse_id, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -48,6 +48,14 @@ impl std::fmt::Display for WriterId {
 impl std::fmt::Debug for WriterId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "WriterId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::str::FromStr for WriterId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_id('w', "WriterId", s).map(WriterId)
     }
 }
 
@@ -484,6 +492,7 @@ where
             lower,
             Arc::clone(&self.blob),
             self.machine.shard_id().clone(),
+            self.writer_id.clone(),
         )
     }
 

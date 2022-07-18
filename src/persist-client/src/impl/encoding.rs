@@ -21,6 +21,7 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::CodecMismatch;
+use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::{
     HollowBatch, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReader, ProtoSnapshotSplit,
     ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriter,
@@ -76,6 +77,16 @@ impl RustType<String> for WriterId {
             Ok(x) => Ok(WriterId(x)),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
+    }
+}
+
+impl RustType<String> for PartialBlobKey {
+    fn into_proto(&self) -> String {
+        self.0.clone()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(PartialBlobKey(proto))
     }
 }
 
@@ -365,7 +376,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoSnapshotSplit> for SnapshotSplit<T> {
         let mut batches = Vec::new();
         for batch in proto.batches.into_iter() {
             let desc = batch.desc.into_rust_if_some("desc")?;
-            batches.push((batch.key, desc));
+            batches.push((PartialBlobKey(batch.key), desc));
         }
         Ok(SnapshotSplit {
             shard_id: proto.shard_id.into_rust()?,

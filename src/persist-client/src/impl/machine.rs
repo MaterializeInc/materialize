@@ -727,6 +727,7 @@ mod tests {
                                 Antichain::from_elem(lower),
                                 Arc::clone(&client.blob),
                                 shard_id.clone(),
+                                WriterId::new(),
                             );
                             for (k, t, d) in updates {
                                 builder.add(&k, &(), &t, &d).await.expect("invalid batch");
@@ -819,6 +820,7 @@ mod tests {
                                 Arc::clone(&client.blob),
                                 Arc::clone(&client.metrics),
                                 req,
+                                WriterId::new(),
                             )
                             .await;
                             match res {
