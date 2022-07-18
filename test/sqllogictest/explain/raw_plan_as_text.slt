@@ -144,10 +144,18 @@ EOF
 # |     Get materialize.public.t
 query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
-SELECT * FROM t WHERE EXISTS(SELECT * FROM t as t1 WHERE t.a = t1.a)
+SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
-Filter ???
-  Get materialize.public.t
+Let
+  Filter (Exists(Get l1) && Exists(Get l2))
+    Get materialize.public.t
+  Where
+    l1 =
+      Filter (#^0 < #0)
+        Get materialize.public.mv
+    l2 =
+      Filter (#^1 > #1)
+        Get materialize.public.mv
 
 EOF
 
@@ -288,53 +296,41 @@ InnerJoin true
 EOF
 
 
-# query T multiline
-# EXPLAIN RAW PLAN AS TEXT FOR
-# SELECT
-#   *
-# FROM
-#   T as X
-# WHERE
-#   NOT EXISTS (SELECT * FROM T as Y WHERE X.a = Y.b)
-# LIMIT 10
-# ----
-# %0 =
-# | Get materialize.public.t (u1)
-# | Filter NOT(exists(%1))
-# | |
-# | | %1 =
-# | | | Get materialize.public.t (u1)
-# | | | Filter (#^0 = #1)
-# | |
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT
+  *
+FROM
+  T as X
+WHERE
+  NOT EXISTS (SELECT * FROM T as Y WHERE X.a = Y.b)
+LIMIT 10
+----
+Finish limit=10 output=[#0, #1]
+  Let
+    Filter NOT(Exists(Get l1))
+      Get materialize.public.t
+    Where
+      l1 =
+        Filter (#^0 = #1)
+          Get materialize.public.t
 
-# Finish order_by=() limit=10 offset=0 project=(#0, #1)
+EOF
 
-# EOF
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR -- WITH (TYPES)
+VIEW mv
+----
+Filter (#0) IS NOT NULL
+  Get materialize.public.t
 
-# query T multiline
-# EXPLAIN RAW PLAN WITH (TYPES) AS TEXT FOR
-# VIEW v
-# ----
-# %0 =
-# | Get materialize.public.t (u1)
-# | | types = (integer?, integer?)
-# | | keys = ()
-# | Filter NOT(isnull(#0))
-# | | types = (integer?, integer?)
-# | | keys = ()
+EOF
 
-# EOF
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR -- WITH (TYPES)
+RECORDED VIEW rv
+----
+Filter (#0) IS NOT NULL
+  Get materialize.public.t
 
-# query T multiline
-# EXPLAIN RAW PLAN WITH (TYPES) AS TEXT FOR
-# RECORDED VIEW rv
-# ----
-# %0 =
-# | Get materialize.public.t (u1)
-# | | types = (integer?, integer?)
-# | | keys = ()
-# | Filter NOT(isnull(#0))
-# | | types = (integer?, integer?)
-# | | keys = ()
-
-# EOF
+EOF

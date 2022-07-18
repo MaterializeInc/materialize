@@ -203,6 +203,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
 
 impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
+        use HirRelationExpr::Get;
         use HirScalarExpr::*;
 
         match self.0 {
@@ -307,8 +308,14 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                 }
                 Ok(())
             }
-            Exists(_expr) => write!(f, "???"), // TODO
-            Select(_expr) => write!(f, "???"), // TODO
+            Exists(expr) => match expr.as_ref() {
+                Get { id, .. } => write!(f, "Exists(Get {})", id), // TODO: optional humanizer
+                _ => write!(f, "Exists(???)"),
+            },
+            Select(expr) => match expr.as_ref() {
+                Get { id, .. } => write!(f, "Select(Get {})", id), // TODO: optional humanizer
+                _ => write!(f, "Select(???)"),
+            },
         }
     }
 }
