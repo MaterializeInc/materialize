@@ -20,10 +20,10 @@ use crate::{
     BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL,
     USER_AUTH_URL, WEB_LOGIN_URL,
 };
+use mz_ore::task;
 use open;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
-use tokio::task;
 use tokio::time::sleep;
 
 /// ----------------------------
@@ -47,7 +47,7 @@ async fn request(
         save_profile(profile).unwrap();
     }
 
-    let _ = task::spawn(async {
+    let _ = task::spawn(|| "sleep", async {
         sleep(Duration::from_millis(200)).await;
         exit(0);
     });

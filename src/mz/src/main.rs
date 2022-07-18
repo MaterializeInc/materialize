@@ -197,7 +197,7 @@ async fn main() {
                 RegionsCommands::Delete {
                     cloud_provider_region,
                 } => {
-                    if warning_delete_region(cloud_provider_region.clone()).await {
+                    if warning_delete_region(cloud_provider_region.clone()) {
                         match validate_profile(client.clone()).await {
                             Some(frontegg_auth_machine) => {
                                 println!(

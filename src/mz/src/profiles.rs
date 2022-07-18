@@ -16,6 +16,7 @@ use reqwest::{Client, Error};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::process::exit;
 
 /// ----------------------------
 ///  Profiles handling
@@ -43,14 +44,19 @@ pub(crate) async fn authenticate_profile(
     headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    client
+    let authentication_result = client
         .post(MACHINE_AUTH_URL)
         .headers(headers)
         .json(&access_token_request_body)
         .send()
-        .await?
-        .json::<FronteggAuthMachine>()
-        .await
+        .await?;
+
+    if authentication_result.status() == 401 {
+        println!("Unauthorized. Please, update the credentials.");
+        exit(0);
+    } else {
+        authentication_result.json::<FronteggAuthMachine>().await
+    }
 }
 
 fn create_profile_dir_if_not_exists() {

@@ -19,3 +19,4 @@ reqwest = { version = "0.11", features = ["blocking", "json"] }
 toml = "0.5.8"
 dirs = "4.0.0"
 subprocess = "0.2.9"
+mz-ore = { path = "../ore", features = ["task"] }

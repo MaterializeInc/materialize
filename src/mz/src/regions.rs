@@ -68,7 +68,7 @@ pub(crate) async fn enable_region(
         .await
 }
 
-pub(crate) async fn warning_delete_region(cloud_provider_region: CloudProviderRegion) -> bool {
+pub(crate) fn warning_delete_region(cloud_provider_region: CloudProviderRegion) -> bool {
     let region = parse_cloud_provider_region(cloud_provider_region);
 
     println!();
