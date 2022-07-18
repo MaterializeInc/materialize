@@ -607,7 +607,6 @@ impl_display_t!(ViewDefinition);
 pub struct CreateViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub temporary: bool,
-    pub materialized: bool,
     pub definition: ViewDefinition<T>,
 }
 
@@ -619,9 +618,6 @@ impl<T: AstInfo> AstDisplay for CreateViewStatement<T> {
         }
         if self.temporary {
             f.write_str(" TEMPORARY");
-        }
-        if self.materialized {
-            f.write_str(" MATERIALIZED");
         }
 
         f.write_str(" VIEW");
@@ -658,7 +654,6 @@ impl_display!(CreateViewsSourceTarget);
 pub struct CreateViewsStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub temporary: bool,
-    pub materialized: bool,
     pub source: T::ObjectName,
     pub targets: Option<Vec<CreateViewsSourceTarget>>,
 }
@@ -671,9 +666,6 @@ impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
         }
         if self.temporary {
             f.write_str(" TEMPORARY");
-        }
-        if self.materialized {
-            f.write_str(" MATERIALIZED");
         }
 
         f.write_str(" VIEWS");

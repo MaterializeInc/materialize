@@ -1430,7 +1430,6 @@ pub fn plan_view(
         Statement::CreateView(CreateViewStatement {
             if_exists: IfExistsBehavior::Error,
             temporary,
-            materialized: false,
             definition: def.clone(),
         }),
     )?;
@@ -1482,7 +1481,6 @@ pub fn plan_create_view(
 ) -> Result<Plan, PlanError> {
     let CreateViewStatement {
         temporary,
-        materialized,
         if_exists,
         definition,
     } = &mut stmt;
@@ -1508,7 +1506,6 @@ pub fn plan_create_view(
         name,
         view,
         replace,
-        materialize: *materialized,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
     }))
 }
@@ -1524,7 +1521,6 @@ pub fn plan_create_views(
     scx: &StatementContext,
     CreateViewsStatement {
         if_exists,
-        materialized,
         temporary,
         source: source_name,
         targets,
@@ -1668,7 +1664,6 @@ pub fn plan_create_views(
             Ok(Plan::CreateViews(CreateViewsPlan {
                 views,
                 if_not_exists: if_exists == IfExistsBehavior::Skip,
-                materialize: materialized,
             }))
         }
         connection @ _ => sql_bail!("cannot generate views from {} sources", connection.name()),
@@ -2365,9 +2360,7 @@ pub fn plan_create_index(
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
         None => {
-            // `key_parts` is None if we're creating a "default" index, i.e.
-            // creating the index as if the index had been created alongside the
-            // view source, e.g. `CREATE MATERIALIZED...`
+            // `key_parts` is None if we're creating a "default" index.
             on.desc(&scx.catalog.resolve_full_name(on.name()))?
                 .typ()
                 .default_key()

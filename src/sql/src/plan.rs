@@ -232,15 +232,12 @@ pub struct CreateViewPlan {
     pub view: View,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
-    /// whether we should auto-materialize the view
-    pub materialize: bool,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateViewsPlan {
     pub views: Vec<(QualifiedObjectName, View)>,
-    pub materialize: bool,
     pub if_not_exists: bool,
 }
 

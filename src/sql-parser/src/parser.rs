@@ -1597,7 +1597,6 @@ impl<'a> Parser<'a> {
             // go over optional modifiers
             let _ = self.parse_keywords(&[OR, REPLACE]);
             let _ = self.parse_one_of_keywords(&[TEMP, TEMPORARY]);
-            let _ = self.parse_keyword(MATERIALIZED);
 
             if self.parse_keyword(VIEW) {
                 self.index = index;
@@ -1608,7 +1607,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE",
                     self.peek_token(),
                 )
             }
@@ -2447,7 +2446,6 @@ impl<'a> Parser<'a> {
             IfExistsBehavior::Error
         };
         let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
-        let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(VIEW)?;
         if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
             if_exists = IfExistsBehavior::Skip;
@@ -2456,7 +2454,6 @@ impl<'a> Parser<'a> {
         let definition = self.parse_view_definition()?;
         Ok(Statement::CreateView(CreateViewStatement {
             temporary,
-            materialized,
             if_exists,
             definition,
         }))
@@ -2485,7 +2482,6 @@ impl<'a> Parser<'a> {
             IfExistsBehavior::Error
         };
         let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
-        let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(VIEWS)?;
         if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
             if_exists = IfExistsBehavior::Skip;
@@ -2511,7 +2507,6 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::CreateViews(CreateViewsStatement {
             temporary,
-            materialized,
             if_exists,
             source,
             targets,

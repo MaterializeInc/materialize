@@ -3363,9 +3363,8 @@ impl<S: Append + 'static> Coordinator<S> {
         name: QualifiedObjectName,
         view: View,
         replace: Option<GlobalId>,
-        materialize: bool,
         depends_on: Vec<GlobalId>,
-    ) -> Result<(Vec<catalog::Op>, Option<(GlobalId, ComputeInstanceId)>), AdapterError> {
+    ) -> Result<Vec<catalog::Op>, AdapterError> {
         self.validate_timeline(view.expr.depends_on())?;
 
         let mut ops = vec![];
@@ -3392,45 +3391,10 @@ impl<S: Append + 'static> Coordinator<S> {
             id: view_id,
             oid: view_oid,
             name: name.clone(),
-            item: CatalogItem::View(view.clone()),
+            item: CatalogItem::View(view),
         });
-        let index_id = if materialize {
-            let compute_instance = self
-                .catalog
-                .resolve_compute_instance(session.vars().cluster())?
-                .id;
-            let mut index_name = name.clone();
-            index_name.item += "_primary_idx";
-            index_name = self
-                .catalog
-                .for_session(session)
-                .find_available_name(index_name);
-            let index_id = self.catalog.allocate_user_id().await?;
-            let full_name = self
-                .catalog
-                .resolve_full_name(&name, Some(session.conn_id()));
-            let index = auto_generate_primary_idx(
-                index_name.item.clone(),
-                compute_instance,
-                full_name,
-                view_id,
-                &view.desc,
-                view.conn_id,
-                vec![view_id],
-            );
-            let index_oid = self.catalog.allocate_oid().await?;
-            ops.push(catalog::Op::CreateItem {
-                id: index_id,
-                oid: index_oid,
-                name: index_name,
-                item: CatalogItem::Index(index),
-            });
-            Some((index_id, compute_instance))
-        } else {
-            None
-        };
 
-        Ok((ops, index_id))
+        Ok(ops)
     }
 
     async fn sequence_create_view(
@@ -3440,36 +3404,17 @@ impl<S: Append + 'static> Coordinator<S> {
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let if_not_exists = plan.if_not_exists;
-        let (ops, index) = self
+        let ops = self
             .generate_view_ops(
                 session,
                 plan.name,
                 plan.view.clone(),
                 plan.replace,
-                plan.materialize,
                 depends_on,
             )
             .await?;
-        match self
-            .catalog_transact(Some(session), ops, |txn| {
-                if let Some((index_id, compute_instance)) = index {
-                    let mut builder = txn.dataflow_builder(compute_instance);
-                    Ok(Some((
-                        builder.build_index_dataflow(index_id)?,
-                        compute_instance,
-                    )))
-                } else {
-                    Ok(None)
-                }
-            })
-            .await
-        {
-            Ok(df) => {
-                if let Some((df, compute_instance)) = df {
-                    self.ship_dataflow(df, compute_instance).await;
-                }
-                Ok(ExecuteResponse::CreatedView { existed: false })
-            }
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedView { existed: false }),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
@@ -3485,44 +3430,15 @@ impl<S: Append + 'static> Coordinator<S> {
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
-        let mut indexes = vec![];
 
         for (name, view) in plan.views {
-            let (mut view_ops, index) = self
-                .generate_view_ops(
-                    session,
-                    name,
-                    view,
-                    None,
-                    plan.materialize,
-                    depends_on.clone(),
-                )
+            let mut view_ops = self
+                .generate_view_ops(session, name, view, None, depends_on.clone())
                 .await?;
             ops.append(&mut view_ops);
-            indexes.extend(index);
         }
-        match self
-            .catalog_transact(Some(session), ops, |txn| {
-                let mut dfs = HashMap::new();
-                for (index_id, compute_instance) in indexes {
-                    let mut builder = txn.dataflow_builder(compute_instance);
-                    let df = builder.build_index_dataflow(index_id)?;
-                    dfs.entry(compute_instance)
-                        .or_insert_with(Vec::new)
-                        .push(df);
-                }
-                Ok(dfs)
-            })
-            .await
-        {
-            Ok(dfs) => {
-                for (compute_instance, dfs) in dfs {
-                    if !dfs.is_empty() {
-                        self.ship_dataflows(dfs, compute_instance).await;
-                    }
-                }
-                Ok(ExecuteResponse::CreatedView { existed: false })
-            }
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedView { existed: false }),
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
@@ -6409,35 +6325,6 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     ExecuteResponse::SendingRows {
         future: Box::pin(async { PeekResponseUnary::Rows(rows) }),
         span: tracing::Span::none(),
-    }
-}
-
-fn auto_generate_primary_idx(
-    index_name: String,
-    compute_instance: ComputeInstanceId,
-    on_name: FullObjectName,
-    on_id: GlobalId,
-    on_desc: &RelationDesc,
-    conn_id: Option<ConnectionId>,
-    depends_on: Vec<GlobalId>,
-) -> catalog::Index {
-    let default_key = on_desc.typ().default_key();
-    catalog::Index {
-        create_sql: index_sql(
-            index_name,
-            compute_instance,
-            on_name,
-            &on_desc,
-            &default_key,
-        ),
-        on: on_id,
-        keys: default_key
-            .iter()
-            .map(|k| MirScalarExpr::Column(*k))
-            .collect(),
-        conn_id,
-        depends_on,
-        compute_instance,
     }
 }
 

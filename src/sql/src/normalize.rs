@@ -224,7 +224,7 @@ pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, P
 /// Normalizes a `CREATE` statement.
 ///
 /// The resulting statement will not depend upon any session parameters, nor
-/// specify any non-default options (like `MATERIALIZED`, `IF NOT EXISTS`, etc).
+/// specify any non-default options (like `TEMPORARY`, `IF NOT EXISTS`, etc).
 ///
 /// The goal is to construct a backwards-compatible description of the object.
 /// SQL is the most stable part of Materialize, so SQL is used to describe the
@@ -404,7 +404,6 @@ pub fn create_statement(
 
         Statement::CreateView(CreateViewStatement {
             temporary,
-            materialized,
             if_exists,
             definition:
                 ViewDefinition {
@@ -425,7 +424,6 @@ pub fn create_statement(
                     return Err(err);
                 }
             }
-            *materialized = false;
             *if_exists = IfExistsBehavior::Error;
         }
 
