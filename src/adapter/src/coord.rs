@@ -160,6 +160,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks { conn_id: ConnectionId },
     LinearizeReads(Vec<PendingTxn>),
+    StorageUsage,
 }
 
 #[derive(Derivative)]
@@ -717,6 +718,10 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
 
+        // Trigger a storage usage metric collection on configured interval
+        let mut storage_usage_update_interval =
+            tokio::time::interval(self.catalog.config().storage_metrics_collection_interval);
+
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
             // cancellation safe and add a comment explaining why. You can refer here for more
@@ -755,6 +760,19 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
+                _ = storage_usage_update_interval.tick() => Message::StorageUsage,
+
+                // At the lowest priority, process table advancements. This is a blocking
+                // HashMap instead of a channel so that we can delay the determination of
+                // which table to advance until we know we can process it. In the event of
+                // very high traffic where a second AdvanceLocalInputs message occurs before
+                // advance_tables is fully emptied, this allows us to replace an old request
+                // with a new one, avoiding duplication of work, which wouldn't be possible if
+                // we had already sent all AdvanceLocalInput messages on a channel.
+                // See [`AdvanceTables::recv`] for notes on why this is cancel-safe.
+                inputs = self.advance_tables.recv() => {
+                    Message::AdvanceLocalInput(inputs)
+                },
             };
 
             // All message processing functions trace. Start a parent span for them to make

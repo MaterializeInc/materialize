@@ -105,6 +105,7 @@ pub enum EventDetails {
     FullNameV1(FullNameV1),
     NameV1(NameV1),
     RenameItemV1(RenameItemV1),
+    StorageMetricsV1(StorageMetricsV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,6 +139,14 @@ pub struct CreateComputeInstanceReplicaV1 {
     pub logical_size: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageMetricsV1 {
+    pub id: u64,
+    pub object_id: Option<String>,
+    pub size_bytes: u64,
+    pub collection_timestamp: EpochMillis,
+}
+
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
@@ -150,6 +159,7 @@ impl EventDetails {
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::NameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::FullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::StorageMetricsV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }

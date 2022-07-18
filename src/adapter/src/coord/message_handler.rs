@@ -67,7 +67,35 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
+            Message::StorageUsage => {
+                self.storage_usage_update().await;
+            }
         }
+    }
+
+    //  #[tracing::instrument(level = "debug", skip_all)]
+    async fn storage_usage_update(&mut self) {
+        // TODO: call persist API, stub out values for now
+        let object_id = None;
+        let size_bytes = 12345;
+        // let insertion = self
+        //     .catalog
+        //     .state()
+        //     .pack_storage_usage_update(storage_id, bytes_used, timestamp);
+        // let updates = vec![insertion];
+        // self.send_builtin_table_updates(updates).await;
+        // Persist update in stash
+
+        self.catalog_transact(
+            None,
+            vec![catalog::Op::UpdateStorageMetrics {
+                object_id,
+                size_bytes,
+            }],
+            |_| Ok(()),
+        )
+        .await
+        .expect("updating storage usage status cannot fail");
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

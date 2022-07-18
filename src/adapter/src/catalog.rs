@@ -1643,6 +1643,8 @@ impl<S: Append> Catalog<S> {
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     timestamp_frequency: Duration::from_secs(1),
+                    // TODO: Make this more configurable?
+                    storage_metrics_collection_interval: Duration::from_secs(120),
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
@@ -2001,6 +2003,14 @@ impl<S: Append> Catalog<S> {
         for event in audit_logs {
             let event = VersionedEvent::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
+        }
+
+        println!("About to load_storage_metrics");
+        let storage_metric_events = storage.load_storage_metrics().await?;
+        for event in storage_metric_events {
+            let event = serde_json::from_slice(&event).unwrap();
+            println!("packing storage metric event: {:?}", event);
+            builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 
         Ok((catalog, builtin_migration_metadata, builtin_table_updates))
@@ -2885,6 +2895,27 @@ impl<S: Append> Catalog<S> {
         Ok(())
     }
 
+    fn add_to_storage_metrics(
+        &self,
+        tx: &mut storage::Transaction<S>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        object_id: Option<String>,
+        size_bytes: u64,
+    ) -> Result<(), Error> {
+        let collection_timestamp = (self.state.config.now)();
+        let id = tx.get_and_increment_id(storage::STORAGE_METRICS_ID_ALLOC_KEY.to_string())?;
+
+        let event_details = EventDetails::StorageMetricsV1(mz_audit_log::StorageMetricsV1 {
+            id,
+            object_id,
+            size_bytes,
+            collection_timestamp,
+        });
+        builtin_table_updates.push(self.state.pack_storage_usage_update(&event_details)?);
+        tx.insert_storage_metrics_event(event_details);
+        Ok(())
+    }
+
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
             && matches!(
@@ -3529,6 +3560,18 @@ impl<S: Append> Catalog<S> {
 
                     vec![Action::UpdateComputeInstanceStatus { event }]
                 }
+                Op::UpdateStorageMetrics {
+                    object_id,
+                    size_bytes,
+                } => {
+                    self.add_to_storage_metrics(
+                        &mut tx,
+                        &mut builtin_table_updates,
+                        object_id,
+                        size_bytes,
+                    )?;
+                    vec![]
+                }
             });
         }
 
@@ -4088,6 +4131,10 @@ pub enum Op {
     },
     UpdateComputeInstanceStatus {
         event: ComputeInstanceEvent,
+    },
+    UpdateStorageMetrics {
+        object_id: Option<String>,
+        size_bytes: u64,
     },
 }
 
