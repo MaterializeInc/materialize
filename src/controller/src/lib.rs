@@ -204,6 +204,8 @@ pub struct Controller<T = mz_repr::Timestamp> {
     computed_image: String,
     compute: BTreeMap<ComputeInstanceId, ComputeControllerState<T>>,
     readiness: Readiness,
+    /// Set to `true` once `initialization_complete` has been called.
+    initialized: bool,
 }
 
 impl<T> Controller<T>
@@ -222,6 +224,11 @@ where
             instance,
             ComputeControllerState::new(self.build_info, &logging).await,
         );
+        if self.initialized {
+            self.compute_mut(instance)
+                .expect("Instance just initialized")
+                .initialization_complete();
+        }
     }
 
     /// Adds replicas of an instance.
@@ -432,6 +439,24 @@ where
     T: Timestamp + Lattice + Codec64 + Copy,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    /// Marks the end of any initialization commands.
+    ///
+    /// The implementor may wait for this method to be called before implementing prior commands,
+    /// and so it is important for a user to invoke this method as soon as it is comfortable.
+    /// This method can be invoked immediately, at the potential expense of performance.
+    pub fn initialization_complete(&mut self) {
+        self.initialized = true;
+        for (instance, compute) in self.compute.iter_mut() {
+            ComputeControllerMut {
+                instance: *instance,
+                compute,
+                storage_controller: &mut *self.storage_controller,
+            }
+            .initialization_complete();
+        }
+        self.storage_mut().initialization_complete();
+    }
+
     /// Waits until the controller is ready to process a response.
     ///
     /// This method may block for an arbitrarily long time.
@@ -519,6 +544,7 @@ where
             computed_image: config.computed_image,
             compute: BTreeMap::default(),
             readiness: Readiness::NotReady,
+            initialized: false,
         }
     }
 }

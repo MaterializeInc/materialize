@@ -48,7 +48,7 @@ use crate::logging::LoggingConfig;
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-mod replicated;
+pub mod replicated;
 
 /// An abstraction allowing us to name different compute instances.
 pub type ComputeInstanceId = u64;
@@ -646,6 +646,15 @@ where
     T: Timestamp + Lattice + Codec64,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    /// Marks the end of any initialization commands.
+    ///
+    /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
+    pub fn initialization_complete(&mut self) {
+        self.compute
+            .replicas
+            .send(ComputeCommand::InitializationComplete);
+    }
+
     /// Acquire a mutable reference to the collection state, should it exist.
     pub fn collection_mut(
         &mut self,
