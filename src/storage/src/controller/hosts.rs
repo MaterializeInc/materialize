@@ -231,7 +231,7 @@ impl<T> StorageHosts<T> {
                         },
                         ServicePort {
                             name: "internal-http".into(),
-                            port_hint: 6877,
+                            port_hint: 6878,
                         },
                     ],
                     // TODO: limits?
