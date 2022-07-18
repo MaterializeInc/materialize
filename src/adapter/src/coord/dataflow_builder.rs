@@ -32,7 +32,7 @@ use mz_storage::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, 
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
-use crate::catalog::{CatalogItem, CatalogState, RecordedView, View};
+use crate::catalog::{CatalogItem, CatalogState, MaterializedView, View};
 use crate::coord::{CatalogTxn, Coordinator};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::AdapterError;
@@ -156,9 +156,9 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         let expr = view.optimized_expr.clone();
                         self.import_view_into_dataflow(id, &expr, dataflow)?;
                     }
-                    CatalogItem::RecordedView(rview) => {
+                    CatalogItem::MaterializedView(mview) => {
                         let monotonic = self.monotonic_view(*id);
-                        dataflow.import_source(*id, rview.desc.typ().clone(), monotonic);
+                        dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
@@ -269,39 +269,39 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         Ok(())
     }
 
-    /// Builds a dataflow description for the recorded view specified by `id`.
+    /// Builds a dataflow description for the materialized view specified by `id`.
     ///
     /// For this, we first build a dataflow for the view expression, then we
     /// add a sink that writes that dataflow's output to storage.
     /// `internal_view_id` is the ID we assign to the view dataflow internally,
     /// so we can connect the sink to it.
-    pub fn build_recorded_view_dataflow(
+    pub fn build_materialized_view_dataflow(
         &mut self,
         id: GlobalId,
         as_of: Antichain<Timestamp>,
         internal_view_id: GlobalId,
     ) -> Result<DataflowDesc, AdapterError> {
-        let rview_entry = self.catalog.get_entry(&id);
-        let rview = match rview_entry.item() {
-            CatalogItem::RecordedView(rv) => rv,
+        let mview_entry = self.catalog.get_entry(&id);
+        let mview = match mview_entry.item() {
+            CatalogItem::MaterializedView(mv) => mv,
             _ => unreachable!(
-                "cannot create recorded view dataflow on something that is not a recorded view"
+                "cannot create materialized view dataflow on something that is not a materialized view"
             ),
         };
 
-        let name = rview_entry.name().to_string();
+        let name = mview_entry.name().to_string();
         let mut dataflow = DataflowDesc::new(name);
 
-        self.import_view_into_dataflow(&internal_view_id, &rview.optimized_expr, &mut dataflow)?;
+        self.import_view_into_dataflow(&internal_view_id, &mview.optimized_expr, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
         }
 
         let sink_description = SinkDesc {
             from: internal_view_id,
-            from_desc: rview.desc.clone(),
+            from_desc: mview.desc.clone(),
             connection: SinkConnection::Persist(PersistSinkConnection {
-                value_desc: rview.desc.clone(),
+                value_desc: mview.desc.clone(),
                 storage_metadata: (),
             }),
             envelope: None,
@@ -317,8 +317,8 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
     /// Determine the given view's monotonicity.
     ///
-    /// This recursively traverses the expressions of all (recorded) views involved in the given
-    /// view's query expression. If this becomes a performance problem, we could add the
+    /// This recursively traverses the expressions of all (materialized) views involved in the
+    /// given view's query expression. If this becomes a performance problem, we could add the
     /// monotonicity information of views into the catalog instead.
     fn monotonic_view(&self, id: GlobalId) -> bool {
         self.monotonic_view_inner(id, &mut HashMap::new())
@@ -337,11 +337,11 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             match self.catalog.get_entry(&id).item() {
                 CatalogItem::Source(source) => Ok(source.source_desc.monotonic()),
                 CatalogItem::View(View { optimized_expr, .. })
-                | CatalogItem::RecordedView(RecordedView { optimized_expr, .. }) => {
+                | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
                     let mut view_expr = optimized_expr.clone().into_inner();
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
-                    // of monotonic (recorded) views and sources (but not indexes).
+                    // of monotonic (materialized) views and sources (but not indexes).
                     let mut monotonic_ids = HashSet::new();
                     let recursion_result: Result<(), RecursionLimitError> = view_expr
                         .try_visit_post(&mut |e| {

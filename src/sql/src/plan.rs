@@ -88,7 +88,7 @@ pub enum Plan {
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
     CreateViews(CreateViewsPlan),
-    CreateRecordedView(CreateRecordedViewPlan),
+    CreateMaterializedView(CreateMaterializedViewPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
     DiscardTemp,
@@ -242,9 +242,9 @@ pub struct CreateViewsPlan {
 }
 
 #[derive(Debug)]
-pub struct CreateRecordedViewPlan {
+pub struct CreateMaterializedViewPlan {
     pub name: QualifiedObjectName,
-    pub recorded_view: RecordedView,
+    pub materialized_view: MaterializedView,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
     pub if_not_exists: bool,
@@ -516,7 +516,7 @@ pub struct View {
 }
 
 #[derive(Clone, Debug)]
-pub struct RecordedView {
+pub struct MaterializedView {
     pub create_sql: String,
     pub expr: mz_expr::MirRelationExpr,
     pub column_names: Vec<ColumnName>,

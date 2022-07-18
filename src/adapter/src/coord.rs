@@ -136,14 +136,14 @@ use mz_sql::names::{
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
-    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    RecordedView, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    StatementDesc, TailFrom, TailPlan, View,
+    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr,
+    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, Params, PeekPlan,
+    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ExportDescription, ReadPolicy};
@@ -916,9 +916,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
                 CatalogItem::View(_) => (),
-                CatalogItem::RecordedView(rview) => {
+                CatalogItem::MaterializedView(mview) => {
                     // Re-create the storage collection.
-                    let collection_desc = rview.desc.clone().into();
+                    let collection_desc = mview.desc.clone().into();
                     self.controller
                         .storage_mut()
                         .create_collections(vec![(entry.id(), collection_desc)])
@@ -929,14 +929,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
-                        .index_oracle(rview.compute_instance)
-                        .sufficient_collections(&rview.depends_on);
+                        .index_oracle(mview.compute_instance)
+                        .sufficient_collections(&mview.depends_on);
                     let as_of = self.least_valid_read(&id_bundle);
                     let internal_view_id = self.allocate_transient_id()?;
                     let df = self
-                        .dataflow_builder(rview.compute_instance)
-                        .build_recorded_view_dataflow(entry.id(), as_of, internal_view_id)?;
-                    self.ship_dataflow(df, rview.compute_instance).await;
+                        .dataflow_builder(mview.compute_instance)
+                        .build_materialized_view_dataflow(entry.id(), as_of, internal_view_id)?;
+                    self.ship_dataflow(df, mview.compute_instance).await;
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink on the compute instance.
@@ -1705,7 +1705,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     match entry.item() {
                         CatalogItem::Table(_)
                         | CatalogItem::Source(_)
-                        | CatalogItem::RecordedView(_)
+                        | CatalogItem::MaterializedView(_)
                         | CatalogItem::StorageCollection(_) => {
                             id_bundle.storage_ids.insert(entry.id());
                         }
@@ -2163,7 +2163,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::ShowCreateSource(_)
                     | Statement::ShowCreateTable(_)
                     | Statement::ShowCreateView(_)
-                    | Statement::ShowCreateRecordedView(_)
+                    | Statement::ShowCreateMaterializedView(_)
                     | Statement::ShowCreateConnection(_)
                     | Statement::ShowDatabases(_)
                     | Statement::ShowSchemas(_)
@@ -2209,7 +2209,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
                     | Statement::CreateViews(_)
-                    | Statement::CreateRecordedView(_)
+                    | Statement::CreateMaterializedView(_)
                     | Statement::Delete(_)
                     | Statement::DropDatabase(_)
                     | Statement::DropSchema(_)
@@ -2535,9 +2535,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     session,
                 );
             }
-            Plan::CreateRecordedView(plan) => {
+            Plan::CreateMaterializedView(plan) => {
                 tx.send(
-                    self.sequence_create_recorded_view(&session, plan, depends_on)
+                    self.sequence_create_materialized_view(&session, plan, depends_on)
                         .await,
                     session,
                 );
@@ -3444,16 +3444,16 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn sequence_create_recorded_view(
+    async fn sequence_create_materialized_view(
         &mut self,
         session: &Session,
-        plan: CreateRecordedViewPlan,
+        plan: CreateMaterializedViewPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let CreateRecordedViewPlan {
+        let CreateMaterializedViewPlan {
             name,
-            recorded_view:
-                RecordedView {
+            materialized_view:
+                MaterializedView {
                     create_sql,
                     expr: view_expr,
                     column_names,
@@ -3465,7 +3465,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.validate_timeline(depends_on.clone())?;
 
-        // Recorded views are not allowed to depend on log sources, as replicas
+        // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
         // TODO(teskje): Remove this check once arrangement-based log sources
         // are replaced with persist-based ones.
@@ -3476,12 +3476,12 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
             return Err(AdapterError::InvalidLogDependency {
-                object_type: "recorded view".into(),
+                object_type: "materialized view".into(),
                 log_names,
             });
         }
 
-        // Allocate IDs for the recorded view in the catalog.
+        // Allocate IDs for the materialized view in the catalog.
         let id = self.catalog.allocate_user_id().await?;
         let oid = self.catalog.allocate_oid().await?;
         // Allocate a unique ID that can be used by the dataflow builder to
@@ -3492,7 +3492,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
 
         // Pick the least valid read timestamp as the as-of for the view
-        // dataflow. This makes the recorded view include the maximum possible
+        // dataflow. This makes the materialized view include the maximum possible
         // amount of historical detail.
         let id_bundle = self
             .index_oracle(compute_instance)
@@ -3507,7 +3507,7 @@ impl<S: Append + 'static> Coordinator<S> {
             id,
             oid,
             name,
-            item: CatalogItem::RecordedView(catalog::RecordedView {
+            item: CatalogItem::MaterializedView(catalog::MaterializedView {
                 create_sql,
                 optimized_expr,
                 desc: desc.clone(),
@@ -3522,13 +3522,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 // it to storage.
                 let df = txn
                     .dataflow_builder(compute_instance)
-                    .build_recorded_view_dataflow(id, as_of.clone(), internal_view_id)?;
+                    .build_materialized_view_dataflow(id, as_of.clone(), internal_view_id)?;
                 Ok(df)
             })
             .await
         {
             Ok(df) => {
-                // Announce the creation of the recorded view source.
+                // Announce the creation of the materialized view source.
                 self.controller
                     .storage_mut()
                     .create_collections(vec![(
@@ -3552,12 +3552,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.ship_dataflow(df, compute_instance).await;
 
-                Ok(ExecuteResponse::CreatedRecordedView { existed: false })
+                Ok(ExecuteResponse::CreatedMaterializedView { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
-            })) if if_not_exists => Ok(ExecuteResponse::CreatedRecordedView { existed: true }),
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedMaterializedView { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -3786,7 +3786,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
-            ObjectType::RecordedView => ExecuteResponse::DroppedRecordedView,
+            ObjectType::MaterializedView => ExecuteResponse::DroppedMaterializedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
@@ -5308,7 +5308,7 @@ impl<S: Append + 'static> Coordinator<S> {
             use CatalogItemType::*;
             match catalog.try_get_entry(id) {
                 Some(entry) => match entry.item().typ() {
-                    typ @ (Func | View | RecordedView) => {
+                    typ @ (Func | View | MaterializedView) => {
                         let valid_id = id.is_user() || matches!(typ, Func);
                         valid_id
                             && (
@@ -5617,7 +5617,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut tables_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
-        let mut recorded_views_to_drop = vec![];
+        let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
 
@@ -5658,10 +5658,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     }) => {
                         indexes_to_drop.push((*compute_instance, *id));
                     }
-                    CatalogItem::RecordedView(catalog::RecordedView {
-                        compute_instance, ..
+                    CatalogItem::MaterializedView(catalog::MaterializedView {
+                        compute_instance,
+                        ..
                     }) => {
-                        recorded_views_to_drop.push((*compute_instance, *id));
+                        materialized_views_to_drop.push((*compute_instance, *id));
                     }
                     CatalogItem::Secret(_) => {
                         secrets_to_drop.push(*id);
@@ -5675,7 +5676,7 @@ impl<S: Append + 'static> Coordinator<S> {
             sources_to_drop
                 .iter()
                 .chain(tables_to_drop.iter())
-                .chain(recorded_views_to_drop.iter().map(|(_, id)| id))
+                .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
                 .cloned(),
         );
         empty_timelines.extend(
@@ -5683,7 +5684,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 sinks_to_drop
                     .iter()
                     .chain(indexes_to_drop.iter())
-                    .chain(recorded_views_to_drop.iter())
+                    .chain(materialized_views_to_drop.iter())
                     .cloned(),
             ),
         );
@@ -5716,8 +5717,9 @@ impl<S: Append + 'static> Coordinator<S> {
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
             }
-            if !recorded_views_to_drop.is_empty() {
-                self.drop_recorded_views(recorded_views_to_drop).await;
+            if !materialized_views_to_drop.is_empty() {
+                self.drop_materialized_views(materialized_views_to_drop)
+                    .await;
             }
             if !secrets_to_drop.is_empty() {
                 self.drop_secrets(secrets_to_drop).await;
@@ -5843,10 +5845,10 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn drop_recorded_views(&mut self, rviews: Vec<(ComputeInstanceId, GlobalId)>) {
+    async fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
         let mut by_compute_instance = HashMap::new();
         let mut source_ids = Vec::new();
-        for (compute_instance, id) in rviews {
+        for (compute_instance, id) in mviews {
             if self.read_capability.remove(&id).is_some() {
                 by_compute_instance
                     .entry(compute_instance)
@@ -5854,7 +5856,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .push(id);
                 source_ids.push(id);
             } else {
-                tracing::error!("Instructed to drop a recorded view that isn't one");
+                tracing::error!("Instructed to drop a materialized view that isn't one");
             }
         }
 
@@ -6138,8 +6140,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     CatalogItem::View(view) => {
                         ids.extend(view.optimized_expr.depends_on());
                     }
-                    CatalogItem::RecordedView(rview) => {
-                        ids.extend(rview.optimized_expr.depends_on());
+                    CatalogItem::MaterializedView(mview) => {
+                        ids.extend(mview.optimized_expr.depends_on());
                     }
                     CatalogItem::Table(table) => {
                         timelines.insert(id, table.timeline());

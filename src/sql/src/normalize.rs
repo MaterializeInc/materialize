@@ -23,7 +23,7 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateRecordedViewStatement,
+    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
     IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
@@ -427,7 +427,7 @@ pub fn create_statement(
             *if_exists = IfExistsBehavior::Error;
         }
 
-        Statement::CreateRecordedView(CreateRecordedViewStatement {
+        Statement::CreateMaterializedView(CreateMaterializedViewStatement {
             if_exists,
             name,
             columns: _,
@@ -715,10 +715,8 @@ mod tests {
     fn normalized_create() -> Result<(), Box<dyn Error>> {
         let scx = &mut StatementContext::new(None, &DummyCatalog);
 
-        let parsed = mz_sql_parser::parser::parse_statements(
-            "create view foo as select 1 as bar",
-        )?
-        .into_element();
+        let parsed = mz_sql_parser::parser::parse_statements("create view foo as select 1 as bar")?
+            .into_element();
 
         let (stmt, _) = names::resolve(scx.catalog, parsed)?;
 

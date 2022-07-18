@@ -96,32 +96,32 @@ SHOW VIEWS FROM foo.bar
 ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
-SHOW RECORDED VIEWS
+SHOW MATERIALIZED VIEWS
 ----
-SHOW RECORDED VIEWS
+SHOW MATERIALIZED VIEWS
 =>
-ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: None, in_cluster: None, extended: false, full: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
-SHOW RECORDED VIEWS FROM foo.bar
+SHOW MATERIALIZED VIEWS FROM foo.bar
 ----
-SHOW RECORDED VIEWS FROM foo.bar
+SHOW MATERIALIZED VIEWS FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
-SHOW RECORDED VIEWS FROM foo.bar IN CLUSTER baz
+SHOW MATERIALIZED VIEWS FROM foo.bar IN CLUSTER baz
 ----
-SHOW RECORDED VIEWS FROM foo.bar IN CLUSTER baz
+SHOW MATERIALIZED VIEWS FROM foo.bar IN CLUSTER baz
 =>
-ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
 
 parse-statement
-SHOW RECORDED VIEWS IN CLUSTER baz
+SHOW MATERIALIZED VIEWS IN CLUSTER baz
 ----
-SHOW RECORDED VIEWS IN CLUSTER baz
+SHOW MATERIALIZED VIEWS IN CLUSTER baz
 =>
-ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
 
 parse-statement
 SHOW TABLES
@@ -250,11 +250,11 @@ SHOW CREATE VIEW foo
 ShowCreateView(ShowCreateViewStatement { view_name: Name(UnresolvedObjectName([Ident("foo")])) })
 
 parse-statement
-SHOW CREATE RECORDED VIEW foo
+SHOW CREATE MATERIALIZED VIEW foo
 ----
-SHOW CREATE RECORDED VIEW foo
+SHOW CREATE MATERIALIZED VIEW foo
 =>
-ShowCreateRecordedView(ShowCreateRecordedViewStatement { recorded_view_name: Name(UnresolvedObjectName([Ident("foo")])) })
+ShowCreateMaterializedView(ShowCreateMaterializedViewStatement { materialized_view_name: Name(UnresolvedObjectName([Ident("foo")])) })
 
 parse-statement
 SHOW CREATE SINK foo

@@ -187,6 +187,7 @@ Login
 Map
 Matching
 Materialize
+Materialized
 Mechanisms
 Message
 Metadata
@@ -245,7 +246,6 @@ Range
 Raw
 Read
 Real
-Recorded
 References
 Regex
 Registry
