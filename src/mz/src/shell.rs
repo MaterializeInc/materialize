@@ -60,7 +60,6 @@ pub(crate) async fn shell(
 ) -> () {
     match list_cloud_providers(client.clone(), frontegg_auth_machine.clone()).await {
         Ok(cloud_providers) => {
-            println!("Listing regions.");
             let regions = list_regions(
                 cloud_providers.to_vec(),
                 client.clone(),
@@ -72,21 +71,20 @@ pub(crate) async fn shell(
                 .iter()
                 .map(|cloud_provider| cloud_provider.region.clone())
                 .collect::<Vec<String>>()
-                .join("\", \"");
+                .join(r#"", ""#);
             let mut region_input = String::new();
 
             // TODO: Very similar code for both cases
             if regions.len() > 0 {
                 println!(
-                    "Please, first select a default region [\"{:?}\"]",
+                    r#"Please, first select a region: ["{}"]"#,
                     cloud_provider_str
                 );
 
+                print!("Region: ");
                 let _ = std::io::stdout().flush();
                 std::io::stdin().read_line(&mut region_input).unwrap();
                 trim_newline(&mut region_input);
-
-                println!("Region input: {:?}", region_input);
 
                 // TODO: A map would be more efficient.
                 let selected_cloud_provider_filtered = cloud_providers

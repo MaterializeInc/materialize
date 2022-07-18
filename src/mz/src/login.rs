@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use axum::http::StatusCode;
+use axum::{extract::Query, response::IntoResponse, routing::get, Router};
+use std::net::SocketAddr;
 use std::process::exit;
 use std::time::Duration;
 use std::{collections::HashMap, io::Write};
@@ -17,39 +20,39 @@ use crate::{
     BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL,
     USER_AUTH_URL, WEB_LOGIN_URL,
 };
-use actix_web::{get, web, App, HttpRequest, HttpServer, Responder};
 use open;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
+use tokio::task;
 use tokio::time::sleep;
 
 /// ----------------------------
 ///  Login code using browser
 /// ----------------------------
 
-#[get("/")]
-async fn request(req: HttpRequest) -> impl Responder {
-    let query_string = req.query_string();
-
-    if query_string != "cancel" {
-        let api_token = web::Query::<BrowserAPIToken>::from_query(query_string).unwrap();
-
+async fn request(
+    Query(BrowserAPIToken {
+        email,
+        secret,
+        client_id,
+    }): Query<BrowserAPIToken>,
+) -> impl IntoResponse {
+    if secret != "" {
         let profile = Profile {
-            email: api_token.email.to_string(),
-            secret: api_token.secret.to_string(),
-            client_id: api_token.client_id.to_string(),
+            email,
+            secret,
+            client_id,
             default_region: None,
         };
         save_profile(profile).unwrap();
     }
 
-    let _ = tokio::join!(async {
-        // 200ms
-        sleep(Duration::from_millis(200));
+    let _ = task::spawn(async {
+        sleep(Duration::from_millis(200)).await;
         exit(0);
     });
 
-    "You can now close the tab."
+    (StatusCode::OK, "You can now close the tab.")
 }
 
 pub(crate) async fn login_with_browser() -> Result<(), std::io::Error> {
@@ -65,9 +68,11 @@ pub(crate) async fn login_with_browser() -> Result<(), std::io::Error> {
     /*
      * Start the server to handle the request response
      */
-    HttpServer::new(|| App::new().service(request))
-        .bind(("127.0.0.1", 8808))?
-        .run()
+    let app = Router::new().route("/", get(request));
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8808));
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
         .await
         .unwrap();
 

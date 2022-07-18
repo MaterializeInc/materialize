@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+extern crate core;
+
 mod login;
 mod profiles;
 mod regions;
@@ -32,6 +34,7 @@ use crate::regions::{
 use crate::shell::shell;
 
 #[derive(Debug, Clone, ArgEnum)]
+#[allow(non_camel_case_types)]
 enum CloudProviderRegion {
     usEast_1,
     euWest_1,
@@ -52,7 +55,7 @@ enum Commands {
     Login(Login),
     /// Enable or delete a region
     Regions(Regions),
-    /// Shell
+    /// Connect to a region using a SQL shell
     Shell,
 }
 
@@ -64,6 +67,7 @@ struct Login {
 
 #[derive(Debug, Subcommand)]
 enum LoginCommands {
+    /// Log in via the console using email and password.
     Interactive,
 }
 
@@ -75,19 +79,22 @@ struct Regions {
 
 #[derive(Debug, Subcommand)]
 enum RegionsCommands {
+    /// Enable a new region.
     Enable {
         #[clap(arg_enum)]
         cloud_provider_region: CloudProviderRegion,
     },
+    /// Delete an existing region.
     Delete {
         #[clap(arg_enum)]
         cloud_provider_region: CloudProviderRegion,
     },
+    /// List all enabled regions.
     List,
 }
 
 /**
- ** Internal types, strucs and enums
+ ** Internal types, struct and enums
  **/
 
 #[derive(Debug, Deserialize)]
@@ -137,13 +144,13 @@ struct Profile {
     default_region: Option<String>,
 }
 
-const PROFILES_DIR_NAME: &str = "mz";
+const PROFILES_DIR_NAME: &str = ".config/mz";
 const PROFILES_FILE_NAME: &str = "profiles.toml";
 const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/api/cloud-providers";
 const API_TOKEN_AUTH_URL: &str =
-    "https://materialize.frontegg.com/identity/resources/users/api-tokens/v1";
+    "https://admin.cloud.materialize.com/identity/resources/users/api-tokens/v1";
 const USER_AUTH_URL: &str =
-    "https://materialize.frontegg.com/frontegg/identity/resources/auth/v1/user";
+    "https://admin.cloud.materialize.com/frontegg/identity/resources/auth/v1/user";
 const MACHINE_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/auth/v1/api-token";
 const WEB_LOGIN_URL: &str = "http://www.materialize.com/account/login?redirectUrl=/access/cli";

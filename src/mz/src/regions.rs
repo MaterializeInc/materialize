@@ -13,7 +13,8 @@ use crate::utils::trim_newline;
 /// ----------------------------
 use crate::{CloudProvider, CloudProviderRegion, FronteggAuthMachine, Region, CLOUD_PROVIDERS_URL};
 
-use std::{collections::HashMap, io::Write};
+use std::collections::HashMap;
+use std::io::Write;
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error, Response};
@@ -55,11 +56,7 @@ pub(crate) async fn enable_region(
 
     let headers = build_region_request_headers(authorization);
     let mut body = HashMap::new();
-    // TODO: Version is dynamic
-    body.insert(
-        "coordd_image_ref",
-        &"materialize/environmentd:unstable-45e2acde087c27a661b5e67db587375c0b628fde",
-    );
+    body.insert("coordd_image_ref", &"materialize/environmentd:latest");
 
     client
         .post(region_url)
@@ -139,10 +136,9 @@ pub(crate) async fn list_regions(
     client: Client,
     frontegg_auth_machine: FronteggAuthMachine,
 ) -> Vec<Region> {
-    // TODO: Run request in parallel
+    // TODO: Run requests in parallel
     let mut regions: Vec<Region> = Vec::new();
 
-    // TODO: Use iterators
     for cloud_provider in cloud_providers {
         match cloud_provider_region_details(
             client.clone(),

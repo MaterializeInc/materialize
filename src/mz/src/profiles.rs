@@ -10,7 +10,7 @@
 use crate::{
     FronteggAuthMachine, Profile, MACHINE_AUTH_URL, PROFILES_DIR_NAME, PROFILES_FILE_NAME,
 };
-use dirs::config_dir;
+use dirs::home_dir;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error};
 use std::collections::HashMap;
@@ -22,9 +22,12 @@ use std::path::PathBuf;
 /// ----------------------------
 
 fn get_config_path() -> PathBuf {
-    match config_dir() {
-        Some(path) => path,
-        None => panic!("Problem trying to find the config dir."),
+    match home_dir() {
+        Some(mut path) => {
+            path.push(PROFILES_DIR_NAME);
+            path
+        }
+        None => panic!("Error finding $HOME directory."),
     }
 }
 
@@ -51,8 +54,7 @@ pub(crate) async fn authenticate_profile(
 }
 
 fn create_profile_dir_if_not_exists() {
-    let mut config_path = get_config_path();
-    config_path.push(PROFILES_DIR_NAME);
+    let config_path = get_config_path();
 
     // Check if path exists
     if fs::metadata(config_path.clone()).is_err() {
@@ -62,7 +64,6 @@ fn create_profile_dir_if_not_exists() {
 
 fn write_profile(profile: Profile) -> std::io::Result<()> {
     let mut config_path = get_config_path();
-    config_path.push(PROFILES_DIR_NAME);
     config_path.push(PROFILES_FILE_NAME);
 
     let toml = toml::to_string(&profile).unwrap();
@@ -80,10 +81,7 @@ pub(crate) fn get_local_profile() -> Option<Profile> {
     create_profile_dir_if_not_exists();
 
     let mut config_path = get_config_path();
-    config_path.push(PROFILES_DIR_NAME);
     config_path.push(PROFILES_FILE_NAME);
-
-    println!("Path: {:?}", config_path.clone());
 
     // Check if profiles file exists
     if fs::metadata(config_path.clone()).is_err() {

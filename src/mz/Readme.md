@@ -17,10 +17,9 @@ Clone the repository. Once inside, run:
 cargo build --package mz --release
 ```
 
-After a succesfull build. Make the binary executable:
+After a successful build:
 
 ```bash
-
 cd ./target/release
 ```
 
@@ -54,8 +53,8 @@ mz login interactive
 
 The CLI uses `USER_ID`, `SECRET`, and `Email` to interact with the platform. These values are automatically populated through the login command. If you want to retrieve or manually create the profiles file, the file is in the OS config folder:
 
-Linux: `.config/mz/profiles.toml` (TBC)
-macOS (Monterrey): `/Users/{username}/Library/Application Support/mz/profiles.toml`
+Linux: `.config/mz/profiles.toml`
+macOS (Monterrey): `.config/mz/profiles.toml`
 Windows: (TBC)
 
 
@@ -93,23 +92,22 @@ Install `psql` dependency for the shell:
 # Linux (TBC)
 apt-get install postgresql-client
 
-# Windows (TBC)
-
 # macOS
 brew install libpq
-
 
 echo 'export PATH="/usr/local/opt/libpq/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 
 echo 'export PATH="/usr/local/opt/libpq/bin:$PATH"' >> ~/.bash_profile
 source ~/.bash_profile
+
+# Windows (TBC)
 ```
 
 
 ### Future work
 #### Improvements
-- [ ] Handle multiple profiles in .toml
+- [ ]  Handle multiple profiles in .toml
 - [ ]  Make error messages standard
 - [ ]  Selecting a default region
 - [ ]  Run requests in parallel
