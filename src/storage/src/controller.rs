@@ -47,9 +47,7 @@ use mz_build_info::BuildInfo;
 use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{
-    read::ReadHandle, write::WriteHandle, PersistClient, PersistLocation, ShardId,
-};
+use mz_persist_client::{write::WriteHandle, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -326,7 +324,13 @@ pub struct StorageControllerState<
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) stash: S,
-    pub(super) persist_handles: BTreeMap<GlobalId, PersistHandles<T>>,
+    /// Write handle for persist shards.
+    pub(super) persist_write_handles: BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>>,
+    /// Read handles for persist shards.
+    ///
+    /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
+    /// without blocknig the storage controller.
+    persist_read_handles: persist_read_downgrade::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
 }
 
@@ -443,7 +447,8 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
         Self {
             collections: BTreeMap::default(),
             stash,
-            persist_handles: BTreeMap::default(),
+            persist_write_handles: BTreeMap::default(),
+            persist_read_handles: persist_read_downgrade::PersistWorker::new(),
             stashed_response: None,
         }
     }
@@ -531,9 +536,8 @@ where
             let collection_state =
                 CollectionState::new(description.clone(), read.since().clone(), metadata);
 
-            self.state
-                .persist_handles
-                .insert(id, PersistHandles { read, write });
+            self.state.persist_write_handles.insert(id, write);
+            self.state.persist_read_handles.register(id, read);
 
             self.state.collections.insert(id, collection_state);
 
@@ -640,7 +644,7 @@ where
 
         let mut appends_by_id = HashMap::new();
         for (id, (updates, upper)) in updates_by_id {
-            let current_upper = self.state.persist_handles[&id].write.upper().clone();
+            let current_upper = self.state.persist_write_handles[&id].upper().clone();
             appends_by_id.insert(id, (updates.into_iter().flatten(), current_upper, upper));
         }
 
@@ -653,7 +657,7 @@ where
         // Instead, we first group the update by ID above and then iterate
         // through all available write handles and see if there are any updates
         // for it. If yes, we send them all in one go.
-        for (id, persist_handle) in self.state.persist_handles.iter_mut() {
+        for (id, write) in self.state.persist_write_handles.iter_mut() {
             let (updates, upper, new_upper) = match appends_by_id.remove(id) {
                 Some(updates) => updates,
                 None => continue,
@@ -664,8 +668,6 @@ where
             let updates = updates
                 .into_iter()
                 .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
-
-            let write = &mut persist_handle.write;
 
             futs.push(async move {
                 write
@@ -695,23 +697,14 @@ where
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
+        // TODO: replace this with a new tokio task, rather than occupying
+        // the existing read downgrader.
         let as_of = Antichain::from_elem(as_of);
-        let mut snapshot = self.state.persist_handles[&id]
-            .read
-            .snapshot(as_of)
+        self.state
+            .persist_read_handles
+            .snapshot(id, as_of)
             .await
-            .map_err(|_| StorageError::ReadBeforeSince(id))?;
-
-        let mut contents = Vec::new();
-
-        while let Some(updates) = snapshot.next().await {
-            for ((source_data, _pid), _ts, diff) in updates {
-                let row = source_data.expect("cannot read snapshot").0?;
-                contents.push((row, diff));
-            }
-        }
-
-        Ok(contents)
+            .unwrap()
     }
 
     async fn set_read_policy(
@@ -808,34 +801,22 @@ where
         }
 
         // Translate our net compute actions into `AllowCompaction` commands and
-        // downgrade persist sinces.
-
-        let futs = FuturesUnordered::new();
-
-        // We cannot iterate through the changes and then set off a persist call
-        // on the read handle because we cannot mutably borrow the read handle
-        // multiple times.
-        //
-        // Instead, we iterate through all available read handles and see if
-        // there are any changes for it. If yes, we downgrade.
-        for (id, persist_handle) in self.state.persist_handles.iter_mut() {
+        // downgrade persist sinces. The actual downgrades are performed by a Tokio
+        // task asynchorously.
+        let mut compaction_commands = BTreeMap::default();
+        for (id, _) in self.state.persist_write_handles.iter_mut() {
             let (mut changes, frontier) = match storage_net.remove(id) {
                 Some(changes) => changes,
                 None => continue,
             };
-            if changes.is_empty() {
-                continue;
+            if !changes.is_empty() {
+                compaction_commands.insert(*id, frontier);
             }
-
-            let fut = async move {
-                persist_handle.read.downgrade_since(frontier.clone()).await;
-                (*id, frontier)
-            };
-
-            futs.push(fut);
         }
 
-        let compaction_commands = futs.collect::<Vec<_>>().await;
+        self.state
+            .persist_read_handles
+            .downgrade(compaction_commands.clone());
 
         for (id, frontier) in compaction_commands {
             if let Some(client) = self.hosts.client(id) {
@@ -956,14 +937,6 @@ pub struct CollectionState<T> {
     pub collection_metadata: CollectionMetadata,
 }
 
-#[derive(Debug)]
-pub(super) struct PersistHandles<T: Timestamp + Lattice + Codec64> {
-    /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
-    /// since frontier and we need to downgrade that when the read capabilities change.
-    read: ReadHandle<SourceData, (), T, Diff>,
-    write: WriteHandle<SourceData, (), T, Diff>,
-}
-
 impl<T: Timestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(
@@ -980,6 +953,195 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             collection_metadata: metadata,
+        }
+    }
+}
+
+mod persist_read_downgrade {
+
+    use std::collections::BTreeMap;
+
+    use differential_dataflow::lattice::Lattice;
+    use futures::stream::FuturesUnordered;
+    use futures_util::StreamExt;
+    use timely::progress::{Antichain, Timestamp};
+    use tokio::sync::mpsc::UnboundedSender;
+
+    use mz_persist_client::read::ReadHandle;
+    use mz_persist_types::Codec64;
+    use mz_repr::Row;
+    use mz_repr::{Diff, GlobalId};
+
+    use crate::controller::StorageError;
+    use crate::types::sources::SourceData;
+
+    /// A wrapper that holds on to backing persist shards/collections that the
+    /// storage controller is aware of. The handles hold back the since frontier and
+    /// we need to downgrade them when the read capabilities change.
+    ///
+    /// Internally, this has an async task and the methods for registering a handle
+    /// and downgrading sinces add commands to a queue that this task is working
+    /// off. This makes the methods non-blocking and moves the work outside the main
+    /// coordinator task, meaning the coordinator is spending less time waiting on
+    /// persist calls.
+    #[derive(Debug)]
+    pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
+        tx: UnboundedSender<PersistWorkerCmd<T>>,
+    }
+
+    impl<T> Drop for PersistWorker<T>
+    where
+        T: Timestamp + Lattice + Codec64,
+    {
+        fn drop(&mut self) {
+            self.send(PersistWorkerCmd::Shutdown);
+            // TODO: Can't easily block on shutdown occurring.
+        }
+    }
+
+    /// Commands for [PersistWorker].
+    #[derive(Debug)]
+    enum PersistWorkerCmd<T: Timestamp + Lattice + Codec64> {
+        Register(GlobalId, ReadHandle<SourceData, (), T, Diff>),
+        Downgrade(BTreeMap<GlobalId, Antichain<T>>),
+        Snapshot(
+            GlobalId,
+            Antichain<T>,
+            tokio::sync::oneshot::Sender<Result<Vec<(Row, Diff)>, StorageError>>,
+        ),
+        Shutdown,
+    }
+
+    impl<T: Timestamp + Lattice + Codec64> PersistWorker<T> {
+        pub(crate) fn new() -> Self {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+            mz_ore::task::spawn(|| "PersistReadDowngrade", async move {
+                let mut read_handles: BTreeMap<GlobalId, ReadHandle<SourceData, (), T, Diff>> =
+                    BTreeMap::new();
+
+                while let Some(cmd) = rx.recv().await {
+                    // Peel off all available commands.
+                    // This allows us to catch up if we fall behind on downgrade commands.
+                    let mut commands = vec![cmd];
+                    while let Ok(cmd) = rx.try_recv() {
+                        commands.push(cmd);
+                    }
+                    // Collect all downgrade requests and apply them last.
+                    let mut downgrades = BTreeMap::default();
+                    let mut shutdown = false;
+
+                    for command in commands {
+                        match command {
+                            PersistWorkerCmd::Register(id, read_handle) => {
+                                let previous = read_handles.insert(id, read_handle);
+                                if previous.is_some() {
+                                    panic!(
+                                        "already registered a ReadHandle for collection {:?}",
+                                        id
+                                    );
+                                }
+                            }
+                            PersistWorkerCmd::Downgrade(since_frontiers) => {
+                                for (id, frontier) in since_frontiers {
+                                    downgrades.insert(id, frontier);
+                                }
+                            }
+                            PersistWorkerCmd::Snapshot(id, as_of, oneshot) => {
+                                async fn snapshot<T2: Timestamp + Lattice + Codec64>(
+                                    read_handle: &mut ReadHandle<SourceData, (), T2, Diff>,
+                                    id: GlobalId,
+                                    as_of: Antichain<T2>,
+                                ) -> Result<Vec<(Row, Diff)>, StorageError>
+                                {
+                                    let mut snapshot = read_handle
+                                        .snapshot(as_of)
+                                        .await
+                                        .map_err(|_| StorageError::ReadBeforeSince(id))?;
+
+                                    let mut contents = Vec::new();
+
+                                    while let Some(updates) = snapshot.next().await {
+                                        for ((source_data, _pid), _ts, diff) in updates {
+                                            let row =
+                                                source_data.expect("cannot read snapshot").0?;
+                                            contents.push((row, diff));
+                                        }
+                                    }
+
+                                    Ok(contents)
+                                }
+
+                                if let Some(read_handle) = read_handles.get_mut(&id) {
+                                    let result = snapshot(read_handle, id, as_of).await;
+                                    oneshot.send(result).expect("Oneshot should not fail");
+                                } else {
+                                    oneshot
+                                        .send(Err(StorageError::IdentifierMissing(id)))
+                                        .expect("Oneshot should not fail");
+                                }
+                            }
+                            PersistWorkerCmd::Shutdown => {
+                                shutdown = true;
+                            }
+                        }
+                    }
+
+                    if !downgrades.is_empty() {
+                        let futs = FuturesUnordered::new();
+
+                        for (id, read) in read_handles.iter_mut() {
+                            if let Some(since) = downgrades.remove(id) {
+                                let fut = async move {
+                                    read.downgrade_since(since).await;
+                                };
+
+                                futs.push(fut);
+                            }
+                        }
+
+                        assert!(downgrades.is_empty());
+                        futs.collect::<Vec<_>>().await;
+                    }
+                    if shutdown {
+                        tracing::trace!("shutting down persist since downgrade task");
+                        break;
+                    }
+                }
+            });
+
+            Self { tx }
+        }
+
+        pub(crate) fn register(
+            &self,
+            id: GlobalId,
+            read_handle: ReadHandle<SourceData, (), T, Diff>,
+        ) {
+            self.send(PersistWorkerCmd::Register(id, read_handle))
+        }
+
+        pub(crate) fn downgrade(&self, frontiers: BTreeMap<GlobalId, Antichain<T>>) {
+            self.send(PersistWorkerCmd::Downgrade(frontiers))
+        }
+
+        pub(crate) fn snapshot(
+            &self,
+            id: GlobalId,
+            since: Antichain<T>,
+        ) -> tokio::sync::oneshot::Receiver<Result<Vec<(Row, Diff)>, StorageError>> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.send(PersistWorkerCmd::Snapshot(id, since, tx));
+            rx
+        }
+
+        fn send(&self, cmd: PersistWorkerCmd<T>) {
+            match self.tx.send(cmd) {
+                Ok(()) => (), // All good!
+                Err(e) => {
+                    tracing::error!("could not forward command: {:?}", e);
+                }
+            }
         }
     }
 }
