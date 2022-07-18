@@ -143,6 +143,50 @@ where
     }
 }
 
+/// Creates a type whose [`fmt::Display`] implementation outputs each item in
+/// `iter` separated by `separator`.
+///
+/// The difference between this and [`mz_ore::str::separated`] is that the latter
+/// requires the iterator items to implement [`fmt::Display`], whereas this version
+/// wants them to implement [`DisplayText<C>`] for some rendering context `C` which
+/// implements [`Default`].
+pub fn separated_text<'a, I, C>(separator: &'a str, iter: I) -> impl fmt::Display + 'a
+where
+    I: IntoIterator,
+    I::IntoIter: Clone + 'a,
+    I::Item: DisplayText<C> + 'a,
+    C: Default + 'a,
+{
+    struct Separated<'a, I, C> {
+        separator: &'a str,
+        iter: I,
+        phantom: std::marker::PhantomData<C>,
+    }
+
+    impl<'a, I, C> fmt::Display for Separated<'a, I, C>
+    where
+        C: Default,
+        I: Iterator + Clone,
+        I::Item: DisplayText<C>,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            for (i, item) in self.iter.clone().enumerate() {
+                if i != 0 {
+                    write!(f, "{}", self.separator)?;
+                }
+                item.fmt_text(f, &mut C::default())?;
+            }
+            Ok(())
+        }
+    }
+
+    Separated {
+        separator,
+        iter: iter.into_iter(),
+        phantom: std::marker::PhantomData::<C>,
+    }
+}
+
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Json`].
 pub trait DisplayJson<C = ()>
