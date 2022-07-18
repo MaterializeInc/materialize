@@ -449,6 +449,12 @@ impl<'a> RenderingContext<'a> {
     }
 }
 
+impl<'a> AsMut<Indent> for RenderingContext<'a> {
+    fn as_mut(&mut self) -> &mut Indent {
+        &mut self.indent
+    }
+}
+
 /// A trait for humanizing components of an expression.
 ///
 /// This will be most often used as part of the rendering context
