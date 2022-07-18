@@ -312,7 +312,6 @@ pub fn show_objects<'a>(
     ShowObjectsStatement {
         extended,
         full,
-        materialized,
         object_type,
         from,
         in_cluster,
@@ -322,7 +321,7 @@ pub fn show_objects<'a>(
     match object_type {
         ObjectType::Table => show_tables(scx, extended, full, from, filter),
         ObjectType::Source => show_sources(scx, full, from, filter),
-        ObjectType::View => show_views(scx, full, materialized, from, filter),
+        ObjectType::View => show_views(scx, full, from, filter),
         ObjectType::RecordedView => show_recorded_views(scx, full, from, in_cluster, filter),
         ObjectType::Sink => show_sinks(scx, full, from, in_cluster, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
@@ -417,42 +416,27 @@ fn show_sources<'a>(
 fn show_views<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
-    materialized: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
-    let query = if !full & !materialized {
-        format!(
-            "SELECT name FROM mz_catalog.mz_views WHERE schema_id = {}",
-            schema_spec,
-        )
-    } else if full & !materialized {
+    let query = if full {
         format!(
             "SELECT
                 name,
-                mz_internal.mz_classify_object_id(id) AS type,
-                mz_internal.mz_is_materialized(id) AS materialized
+                mz_internal.mz_classify_object_id(id) AS type
              FROM mz_catalog.mz_views
-             WHERE schema_id = {}",
-            schema_spec,
-        )
-    } else if !full & materialized {
-        format!(
-            "SELECT name
-             FROM mz_catalog.mz_views
-             WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema_spec,
+             WHERE schema_id = {schema_spec}"
         )
     } else {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
-             FROM mz_catalog.mz_views
-             WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema_spec,
+            "SELECT name
+            FROM mz_catalog.mz_views
+            WHERE schema_id = {schema_spec}"
         )
     };
+
     ShowSelect::new(scx, query, filter, None, None)
 }
 

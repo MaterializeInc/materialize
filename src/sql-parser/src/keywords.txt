@@ -187,7 +187,6 @@ Login
 Map
 Matching
 Materialize
-Materialized
 Mechanisms
 Message
 Metadata

@@ -3163,20 +3163,12 @@ pub fn describe_drop_objects(
 pub fn plan_drop_objects(
     scx: &StatementContext,
     DropObjectsStatement {
-        materialized,
         object_type,
         names,
         cascade,
         if_exists,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    if materialized {
-        sql_bail!(
-            "DROP MATERIALIZED {0} is not allowed, use DROP {0}",
-            object_type
-        );
-    }
-
     let mut items = vec![];
     for name in names {
         let name = normalize::unresolved_object_name(name)?;

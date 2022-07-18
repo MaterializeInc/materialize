@@ -1274,8 +1274,6 @@ impl_display!(DropSchemaStatement);
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropObjectsStatement {
-    /// If this was constructed as `DROP MATERIALIZED <type>`
-    pub materialized: bool,
     /// The type of the object to drop: TABLE, VIEW, etc.
     pub object_type: ObjectType,
     /// An optional `IF EXISTS` clause. (Non-standard.)
@@ -1500,7 +1498,6 @@ pub struct ShowObjectsStatement<T: AstInfo> {
     pub in_cluster: Option<T::ClusterName>,
     pub extended: bool,
     pub full: bool,
-    pub materialized: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
@@ -1512,9 +1509,6 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         }
         if self.full {
             f.write_str(" FULL");
-        }
-        if self.materialized {
-            f.write_str(" MATERIALIZED");
         }
         f.write_str(" ");
         f.write_str(match &self.object_type {

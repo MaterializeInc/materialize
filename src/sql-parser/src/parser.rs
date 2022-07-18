@@ -2853,8 +2853,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let materialized = self.parse_keyword(MATERIALIZED);
-
         let object_type = match self.expect_one_of_keywords(&[
             CONNECTION, CLUSTER, DATABASE, INDEX, RECORDED, ROLE, SECRET, SCHEMA, SINK, SOURCE,
             TABLE, TYPE, USER, VIEW,
@@ -2922,7 +2920,6 @@ impl<'a> Parser<'a> {
             Some(CASCADE),
         );
         Ok(Statement::DropObjects(DropObjectsStatement {
-            materialized,
             object_type,
             if_exists,
             names,
@@ -4326,7 +4323,6 @@ impl<'a> Parser<'a> {
                 let kw = self.expect_one_of_keywords(&[
                     COLUMNS,
                     CONNECTIONS,
-                    MATERIALIZED,
                     OBJECTS,
                     RECORDED,
                     ROLES,
@@ -4342,12 +4338,6 @@ impl<'a> Parser<'a> {
                     self.prev_token();
                 }
             }
-            self.prev_token();
-        }
-
-        let materialized = self.parse_keyword(MATERIALIZED);
-        if materialized {
-            self.expect_keyword(VIEWS)?;
             self.prev_token();
         }
 
@@ -4434,7 +4424,6 @@ impl<'a> Parser<'a> {
                 object_type,
                 extended,
                 full,
-                materialized,
                 from,
                 in_cluster,
                 filter: self.parse_show_statement_filter()?,
