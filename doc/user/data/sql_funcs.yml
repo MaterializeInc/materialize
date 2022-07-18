@@ -432,6 +432,10 @@
     description: Largest `time_component` <= `val`
     url: date-trunc
 
+  - signature: 'date_trunc(time_component: str, val: interval) -> interval'
+    description: Largest `time_component` <= `val`
+    url: date-trunc
+
   - signature: EXTRACT(extract_expr) -> numeric
     description: Specified time component from value
     url: extract
