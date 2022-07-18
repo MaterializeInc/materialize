@@ -716,7 +716,7 @@ mod tests {
         let scx = &mut StatementContext::new(None, &DummyCatalog);
 
         let parsed = mz_sql_parser::parser::parse_statements(
-            "create materialized view foo as select 1 as bar",
+            "create view foo as select 1 as bar",
         )?
         .into_element();
 
