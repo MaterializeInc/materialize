@@ -183,7 +183,7 @@ mod indexes;
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
 /// The interval that read holds are updated.
-pub const UPDATE_READ_HOLDS_INTERVAL: Timestamp = 60 * 1_000;
+pub const UPDATE_READ_HOLDS_INTERVAL_MS: Timestamp = 60 * 1_000;
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
@@ -1649,8 +1649,8 @@ impl<S: Append + 'static> Coordinator<S> {
             // This limits the amount of updates sent out and increases the leniency of choosing
             // a timestamp for non-strict serializable queries.
             let new_time = read_ts
-                .saturating_sub(read_ts % UPDATE_READ_HOLDS_INTERVAL)
-                .saturating_sub(UPDATE_READ_HOLDS_INTERVAL);
+                .saturating_sub(read_ts % UPDATE_READ_HOLDS_INTERVAL_MS)
+                .saturating_sub(UPDATE_READ_HOLDS_INTERVAL_MS);
             if new_time > read_holds.time {
                 read_holds = self.update_read_hold(read_holds, read_ts).await;
             }
