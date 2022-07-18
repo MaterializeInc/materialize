@@ -237,7 +237,7 @@ func_date_bin_experimental ::=
 func_date_bin_hopping ::=
   'date_bin_hopping' '(' hop ',' width ',' source (',' origin)? ')'
 func_date_trunc ::=
-  'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' ts_val ')'
+  'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' val ')'
 func_extract ::=
   'EXTRACT' '(' ( 'EPOCH' | 'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'QUARTER' | 'MONTH' | 'WEEK' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MICROSECOND' | 'MILLISECOND' | 'DOW' | 'ISODOW' | 'DOY' ) 'FROM' val ')'
 func_date_part ::=
