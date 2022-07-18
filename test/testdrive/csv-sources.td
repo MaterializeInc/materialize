@@ -136,8 +136,9 @@ contains:Expected a list of columns in parentheses, found EOF
 # The write frontier of a source from  a static CSV should be empty,
 # since the definition of "static" means "will never change again".
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
+$ set-regex match=u\d{2} replacement=<GID>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM static_csv
-"     timestamp: <TIMESTAMP>\n         since:[<TIMESTAMP>]\n         upper:[]\n     has table: false\n\nsource materialize.public.static_csv_primary_idx (u37, compute):\n read frontier:[<TIMESTAMP>]\nwrite frontier:[]\n"
+"     timestamp: <TIMESTAMP>\n         since:[<TIMESTAMP>]\n         upper:[]\n     has table: false\n\nsource materialize.public.static_csv (<GID>, storage):\n read frontier:[<TIMESTAMP>]\nwrite frontier:[]\n"
 
 # Static CSV with manual headers.
 > CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
