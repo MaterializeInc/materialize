@@ -558,10 +558,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             // Read the upper frontier and compare to what we've reported.
             traces.oks_mut().read_upper(&mut new_frontier);
             if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
-                assert!(<_ as PartialOrder>::less_equal(
-                    prev_frontier,
-                    &new_frontier
-                ));
+                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
                 if prev_frontier != &new_frontier {
                     add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                     prev_frontier.clone_from(&new_frontier);
