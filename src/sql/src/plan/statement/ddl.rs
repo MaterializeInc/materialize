@@ -311,7 +311,6 @@ pub fn plan_create_source(
         with_options,
         envelope,
         if_not_exists,
-        materialized,
         format,
         key_constraint,
         include_metadata,
@@ -800,7 +799,6 @@ pub fn plan_create_source(
     };
 
     let if_not_exists = *if_not_exists;
-    let materialized = *materialized;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
@@ -839,7 +837,6 @@ pub fn plan_create_source(
         name,
         source,
         if_not_exists,
-        materialized,
         timeline,
         remote,
     }))

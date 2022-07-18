@@ -2987,56 +2987,11 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name.clone(),
             item: CatalogItem::Source(source.clone()),
         });
-        let index = if plan.materialized {
-            let compute_instance = self
-                .catalog
-                .resolve_compute_instance(session.vars().cluster())?
-                .id;
-            let mut index_name = plan.name.clone();
-            index_name.item += "_primary_idx";
-            index_name = self
-                .catalog
-                .for_session(session)
-                .find_available_name(index_name);
-            let index_id = self.catalog.allocate_user_id().await?;
-            let full_name = self
-                .catalog
-                .resolve_full_name(&plan.name, Some(session.conn_id()));
-            let index = auto_generate_primary_idx(
-                index_name.item.clone(),
-                compute_instance,
-                full_name,
-                source_id,
-                &source.desc,
-                None,
-                vec![source_id],
-            );
-            let index_oid = self.catalog.allocate_oid().await?;
-            ops.push(catalog::Op::CreateItem {
-                id: index_id,
-                oid: index_oid,
-                name: index_name,
-                item: CatalogItem::Index(index),
-            });
-            Some((index_id, compute_instance))
-        } else {
-            None
-        };
         match self
-            .catalog_transact(Some(session), ops, move |txn| {
-                if let Some((index_id, compute_instance)) = index {
-                    let mut builder = txn.dataflow_builder(compute_instance);
-                    Ok(Some((
-                        builder.build_index_dataflow(index_id)?,
-                        compute_instance,
-                    )))
-                } else {
-                    Ok(None)
-                }
-            })
+            .catalog_transact(Some(session), ops, move |_| Ok(()))
             .await
         {
-            Ok(df) => {
+            Ok(()) => {
                 // Do everything to instantiate the source at the coordinator and
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
@@ -3073,9 +3028,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
                 )
                 .await;
-                if let Some((df, compute_instance)) = df {
-                    self.ship_dataflow(df, compute_instance).await;
-                }
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -3918,7 +3870,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item_ids.extend(schema.items.values());
         }
 
-        // Gather the indexes and unmaterialized sources used by those items.
+        // Gather the dependencies of those items.
         let mut id_bundle: CollectionIdBundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(item_ids.iter());

@@ -16,7 +16,7 @@ CREATE TABLE money_type (f1 MONEY);
 ALTER TABLE money_type REPLICA IDENTITY FULL;
 INSERT INTO money_type VALUES (NULL), (12.34);
 
-> CREATE MATERIALIZED SOURCE money_type
+> CREATE SOURCE money_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.money_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

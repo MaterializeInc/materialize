@@ -27,7 +27,7 @@ $ kafka-create-topic topic=recorded-views
 $ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
 {"f1": "123"}
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-recorded-views-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -53,7 +53,7 @@ $ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish
   WITH (reuse_topic = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE MATERIALIZED SOURCE sink1_check
+> CREATE SOURCE sink1_check
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-recorded-views-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

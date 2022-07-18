@@ -174,7 +174,7 @@ $ kafka-create-topic topic=source1 partitions=1
 $ kafka-ingest format=bytes topic=source1
 A
 
-> CREATE MATERIALIZED SOURCE source1
+> CREATE SOURCE source1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-source1-${testdrive.seed}'
   FORMAT BYTES
 

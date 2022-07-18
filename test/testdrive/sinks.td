@@ -20,7 +20,7 @@ goofus,gallant
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
 
-> CREATE MATERIALIZED SOURCE src_materialized (a, b)
+> CREATE SOURCE src_materialized (a, b)
   FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-test-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS

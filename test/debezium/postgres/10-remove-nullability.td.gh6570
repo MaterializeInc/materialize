@@ -16,7 +16,7 @@ CREATE TABLE alter_remove_nullability (f1 INTEGER);
 ALTER TABLE alter_remove_nullability REPLICA IDENTITY FULL;
 INSERT INTO alter_remove_nullability VALUES (123),(234);
 
-> CREATE MATERIALIZED SOURCE alter_remove_nullability
+> CREATE SOURCE alter_remove_nullability
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_remove_nullability'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

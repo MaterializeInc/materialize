@@ -22,11 +22,11 @@ $ kafka-create-topic topic=data partitions=2
 
 $ kafka-create-topic topic=data2 partitions=2
 
-> CREATE MATERIALIZED SOURCE data_empty
+> CREATE SOURCE data_empty
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED SOURCE data_rt
+> CREATE SOURCE data_rt
     FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
     WITH (topic_metadata_refresh_interval_ms=50)
     FORMAT AVRO USING SCHEMA '${schema}'

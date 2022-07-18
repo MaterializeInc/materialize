@@ -13,7 +13,7 @@ $ s3-put-object bucket=test key=posix
 foo
 bar
 
-> CREATE MATERIALIZED SOURCE posix
+> CREATE SOURCE posix
   FROM S3 DISCOVER OBJECTS MATCHING 'posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -32,7 +32,7 @@ $ s3-put-object bucket=test key=non-posix trailing-newline=false
 foo
 bar
 
-> CREATE MATERIALIZED SOURCE non_posix
+> CREATE SOURCE non_posix
   FROM S3 DISCOVER OBJECTS MATCHING 'non-posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',

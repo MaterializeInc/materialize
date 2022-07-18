@@ -148,7 +148,7 @@ class DecodeError(Check):
                 $ kafka-ingest format=avro topic=decode-error schema=${schema-f1} publish=true repeat=1
                 {"f1": "A"}
 
-                > CREATE MATERIALIZED SOURCE decode_error
+                > CREATE SOURCE decode_error
                   FROM KAFKA BROKER '${testdrive.kafka-addr}'
                   TOPIC 'testdrive-decode-error-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

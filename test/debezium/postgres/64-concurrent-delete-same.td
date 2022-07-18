@@ -23,7 +23,7 @@ INSERT INTO concurrent_delete VALUES (6);
 
 $ schema-registry-wait-schema schema=postgres.public.concurrent_delete-value
 
-> CREATE MATERIALIZED SOURCE concurrent_delete
+> CREATE SOURCE concurrent_delete
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.concurrent_delete'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

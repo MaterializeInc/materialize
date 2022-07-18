@@ -28,7 +28,7 @@ $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value sc
 
 $ kafka-create-topic topic=evolution partitions=1
 
-> CREATE MATERIALIZED SOURCE evolution FROM
+> CREATE SOURCE evolution FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-evolution-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 

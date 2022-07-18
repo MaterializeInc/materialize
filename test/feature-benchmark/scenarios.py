@@ -669,7 +669,7 @@ true
 > CREATE CONNECTION s1_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_conn
   TOPIC 'testdrive-kafka-raw-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
@@ -705,7 +705,7 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 > CREATE CONNECTION s1_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_conn
   TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}'
   FORMAT BYTES
@@ -743,7 +743,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 > CREATE CONNECTION s1_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_conn
   TOPIC 'testdrive-kafka-upsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -780,7 +780,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
   /* A */
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_conn
   TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
@@ -814,7 +814,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > CREATE CONNECTION s1_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_conn
   TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
@@ -996,7 +996,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 > CREATE CONNECTION s1_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
-> CREATE MATERIALIZED SOURCE source1
+> CREATE SOURCE source1
   FROM KAFKA CONNECTION s1_conn
   TOPIC 'testdrive-sink-input-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
@@ -1075,7 +1075,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
-> CREATE MATERIALIZED SOURCE mz_source_pgcdc
+> CREATE SOURCE mz_source_pgcdc
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
   /* A */
@@ -1115,7 +1115,7 @@ DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 
-> CREATE MATERIALIZED SOURCE s1
+> CREATE SOURCE s1
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'p1';
             """
@@ -1254,7 +1254,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true re
 > CREATE CONNECTION s1_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
-> CREATE MATERIALIZED SOURCE source{i}
+> CREATE SOURCE source{i}
   FROM KAFKA CONNECTION s1_conn
   TOPIC 'testdrive-startup-time-${{testdrive.seed}}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'

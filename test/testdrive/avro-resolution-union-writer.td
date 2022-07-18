@@ -20,7 +20,7 @@ $ kafka-create-topic topic=resolution-unions
 $ kafka-ingest format=avro topic=resolution-unions schema=${int} publish=true timestamp=1
 {"f1": 234 }
 
-> CREATE MATERIALIZED SOURCE resolution_unions
+> CREATE SOURCE resolution_unions
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-unions-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE

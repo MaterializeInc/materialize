@@ -13,7 +13,7 @@
 
 $ kafka-create-topic topic=input_csv
 
-> CREATE MATERIALIZED SOURCE input_csv (first, second)
+> CREATE SOURCE input_csv (first, second)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_csv-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS;
 
@@ -38,7 +38,7 @@ $ protobuf-compile-descriptors inputs=input.proto output=input.pb
 
 $ kafka-create-topic topic=input_proto
 
-> CREATE MATERIALIZED SOURCE input_proto
+> CREATE SOURCE input_proto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_proto-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Input' USING SCHEMA FILE '${testdrive.temp-dir}/input.pb'
 
@@ -92,7 +92,7 @@ $ kafka-create-topic topic=input_avro
 $ kafka-ingest format=avro topic=input_avro schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 123}}, "op": "c", "source": {"snapshot": false, "lsn": null, "sequence": null}}
 
-> CREATE MATERIALIZED SOURCE input_avro
+> CREATE SOURCE input_avro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_avro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM

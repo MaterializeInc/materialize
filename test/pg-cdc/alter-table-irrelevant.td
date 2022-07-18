@@ -31,7 +31,7 @@ INSERT INTO base_table VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -65,7 +65,7 @@ INSERT INTO irrelevant_table VALUES (2, 'ab');
 # Recreate the source and views to verify the irrelevant_table is part of the publication
 > DROP VIEW base_table;
 > DROP SOURCE mz_source;
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 

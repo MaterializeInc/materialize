@@ -12,10 +12,10 @@ $ kafka-ingest topic=csv format=bytes
 id,value
 1,person
 
-> CREATE MATERIALIZED SOURCE csv_upgrade_no_header
+> CREATE SOURCE csv_upgrade_no_header
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csv-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS
 
-> CREATE MATERIALIZED SOURCE csv_upgrade_no_header_alias (al, sia)
+> CREATE SOURCE csv_upgrade_no_header_alias (al, sia)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csv-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS

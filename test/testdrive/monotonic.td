@@ -136,10 +136,12 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
   }
 }
 
-> CREATE MATERIALIZED SOURCE non_dbz_data_materialized
+> CREATE SOURCE non_dbz_data_materialized
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+
+> CREATE DEFAULT INDEX ON non_dbz_data_materialized
 
 # Propagating monotonicity analysis from a materialized source
 

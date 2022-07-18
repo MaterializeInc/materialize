@@ -33,15 +33,15 @@ CREATE PUBLICATION mz_source_insert FOR TABLE t1 WITH ( publish = 'insert') ;
 CREATE PUBLICATION mz_source_update FOR TABLE t1 WITH ( publish = 'update') ;
 CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 
-> CREATE MATERIALIZED SOURCE mz_source_insert
+> CREATE SOURCE mz_source_insert
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source_insert';
 
-> CREATE MATERIALIZED SOURCE mz_source_update
+> CREATE SOURCE mz_source_update
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source_update';
 
-> CREATE MATERIALIZED SOURCE mz_source_delete
+> CREATE SOURCE mz_source_delete
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source_delete';
 

@@ -19,7 +19,7 @@ INSERT INTO alter_change_decimal VALUES (0),(NULL),(12.345);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_change_decimal-value
 
-> CREATE MATERIALIZED SOURCE alter_change_decimal
+> CREATE SOURCE alter_change_decimal
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_change_decimal'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

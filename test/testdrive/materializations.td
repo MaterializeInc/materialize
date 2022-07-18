@@ -301,9 +301,11 @@ b  c
 
 $ kafka-create-topic topic=mat
 
-> CREATE MATERIALIZED SOURCE mat_data
+> CREATE SOURCE mat_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mat-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
+
+> CREATE DEFAULT INDEX ON mat_data
 
 > SELECT * from mat_data
 
@@ -327,21 +329,11 @@ name
 data
 mat_data
 
-> SHOW MATERIALIZED SOURCES
-name
-----
-mat_data
-
 > SHOW FULL SOURCES
-name     type materialized  type
----------------------------------
-data     user false         kafka
-mat_data user true          kafka
-
-> SHOW FULL MATERIALIZED SOURCES
-name     type  type
---------------------
-mat_data user  kafka
+name     type type
+-------------------
+data     user kafka
+mat_data user kafka
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

@@ -53,7 +53,7 @@ def populate(c: Composition) -> None:
             $ kafka-create-topic topic=source1
             $ kafka-ingest format=bytes topic=source1 repeat=1000000
             A${kafka-ingest.iteration}
-            > CREATE MATERIALIZED SOURCE source1
+            > CREATE SOURCE source1
               FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-source1-${testdrive.seed}'
               FORMAT BYTES
             > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM source1
@@ -121,7 +121,7 @@ def validate(c: Composition) -> None:
             11
 
             # New sources
-            > CREATE MATERIALIZED SOURCE source2
+            > CREATE SOURCE source2
               FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-source1-${testdrive.seed}'
               FORMAT BYTES
             > SELECT COUNT(*) FROM source2

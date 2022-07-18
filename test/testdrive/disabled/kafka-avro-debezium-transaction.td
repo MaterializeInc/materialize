@@ -9,6 +9,9 @@
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 
+# This test is broken.
+# See: https://github.com/MaterializeInc/materialize/issues/13629
+
 $ set schema={
     "type": "record",
     "name": "envelope",
@@ -159,7 +162,7 @@ $ set txschema-bad-schema={
 
 $ kafka-create-topic topic=data-txdata
 
-> CREATE MATERIALIZED SOURCE data_txdata
+> CREATE SOURCE data_txdata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-txdata-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${txschema}'
   ENVELOPE NONE
@@ -181,14 +184,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 #
 # Create a source using an inline schema.
 #
-> CREATE MATERIALIZED SOURCE data_schema_inline
+> CREATE SOURCE data_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data-${testdrive.seed}')
   )
 
-> CREATE MATERIALIZED SOURCE data2_schema_inline
+> CREATE SOURCE data2_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM (
@@ -249,7 +252,7 @@ a    b
 $ file-append path=data-schema.json
 \${schema}
 
-> CREATE MATERIALIZED SOURCE data_schema_file
+> CREATE SOURCE data_schema_file
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
     ENVELOPE DEBEZIUM (
@@ -349,7 +352,7 @@ a  b
 $ unset-regex
 
 # Reingest to verify that we keep transactionality
-> CREATE MATERIALIZED SOURCE data_sink_reingest
+> CREATE SOURCE data_sink_reingest
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
@@ -374,7 +377,7 @@ $ unset-regex
 $ kafka-create-topic topic=data-txdata-bad-schema
 $ kafka-create-topic topic=data-bad-schema
 
-> CREATE MATERIALIZED SOURCE data_txdata_bad_schema
+> CREATE SOURCE data_txdata_bad_schema
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-txdata-bad-schema-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${txschema-bad-schema}'
   ENVELOPE NONE
@@ -384,7 +387,7 @@ $ kafka-ingest format=avro topic=data-txdata-bad-schema schema=${txschema-bad-sc
 {"status": "BEGIN", "id": null, "event_count": null, "data_collections": null}
 {"status": "END", "id": {"string": "1"}, "event_count": {"long": 3}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
 
-! CREATE MATERIALIZED SOURCE data_schema_inline_with_bad_schema_tx_metadata
+! CREATE SOURCE data_schema_inline_with_bad_schema_tx_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-bad-schema-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM (
@@ -395,7 +398,7 @@ $ kafka-ingest format=avro topic=data-txdata-bad-schema schema=${txschema-bad-sc
   )
 contains:'id' column must be of type non-nullable string
 
-! CREATE MATERIALIZED SOURCE data_schema_inline_with_sink
+! CREATE SOURCE data_schema_inline_with_sink
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM (

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE MATERIALIZED SOURCE s3_text
+> CREATE SOURCE s3_text
   FROM S3
   DISCOVER OBJECTS MATCHING 's3/*.text'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
@@ -20,7 +20,7 @@
   )
   FORMAT TEXT;
 
-> CREATE MATERIALIZED SOURCE s3_gzip
+> CREATE SOURCE s3_gzip
   FROM S3
   DISCOVER OBJECTS MATCHING 's3/*.gzip'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',

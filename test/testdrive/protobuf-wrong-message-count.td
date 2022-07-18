@@ -19,12 +19,12 @@ syntax = "proto3";
 message Message1 {}
 message Message2 {}
 
-! CREATE MATERIALIZED SOURCE fail FROM
+! CREATE SOURCE fail FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-too-few-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Protobuf schemas with no messages not yet supported
 
-! CREATE MATERIALIZED SOURCE fail FROM
+! CREATE SOURCE fail FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-too-many-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Protobuf schemas with multiple messages not yet supported

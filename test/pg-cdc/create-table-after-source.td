@@ -25,7 +25,7 @@ DROP PUBLICATION IF EXISTS mz_source;
 CREATE SCHEMA public;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
@@ -42,7 +42,7 @@ contains:table t1 not found
 
 > DROP SOURCE mz_source;
 
-> CREATE MATERIALIZED SOURCE mz_source
+> CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 

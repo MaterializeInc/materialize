@@ -190,7 +190,6 @@ pub struct CreateSourcePlan {
     pub name: QualifiedObjectName,
     pub source: Source,
     pub if_not_exists: bool,
-    pub materialized: bool,
     pub timeline: Timeline,
     pub remote: Option<String>,
 }

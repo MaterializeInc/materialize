@@ -57,7 +57,7 @@ class Sink(Check):
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} publish=true repeat=10
                 {"key1": "D3${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE MATERIALIZED SOURCE sink_source
+                > CREATE SOURCE sink_source
                   FROM KAFKA BROKER '${testdrive.kafka-addr}'
                   TOPIC 'testdrive-sink-source-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

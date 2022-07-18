@@ -11,7 +11,7 @@ $ kafka-create-topic topic=input_csv partitions=1
 $ kafka-create-topic topic=input_csv_partitioned partitions=2
 $ kafka-create-topic topic=input_proto
 
-> CREATE MATERIALIZED SOURCE input_csv (first, second)
+> CREATE SOURCE input_csv (first, second)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_csv-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS;
 
@@ -31,7 +31,7 @@ $ kafka-ingest format=bytes topic=input_csv_partitioned partition=0
 $ kafka-ingest format=bytes topic=input_csv_partitioned partition=1
 2,3
 
-> CREATE MATERIALIZED SOURCE input_csv_partitioned (first, second)
+> CREATE SOURCE input_csv_partitioned (first, second)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_csv_partitioned-${testdrive.seed}'
   WITH (start_offset=[1,0])
   FORMAT CSV WITH 2 COLUMNS;

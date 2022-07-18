@@ -17,7 +17,7 @@ $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "ty
 
 $ kafka-create-topic topic=fetch-concurrent-same-source
 
-> CREATE MATERIALIZED SOURCE fetch_concurrent_same_source
+> CREATE SOURCE fetch_concurrent_same_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}'
   WITH( timestamp_frequency_ms = 10 )
   FORMAT AVRO USING SCHEMA '${int}'

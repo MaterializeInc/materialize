@@ -151,7 +151,7 @@ class MonotonicTop1(Check):
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} publish=true repeat=1
                 {"f1": "A"}
 
-                > CREATE MATERIALIZED SOURCE monotonic_top1_source
+                > CREATE SOURCE monotonic_top1_source
                   FROM KAFKA BROKER '${testdrive.kafka-addr}'
                   TOPIC 'testdrive-monotonic-top1-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

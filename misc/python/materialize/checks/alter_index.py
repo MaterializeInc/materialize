@@ -50,11 +50,13 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} publish=true repeat=10000
                 {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE MATERIALIZED SOURCE alter_index_source
+                > CREATE SOURCE alter_index_source
                   FROM KAFKA BROKER '${testdrive.kafka-addr}'
                   TOPIC 'testdrive-alter-index-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE NONE
+
+                > CREATE DEFAULT INDEX ON alter_index_source
             """
             )
         )

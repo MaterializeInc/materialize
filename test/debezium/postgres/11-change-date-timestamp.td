@@ -18,7 +18,7 @@ INSERT INTO alter_change_date_timestamp VALUES ('2011-11-11'),('2012-12-12');
 
 $ schema-registry-wait-schema schema=postgres.public.alter_change_date_timestamp-value
 
-> CREATE MATERIALIZED SOURCE alter_change_date_timestamp
+> CREATE SOURCE alter_change_date_timestamp
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_change_date_timestamp'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
