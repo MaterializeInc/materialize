@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use mz_expr::RowSetFinishing;
+use mz_ore::str::Indent;
 use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer};
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
@@ -156,5 +157,37 @@ where
         // writeln!(f, "")?;
         // self.context.used_indexes.fmt_text(..., f)?;
         Ok(())
+    }
+}
+
+#[allow(dead_code)] // TODO (#13299)
+#[allow(missing_debug_implementations)]
+pub(crate) struct PlanRenderingContext<'a, T> {
+    pub(crate) indent: Indent,
+    pub(crate) humanizer: &'a dyn ExprHumanizer,
+    pub(crate) annotations: HashMap<&'a T, Attributes>, // TODO: can this be a ref
+    pub(crate) config: &'a ExplainConfig,
+}
+
+impl<'a, T> PlanRenderingContext<'a, T> {
+    #[allow(dead_code)] // TODO (#13299)
+    pub fn new(
+        indent: Indent,
+        humanizer: &'a dyn ExprHumanizer,
+        annotations: HashMap<&'a T, Attributes>,
+        config: &'a ExplainConfig,
+    ) -> PlanRenderingContext<'a, T> {
+        PlanRenderingContext {
+            indent,
+            humanizer,
+            annotations,
+            config,
+        }
+    }
+}
+
+impl<'a, T> AsMut<Indent> for PlanRenderingContext<'a, T> {
+    fn as_mut(&mut self) -> &mut Indent {
+        &mut self.indent
     }
 }
