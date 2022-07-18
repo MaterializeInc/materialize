@@ -488,6 +488,7 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn create_collections(
         &mut self,
         mut collections: Vec<(GlobalId, CollectionDescription<T>)>,
@@ -707,6 +708,7 @@ where
             .unwrap()
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,

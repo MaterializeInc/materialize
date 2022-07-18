@@ -680,6 +680,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// This should be called only after a collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn initialize_read_policies(
         &mut self,
         id_bundle: CollectionIdBundle,
@@ -1260,7 +1261,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn try_group_commit(&mut self) {
         if self.pending_writes.is_empty() {
             return;
@@ -2906,6 +2907,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_table(
         &mut self,
         session: &Session,
@@ -5505,6 +5507,8 @@ impl<S: Append + 'static> Coordinator<S> {
     where
         F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, AdapterError>,
     {
+        event!(Level::TRACE, ops = format!("{:?}", ops));
+
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut sinks_to_drop = vec![];
