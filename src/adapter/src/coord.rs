@@ -169,7 +169,8 @@ use crate::coord::read_holds::ReadHolds;
 use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    vars, EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus,
+    WriteOp,
 };
 use crate::sink_connection;
 use crate::tail::PendingTail;
@@ -1849,7 +1850,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } => {
                 let now = self.now_datetime();
                 let session = match implicit {
-                    None => session.start_transaction(now, None),
+                    None => session.start_transaction(now, None, None),
                     Some(stmts) => session.start_transaction_implicit(now, stmts),
                 };
                 let _ = tx.send(Response {
@@ -2504,7 +2505,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(self.now_datetime(), plan.access);
+                let session = session.start_transaction(
+                    self.now_datetime(),
+                    plan.access,
+                    plan.isolation_level,
+                );
                 tx.send(
                     Ok(ExecuteResponse::StartedTransaction { duplicated }),
                     session,
@@ -4434,16 +4439,37 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&ts);
         }
 
-        if when.advance_to_since() {
-            candidate.advance_by(since.borrow());
+        let isolation_level = session.vars().transaction_isolation();
+        let timeline = self.validate_timeline(id_bundle.iter())?;
+        let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
+            && timeline.is_some()
+            && when.advance_to_global_ts();
+
+        if use_timestamp_oracle {
+            let timeline = timeline.expect("checked that timeline exists above");
+            let timestamp_oracle = &mut self
+                .global_timelines
+                .get_mut(&timeline)
+                .expect("all timelines have a timestamp oracle")
+                .oracle;
+            candidate.join_assign(&timestamp_oracle.read_ts());
+        } else {
+            if when.advance_to_since() {
+                candidate.advance_by(since.borrow());
+            }
+            if when.advance_to_upper() {
+                let upper = self.largest_not_in_advance_of_upper(&id_bundle);
+                candidate.join_assign(&upper);
+            }
         }
-        let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-        if when.advance_to_table_ts(uses_tables) {
-            candidate.join_assign(&self.get_local_read_ts());
-        }
-        if when.advance_to_upper(uses_tables) {
-            let upper = self.largest_not_in_advance_of_upper(&id_bundle);
-            candidate.join_assign(&upper);
+
+        if use_timestamp_oracle && when == &QueryWhen::Immediately {
+            assert!(
+                since.less_equal(&candidate),
+                "the strict serializable isolation level guarantees that the timestamp chosen \
+                ({candidate}) is greater than or equal to since ({:?}) via read holds",
+                since
+            )
         }
 
         // If the timestamp is greater or equal to some element in `since` we are
@@ -5992,6 +6018,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Table(table) => {
                         timelines.insert(id, table.timeline());
+                    }
+                    CatalogItem::Log(_) => {
+                        timelines.insert(id, Timeline::EpochMilliseconds);
                     }
                     _ => {}
                 }

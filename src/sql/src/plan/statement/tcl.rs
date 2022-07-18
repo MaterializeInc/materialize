@@ -18,6 +18,7 @@ use crate::ast::{
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{Plan, PlanError, StartTransactionPlan};
+use mz_sql_parser::ast::TransactionIsolationLevel;
 
 pub fn describe_start_transaction(
     _: &StatementContext,
@@ -30,8 +31,11 @@ pub fn plan_start_transaction(
     _: &StatementContext,
     StartTransactionStatement { modes }: StartTransactionStatement,
 ) -> Result<Plan, PlanError> {
-    let access = verify_transaction_modes(modes)?;
-    Ok(Plan::StartTransaction(StartTransactionPlan { access }))
+    let (access, isolation_level) = verify_transaction_modes(modes)?;
+    Ok(Plan::StartTransaction(StartTransactionPlan {
+        access,
+        isolation_level,
+    }))
 }
 
 pub fn describe_set_transaction(
@@ -50,19 +54,24 @@ pub fn plan_set_transaction(
 
 fn verify_transaction_modes(
     modes: Vec<TransactionMode>,
-) -> Result<Option<TransactionAccessMode>, PlanError> {
+) -> Result<
+    (
+        Option<TransactionAccessMode>,
+        Option<TransactionIsolationLevel>,
+    ),
+    PlanError,
+> {
     let mut access = None;
+    let mut isolation = None;
     for mode in modes {
         match mode {
-            // Although we are only serializable, it's not wrong to accept lower isolation
-            // levels because we still meet the required guarantees for those.
-            TransactionMode::IsolationLevel(_) => {}
+            TransactionMode::IsolationLevel(level) => isolation = Some(level),
             TransactionMode::AccessMode(mode) => {
                 access = Some(mode);
             }
         }
     }
-    Ok(access)
+    Ok((access, isolation))
 }
 
 pub fn describe_rollback(

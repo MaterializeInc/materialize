@@ -68,6 +68,7 @@ pub(crate) mod with_options;
 pub use self::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 pub use error::PlanError;
 pub use explain::Explanation;
+use mz_sql_parser::ast::TransactionIsolationLevel;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
@@ -131,6 +132,7 @@ pub enum Plan {
 #[derive(Debug)]
 pub struct StartTransactionPlan {
     pub access: Option<TransactionAccessMode>,
+    pub isolation_level: Option<TransactionIsolationLevel>,
 }
 
 #[derive(Debug)]
@@ -570,17 +572,17 @@ impl QueryWhen {
         }
     }
     /// Returns whether the candidate must be advanced to the upper.
-    pub fn advance_to_upper(&self, uses_tables: bool) -> bool {
+    pub fn advance_to_upper(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => !uses_tables,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
-    /// Returns whether the candidate must be advanced to the global table timestamp.
-    pub fn advance_to_table_ts(&self, uses_tables: bool) -> bool {
+    /// Returns whether the candidate must be advanced to the global timestamp.
+    pub fn advance_to_global_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => uses_tables,
-            QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately => true,
+            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
         }
     }
 }

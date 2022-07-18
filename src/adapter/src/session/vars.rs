@@ -17,6 +17,7 @@ use uncased::UncasedStr;
 
 use mz_ore::cast;
 use mz_sql::DEFAULT_SCHEMA;
+use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::error::AdapterError;
 use crate::session::EndTransactionAction;
@@ -166,9 +167,9 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
-const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
+const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     name: UncasedStr::new("transaction_isolation"),
-    value: "serializable",
+    value: &IsolationLevel::StrictSerializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
 
@@ -217,7 +218,7 @@ pub struct Vars {
     standard_conforming_strings: ServerVar<bool>,
     statement_timeout: SessionVar<Duration>,
     timezone: SessionVar<TimeZone>,
-    transaction_isolation: ServerVar<str>,
+    transaction_isolation: SessionVar<IsolationLevel>,
 }
 
 impl Default for Vars {
@@ -242,7 +243,7 @@ impl Default for Vars {
             standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
             statement_timeout: SessionVar::new(&STATEMENT_TIMEOUT),
             timezone: SessionVar::new(&TIMEZONE),
-            transaction_isolation: TRANSACTION_ISOLATION,
+            transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
         }
     }
 }
@@ -467,7 +468,15 @@ impl Vars {
                 });
             }
         } else if name == TRANSACTION_ISOLATION.name {
-            Err(AdapterError::ReadOnlyParameter(&TRANSACTION_ISOLATION))
+            if let Ok(_) = IsolationLevel::parse(value) {
+                self.transaction_isolation.set(value, local)
+            } else {
+                return Err(AdapterError::ConstrainedParameter {
+                    parameter: &TRANSACTION_ISOLATION,
+                    value: value.into(),
+                    valid_values: Some(IsolationLevel::valid_values()),
+                });
+            }
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -657,8 +666,8 @@ impl Vars {
 
     /// Returns the value of the `transaction_isolation` configuration
     /// parameter.
-    pub fn transaction_isolation(&self) -> &'static str {
-        self.transaction_isolation.value
+    pub fn transaction_isolation(&self) -> &IsolationLevel {
+        self.transaction_isolation.value()
     }
 }
 
@@ -1172,5 +1181,75 @@ impl Value for TimeZone {
 
     fn format(&self) -> String {
         self.as_str().into()
+    }
+}
+
+/// List of valid isolation levels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsolationLevel {
+    ReadUncommitted,
+    ReadCommitted,
+    RepeatableRead,
+    Serializable,
+    StrictSerializable,
+}
+
+impl IsolationLevel {
+    pub(super) fn as_str(&self) -> &'static str {
+        match self {
+            Self::ReadUncommitted => "READ_UNCOMMITTED",
+            Self::ReadCommitted => "READ_COMMITTED",
+            Self::RepeatableRead => "REPEATABLE_READ",
+            Self::Serializable => "SERIALIZABLE",
+            Self::StrictSerializable => "STRICT_SERIALIZABLE",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![
+            Self::ReadUncommitted.as_str(),
+            Self::ReadCommitted.as_str(),
+            Self::RepeatableRead.as_str(),
+            Self::Serializable.as_str(),
+            Self::StrictSerializable.as_str(),
+        ]
+    }
+}
+
+impl Value for IsolationLevel {
+    const TYPE_NAME: &'static str = "string";
+
+    fn parse(s: &str) -> Result<Self::Owned, ()> {
+        let s = UncasedStr::new(s);
+
+        // We don't have any optimizations for levels below Serializable,
+        // so we upgrade them all to Serializable.
+        if s == Self::ReadUncommitted.as_str()
+            || s == Self::ReadCommitted.as_str()
+            || s == Self::RepeatableRead.as_str()
+            || s == Self::Serializable.as_str()
+        {
+            Ok(Self::Serializable)
+        } else if s == Self::StrictSerializable.as_str() {
+            Ok(Self::StrictSerializable)
+        } else {
+            Err(())
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
+    }
+}
+
+impl From<TransactionIsolationLevel> for IsolationLevel {
+    fn from(transaction_isolation_level: TransactionIsolationLevel) -> Self {
+        match transaction_isolation_level {
+            TransactionIsolationLevel::ReadUncommitted => Self::ReadUncommitted,
+            TransactionIsolationLevel::ReadCommitted => Self::ReadCommitted,
+            TransactionIsolationLevel::RepeatableRead => Self::RepeatableRead,
+            TransactionIsolationLevel::Serializable => Self::Serializable,
+            TransactionIsolationLevel::StrictSerializable => Self::StrictSerializable,
+        }
     }
 }
