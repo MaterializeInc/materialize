@@ -217,6 +217,8 @@ impl Transactor {
             })?;
         let listen = self
             .read
+            .clone()
+            .await
             .listen(snap_as_of)
             .await
             .map_err(|since| MaelstromError {

@@ -32,9 +32,11 @@ include!(concat!(
 ));
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ReadCapability<T> {
+pub struct ReaderState<T> {
     pub seqno: SeqNo,
     pub since: Antichain<T>,
+    /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
+    pub last_heartbeat_timestamp_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +61,7 @@ pub struct HollowBatch<T> {
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 pub struct StateCollections<T> {
-    pub(crate) readers: HashMap<ReaderId, ReadCapability<T>>,
+    pub(crate) readers: HashMap<ReaderId, ReaderState<T>>,
     pub(crate) writers: HashMap<WriterId, WriterState>,
 
     pub(crate) trace: Trace<T>,
@@ -71,14 +73,16 @@ where
 {
     pub fn register_reader(
         &mut self,
-        seqno: SeqNo,
         reader_id: &ReaderId,
-    ) -> ControlFlow<Infallible, (Upper<T>, ReadCapability<T>)> {
+        seqno: SeqNo,
+        heartbeat_timestamp_ms: u64,
+    ) -> ControlFlow<Infallible, (Upper<T>, ReaderState<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
         // retry).
-        let read_cap = ReadCapability {
+        let read_cap = ReaderState {
             seqno,
             since: self.trace.since().clone(),
+            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
         Continue((Upper(self.trace.upper().clone()), read_cap))
@@ -98,13 +102,15 @@ where
 
     pub fn clone_reader(
         &mut self,
-        seqno: SeqNo,
         new_reader_id: &ReaderId,
-    ) -> ControlFlow<Infallible, ReadCapability<T>> {
+        seqno: SeqNo,
+        heartbeat_timestamp_ms: u64,
+    ) -> ControlFlow<Infallible, ReaderState<T>> {
         // TODO: Handle if the reader already exists (probably with a retry).
-        let read_cap = ReadCapability {
+        let read_cap = ReaderState {
             seqno,
             since: self.trace.since().clone(),
+            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
         };
         self.readers.insert(new_reader_id.clone(), read_cap.clone());
         Continue(read_cap)
@@ -157,19 +163,38 @@ where
     pub fn downgrade_since(
         &mut self,
         reader_id: &ReaderId,
+        seqno: SeqNo,
         new_since: &Antichain<T>,
+        heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, Since<T>> {
-        let read_cap = self.reader(reader_id);
-        let reader_current_since = if PartialOrder::less_than(&read_cap.since, new_since) {
-            read_cap.since.clone_from(new_since);
+        let reader_state = self.reader(reader_id);
+
+        // Also use this as an opportunity to heartbeat the reader and downgrade
+        // the seqno capability.
+        reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        reader_state.seqno = seqno;
+
+        let reader_current_since = if PartialOrder::less_than(&reader_state.since, new_since) {
+            reader_state.since.clone_from(new_since);
             self.update_since();
             new_since.clone()
         } else {
             // No-op, but still commit the state change so that this gets
             // linearized.
-            read_cap.since.clone()
+            reader_state.since.clone()
         };
+
         Continue(Since(reader_current_since))
+    }
+
+    pub fn heartbeat_reader(
+        &mut self,
+        reader_id: &ReaderId,
+        heartbeat_timestamp_ms: u64,
+    ) -> ControlFlow<Infallible, ()> {
+        let reader_state = self.reader(reader_id);
+        reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        Continue(())
     }
 
     pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
@@ -189,7 +214,7 @@ where
         Continue(existed)
     }
 
-    fn reader(&mut self, id: &ReaderId) -> &mut ReadCapability<T> {
+    fn reader(&mut self, id: &ReaderId) -> &mut ReaderState<T> {
         self.readers
             .get_mut(id)
             // The only (tm) ways to hit this are (1) inventing a ReaderId
@@ -283,12 +308,6 @@ where
         for cap in self.collections.readers.values() {
             seqno_since = std::cmp::min(seqno_since, cap.seqno);
         }
-        // TODO: This is meant to be the minimum SeqNo that some reader holds a
-        // capability on it, but we don't yet actually do the bookkeeping (it
-        // currently starts at the SeqNo at which the reader was registered). In
-        // the meantime, reset it to the current seqno and don't actually delete
-        // blobs in the GarbageCollector.
-        seqno_since = self.seqno;
         seqno_since
     }
 
@@ -381,6 +400,8 @@ impl<T> Determinacy for Upper<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::now::SYSTEM_TIME;
+
     use super::*;
 
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
@@ -404,7 +425,9 @@ mod tests {
     fn downgrade_since() {
         let mut state = State::<(), (), u64, i64>::new(ShardId::new());
         let reader = ReaderId::new();
-        let _ = state.collections.register_reader(SeqNo::minimum(), &reader);
+        let seqno = SeqNo::minimum();
+        let now = SYSTEM_TIME.clone();
+        let _ = state.collections.register_reader(&reader, seqno, now());
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
@@ -413,7 +436,7 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
+                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -421,7 +444,7 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
+                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -429,22 +452,20 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(1)),
+                .downgrade_since(&reader, seqno, &Antichain::from_elem(1), now()),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
 
         // Create a second reader.
         let reader2 = ReaderId::new();
-        let _ = state
-            .collections
-            .register_reader(SeqNo::minimum(), &reader2);
+        let _ = state.collections.register_reader(&reader2, seqno, now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader2, &Antichain::from_elem(3)),
+                .downgrade_since(&reader2, seqno, &Antichain::from_elem(3), now()),
             Continue(Since(Antichain::from_elem(3)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -452,7 +473,7 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(5)),
+                .downgrade_since(&reader, seqno, &Antichain::from_elem(5), now()),
             Continue(Since(Antichain::from_elem(5)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -463,15 +484,13 @@ mod tests {
 
         // Create a third reader.
         let reader3 = ReaderId::new();
-        let _ = state
-            .collections
-            .register_reader(SeqNo::minimum(), &reader3);
+        let _ = state.collections.register_reader(&reader3, seqno, now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader3, &Antichain::from_elem(10)),
+                .downgrade_since(&reader3, seqno, &Antichain::from_elem(10), now()),
             Continue(Since(Antichain::from_elem(10)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -537,6 +556,7 @@ mod tests {
     #[test]
     fn snapshot() {
         mz_ore::test::init_logging();
+        let now = SYSTEM_TIME.clone();
 
         let mut state = State::<String, String, u64, i64>::new(ShardId::new());
         // Cannot take a snapshot with as_of == shard upper.
@@ -584,11 +604,16 @@ mod tests {
 
         let reader = ReaderId::new();
         // Advance the since to 2.
-        let _ = state.collections.register_reader(SeqNo::minimum(), &reader);
+        let _ = state
+            .collections
+            .register_reader(&reader, SeqNo::minimum(), now());
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
+            state.collections.downgrade_since(
+                &reader,
+                SeqNo::minimum(),
+                &Antichain::from_elem(2),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));

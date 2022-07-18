@@ -76,7 +76,7 @@ where
             return;
         }
 
-        let mut read = persist_clients
+        let read = persist_clients
             .lock()
             .await
             .open(metadata.persist_location)
@@ -85,9 +85,6 @@ where
             .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(metadata.data_shard)
             .await
             .expect("could not open persist shard");
-
-        /// Aggressively downgrade `since`, to not hold back compaction.
-        read.downgrade_since(as_of.clone()).await;
 
         let mut snapshot_iter = read
             .snapshot(as_of.clone())
@@ -99,7 +96,7 @@ where
             yield ListenEvent::Updates(next);
         }
 
-        // Then, listen continously and yield any new updates. This loop is expected to never
+        // Then, listen continuously and yield any new updates. This loop is expected to never
         // finish.
         let mut listen = read
             .listen(as_of)
@@ -108,16 +105,6 @@ where
 
         loop {
             for event in listen.next().await {
-                // TODO(petrosagg): We are incorrectly NOT downgrading the since frontier of this
-                // read handle which will hold back compaction in persist. This is currently a
-                // necessary evil to avoid too much contension on persist's consensus
-                // implementation.
-                //
-                // Once persist supports compaction and/or has better performance the code below
-                // should be enabled.
-                // if let ListenEvent::Progress(upper) = &event {
-                //     read.downgrade_since(upper.clone()).await;
-                // }
                 yield event;
             }
         }
