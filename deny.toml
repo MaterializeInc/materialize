@@ -17,16 +17,7 @@ skip = [
     # Waiting for vte to upgrade to v0.7.0.
     { name = "arrayvec", version = "0.5.2" },
 
-    # WASI dependencies from multiple sources.
-    { name = "wasi", version = "0.10.0+wasi-snapshot-preview1" },
-    { name = "windows-sys", version = "0.32.0" },
-    { name = "windows_aarch64_msvc", version = "0.32.0" },
-    { name = "windows_i686_gnu", version = "0.32.0" },
-    { name = "windows_i686_msvc", version = "0.32.0" },
-    { name = "windows_x86_64_gnu", version = "0.32.0" },
-    { name = "windows_x86_64_msvc", version = "0.32.0" },
-
-    # Waiting on many dependencies throughout the ecosystem.
+    # Waiting on https://github.com/prisma/tiberius/pull/233.
     { name = "uuid", version = "0.8.2" },
 
     # Waiting on https://github.com/chronotope/chrono-tz/pull/100.
