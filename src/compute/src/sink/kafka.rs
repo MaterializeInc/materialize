@@ -55,10 +55,10 @@ use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, Gau
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
-use mz_storage::client::connections::{ConnectionContext, PopulateClientConfig};
-use mz_storage::client::controller::CollectionMetadata;
-use mz_storage::client::errors::DataflowError;
-use mz_storage::client::sinks::{
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
+use mz_storage::types::errors::DataflowError;
+use mz_storage::types::sinks::{
     KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
     SinkEnvelope,
 };
@@ -500,7 +500,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        connection.populate_client_config(&mut config, &connection_context.secrets_reader);
+        connection.populate_client_config(&mut config, &*connection_context.secrets_reader);
 
         // Ensure that messages are sinked in order and without duplicates. Note that
         // this only applies to a single instance of a producer - in the case of restarts,
@@ -541,7 +541,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        connection.populate_client_config(&mut config, &connection_context.secrets_reader);
+        connection.populate_client_config(&mut config, &*connection_context.secrets_reader);
 
         config
             .set(

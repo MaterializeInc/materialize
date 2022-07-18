@@ -14,7 +14,7 @@
 $ s3-create-bucket bucket=philip-stoev-materialize
 $ s3-add-notifications bucket=philip-stoev-materialize queue=philip-stoev-materialize sqs-validation-timeout=5m
 
-> CREATE MATERIALIZED SOURCE s3
+> CREATE SOURCE s3
   FROM S3
   DISCOVER OBJECTS MATCHING '**/*.csv'
   USING BUCKET SCAN 'testdrive-philip-stoev-materialize-${testdrive.seed}',
@@ -111,7 +111,7 @@ $ s3-delete-objects bucket=philip-stoev-materialize
 <null>
 
 
-> CREATE MATERIALIZED SOURCE s3
+> CREATE SOURCE s3
   FROM S3
   DISCOVER OBJECTS MATCHING '**/*.csv'
   USING BUCKET SCAN 'testdrive-philip-stoev-materialize-${testdrive.seed}',

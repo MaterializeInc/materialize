@@ -13,11 +13,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use mz_expr::explain::Indices;
-use mz_expr::{ExprHumanizer, Id, LocalId, RowSetFinishing};
+use mz_expr::{Id, LocalId, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::str::{bracketed, separated};
-use mz_repr::explain_new::DisplayText;
+use mz_repr::explain_new::{text_string, DisplayText, ExprHumanizer};
 use mz_repr::{RelationType, ScalarType};
 use mz_sql::plan::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 
@@ -389,7 +389,7 @@ impl<'a> HirRelationExprExplanation<'a> {
         }
 
         for subquery in &node.subqueries {
-            for line in subquery.str_text().split('\n') {
+            for line in text_string(subquery).split('\n') {
                 if line.is_empty() {
                     writeln!(f, "| |")?;
                 } else {
@@ -510,7 +510,7 @@ impl<'a> HirRelationExprExplanation<'a> {
 }
 
 impl<'a> DisplayText for HirRelationExprExplanation<'a> {
-    fn fmt_text(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt_text(&self, f: &mut fmt::Formatter, _ctx: &mut ()) -> fmt::Result {
         let mut prev_chain = u64::max_value();
         for node in &self.nodes {
             if node.chain != prev_chain {

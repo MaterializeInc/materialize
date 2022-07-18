@@ -15,15 +15,16 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags.
-[`--listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for HTTP and SQL connections.
+[`--sql-listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for untrusted SQL connections.
+[`--http-listen-addr`](#listen-address) | `0.0.0.0:6876` | The host and port on which to listen for untrusted HTTP connections.
+[`--internal-sql-listen-addr`](#listen-address) | `0.0.0.0:6877` | The host and port on which to listen for trusted SQL connections.
+[`--internal-http-listen-addr`](#listen-address) | `0.0.0.0:6878` | The host and port on which to listen for trusted HTTP connections.
 [`--log-filter`](#log-filter) | `info` | Which log messages to emit.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA).
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file.
 [`--tls-mode`](#tls-encryption) | N/A | How stringently to demand TLS authentication and encryption.
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file.
-[`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads.
 `-v` / `--version` | N/A | Print version and exit.
 `-vv` | N/A | Print version and additional build information, and exit.
 
@@ -35,36 +36,15 @@ precedence.
 The process for converting a flag name to an environment variable name is as
 follows:
 
-  1. Convert all characters to uppercase
-  2. Replace all hyphens with underscores
-  3. add an `MZ_` prefix.
+  1. Convert all characters to uppercase.
+  2. Replace all hyphens with underscores.
+  3. Add an `MZ_` prefix.
 
-For example, the `--data-directory` command line flag corresponds to the
-`MZ_DATA_DIRECTORY` environment variable.
+For example, the `--sql-listen-addr` command line flag corresponds to the
+`MZ_SQL_LISTEN_ADDR` environment variable.
 
 If the same command line flag is specified multiple times, the last
 specification takes precedence.
-
-### Data directory
-
-Upon startup `materialized` creates a directory where it persists metadata. By
-default, this directory is called `mzdata` and is situated in the current
-working directory of the materialized process. Currently, only metadata is
-persisted in `mzdata`. You can specify a different directory using the
-`--data-directory` flag. Upon start, `materialized` checks for an existing data
-directory, and will reinstall source and view definitions from it if one is
-found.
-
-### Worker threads
-
-A `materialized` instance runs a specified number of timely dataflow worker
-threads. Worker threads can only be specified at startup by setting the
-`--workers` flag, and cannot be changed without shutting down `materialized`
-and restarting. If `--workers` is not set, `materialized` will default to using
-half of the machine's physical cores as the thread count.  In the future,
-dynamically changing the number of worker threads will be possible over
-distributed clusters, see
-[#2449](https://github.com/MaterializeInc/materialize/issues/2449).
 
 #### How many worker threads should you run?
 
@@ -89,12 +69,12 @@ recommended worker setting on this VM is `7`.
 
 ### Listen address
 
-By default, `materialized` binds to `127.0.0.1:6875`. This means that
-Materialize will accept any incoming SQL connection to port 6875 from only the
-local machine. If you wish to configure `materialized` to accept connections
-from anywhere, you can set `--listen-addr` to `0.0.0.0:6875`. You can
-also use this to change the port that Materialize listens on from the default
-`6875`.
+By default, `materialized` binds to `127.0.0.1:6875` for SQL connections. This
+means that Materialize will accept any incoming SQL connection to port 6875 from
+only the local machine. If you wish to configure `materialized` to accept
+connections from anywhere, you can set `--listen-addr` to `0.0.0.0:6875`. You
+can also use this to change the port that Materialize listens on from the
+default `6875`.
 
 The `materialized` [Docker image](/install/#docker) instead uses a listen
 address of `0.0.0.0:6875` by default, in accordance with Docker conventions.
@@ -130,20 +110,6 @@ other modules.
 ```
 pgwire=trace,info
 ```
-
-### Introspection sources
-
-Materialize maintains several built-in sources and views in
-[`mz_catalog`](/sql/system-catalog) that describe the internal state of the
-dataflow execution layer, like `mz_scheduling_elapsed`.
-
-The `--introspection-frequency` option determines the frequency at which the
-base sources are updated. The default frequency is `1s`. To disable
-introspection entirely, use the special value `off`.
-
-Higher frequencies provide more up-to-date introspection but increase load on
-the system. Lower frequencies increase staleness in exchange for decreased load.
-The default frequency is a good choice for most deployments.
 
 ### TLS encryption
 

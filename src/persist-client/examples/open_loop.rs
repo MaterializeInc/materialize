@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use prometheus::Encoder;
 use tokio::sync::mpsc::error::SendError;
@@ -26,7 +27,7 @@ use tracing::{debug, error, info, info_span, trace, Instrument};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::workload::DataGenerator;
-use mz_persist_client::{Metrics, PersistLocation, ShardId};
+use mz_persist_client::{Metrics, PersistConfig, PersistLocation, ShardId};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
@@ -88,7 +89,7 @@ pub struct Args {
     shard_id: Option<String>,
 
     /// The address of the internal HTTP server.
-    #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
+    #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6878")]
     internal_http_listen_addr: SocketAddr,
 
     /// Path of a file to write metrics at the end of the run.
@@ -125,9 +126,10 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
     };
-    let persist = PersistClientCache::new(&metrics_registry)
-        .open(location)
-        .await?;
+    let persist =
+        PersistClientCache::new(PersistConfig::new(SYSTEM_TIME.clone()), &metrics_registry)
+            .open(location)
+            .await?;
 
     let shard_id = match args.shard_id.clone() {
         Some(shard_id) => ShardId::from_str(&shard_id).map_err(anyhow::Error::msg)?,

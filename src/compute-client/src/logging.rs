@@ -9,9 +9,9 @@
 
 //! Compute layer logging configuration.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use mz_storage::client::controller::CollectionMetadata;
+use mz_storage::controller::CollectionMetadata;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -25,10 +25,10 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 #[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub granularity_ns: u128,
+    /// Logs to keep in an arrangement
+    pub active_logs: BTreeMap<LogVariant, GlobalId>,
     /// Whether we should report logs for the log-processing dataflows
     pub log_logging: bool,
-    /// Logs to keep in an arrangement
-    pub active_logs: HashMap<LogVariant, GlobalId>,
     /// Logs to be written to persist
     pub sink_logs: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
@@ -105,7 +105,7 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoActiveLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum LogVariant {
     Timely(TimelyLog),
     Differential(DifferentialLog),
@@ -135,7 +135,7 @@ impl RustType<ProtoLogVariant> for LogVariant {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum TimelyLog {
     Operates,
     Channels,
@@ -183,7 +183,7 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum DifferentialLog {
     ArrangementBatches,
     ArrangementRecords,
@@ -215,7 +215,7 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum ComputeLog {
     DataflowCurrent,
     DataflowDependency,

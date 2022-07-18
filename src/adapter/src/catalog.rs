@@ -10,7 +10,7 @@
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,15 +31,15 @@ use mz_compute_client::logging::{
     LogVariant, LoggingConfig as DataflowLoggingConfig, DEFAULT_LOG_VARIANTS,
 };
 use mz_controller::{
-    ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig,
-    ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceEvent, ComputeInstanceReplicaAllocation, ConcreteComputeInstanceReplicaConfig,
+    ConcreteComputeInstanceReplicaLocation, ConcreteComputeInstanceReplicaLogging,
 };
-use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{explain_new::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
@@ -53,14 +53,14 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
-    CreateRecordedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig, CreateConnectionPlan,
+    CreateIndexPlan, CreateRecordedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
-use mz_storage::client::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
-use mz_storage::client::sources::{SourceDesc, Timeline};
+use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 use uuid::Uuid;
 
@@ -68,6 +68,7 @@ use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
+use crate::catalog::storage::BootstrapArgs;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::AdapterError;
 
@@ -80,10 +81,8 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::Config;
-pub use crate::catalog::error::AmbiguousRename;
-pub use crate::catalog::error::Error;
-pub use crate::catalog::error::ErrorKind;
+pub use crate::catalog::config::{ClusterReplicaSizeMap, Config};
+pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::client::ConnectionId;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
@@ -143,6 +142,8 @@ pub struct CatalogState {
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
+    replica_sizes: ClusterReplicaSizeMap,
+    availability_zones: Vec<String>,
 }
 
 impl CatalogState {
@@ -416,7 +417,7 @@ impl CatalogState {
         let logging = match introspection {
             None => None,
             Some(introspection) => {
-                let mut active_logs = HashMap::new();
+                let mut active_logs = BTreeMap::new();
                 for (log, index_id) in introspection_sources {
                     let source_name = FullObjectName {
                         database: RawDatabaseSpecifier::Ambient,
@@ -1086,7 +1087,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage::client::connections::Connection,
+    pub connection: mz_storage::types::connections::Connection,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1324,7 +1325,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_storage::client::sources::SourceDesc`] associated with
+    /// Returns the [`mz_storage::types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`.
     pub fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
         self.item.source_desc(self.name())
@@ -1413,7 +1414,7 @@ impl<S: Append> Catalog<S> {
     /// describe the initial state of the catalog.
     pub async fn open(
         config: Config<'_, S>,
-    ) -> Result<(Catalog<S>, Vec<BuiltinTableUpdate>), Error> {
+    ) -> Result<(Catalog<S>, Vec<BuiltinTableUpdate>), AdapterError> {
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -1437,6 +1438,8 @@ impl<S: Append> Catalog<S> {
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
+                replica_sizes: config.replica_sizes,
+                availability_zones: config.availability_zones,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -1671,36 +1674,33 @@ impl<S: Append> Catalog<S> {
             .await
             .load_compute_instance_replicas()
             .await?;
-        for (instance_id, replica_id, name, config) in replicas {
+        for (instance_id, replica_id, name, serialized_config) in replicas {
             // Instantiate the default logging settings for replicas
-            let persisted_logs = match config.persisted_logs {
-                mz_controller::ConcreteComputeInstanceReplicaLogging::Default => {
-                    ConcreteComputeInstanceReplicaLogging::Concrete(
-                        catalog
-                            .allocate_persisted_introspection_source_indexes()
-                            .await,
-                    )
+            let persisted_logs = match &serialized_config.persisted_logs {
+                SerializedComputeInstanceReplicaLogging::Default => {
+                    catalog
+                        .allocate_persisted_introspection_source_indexes()
+                        .await
                 }
-                x @ ConcreteComputeInstanceReplicaLogging::Concrete(_) => x,
+
+                SerializedComputeInstanceReplicaLogging::Concrete(x) => {
+                    ConcreteComputeInstanceReplicaLogging::Concrete(x.clone())
+                }
             };
-            let new_config = ConcreteComputeInstanceReplicaConfig {
-                persisted_logs,
-                ..config
-            };
+
+            let config =
+                catalog.concretize_replica_config(serialized_config.into(), persisted_logs)?;
 
             // And write the allocated sources back to storage
             catalog
                 .storage()
                 .await
-                .set_replica_config(replica_id, instance_id, name.clone(), &new_config)
+                .set_replica_config(replica_id, instance_id, name.clone(), &config)
                 .await?;
 
-            catalog.state.insert_compute_instance_replica(
-                instance_id,
-                name,
-                replica_id,
-                new_config,
-            );
+            catalog
+                .state
+                .insert_compute_instance_replica(instance_id, name, replica_id, config);
         }
 
         if !config.skip_migrations {
@@ -1984,7 +1984,13 @@ impl<S: Append> Catalog<S> {
     /// instead.
     pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(stash).await?;
+        let storage = storage::Connection::open(
+            stash,
+            &BootstrapArgs {
+                default_cluster_replica_size: "1".into(),
+            },
+        )
+        .await?;
         let (catalog, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -1992,6 +1998,8 @@ impl<S: Append> Catalog<S> {
             now,
             skip_migrations: true,
             metrics_registry,
+            replica_sizes: Default::default(),
+            availability_zones: vec![],
         })
         .await?;
         Ok(catalog)
@@ -2464,6 +2472,59 @@ impl<S: Append> Catalog<S> {
         }
     }
 
+    pub fn concretize_replica_config(
+        &self,
+        config: ComputeInstanceReplicaConfig,
+        persisted_logs: ConcreteComputeInstanceReplicaLogging,
+    ) -> Result<ConcreteComputeInstanceReplicaConfig, AdapterError> {
+        let replica_sizes = &self.state.replica_sizes;
+        let availability_zones = &self.state.availability_zones;
+        let location = match config {
+            ComputeInstanceReplicaConfig::Remote { addrs } => {
+                ConcreteComputeInstanceReplicaLocation::Remote { addrs }
+            }
+            ComputeInstanceReplicaConfig::Managed {
+                size,
+                availability_zone,
+            } => {
+                let allocation = replica_sizes.0.get(&size).ok_or_else(|| {
+                    let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
+                    entries.sort_by_key(
+                        |(
+                            _name,
+                            ComputeInstanceReplicaAllocation {
+                                scale, cpu_limit, ..
+                            },
+                        )| (scale, cpu_limit),
+                    );
+                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
+                    AdapterError::InvalidClusterReplicaSize {
+                        size: size.clone(),
+                        expected,
+                    }
+                })?;
+
+                if let Some(az) = &availability_zone {
+                    if !availability_zones.contains(az) {
+                        return Err(AdapterError::InvalidClusterReplicaAz {
+                            az: az.to_string(),
+                            expected: availability_zones.to_vec(),
+                        });
+                    }
+                }
+                ConcreteComputeInstanceReplicaLocation::Managed {
+                    size,
+                    allocation: allocation.clone(),
+                    availability_zone,
+                }
+            }
+        };
+        Ok(ConcreteComputeInstanceReplicaConfig {
+            location,
+            persisted_logs,
+        })
+    }
+
     pub async fn transact<F, T>(
         &mut self,
         session: Option<&Session>,
@@ -2665,19 +2726,20 @@ impl<S: Append> Catalog<S> {
                     name,
                     on_cluster_name,
                     config,
-                    logical_size,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
-                    if let Some(logical_size) = logical_size {
+                    if let ConcreteComputeInstanceReplicaLocation::Managed { size, .. } =
+                        &config.location
+                    {
                         let details = EventDetails::CreateComputeInstanceReplicaV1(
                             mz_audit_log::CreateComputeInstanceReplicaV1 {
                                 cluster_name: on_cluster_name.clone(),
                                 replica_name: name.clone(),
-                                logical_size,
+                                logical_size: size.clone(),
                             },
                         );
                         self.add_to_audit_log(
@@ -2690,7 +2752,11 @@ impl<S: Append> Catalog<S> {
                         )?;
                     }
                     vec![Action::CreateComputeInstanceReplica {
-                        id: tx.insert_compute_instance_replica(&on_cluster_name, &name, &config)?,
+                        id: tx.insert_compute_instance_replica(
+                            &on_cluster_name,
+                            &name,
+                            &config.clone().into(),
+                        )?,
                         name,
                         on_cluster_name,
                         config,
@@ -3472,7 +3538,7 @@ impl<S: Append> Catalog<S> {
     /// Allocate ids for persisted logs. Called once per compute replica creation
     pub async fn allocate_persisted_introspection_source_indexes(
         &mut self,
-    ) -> Vec<(LogVariant, GlobalId)> {
+    ) -> ConcreteComputeInstanceReplicaLogging {
         let log_amount = DEFAULT_LOG_VARIANTS.len();
         let system_ids = self
             .storage()
@@ -3484,11 +3550,13 @@ impl<S: Append> Catalog<S> {
             )
             .await
             .expect("cannot fail to allocate system ids");
-        DEFAULT_LOG_VARIANTS
-            .clone()
-            .into_iter()
-            .zip(system_ids.into_iter())
-            .collect()
+        ConcreteComputeInstanceReplicaLogging::Concrete(
+            DEFAULT_LOG_VARIANTS
+                .clone()
+                .into_iter()
+                .zip(system_ids.into_iter())
+                .collect(),
+        )
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
@@ -3523,9 +3591,8 @@ pub enum Op {
     },
     CreateComputeInstanceReplica {
         name: String,
-        config: ConcreteComputeInstanceReplicaConfig,
         on_cluster_name: String,
-        logical_size: Option<String>,
+        config: ConcreteComputeInstanceReplicaConfig,
     },
     CreateItem {
         id: GlobalId,
@@ -3593,6 +3660,103 @@ impl From<PlanContext> for SerializedPlanContext {
         SerializedPlanContext {
             logical_time: None,
             wall_time: Some(cx.wall_time),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SerializedComputeInstanceReplicaLogging {
+    Default,
+    Concrete(Vec<(LogVariant, GlobalId)>),
+}
+
+/// A [`ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
+/// to the catalog stash. This is a separate type to allow us to evolve the
+/// on-disk format independently from the SQL layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializedComputeInstanceReplicaConfig {
+    pub persisted_logs: SerializedComputeInstanceReplicaLogging,
+    pub location: SerializedComputeInstanceReplicaLocation,
+}
+
+impl SerializedComputeInstanceReplicaConfig {
+    pub fn from(
+        location: ConcreteComputeInstanceReplicaLocation,
+        persisted_logs: ConcreteComputeInstanceReplicaLogging,
+    ) -> Self {
+        Self {
+            persisted_logs: persisted_logs.into(),
+            location: location.into(),
+        }
+    }
+}
+
+impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
+    fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
+        match conc {
+            ConcreteComputeInstanceReplicaLogging::Default => {
+                SerializedComputeInstanceReplicaLogging::Default
+            }
+            ConcreteComputeInstanceReplicaLogging::Concrete(x) => {
+                SerializedComputeInstanceReplicaLogging::Concrete(x)
+            }
+        }
+    }
+}
+
+impl From<SerializedComputeInstanceReplicaConfig> for ComputeInstanceReplicaConfig {
+    fn from(x: SerializedComputeInstanceReplicaConfig) -> Self {
+        match x.location {
+            SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
+                ComputeInstanceReplicaConfig::Remote { addrs }
+            }
+            SerializedComputeInstanceReplicaLocation::Managed {
+                size,
+                availability_zone,
+            } => ComputeInstanceReplicaConfig::Managed {
+                size,
+                availability_zone,
+            },
+        }
+    }
+}
+
+impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
+    fn from(conf: ConcreteComputeInstanceReplicaConfig) -> Self {
+        Self {
+            persisted_logs: conf.persisted_logs.into(),
+            location: conf.location.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SerializedComputeInstanceReplicaLocation {
+    Remote {
+        addrs: BTreeSet<String>,
+    },
+    Managed {
+        size: String,
+        availability_zone: Option<String>,
+    },
+}
+
+impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
+    fn from(
+        config: ConcreteComputeInstanceReplicaLocation,
+    ) -> SerializedComputeInstanceReplicaLocation {
+        match config {
+            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
+                SerializedComputeInstanceReplicaLocation::Remote { addrs }
+            }
+            ConcreteComputeInstanceReplicaLocation::Managed {
+                availability_zone,
+                size,
+                ..
+            } => SerializedComputeInstanceReplicaLocation::Managed {
+                size,
+                availability_zone,
+            },
         }
     }
 }
@@ -3964,7 +4128,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.source_desc()?)
     }
 
-    fn connection(&self) -> Result<&mz_storage::client::connections::Connection, SqlCatalogError> {
+    fn connection(&self) -> Result<&mz_storage::types::connections::Connection, SqlCatalogError> {
         Ok(&self.connection()?.connection)
     }
 

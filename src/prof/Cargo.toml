@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 anyhow = "1.0.58"
-axum = { version = "0.5.12", features = ["headers"] }
+axum = { version = "0.5.13", features = ["headers"] }
 backtrace = "0.3.66"
 cfg-if = "1.0.0"
 headers = "0.3.7"
@@ -20,7 +20,7 @@ mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
 pprof = "0.10.0"
-serde = { version = "1.0.138", features = ["derive"] }
+serde = { version = "1.0.139", features = ["derive"] }
 tempfile = "3.2.0"
 tracing = "0.1.35"
 tokio = { version = "1.19.2", features = ["time"] }

@@ -54,7 +54,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 1} {"before": {"row": {"creature": "salamander", "id": 1}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
 
 
-> CREATE MATERIALIZED SOURCE doin_upsert
+> CREATE SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT

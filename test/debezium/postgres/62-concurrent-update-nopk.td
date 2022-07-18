@@ -19,7 +19,7 @@ INSERT INTO concurrent_update VALUES (11, 'r2');
 
 $ schema-registry-wait-schema schema=postgres.public.concurrent_update-value
 
-> CREATE MATERIALIZED SOURCE concurrent_update
+> CREATE SOURCE concurrent_update
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.concurrent_update'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

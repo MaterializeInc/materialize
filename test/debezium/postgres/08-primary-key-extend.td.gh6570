@@ -17,7 +17,7 @@ CREATE TABLE alter_extend_primary_key (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1))
 ALTER TABLE alter_extend_primary_key REPLICA IDENTITY FULL;
 INSERT INTO alter_extend_primary_key VALUES (123, 234), (345, 456);
 
-> CREATE MATERIALIZED SOURCE alter_extend_primary_key
+> CREATE SOURCE alter_extend_primary_key
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_extend_primary_key'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

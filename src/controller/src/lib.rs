@@ -21,7 +21,7 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -40,6 +40,7 @@ use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use mz_build_info::BuildInfo;
 use mz_compute_client::command::{ComputeCommand, ProcessId, ProtoComputeCommand, ReplicaId};
 use mz_compute_client::controller::{
     ComputeController, ComputeControllerMut, ComputeControllerResponse, ComputeControllerState,
@@ -60,8 +61,8 @@ use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::GlobalId;
-use mz_storage::client::controller::StorageController;
-use mz_storage::client::{
+use mz_storage::controller::StorageController;
+use mz_storage::protocol::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 
@@ -70,6 +71,8 @@ pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 /// Configures a controller.
 #[derive(Debug, Clone)]
 pub struct ControllerConfig {
+    /// The build information for this process.
+    pub build_info: &'static BuildInfo,
     /// The orchestrator implementation to use.
     pub orchestrator: Arc<dyn Orchestrator>,
     /// The persist location where all storage collections will be written to.
@@ -86,74 +89,17 @@ pub struct ControllerConfig {
     pub computed_image: String,
 }
 
+/// Resource allocations for a replica of a compute instance.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ClusterReplicaSizeConfig {
+pub struct ComputeInstanceReplicaAllocation {
+    /// The memory limit for each process in the replica.
     pub memory_limit: Option<MemoryLimit>,
+    /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The number of processes in the replica.
     pub scale: NonZeroUsize,
+    /// The number of worker threads in the replica.
     pub workers: NonZeroUsize,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct ClusterReplicaSizeMap(pub HashMap<String, ClusterReplicaSizeConfig>);
-
-impl Default for ClusterReplicaSizeMap {
-    fn default() -> Self {
-        // {
-        //     "1": {"scale": 1, "workers": 1},
-        //     "2": {"scale": 1, "workers": 2},
-        //     "4": {"scale": 1, "workers": 4},
-        //     /// ...
-        //     "32": {"scale": 1, "workers": 32}
-        //     /// Testing with multiple processes on a single machine is a novelty, so
-        //     /// we don't bother providing many options.
-        //     "2-1": {"scale": 2, "workers": 1},
-        //     "2-2": {"scale": 2, "workers": 2},
-        //     "2-4": {"scale": 2, "workers": 4},
-        // }
-        let mut inner = (0..=5)
-            .map(|i| {
-                let workers = 1 << i;
-                (
-                    workers.to_string(),
-                    ClusterReplicaSizeConfig {
-                        memory_limit: None,
-                        cpu_limit: None,
-                        scale: NonZeroUsize::new(1).unwrap(),
-                        workers: NonZeroUsize::new(workers).unwrap(),
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        inner.insert(
-            "2-1".to_string(),
-            ClusterReplicaSizeConfig {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(1).unwrap(),
-            },
-        );
-        inner.insert(
-            "2-2".to_string(),
-            ClusterReplicaSizeConfig {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(2).unwrap(),
-            },
-        );
-        inner.insert(
-            "2-4".to_string(),
-            ClusterReplicaSizeConfig {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(4).unwrap(),
-            },
-        );
-        Self(inner)
-    }
 }
 
 /// Size or location of a replica
@@ -166,10 +112,10 @@ pub enum ConcreteComputeInstanceReplicaLocation {
     },
     /// A remote but managed replica
     Managed {
-        /// The size configuration of the replica.
-        size_config: ClusterReplicaSizeConfig,
-        /// A readable name for the replica size.
-        size_name: String,
+        /// The resource allocation for the replica.
+        allocation: ComputeInstanceReplicaAllocation,
+        /// SQL size parameter used for allocation
+        size: String,
         /// The replica's availability zone, if `Some`.
         availability_zone: Option<String>,
     },
@@ -286,6 +232,7 @@ enum Readiness {
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<T = mz_repr::Timestamp> {
+    build_info: &'static BuildInfo,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
@@ -305,8 +252,10 @@ where
         logging: Option<LoggingConfig>,
     ) {
         // Insert a new compute instance controller.
-        self.compute
-            .insert(instance, ComputeControllerState::new(&logging).await);
+        self.compute.insert(
+            instance,
+            ComputeControllerState::new(self.build_info, &logging).await,
+        );
     }
 
     /// Adds replicas of an instance.
@@ -336,9 +285,9 @@ where
                 );
             }
             ConcreteComputeInstanceReplicaLocation::Managed {
-                size_config,
-                size_name: _,
+                allocation,
                 availability_zone,
+                ..
             } => {
                 let service_name = generate_replica_service_name(instance_id, replica_id);
 
@@ -351,14 +300,14 @@ where
                             args: &|assigned| {
                                 let mut compute_opts = vec![
                                     format!(
-                                        "--listen-addr={}:{}",
+                                        "--controller-listen-addr={}:{}",
                                         assigned.listen_host, assigned.ports["controller"]
                                     ),
                                     format!(
                                         "--internal-http-listen-addr={}:{}",
                                         assigned.listen_host, assigned.ports["internal-http"]
                                     ),
-                                    format!("--workers={}", size_config.workers),
+                                    format!("--workers={}", allocation.workers),
                                     format!("--opentelemetry-resource=instance_id={}", instance_id),
                                     format!("--opentelemetry-resource=replica_id={}", replica_id),
                                 ];
@@ -387,12 +336,12 @@ where
                                 },
                                 ServicePort {
                                     name: "internal-http".into(),
-                                    port_hint: 6875,
+                                    port_hint: 6878,
                                 },
                             ],
-                            cpu_limit: size_config.cpu_limit,
-                            memory_limit: size_config.memory_limit,
-                            scale: size_config.scale,
+                            cpu_limit: allocation.cpu_limit,
+                            memory_limit: allocation.memory_limit,
+                            scale: allocation.scale,
                             labels: hashmap! {
                                 "cluster-id".into() => instance_id.to_string(),
                                 "type".into() => "cluster".into(),
@@ -420,12 +369,7 @@ where
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        if let ConcreteComputeInstanceReplicaLocation::Managed {
-            size_config: _,
-            size_name: _,
-            availability_zone: _,
-        } = config.location
-        {
+        if let ConcreteComputeInstanceReplicaLocation::Managed { .. } = config.location {
             let service_name = generate_replica_service_name(instance_id, replica_id);
             self.compute_orchestrator
                 .drop_service(&service_name)
@@ -539,6 +483,13 @@ where
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
         if let Readiness::NotReady = self.readiness {
+            if self.compute.is_empty() {
+                // If there are no clients, block forever. This signals that
+                // there may be more work to do (e.g., if a compute instance
+                // is created). Calling `select_all` with an empty list of
+                // futures will panic.
+                future::pending().await
+            }
             // The underlying `ready` methods are cancellation safe, so it is
             // safe to construct this `select!`.
             let computes = future::select_all(
@@ -593,7 +544,8 @@ where
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig) -> Self {
-        let storage_controller = mz_storage::client::controller::Controller::new(
+        let storage_controller = mz_storage::controller::Controller::new(
+            config.build_info,
             config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
@@ -602,6 +554,7 @@ where
         )
         .await;
         Self {
+            build_info: config.build_info,
             storage_controller: Box::new(storage_controller),
             compute_orchestrator: config.orchestrator.namespace("compute"),
             computed_image: config.computed_image,

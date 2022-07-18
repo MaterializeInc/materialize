@@ -42,3 +42,16 @@ optimize
 [(#0 + 1) (#1 + 1)]
 [(#1 = 3)]
 [2]
+
+# duplicate filters
+
+mfp
+1
+(map [(call_unary is_null #0) (call_binary gt #0 1)])
+(filter [#1 #2 #1])
+(project [0])
+optimize
+----
+[]
+[(#0) IS NULL (#0 > 1)]
+[0]

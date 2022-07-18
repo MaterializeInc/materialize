@@ -99,18 +99,53 @@ $ set dbz-schema={
           "null"
         ]
       },
-      { "name": "after", "type": ["row", "null"] }
+      { "name": "op", "type": "string" },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "whatever",
+          "fields": [
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "string",
+                  "connect.version": 1,
+                  "connect.parameters": {
+                    "allowed": "true,last,false"
+                  },
+                  "connect.default": "false",
+                  "connect.name": "io.debezium.data.Enum"
+                },
+                "null"
+              ],
+              "default": "false"
+            },
+            {
+              "name": "lsn",
+              "type": ["long", "null"]
+            },
+            {
+              "name": "sequence",
+              "type": ["string", "null"]
+            }
+          ]
+        }
+      }
     ]
   }
 
 $ kafka-create-topic topic=input_dbz
 $ kafka-create-topic topic=input_cdcv2
 
-> CREATE MATERIALIZED SOURCE input_kafka_cdcv2
+> CREATE SOURCE input_kafka_cdcv2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_cdcv2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED SOURCE input_kafka_dbz
+> CREATE SOURCE input_kafka_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_dbz-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 
@@ -219,7 +254,7 @@ $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[1],"counts":[{"time":1,"count":1}]}}
 
 $ kafka-ingest format=avro topic=input_dbz schema=${dbz-schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 # ensure that the sink works with log compaction enabled on the consistency topic
 
@@ -229,7 +264,7 @@ $ kafka-create-topic topic=compaction-test-input
 # Materialize create it when creating the sink
 $ kafka-create-topic topic=compaction-test-output-consistency compaction=true
 
-> CREATE MATERIALIZED SOURCE compaction_test_input
+> CREATE SOURCE compaction_test_input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-compaction-test-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
@@ -258,7 +293,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ kafka-create-topic topic=rt-binding-consistency-test-input
 
-> CREATE MATERIALIZED SOURCE rt_binding_consistency_test_source
+> CREATE SOURCE rt_binding_consistency_test_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-rt-binding-consistency-test-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 
@@ -268,7 +303,7 @@ $ kafka-create-topic topic=rt-binding-consistency-test-input
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${dbz-schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}

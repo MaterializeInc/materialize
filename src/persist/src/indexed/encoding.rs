@@ -16,7 +16,6 @@
 use std::fmt::{self, Debug};
 use std::io::Cursor;
 use std::marker::PhantomData;
-use std::time::{Duration, Instant};
 
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
@@ -115,9 +114,8 @@ impl TraceBatchMeta {
     pub async fn validate_data(&self, blob: &(dyn Blob + Send + Sync)) -> Result<(), Error> {
         let mut batches = vec![];
         for (idx, key) in self.keys.iter().enumerate() {
-            let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
             let value = blob
-                .get(deadline, key)
+                .get(key)
                 .await?
                 .ok_or_else(|| Error::from(format!("no blob for trace batch at key: {}", key)))?;
             let batch = BlobTraceBatchPart::decode(&value)?;
@@ -511,8 +509,7 @@ mod tests {
         batch.encode(&mut val);
         let val = Bytes::from(val);
         let val_len = u64::cast_from(val.len());
-        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
-        blob.set(deadline, &key, val, Atomicity::AllowNonAtomic)
+        blob.set(&key, val, Atomicity::AllowNonAtomic)
             .await
             .expect("failed to set trace batch");
         val_len

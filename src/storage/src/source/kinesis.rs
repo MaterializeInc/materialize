@@ -25,15 +25,15 @@ use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 
-use crate::client::connections::aws::AwsExternalIdPrefix;
-use crate::client::connections::ConnectionContext;
-use crate::client::errors::SourceErrorDetails;
-use crate::client::sources::encoding::SourceDataEncoding;
-use crate::client::sources::{KinesisSourceConnection, MzOffset, SourceConnection};
 use crate::source::metrics::KinesisMetrics;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
+use crate::types::connections::aws::AwsExternalIdPrefix;
+use crate::types::connections::ConnectionContext;
+use crate::types::errors::SourceErrorDetails;
+use crate::types::sources::encoding::SourceDataEncoding;
+use crate::types::sources::{KinesisSourceConnection, MzOffset, SourceConnection};
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.

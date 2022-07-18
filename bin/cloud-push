@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# stage-cloud – build cloud Docker images and push to personal Docker Hub.
+# cloud-push – build cloud Docker images and push to personal Docker Hub.
 
 set -euo pipefail
 
@@ -17,14 +17,15 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-if [[ $# -ne 1 ]]; then
-    die "usage: $0 DOCKER-HUB-USERNAME"
+if [[ $# -lt 1 ]]; then
+    die "usage: $0 DOCKER-HUB-USERNAME [arguments for mzimage]"
 fi
 username=$1
+shift
 
 for image in environmentd storaged computed; do
-    bin/mzimage acquire --arch=x86_64 "$image"
-    docker tag "$(bin/mzimage spec --arch=x86_64 "$image")" "$username/$image"
+    bin/mzimage acquire --arch=x86_64 "$image" "$@"
+    docker tag "$(bin/mzimage spec --arch=x86_64 "$image" "$@")" "$username/$image"
     docker push "$username/$image"
 done
 

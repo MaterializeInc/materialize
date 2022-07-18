@@ -247,7 +247,7 @@ Source materialize.public.t3 (u3):
 Query:
 %0 = Let l0 =
 | Get materialize.public.t3 (u3)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %1 =
 | Get materialize.public.t3 (u3)

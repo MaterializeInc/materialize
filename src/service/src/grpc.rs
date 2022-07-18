@@ -9,9 +9,8 @@
 
 //! gRPC transport for the [client](crate::client) module.
 
-use std::fmt;
-use std::marker::PhantomData;
-use std::net::ToSocketAddrs;
+use std::fmt::{self, Debug};
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -19,12 +18,17 @@ use async_stream::stream;
 use async_trait::async_trait;
 use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
+use once_cell::sync::Lazy;
+use semver::Version;
 use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::{oneshot, Mutex};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::body::BoxBody;
-use tonic::transport::{Body, NamedService, Server};
+use tonic::codegen::InterceptedService;
+use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
+use tonic::service::Interceptor;
+use tonic::transport::{Body, Channel, Endpoint, NamedService, Server};
 use tonic::{Request, Response, Status, Streaming};
 use tower::Service;
 use tracing::{debug, error, info};
@@ -34,6 +38,8 @@ use mz_proto::{ProtoType, RustType};
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
 pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Send>>;
+
+pub type ClientTransport = InterceptedService<Channel, VersionAttachInterceptor>;
 
 /// A client to a remote dataflow server using gRPC and protobuf based
 /// communication.
@@ -50,53 +56,60 @@ pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Se
 /// functions interact with the two mpsc channels or the streaming instance
 /// respectively.
 #[derive(Debug)]
-pub struct GrpcClient<Client, PC, PR> {
+pub struct GrpcClient<G>
+where
+    G: BidiProtoClient,
+{
     /// The sender for commands.
-    tx: UnboundedSender<PC>,
+    tx: UnboundedSender<G::PC>,
     /// The receiver for responses.
-    rx: Streaming<PR>,
-    _client: PhantomData<Client>,
+    rx: Streaming<G::PR>,
 }
 
-impl<Client, PC, PR> GrpcClient<Client, PC, PR>
+impl<G> GrpcClient<G>
 where
-    Client: BidiProtoClient<PC, PR> + Send + fmt::Debug,
+    G: BidiProtoClient,
 {
-    pub async fn connect(addr: String) -> Result<Self, anyhow::Error> {
+    /// Connects to the server at the given address, announcing the specified
+    /// client version.
+    pub async fn connect(addr: String, version: Version) -> Result<Self, anyhow::Error> {
         debug!("GrpcClient {}: Attempt to connect", addr);
+        let channel = Endpoint::new(format!("http://{}", addr))?.connect().await?;
+        let service = InterceptedService::new(channel, VersionAttachInterceptor::new(version));
+        let mut client = G::new(service);
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut client = Client::connect(format!("http://{}", addr)).await?;
         let rx = client
             .establish_bidi_stream(UnboundedReceiverStream::new(rx))
             .await?
             .into_inner();
         info!("GrpcClient {}: connected", &addr);
-        Ok(GrpcClient {
-            tx,
-            rx,
-            _client: PhantomData,
-        })
+        Ok(GrpcClient { tx, rx })
     }
 
+    /// Like [`GrpcClient::connect`], but for multiple partitioned servers.
     pub async fn connect_partitioned<C, R>(
         addrs: Vec<String>,
+        version: Version,
     ) -> Result<Partitioned<Self, C, R>, anyhow::Error>
     where
         (C, R): Partitionable<C, R>,
     {
-        let clients = future::try_join_all(addrs.into_iter().map(Self::connect)).await?;
+        let clients = future::try_join_all(
+            addrs
+                .into_iter()
+                .map(|addr| Self::connect(addr, version.clone())),
+        )
+        .await?;
         Ok(Partitioned::new(clients))
     }
 }
 
 #[async_trait]
-impl<Client, C, R, PC, PR> GenericClient<C, R> for GrpcClient<Client, PC, PR>
+impl<G, C, R> GenericClient<C, R> for GrpcClient<G>
 where
-    C: RustType<PC> + Send + Sync + 'static,
-    R: RustType<PR> + Send + Sync,
-    Client: BidiProtoClient<PC, PR> + Send + fmt::Debug,
-    PC: Send + Sync + fmt::Debug + 'static,
-    PR: Send + Sync + fmt::Debug,
+    C: RustType<G::PC> + Send + Sync + 'static,
+    R: RustType<G::PR> + Send + Sync + 'static,
+    G: BidiProtoClient,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         self.tx.send(cmd.into_proto())?;
@@ -119,26 +132,18 @@ where
 // TODO(guswynn): if tonic ever presents the client API as a trait, use it
 // instead of requiring an implementation of this trait.
 #[async_trait]
-pub trait BidiProtoClient<PC, PR> {
-    async fn connect(addr: String) -> Result<Self, tonic::transport::Error>
+pub trait BidiProtoClient: Debug + Send {
+    type PC: Debug + Send + Sync + 'static;
+    type PR: Debug + Send + Sync + 'static;
+
+    fn new(inner: ClientTransport) -> Self
     where
         Self: Sized;
 
     async fn establish_bidi_stream(
         &mut self,
-        rx: UnboundedReceiverStream<PC>,
-    ) -> Result<Response<Streaming<PR>>, Status>;
-}
-
-/// A command from a gRPC server.
-pub enum GrpcServerCommand<T> {
-    /// A command indicating the upstream client has reconnected.
-    ///
-    /// This message is delivered by the [`GrpcServer`] immediately after client
-    /// reconnection.
-    Reconnected,
-    /// A command sent by the upstream client.
-    Client(T),
+        rx: UnboundedReceiverStream<Self::PC>,
+    ) -> Result<Response<Streaming<Self::PR>>, Status>;
 }
 
 /// A gRPC server that stitches a gRPC service with a single bidirectional
@@ -150,28 +155,32 @@ pub enum GrpcServerCommand<T> {
 /// The implementation of the bidirectional stream method should call
 /// [`GrpcServer::forward_bidi_stream`] to stitch the bidirectional stream to
 /// the client underlying this server.
-pub struct GrpcServer<G> {
-    state: Arc<GrpcServerState<G>>,
+pub struct GrpcServer<F> {
+    state: Arc<GrpcServerState<F>>,
 }
 
-struct GrpcServerState<G> {
+struct GrpcServerState<F> {
     cancel_tx: Mutex<oneshot::Sender<()>>,
-    client: Mutex<G>,
+    client_builder: F,
 }
 
-impl<G> GrpcServer<G>
+impl<F, G> GrpcServer<F>
 where
-    G: Send + 'static,
+    F: Fn() -> G + Send + Sync + 'static,
 {
-    /// Starts the server, listening for gRPC connections on `listen_addr` and
-    /// communicating with the provided `client`.
+    /// Starts the server, listening for gRPC connections on `listen_addr`.
     ///
     /// The trait bounds on `f` are intimidating, but it is a function that
     /// turns a `GrpcServer<ProtoCommandType, ProtoResponseType>` into a
     /// [`Service`] that represents a gRPC server. This is always encapsulated
     /// by the tonic-generated `ProtoServer::new` method for a specific Protobuf
     /// service.
-    pub async fn serve<S, F>(listen_addr: String, client: G, f: F) -> Result<(), anyhow::Error>
+    pub async fn serve<S, Fs>(
+        listen_addr: SocketAddr,
+        version: Version,
+        client_builder: F,
+        service_builder: Fs,
+    ) -> Result<(), anyhow::Error>
     where
         S: Service<
                 http::Request<Body>,
@@ -182,21 +191,25 @@ where
             + Send
             + 'static,
         S::Future: Send + 'static,
-        F: FnOnce(Self) -> S + Send + 'static,
+        Fs: FnOnce(Self) -> S + Send + 'static,
     {
         let (cancel_tx, _cancel_rx) = oneshot::channel();
         let state = GrpcServerState {
             cancel_tx: Mutex::new(cancel_tx),
-            client: Mutex::new(client),
+            client_builder,
         };
         let server = Self {
             state: Arc::new(state),
         };
+        let service = InterceptedService::new(
+            service_builder(server),
+            VersionCheckExactInterceptor::new(version),
+        );
 
         info!("Starting to listen on {}", listen_addr);
         Server::builder()
-            .add_service(f(server))
-            .serve(listen_addr.to_socket_addrs()?.next().unwrap())
+            .add_service(service)
+            .serve(listen_addr)
             .await?;
         Ok(())
     }
@@ -211,7 +224,7 @@ where
         request: Request<Streaming<PC>>,
     ) -> Result<Response<ResponseStream<PR>>, Status>
     where
-        G: GenericClient<GrpcServerCommand<C>, R> + 'static,
+        G: GenericClient<C, R> + 'static,
         C: RustType<PC> + Send + Sync + 'static + fmt::Debug,
         R: RustType<PR> + Send + Sync + 'static + fmt::Debug,
         PC: fmt::Debug + Send + Sync + 'static,
@@ -230,14 +243,12 @@ where
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         *self.state.cancel_tx.lock().await = cancel_tx;
 
-        // Forward commands and responses to `client` until canceled.
+        // Construct a new client and forward commands and responses until
+        // canceled.
         let mut request = request.into_inner();
         let state = Arc::clone(&self.state);
         let response = stream! {
-            let mut client = state.client.lock().await;
-            if let Err(e) = client.send(GrpcServerCommand::Reconnected).await {
-                yield Err(Status::unknown(e.to_string()));
-            }
+            let mut client = (state.client_builder)();
             loop {
                 select! {
                     command = request.next() => {
@@ -250,7 +261,7 @@ where
                             }
                         };
                         let command = match command.into_rust() {
-                            Ok(command) => GrpcServerCommand::Client(command),
+                            Ok(command) => command,
                             Err(e) => {
                                 error!("error converting command to protobuf: {}", e);
                                 break;
@@ -273,5 +284,67 @@ where
             info!("GrpcServer: remote client disconnected");
         };
         Ok(Response::new(Box::pin(response) as ResponseStream<PR>))
+    }
+}
+
+static VERSION_METADATA_KEY: Lazy<AsciiMetadataKey> =
+    Lazy::new(|| AsciiMetadataKey::from_static("x-mz-version"));
+
+/// A gRPC interceptor that attaches a version as metadata to each request.
+#[derive(Debug, Clone)]
+pub struct VersionAttachInterceptor {
+    version: AsciiMetadataValue,
+}
+
+impl VersionAttachInterceptor {
+    fn new(version: Version) -> VersionAttachInterceptor {
+        VersionAttachInterceptor {
+            version: version
+                .to_string()
+                .try_into()
+                .expect("semver versions are valid metadata values"),
+        }
+    }
+}
+
+impl Interceptor for VersionAttachInterceptor {
+    fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
+        request
+            .metadata_mut()
+            .insert(VERSION_METADATA_KEY.clone(), self.version.clone());
+        Ok(request)
+    }
+}
+
+/// A gRPC interceptor that ensures the version attached to the request by the
+/// `VersionAttachInterceptor` exactly matches the expected version.
+#[derive(Debug, Clone)]
+struct VersionCheckExactInterceptor {
+    version: AsciiMetadataValue,
+}
+
+impl VersionCheckExactInterceptor {
+    fn new(version: Version) -> VersionCheckExactInterceptor {
+        VersionCheckExactInterceptor {
+            version: version
+                .to_string()
+                .try_into()
+                .expect("semver versions are valid metadata values"),
+        }
+    }
+}
+
+impl Interceptor for VersionCheckExactInterceptor {
+    fn call(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
+        match request.metadata().get(&*VERSION_METADATA_KEY) {
+            None => Err(Status::permission_denied(
+                "request missing version metadata",
+            )),
+            Some(version) if version == self.version => Ok(request),
+            Some(version) => Err(Status::permission_denied(format!(
+                "request version {:?} but {:?} required",
+                version, self.version
+            ))),
+        }
     }
 }

@@ -10,7 +10,9 @@
 //! PostgreSQL utility library.
 
 use anyhow::{anyhow, bail};
-use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
+use openssl::pkey::PKey;
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
 use std::time::Duration;
 use tokio_postgres::config::{ReplicationMode, SslMode};
@@ -52,15 +54,17 @@ pub fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
     // Configure certificates
     match (config.get_ssl_cert(), config.get_ssl_key()) {
         (Some(ssl_cert), Some(ssl_key)) => {
-            builder.set_certificate_file(ssl_cert, SslFiletype::PEM)?;
-            builder.set_private_key_file(ssl_key, SslFiletype::PEM)?;
+            builder.set_certificate(&*X509::from_pem(ssl_cert)?)?;
+            builder.set_private_key(&*PKey::private_key_from_pem(ssl_key)?)?;
         }
         (None, Some(_)) => bail!("must provide both sslcert and sslkey, but only provided sslkey"),
         (Some(_), None) => bail!("must provide both sslcert and sslkey, but only provided sslcert"),
         _ => {}
     }
     if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
-        builder.set_ca_file(ssl_root_cert)?
+        builder
+            .cert_store_mut()
+            .add_cert(X509::from_pem(ssl_root_cert)?)?;
     }
 
     let mut tls_connector = MakeTlsConnector::new(builder.build());
@@ -85,13 +89,12 @@ pub fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
 /// - Invalid connection string, user information, or user permissions.
 /// - Upstream publication does not exist or contains invalid values.
 pub async fn publication_info(
-    conn: &str,
+    config: &Config,
     publication: &str,
 ) -> Result<Vec<PostgresTableDesc>, anyhow::Error> {
-    let config = conn.parse()?;
     let tls = make_tls(&config)?;
     let (client, connection) = config.connect(tls).await?;
-    task::spawn(|| format!("postgres_publication_info:{conn}"), connection);
+    task::spawn(|| "postgres_publication_info", connection);
 
     client
         .query(
@@ -169,16 +172,12 @@ pub async fn publication_info(
     Ok(table_infos)
 }
 
-pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), anyhow::Error> {
-    let config = conn.parse()?;
+pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), anyhow::Error> {
     let tls = make_tls(&config)?;
-    let (client, connection) = tokio_postgres::connect(&conn, tls).await?;
-    task::spawn(
-        || format!("postgres_drop_replication_slots:{conn}"),
-        connection,
-    );
+    let (client, connection) = config.connect(tls).await?;
+    task::spawn(|| "postgres_drop_replication_slots", connection);
 
-    let replication_client = connect_replication(conn).await?;
+    let replication_client = connect_replication(config).await?;
     for slot in slots {
         let rows = client
             .query(
@@ -209,8 +208,7 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
 }
 
 /// Starts a replication connection to the upstream database
-pub async fn connect_replication(conn: &str) -> Result<Client, anyhow::Error> {
-    let mut config: Config = conn.parse()?;
+pub async fn connect_replication(mut config: Config) -> Result<Client, anyhow::Error> {
     let tls = make_tls(&config)?;
     let (client, connection) = config
         .replication_mode(ReplicationMode::Logical)
@@ -218,9 +216,6 @@ pub async fn connect_replication(conn: &str) -> Result<Client, anyhow::Error> {
         .keepalives_idle(Duration::from_secs(10 * 60))
         .connect(tls)
         .await?;
-    task::spawn(
-        || format!("postgres_connect_replication:{conn}"),
-        connection,
-    );
+    task::spawn(|| "postgres_connect_replication", connection);
     Ok(client)
 }

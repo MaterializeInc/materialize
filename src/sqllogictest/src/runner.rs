@@ -59,18 +59,20 @@ use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
-use mz_environmentd::SecretsControllerConfig;
+use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use mz_persist_client::PersistLocation;
+use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
+use mz_secrets::SecretsController;
 use mz_sql::ast::Statement;
+use mz_storage::types::connections::ConnectionContext;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -563,7 +565,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 impl Runner {
     pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let (consensus_uri, catalog_postgres_stash, storage_postgres_stash) = {
+        let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
             let (client, conn) = tokio_postgres::connect(&postgres_url, NoTls).await?;
             task::spawn(|| "sqllogictest_connect", async move {
@@ -574,34 +576,39 @@ impl Runner {
             client
                 .batch_execute(&format!(
                     "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
-                     DROP SCHEMA IF EXISTS sqllogictest_catalog CASCADE;
+                     DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
                      CREATE SCHEMA sqllogictest_consensus;
-                     CREATE SCHEMA sqllogictest_catalog;
+                     CREATE SCHEMA sqllogictest_adapter;
                      CREATE SCHEMA sqllogictest_storage;",
                 ))
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
-                format!("{postgres_url}?options=--search_path=sqllogictest_catalog"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_adapter"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
             )
         };
-        let orchestrator = ProcessOrchestrator::new(ProcessOrchestratorConfig {
-            image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-            port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
-            suppress_output: false,
-            data_dir: temp_dir.path().to_path_buf(),
-            command_wrapper: vec![],
-        })
-        .await?;
+        let orchestrator = Arc::new(
+            ProcessOrchestrator::new(ProcessOrchestratorConfig {
+                image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
+                suppress_output: false,
+                data_dir: temp_dir.path().to_path_buf(),
+                command_wrapper: vec![],
+            })
+            .await?,
+        );
+        let now = SYSTEM_TIME.clone();
         let metrics_registry = MetricsRegistry::new();
-        let persist_clients = PersistClientCache::new(&metrics_registry);
+        let persist_clients =
+            PersistClientCache::new(PersistConfig::new(now.clone()), &metrics_registry);
         let persist_clients = Arc::new(Mutex::new(persist_clients));
         let server_config = mz_environmentd::Config {
-            catalog_postgres_stash,
+            adapter_stash_url,
             controller: ControllerConfig {
-                orchestrator: Arc::new(orchestrator),
+                build_info: &mz_environmentd::BUILD_INFO,
+                orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
                 persist_location: PersistLocation {
@@ -609,11 +616,9 @@ impl Runner {
                     consensus_uri,
                 },
                 persist_clients,
-                storage_stash_url: storage_postgres_stash,
+                storage_stash_url,
             },
-            secrets_controller: SecretsControllerConfig::LocalFileSystem(
-                temp_dir.path().to_path_buf().join("secrets"),
-            ),
+            secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -625,10 +630,13 @@ impl Runner {
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             metrics_registry,
-            now: SYSTEM_TIME.clone(),
+            now,
             replica_sizes: Default::default(),
+            bootstrap_default_cluster_replica_size: "1".into(),
             availability_zones: Default::default(),
-            connection_context: Default::default(),
+            connection_context: ConnectionContext::for_tests(
+                (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
+            ),
             otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
         };
         // We need to run the server on its own Tokio runtime, which in turn

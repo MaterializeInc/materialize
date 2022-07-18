@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use mz_persist::location::{Determinate, ExternalError, Indeterminate};
 use timely::progress::Antichain;
 
-use crate::ShardId;
+use crate::{ShardId, WriterId};
 
 /// An indication of whether the given error type indicates an operation
 /// _definitely_ failed or if it _maybe_ failed.
@@ -110,6 +110,8 @@ pub enum InvalidUsage<T> {
     },
     /// The requested codecs don't match the actual ones in durable storage.
     CodecMismatch(CodecMismatch),
+    /// An unregistered or expired [crate::write::WriterId] was used by [crate::write::WriteHandle]
+    UnknownWriter(WriterId),
 }
 
 impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
@@ -161,6 +163,9 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                 handle_shard,
             } => write!(f, "batch was from {} not {}", batch_shard, handle_shard),
             InvalidUsage::CodecMismatch(err) => std::fmt::Display::fmt(err, f),
+            InvalidUsage::UnknownWriter(writer_id) => {
+                write!(f, "writer id {} is not registered", writer_id)
+            }
         }
     }
 }

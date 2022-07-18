@@ -19,7 +19,7 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     materialized = Materialized(
-        options=["--catalog-postgres-stash", "postgres://postgres:postgres@postgres"],
+        options=["--adapter-postgres-stash", "postgres://postgres:postgres@postgres"],
     )
     postgres = Postgres(image="postgres:13.6")
     testdrive = Testdrive()

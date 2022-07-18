@@ -22,7 +22,7 @@ $ kafka-ingest format=avro topic=upgrade-kafka-source-${arg.upgrade-from-version
 {"a": 1, "b": 2}
 {"a": 2, "b": 3}
 
-> CREATE MATERIALIZED SOURCE kafka_source
+> CREATE SOURCE kafka_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upgrade-kafka-source-${arg.upgrade-from-version}-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE

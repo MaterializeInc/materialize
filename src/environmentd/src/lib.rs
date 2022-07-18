@@ -13,14 +13,12 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-use std::fs::Permissions;
+use std::env;
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::{env, fs};
+use std::sync::Arc;
 
-use anyhow::Context;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -28,17 +26,17 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 
+use mz_adapter::catalog::storage::BootstrapArgs;
+use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_build_info::{build_info, BuildInfo};
-use mz_controller::{ClusterReplicaSizeMap, ControllerConfig};
+use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryEnableCallback;
 use mz_secrets::SecretsController;
-use mz_secrets_filesystem::FilesystemSecretsController;
-use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
-use mz_storage::client::connections::ConnectionContext;
+use mz_storage::types::connections::ConnectionContext;
 use tracing::error;
 
 use crate::tcp_connection::ConnectionHandler;
@@ -70,8 +68,8 @@ pub struct Config {
     pub cors_allowed_origin: AllowOrigin,
 
     // === Storage options. ===
-    /// Postgres connection string for catalog's stash.
-    pub catalog_postgres_stash: String,
+    /// Postgres connection string for adapter's stash.
+    pub adapter_stash_url: String,
 
     // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
@@ -83,7 +81,7 @@ pub struct Config {
     /// Storage and compute controller configuration.
     pub controller: ControllerConfig,
     /// Configuration for a secrets controller.
-    pub secrets_controller: SecretsControllerConfig,
+    pub secrets_controller: Arc<dyn SecretsController>,
 
     // === Mode switches. ===
     /// Whether to permit usage of unsafe features.
@@ -94,6 +92,8 @@ pub struct Config {
     pub now: NowFn,
     /// Map of strings to corresponding compute replica sizes.
     pub replica_sizes: ClusterReplicaSizeMap,
+    /// The size of the default cluster replica if bootstrapping.
+    pub bootstrap_default_cluster_replica_size: String,
     /// Availability zones compute resources may be deployed in.
     pub availability_zones: Vec<String>,
 
@@ -133,27 +133,12 @@ pub enum TlsMode {
     },
 }
 
-/// Configuration for the service orchestrator.
-#[derive(Debug, Clone)]
-pub enum SecretsControllerConfig {
-    LocalFileSystem(PathBuf),
-    // Create a Kubernetes Controller.
-    Kubernetes {
-        /// The name of a Kubernetes context to use, if the Kubernetes configuration
-        /// is loaded from the local kubeconfig.
-        context: String,
-        user_defined_secret: String,
-        user_defined_secret_mount_path: PathBuf,
-        refresh_pod_name: String,
-    },
-}
-
 /// Start an `environmentd` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
-        &config.catalog_postgres_stash,
+        &config.adapter_stash_url,
     )?)?;
-    let stash = mz_stash::Postgres::new(config.catalog_postgres_stash.clone(), None, tls).await?;
+    let stash = mz_stash::Postgres::new(config.adapter_stash_url.clone(), None, tls).await?;
     let stash = mz_stash::Memory::new(stash);
 
     // Validate TLS configuration, if present.
@@ -201,40 +186,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let http_local_addr = http_listener.local_addr()?;
 
     // Load the adapter catalog from disk.
-    let adapter_storage = mz_adapter::catalog::storage::Connection::open(stash).await?;
-
-    // Initialize secrets controller.
-    let secrets_controller = match config.secrets_controller {
-        SecretsControllerConfig::LocalFileSystem(secrets_storage) => {
-            fs::create_dir_all(&secrets_storage).with_context(|| {
-                format!("creating secrets directory: {}", secrets_storage.display())
-            })?;
-            let permissions = Permissions::from_mode(0o700);
-            fs::set_permissions(secrets_storage.clone(), permissions)?;
-            let secrets_controller = Box::new(FilesystemSecretsController::new(secrets_storage));
-            secrets_controller as Box<dyn SecretsController>
-        }
-        SecretsControllerConfig::Kubernetes {
-            context,
-            user_defined_secret,
-            user_defined_secret_mount_path,
-            refresh_pod_name,
-        } => {
-            let secrets_controller = Box::new(
-                KubernetesSecretsController::new(
-                    context.to_owned(),
-                    KubernetesSecretsControllerConfig {
-                        user_defined_secret,
-                        user_defined_secret_mount_path: user_defined_secret_mount_path.clone(),
-                        refresh_pod_name,
-                    },
-                )
-                .await
-                .context("connecting to kubernetes")?,
-            );
-            secrets_controller as Box<dyn SecretsController>
-        }
-    };
+    let adapter_storage = mz_adapter::catalog::storage::Connection::open(
+        stash,
+        &BootstrapArgs {
+            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
+        },
+    )
+    .await?;
 
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller).await;
@@ -246,7 +204,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         build_info: &BUILD_INFO,
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
-        secrets_controller,
+        secrets_controller: config.secrets_controller,
         replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
         connection_context: config.connection_context,

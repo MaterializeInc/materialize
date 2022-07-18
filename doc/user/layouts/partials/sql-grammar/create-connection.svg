@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="601" height="409">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="76" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">CREATE</text>
+   <rect x="127" y="3" width="116" height="32" rx="10"/>
+   <rect x="125"
+         y="1"
+         width="116"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="135" y="21">CONNECTION</text>
+   <rect x="283" y="35" width="120" height="32" rx="10"/>
+   <rect x="281"
+         y="33"
+         width="120"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="291" y="53">IF NOT EXISTS</text>
+   <rect x="443" y="3" width="136" height="32"/>
+   <rect x="441" y="1" width="136" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="451" y="21">connection_name</text>
+   <rect x="89" y="101" width="48" height="32" rx="10"/>
+   <rect x="87"
+         y="99"
+         width="48"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="97" y="119">FOR</text>
+   <rect x="177" y="101" width="68" height="32" rx="10"/>
+   <rect x="175"
+         y="99"
+         width="68"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="185" y="119">KAFKA</text>
+   <rect x="177" y="145" width="106" height="32" rx="10"/>
+   <rect x="175"
+         y="143"
+         width="106"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="185" y="163">CONFLUENT</text>
+   <rect x="303" y="145" width="82" height="32" rx="10"/>
+   <rect x="301"
+         y="143"
+         width="82"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="311" y="163">SCHEMA</text>
+   <rect x="405" y="145" width="90" height="32" rx="10"/>
+   <rect x="403"
+         y="143"
+         width="90"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="413" y="163">REGISTRY</text>
+   <rect x="177" y="189" width="96" height="32" rx="10"/>
+   <rect x="175"
+         y="187"
+         width="96"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="185" y="207">POSTGRES</text>
+   <rect x="177" y="233" width="48" height="32" rx="10"/>
+   <rect x="175"
+         y="231"
+         width="48"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="185" y="251">SSH</text>
+   <rect x="245" y="233" width="76" height="32" rx="10"/>
+   <rect x="243"
+         y="231"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="253" y="251">TUNNEL</text>
+   <rect x="359" y="343" width="48" height="32"/>
+   <rect x="357" y="341" width="48" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="367" y="361">field</text>
+   <rect x="447" y="375" width="28" height="32" rx="10"/>
+   <rect x="445"
+         y="373"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="455" y="393">=</text>
+   <rect x="515" y="343" width="38" height="32"/>
+   <rect x="513" y="341" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="523" y="361">val</text>
+   <rect x="359" y="299" width="24" height="32" rx="10"/>
+   <rect x="357"
+         y="297"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="367" y="317">,</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m76 0 h10 m0 0 h10 m116 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m136 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-534 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m48 0 h10 m20 0 h10 m68 0 h10 m0 0 h250 m-358 0 h20 m338 0 h20 m-378 0 q10 0 10 10 m358 0 q0 -10 10 -10 m-368 10 v24 m358 0 v-24 m-358 24 q0 10 10 10 m338 0 q10 0 10 -10 m-348 10 h10 m106 0 h10 m0 0 h10 m82 0 h10 m0 0 h10 m90 0 h10 m-348 -10 v20 m358 0 v-20 m-358 20 v24 m358 0 v-24 m-358 24 q0 10 10 10 m338 0 q10 0 10 -10 m-348 10 h10 m96 0 h10 m0 0 h222 m-348 -10 v20 m358 0 v-20 m-358 20 v24 m358 0 v-24 m-358 24 q0 10 10 10 m338 0 q10 0 10 -10 m-348 10 h10 m48 0 h10 m0 0 h10 m76 0 h10 m0 0 h174 m22 -132 l2 0 m2 0 l2 0 m2 0 l2 0 m-220 242 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m48 0 h10 m20 0 h10 m0 0 h38 m-68 0 h20 m48 0 h20 m-88 0 q10 0 10 10 m68 0 q0 -10 10 -10 m-78 10 v12 m68 0 v-12 m-68 12 q0 10 10 10 m48 0 q10 0 10 -10 m-58 10 h10 m28 0 h10 m20 -32 h10 m38 0 h10 m-234 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m214 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-214 0 h10 m24 0 h10 m0 0 h170 m23 44 h-3"/>
+   <polygon points="591 357 599 353 599 361"/>
+   <polygon points="591 357 583 353 583 361"/>
+</svg>

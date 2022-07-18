@@ -84,7 +84,20 @@ pub struct TracingCliArgs {
     /// An optional prefix for each stderr log line.
     #[clap(long, env = "LOG_INCLUDE_SERVICE_NAME")]
     pub log_prefix: Option<String>,
-    /// Export tracing events to the provided observability backend.
+    /// Whether OpenTelemetry tracing is enabled by default.
+    ///
+    /// OpenTelemetry tracing can be dynamically toggled during runtime via the
+    /// internal HTTP server.
+    ///
+    /// Requires that the `--opentelemetry-endpoint` option is specified.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_ENABLED",
+        default_value_t = DefaultTrue::default(),
+        requires = "opentelemetry-endpoint"
+    )]
+    pub opentelemetry_enabled: DefaultTrue,
+    /// Export OpenTelemetry tracing events to the provided endpoint.
     ///
     /// The specified endpoint should speak the OTLP/HTTP protocol. If the
     /// backend requires authentication, you can pass authentication metadata
@@ -131,17 +144,6 @@ pub struct TracingCliArgs {
         use_value_delimiter = true
     )]
     pub opentelemetry_resource: Vec<KeyValueArg<String, String>>,
-    /// Default the OpenTelemetry tracing collector to off, but allow it to be
-    /// dynamically turned on.
-    ///
-    /// Requires that the `--opentelemetry-endpoint` option is specified.
-    #[clap(
-        long,
-        env = "OPENTELEMETRY_ENABLED",
-        default_value_t = DefaultTrue::default(),
-        requires = "opentelemetry-endpoint"
-    )]
-    pub opentelemetry_enabled: DefaultTrue,
     /// The address on which to listen for Tokio console connections.
     ///
     /// For details about Tokio console, see: <https://github.com/tokio-rs/console>
@@ -224,7 +226,7 @@ impl From<&TracingCliArgs> for TracingConfig {
 /// Wraps an [`Orchestrator`] to inject tracing into all created services.
 #[derive(Debug)]
 pub struct TracingOrchestrator {
-    inner: Box<dyn Orchestrator>,
+    inner: Arc<dyn Orchestrator>,
     tracing_args: TracingCliArgs,
     otel_enable_callback: OpenTelemetryEnableCallback,
 }
@@ -239,7 +241,7 @@ impl TracingOrchestrator {
     /// All services created by the orchestrator **must** embed the
     /// [`TracingCliArgs`] in their command-line argument parser.
     pub fn new(
-        inner: Box<dyn Orchestrator>,
+        inner: Arc<dyn Orchestrator>,
         tracing_args: TracingCliArgs,
         otel_enable_callback: OpenTelemetryEnableCallback,
     ) -> TracingOrchestrator {

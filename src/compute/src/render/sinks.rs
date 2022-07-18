@@ -21,10 +21,11 @@ use timely::dataflow::Scope;
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use mz_storage::client::controller::CollectionMetadata;
-use mz_storage::client::errors::DataflowError;
-use mz_storage::client::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::types::errors::DataflowError;
+use mz_storage::types::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
 
+use crate::compute_state::SinkToken;
 use crate::render::context::Context;
 
 impl<G> Context<G, Row, Timestamp>
@@ -88,9 +89,13 @@ where
             needed_tokens.push(sink_token);
         }
 
-        compute_state
-            .dataflow_tokens
-            .insert(sink_id, Box::new(needed_tokens));
+        compute_state.sink_tokens.insert(
+            sink_id,
+            SinkToken {
+                token: Box::new(needed_tokens),
+                is_tail: matches!(sink.connection, SinkConnection::Tail(_)),
+            },
+        );
     }
 }
 

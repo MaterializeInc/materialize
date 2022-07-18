@@ -23,9 +23,11 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 {"a": 1, "b": "dog"}
 
 # Create library of objects and verify names
-> CREATE MATERIALIZED SOURCE mz_data
+> CREATE SOURCE mz_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${writer-schema}'
+
+> CREATE DEFAULT INDEX ON mz_data
 
 > CREATE SINK sink1 FROM mz_data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'

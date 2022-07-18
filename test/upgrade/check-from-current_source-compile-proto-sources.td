@@ -8,21 +8,21 @@
 # by the Apache License, Version 2.0.
 
 > SELECT * FROM kafka_proto_source;
-id mz_offset
-------------
-c  1
-h  2
+id
+---
+c
+h
 
 $ kafka-ingest topic=upgrade-proto-source-${arg.upgrade-from-version} format=protobuf descriptor-file=message.pb message=Message confluent-wire-format=true
 {"id": "a"}
 {"id": "e"}
 
 > SELECT * FROM kafka_proto_source;
-id mz_offset
-------------
-c  1
-h  2
-a  3
-e  4
+id
+---
+c
+h
+a
+e
 
 > DROP SOURCE kafka_proto_source;

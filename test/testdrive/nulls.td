@@ -43,7 +43,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=nullpayload 
 :
 :así
 
-> CREATE MATERIALIZED SOURCE nullpayload (col)
+> CREATE SOURCE nullpayload (col)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nullpayload-${testdrive.seed}'
   FORMAT BYTES
 

@@ -40,9 +40,9 @@ pub struct PersistClientCache {
 
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
-    pub fn new(registry: &MetricsRegistry) -> Self {
+    pub fn new(cfg: PersistConfig, registry: &MetricsRegistry) -> Self {
         PersistClientCache {
-            cfg: PersistConfig::default(),
+            cfg,
             metrics: Arc::new(Metrics::new(registry)),
             blob_by_uri: HashMap::new(),
             consensus_by_uri: HashMap::new(),
@@ -53,7 +53,10 @@ impl PersistClientCache {
     /// metrics.
     #[cfg(test)]
     pub fn new_no_metrics() -> Self {
-        Self::new(&MetricsRegistry::new())
+        use mz_ore::now::SYSTEM_TIME;
+
+        let cfg = PersistConfig::new(SYSTEM_TIME.clone());
+        Self::new(cfg, &MetricsRegistry::new())
     }
 
     /// Returns a new [PersistClient] for interfacing with persist shards made
@@ -105,11 +108,16 @@ impl PersistClientCache {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::now::SYSTEM_TIME;
+
     use super::*;
 
     #[tokio::test]
     async fn client_cache() {
-        let mut cache = PersistClientCache::new(&MetricsRegistry::new());
+        let mut cache = PersistClientCache::new(
+            PersistConfig::new(SYSTEM_TIME.clone()),
+            &MetricsRegistry::new(),
+        );
         assert_eq!(cache.blob_by_uri.len(), 0);
         assert_eq!(cache.consensus_by_uri.len(), 0);
 

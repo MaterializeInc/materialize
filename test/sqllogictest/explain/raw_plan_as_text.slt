@@ -35,7 +35,7 @@ LIMIT 10
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Filter !(exists(%1))
+| Filter NOT(exists(%1))
 | |
 | | %1 =
 | | | Get materialize.public.t (u1)
@@ -54,7 +54,7 @@ VIEW v
 | Get materialize.public.t (u1)
 | | types = (integer?, integer?)
 | | keys = ()
-| Filter !(isnull(#0))
+| Filter NOT(isnull(#0))
 | | types = (integer?, integer?)
 | | keys = ()
 
@@ -68,7 +68,7 @@ RECORDED VIEW rv
 | Get materialize.public.t (u1)
 | | types = (integer?, integer?)
 | | keys = ()
-| Filter !(isnull(#0))
+| Filter NOT(isnull(#0))
 | | types = (integer?, integer?)
 | | keys = ()
 

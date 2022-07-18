@@ -53,7 +53,7 @@ Source materialize.public.x (u1):
 Query:
 %0 =
 | Get materialize.public.x (u1)
-| Map strtojsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")
+| Map text_to_jsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")
 | Project (#3..=#5)
 
 EOF
@@ -72,7 +72,7 @@ Source materialize.public.x (u1):
 Query:
 %0 =
 | Get materialize.public.x (u1)
-| Map strtojsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")
+| Map text_to_jsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")
 | Project (#4, #5, #7, #8)
 
 EOF

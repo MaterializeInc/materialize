@@ -12,7 +12,7 @@ use mz_repr::strconv;
 use crate::EvalError;
 
 sqlfunc!(
-    #[sqlname = "bytestostr"]
+    #[sqlname = "bytea_to_text"]
     #[preserves_uniqueness = true]
     fn cast_bytes_to_string(a: &'a [u8]) -> String {
         let mut buf = String::new();

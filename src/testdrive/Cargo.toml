@@ -21,7 +21,7 @@ aws-types = { version = "0.15.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.2.8", features = ["derive"] }
+clap = { version = "3.2.12", features = ["derive"] }
 flate2 = "1.0.24"
 futures = "0.3.21"
 globset = "0.4.9"
@@ -54,7 +54,7 @@ rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.6.0"
 reqwest = { version = "0.11.11", features = ["native-tls-vendored"] }
-serde = "1.0.138"
+serde = "1.0.139"
 serde_json = { version = "1.0.82", features = ["raw_value"] }
 similar = "2.1.0"
 tempfile = "3.2.0"

@@ -68,6 +68,8 @@ versions = [
   { name = "v0.1.0", date = "13 February 2020", targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin"] }
 ]
 
+repo = "//github.com/MaterializeInc/materialize"
+
 [[menu.main]]
 identifier = "overview"
 name = "Overview"

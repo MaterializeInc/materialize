@@ -12,17 +12,16 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::str::FromStr;
 use std::time::Duration;
 
 use aws_arn::ResourceName as AmazonResourceName;
-use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
+use mz_sql_parser::ast::SshConnectionOption;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
@@ -36,25 +35,24 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
-use mz_storage::client::connections::{
-    Connection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, SaslConfig,
-    Security, SslConfig, StringOrSecret,
+use mz_storage::types::connections::{
+    Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
+    StringOrSecret, TlsIdentity,
 };
-use mz_storage::client::sinks::{
+use mz_storage::types::sinks::{
     KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
     SinkConnectionBuilder, SinkEnvelope,
 };
-use mz_storage::client::sources::encoding::{
+use mz_storage::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage::client::sources::{
-    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, IncludedColumnPos,
-    KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
-    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
-    Timeline, UnplannedSourceEnvelope, UpsertStyle,
+use mz_storage::types::sources::{
+    DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
+    DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
+    KinesisSourceConnection, MzOffset, PostgresSourceConnection, PostgresSourceDetails,
+    ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection, SourceConnection,
+    SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -72,9 +70,10 @@ use crate::ast::{
     DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
     DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
-    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
-    QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select,
-    SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, Statement,
+    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op,
+    PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
+    Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr,
+    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
     SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
     UnresolvedObjectName, Value, ViewDefinition, WithOptionValue,
 };
@@ -92,13 +91,14 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
+    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, ReplicaConfig, Secret, Sink,
-    Source, Table, Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, Secret, Sink, Source, Table,
+    Type, View,
 };
 
 pub fn describe_create_database(
@@ -311,7 +311,6 @@ pub fn plan_create_source(
         with_options,
         envelope,
         if_not_exists,
-        materialized,
         format,
         key_constraint,
         include_metadata,
@@ -322,6 +321,10 @@ pub fn plan_create_source(
 
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options_original)?;
+
+    if !with_options.is_empty() {
+        scx.require_unsafe_mode("creating sources with WITH options")?;
+    }
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val.into() {
@@ -351,6 +354,7 @@ pub fn plan_create_source(
             let mut options = kafka_util::extract_config(&mut with_options)?;
             let kafka_connection = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
+                    scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
                     options.insert(
                         "bootstrap.servers".into(),
                         KafkaAddrs::from_str(broker)
@@ -533,12 +537,12 @@ pub fn plan_create_source(
             for ks in key_sources {
                 let dtks = match ks {
                     mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        mz_storage::client::sources::S3KeySource::Scan {
+                        mz_storage::types::sources::S3KeySource::Scan {
                             bucket: bucket.clone(),
                         }
                     }
                     mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        mz_storage::client::sources::S3KeySource::SqsNotifications {
+                        mz_storage::types::sources::S3KeySource::SqsNotifications {
                             queue: queue.clone(),
                         }
                     }
@@ -563,17 +567,22 @@ pub fn plan_create_source(
                     .map_err(|e| sql_err!("parsing glob: {e}"))?,
                 aws,
                 compression: match compression {
-                    Compression::Gzip => mz_storage::client::sources::Compression::Gzip,
-                    Compression::None => mz_storage::client::sources::Compression::None,
+                    Compression::Gzip => mz_storage::types::sources::Compression::Gzip,
+                    Compression::None => mz_storage::types::sources::Compression::None,
                 },
             });
             (connection, encoding)
         }
         CreateSourceConnection::Postgres {
-            conn,
+            connection,
             publication,
             details,
         } => {
+            let item = scx.get_item_by_resolved_name(&connection)?;
+            let connection = match item.connection()? {
+                Connection::Postgres(connection) => connection.clone(),
+                _ => sql_bail!("{} is not a postgres connection", item.name()),
+            };
             let details = details
                 .as_ref()
                 .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
@@ -581,7 +590,7 @@ pub fn plan_create_source(
             let details =
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
-                conn: conn.clone(),
+                connection,
                 publication: publication.clone(),
                 details: PostgresSourceDetails::from_proto(details)
                     .map_err(|e| sql_err!("{}", e))?,
@@ -611,7 +620,7 @@ pub fn plan_create_source(
     };
     let (key_desc, value_desc) = encoding.desc()?;
 
-    let key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
+    let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
@@ -623,10 +632,10 @@ pub fn plan_create_source(
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         // TODO: fixup key envelope
-        mz_sql_parser::ast::Envelope::None => {
-            UnplannedSourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
-        }
+        mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
+            scx.require_unsafe_mode("ENVELOPE DEBEZIUM")?;
+
             //TODO check that key envelope is not set
             let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
@@ -689,125 +698,31 @@ pub fn plan_create_source(
                         }
                     };
 
-                    let dedup_projection = typecheck_debezium_dedup(&value_desc, tx_metadata);
-
-                    let dedup_mode = match with_options.remove("deduplication") {
-                        None => match dedup_projection {
-                            Ok(_) => Cow::from("ordered"),
-                            Err(_) => Cow::from("none"),
-                        },
-                        Some(SqlValueOrSecret::Value(Value::String(s))) => Cow::from(s),
-                        _ => sql_bail!("deduplication option must be a string"),
-                    };
-
-                    match dedup_mode.as_ref() {
-                        "ordered" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                            before_idx,
-                            after_idx,
-                            mode: DebeziumMode::Ordered(dedup_projection?),
-                        }),
-                        "full" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                            before_idx,
-                            after_idx,
-                            mode: DebeziumMode::Full(dedup_projection?),
-                        }),
-                        "none" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                            before_idx,
-                            after_idx,
-                            mode: DebeziumMode::None,
-                        }),
-                        "full_in_range" => {
-                            let parse_datetime = |s: &str| {
-                                let formats = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"];
-                                for format in formats {
-                                    if let Ok(dt) = NaiveDateTime::parse_from_str(s, format) {
-                                        return Ok(dt);
-                                    }
-                                }
-                                if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                                    return Ok(d.and_hms(0, 0, 0));
-                                }
-
-                                sql_bail!(
-                                    "UTC DateTime specifier '{}' should match \
-                                    'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS' \
-                                    or 'YYYY-MM-DD HH:MM:SS.FF",
-                                    s
-                                )
-                            };
-
-                            let dedup_start = match with_options.remove("deduplication_start") {
-                                None => None,
-                                Some(SqlValueOrSecret::Value(Value::String(start))) => Some(parse_datetime(&start)?),
-                                _ => sql_bail!("deduplication_start option must be a string"),
-                            };
-
-                            let dedup_end = match with_options.remove("deduplication_end") {
-                                None => None,
-                                Some(SqlValueOrSecret::Value(Value::String(end))) => Some(parse_datetime(&end)?),
-                                _ => sql_bail!("deduplication_end option must be a string"),
-                            };
-
-                            match dedup_start.zip(dedup_end) {
-                                Some((start, end)) => {
-                                    if start >= end {
-                                        sql_bail!(
-                                            "Debezium deduplication start {} is not before end {}",
-                                            start,
-                                            end
-                                        );
-                                    }
-
-                                    let pad_start =
-                                        match with_options.remove("deduplication_pad_start") {
-                                            None => None,
-                                            Some(SqlValueOrSecret::Value(Value::String(pad_start))) => {
-                                                Some(parse_datetime(&pad_start)?)
-                                            }
-                                            _ => sql_bail!(
-                                                "deduplication_pad_start option must be a string"
-                                            ),
-                                        };
-
-                                    UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                                        before_idx,
-                                        after_idx,
-                                        mode: DebeziumMode::FullInRange {
-                                            start,
-                                            end,
-                                            pad_start,
-                                            projection: dedup_projection?,
-                                        }
-                                    })
-                                }
-                                _ => sql_bail!(
-                                    "deduplication full_in_range requires both \
-                                 'deduplication_start' and 'deduplication_end' parameters"
-                                ),
-                            }
-                        }
-                        _ => sql_bail!(
-                            "deduplication must be one of 'none', 'ordered', 'full' or 'full_in_range'."
-                        ),
-                    }
+                    UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
+                        before_idx,
+                        after_idx,
+                        dedup: typecheck_debezium_dedup(&value_desc, tx_metadata)?,
+                    })
                 }
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
-            if encoding.key_ref().is_none() {
-                bail_unsupported!(format!("upsert requires a key/value format: {:?}", format));
-            }
-            //TODO(petrosagg): remove this check. it will be a breaking change
-            let key_envelope = match encoding.key_ref() {
-                Some(DataEncoding {
-                    inner: DataEncodingInner::Avro(_),
-                    ..
-                }) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
-                _ => key_envelope.unwrap_or(KeyEnvelope::LegacyUpsert),
+            scx.require_unsafe_mode("ENVELOPE UPSERT")?;
+            let key_encoding = match encoding.key_ref() {
+                None => {
+                    bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
+                }
+                Some(key_encoding) => key_encoding,
             };
+            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
+            // specified.
+            if key_envelope == KeyEnvelope::None {
+                key_envelope = get_unnamed_key_envelope(key_encoding)?;
+            }
             UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
+            scx.require_unsafe_mode("ENVELOPE MATERIALIZE")?;
             //TODO check that key envelope is not set
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
@@ -817,38 +732,10 @@ pub fn plan_create_source(
         }
     };
 
-    // TODO(petrosagg): remove this inconsistency once INCLUDE (offset) syntax is implemented
-    let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
-    let metadata_columns = external_connection.metadata_columns(include_defaults);
-    let metadata_column_types = external_connection.metadata_column_types(include_defaults);
+    let metadata_columns = external_connection.metadata_columns();
+    let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    // Append default metadata columns if column aliases were provided but do not include them.
-    //
-    // This is a confusing hack due to two combined facts:
-    //
-    // * we used to not allow users to refer to/alias the metadata columns because they were
-    //   specified in render, instead of here in plan
-    // * we don't follow postgres semantics and allow a shorter rename list than total column list
-    //
-    // TODO: probably we should just migrate to pg semantics and allow specifying fewer columns than
-    // actually exist?
-    let tmp_col;
-    let col_names = if include_defaults
-        && !col_names.is_empty()
-        && metadata_columns.len() + col_names.len() == desc.arity()
-    {
-        let mut tmp = Vec::with_capacity(desc.arity());
-        tmp.extend(col_names.iter().cloned());
-        tmp.push(Ident::from(
-            external_connection.default_metadata_column_name().unwrap(),
-        ));
-        tmp_col = tmp;
-        &tmp_col
-    } else {
-        col_names
-    };
 
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
@@ -860,7 +747,7 @@ pub fn plan_create_source(
         desc = desc.without_keys();
     }
 
-    desc = plan_utils::maybe_rename_columns(format!("source {}", name), desc, &col_names)?;
+    plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, &col_names)?;
 
     let names: Vec<_> = desc.iter_names().cloned().collect();
     if let Some(dup) = names.iter().duplicates().next() {
@@ -869,6 +756,8 @@ pub fn plan_create_source(
 
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
+        scx.require_unsafe_mode("PRIMARY KEY NOT ENFORCED")?;
+
         let key_columns = columns
             .into_iter()
             .map(normalize::column_name)
@@ -910,7 +799,6 @@ pub fn plan_create_source(
     };
 
     let if_not_exists = *if_not_exists;
-    let materialized = *materialized;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
@@ -949,7 +837,6 @@ pub fn plan_create_source(
         name,
         source,
         if_not_exists,
-        materialized,
         timeline,
         remote,
     }))
@@ -1077,16 +964,11 @@ fn typecheck_debezium_dedup(
         sql_bail!("unknown type of upstream database")
     };
 
-    let (transaction_idx, _transaction_ty) = value_desc
-        .get_by_name(&"transaction".into())
-        .ok_or_else(|| sql_err!("'transaction' column missing from debezium input"))?;
-
     Ok(DebeziumDedupProjection {
         op_idx,
         source_idx,
         snapshot_idx,
         source_projection,
-        transaction_idx,
         tx_metadata,
     })
 }
@@ -1161,7 +1043,7 @@ fn typecheck_debezium_transaction_metadata(
         _ => sql_bail!("'data_collections.event_count' missing from debezium transaction metadata"),
     };
 
-    let (_data_transaction_idx, data_transaction_ty) = data_value_desc
+    let (data_transaction_idx, data_transaction_ty) = data_value_desc
         .get_by_name(&"transaction".into())
         .ok_or_else(|| sql_err!("'transaction' column missing from debezium input"))?;
 
@@ -1189,6 +1071,7 @@ fn typecheck_debezium_transaction_metadata(
         tx_data_collections_data_collection_idx,
         tx_data_collections_event_count_idx,
         tx_data_collection_name,
+        data_transaction_idx,
         data_transaction_id_idx,
     })
 }
@@ -1237,7 +1120,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_storage::client::connections::CsrConnection>,
+    pub csr_connection: Option<mz_storage::types::connections::CsrConnection>,
     pub confluent_wire_format: bool,
 }
 
@@ -1452,7 +1335,7 @@ fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
     envelope: &Envelope<Aug>,
     encoding: &SourceDataEncoding,
-) -> Result<Option<KeyEnvelope>, PlanError> {
+) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
         .find(|i| i.ty == SourceIncludeMetadataType::Key);
@@ -1462,32 +1345,11 @@ fn get_key_envelope(
         );
     }
     if let Some(kd) = key_definition {
-        Ok(Some(match (&kd.alias, encoding) {
+        match (&kd.alias, encoding) {
             (Some(name), SourceDataEncoding::KeyValue { .. }) => {
-                KeyEnvelope::Named(name.as_str().to_string())
+                Ok(KeyEnvelope::Named(name.as_str().to_string()))
             }
-            (None, _) if matches!(envelope, Envelope::Upsert { .. }) => KeyEnvelope::LegacyUpsert,
-            (None, SourceDataEncoding::KeyValue { key, .. }) => {
-                // If the key is requested but comes from an unnamed type then it gets the name "key"
-                //
-                // Otherwise it gets the names of the columns in the type
-                let is_composite = match key.inner {
-                    DataEncodingInner::Postgres | DataEncodingInner::RowCodec(_) => {
-                        sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
-                    }
-                    DataEncodingInner::Bytes | DataEncodingInner::Text => false,
-                    DataEncodingInner::Avro(_)
-                    | DataEncodingInner::Csv(_)
-                    | DataEncodingInner::Protobuf(_)
-                    | DataEncodingInner::Regex { .. } => true,
-                };
-
-                if is_composite {
-                    KeyEnvelope::Flattened
-                } else {
-                    KeyEnvelope::Named("key".to_string())
-                }
-            }
+            (None, SourceDataEncoding::KeyValue { key, .. }) => get_unnamed_key_envelope(key),
             (_, SourceDataEncoding::Single(_)) => {
                 // `kd.alias` == `None` means `INCLUDE KEY`
                 // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
@@ -1497,9 +1359,33 @@ fn get_key_envelope(
                         got bare FORMAT"
                 );
             }
-        }))
+        }
     } else {
-        Ok(None)
+        Ok(KeyEnvelope::None)
+    }
+}
+
+/// Gets the key envelope for a given key encoding when no name for the key has
+/// been requested by the user.
+fn get_unnamed_key_envelope(key: &DataEncoding) -> Result<KeyEnvelope, PlanError> {
+    // If the key is requested but comes from an unnamed type then it gets the name "key"
+    //
+    // Otherwise it gets the names of the columns in the type
+    let is_composite = match key.inner {
+        DataEncodingInner::Postgres | DataEncodingInner::RowCodec(_) => {
+            sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
+        }
+        DataEncodingInner::Bytes | DataEncodingInner::Text => false,
+        DataEncodingInner::Avro(_)
+        | DataEncodingInner::Csv(_)
+        | DataEncodingInner::Protobuf(_)
+        | DataEncodingInner::Regex { .. } => true,
+    };
+
+    if is_composite {
+        Ok(KeyEnvelope::Flattened)
+    } else {
+        Ok(KeyEnvelope::Named("key".to_string()))
     }
 }
 
@@ -1549,7 +1435,7 @@ pub fn plan_view(
         scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
     };
 
-    desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, &columns)?;
+    plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, &columns)?;
     let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
@@ -1794,7 +1680,7 @@ pub fn plan_create_recorded_view(
 
     let query::PlannedQuery {
         mut expr,
-        desc,
+        mut desc,
         finishing,
     } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
 
@@ -1802,8 +1688,7 @@ pub fn plan_create_recorded_view(
     expr.finish(finishing);
     let expr = expr.optimize_and_lower(&scx.into())?;
 
-    let desc =
-        plan_utils::maybe_rename_columns(format!("recorded view {}", name), desc, &stmt.columns)?;
+    plan_utils::maybe_rename_columns(format!("recorded view {}", name), &mut desc, &stmt.columns)?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = column_names.iter().duplicates().next() {
@@ -2828,7 +2713,7 @@ generate_extracted_config!(
 fn plan_replica_config(
     scx: &StatementContext,
     options: Vec<ReplicaOption<Aug>>,
-) -> Result<ReplicaConfig, PlanError> {
+) -> Result<ComputeInstanceReplicaConfig, PlanError> {
     let ReplicaOptionExtracted {
         availability_zone,
         size,
@@ -2850,11 +2735,11 @@ fn plan_replica_config(
             if availability_zone.is_some() {
                 sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
             }
-            Ok(ReplicaConfig::Remote {
+            Ok(ComputeInstanceReplicaConfig::Remote {
                 addrs: remote_addrs,
             })
         }
-        (false, Some(size)) => Ok(ReplicaConfig::Managed {
+        (false, Some(size)) => Ok(ComputeInstanceReplicaConfig::Managed {
             size,
             availability_zone,
         }),
@@ -2971,26 +2856,23 @@ impl KafkaConnectionOptionExtracted {
     }
     pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
-        HashSet::from([SslKey, SslCertificate, SslCertificateAuthority])
+        HashSet::from([SslKey, SslCertificate])
     }
     pub fn sasl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
-        HashSet::from([
-            SaslMechanisms,
-            SaslUsername,
-            SaslPassword,
-            SslCertificateAuthority,
-        ])
+        HashSet::from([SaslMechanisms, SaslUsername, SaslPassword])
     }
 }
 
-impl From<&KafkaConnectionOptionExtracted> for Option<SslConfig> {
+impl From<&KafkaConnectionOptionExtracted> for Option<KafkaTlsConfig> {
     fn from(k: &KafkaConnectionOptionExtracted) -> Self {
         if k.ssl_config().iter().all(|config| k.seen.contains(config)) {
-            Some(SslConfig {
-                key: k.ssl_key.unwrap().into(),
-                certificate: k.ssl_certificate.clone().unwrap(),
-                certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
+            Some(KafkaTlsConfig {
+                identity: Some(TlsIdentity {
+                    key: k.ssl_key.unwrap().into(),
+                    cert: k.ssl_certificate.clone().unwrap(),
+                }),
+                root_cert: k.ssl_certificate_authority.clone(),
             })
         } else {
             None
@@ -3005,7 +2887,7 @@ impl From<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
                 mechanisms: k.sasl_mechanisms.clone().unwrap(),
                 username: k.sasl_username.clone().unwrap(),
                 password: k.sasl_password.unwrap().into(),
-                certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
+                tls_root_cert: k.ssl_certificate_authority.clone(),
             })
         } else {
             None
@@ -3013,11 +2895,11 @@ impl From<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
     }
 }
 
-impl TryFrom<&KafkaConnectionOptionExtracted> for Option<Security> {
+impl TryFrom<&KafkaConnectionOptionExtracted> for Option<KafkaSecurity> {
     type Error = PlanError;
     fn try_from(value: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        let ssl_config = Option::<SslConfig>::from(value).map(Security::from);
-        let sasl_config = Option::<SaslConfig>::from(value).map(Security::from);
+        let ssl_config = Option::<KafkaTlsConfig>::from(value).map(KafkaSecurity::from);
+        let sasl_config = Option::<SaslConfig>::from(value).map(KafkaSecurity::from);
 
         let mut security_iter = vec![ssl_config, sasl_config].into_iter();
         let res = match security_iter.find(|v| v.is_some()) {
@@ -3063,7 +2945,7 @@ generate_extracted_config!(
     (Password, with_options::Secret)
 );
 
-impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::CsrConnection {
+impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::types::connections::CsrConnection {
     type Error = PlanError;
     fn try_from(ccsr_options: CsrConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let url = match ccsr_options.url {
@@ -3072,15 +2954,11 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::
                 .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
             None => sql_bail!("invalid CONNECTION: must specify URL"),
         };
-        let root_certs = match ccsr_options.ssl_certificate_authority {
-            None => vec![],
-            Some(cert) => vec![cert],
-        };
         let cert = ccsr_options.ssl_certificate;
         let key = ccsr_options.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
             (None, None) => None,
-            (Some(cert), Some(key)) => Some(CsrConnectionTlsIdentity { cert, key }),
+            (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
             _ => sql_bail!(
                 "invalid CONNECTION: reading from SSL-auth Confluent Schema Registry requires both SSL KEY and SSL CERTIFICATE"
             ),
@@ -3089,11 +2967,96 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::client::connections::
             username,
             password: ccsr_options.password.map(|secret| secret.into()),
         });
-        Ok(mz_storage::client::connections::CsrConnection {
+        Ok(mz_storage::types::connections::CsrConnection {
             url,
-            root_certs,
+            tls_root_cert: ccsr_options.ssl_certificate_authority,
             tls_identity,
             http_auth,
+        })
+    }
+}
+
+generate_extracted_config!(
+    PostgresConnectionOption,
+    (Database, String),
+    (Host, String),
+    (Password, with_options::Secret),
+    (Port, u16, Default(5432_u16)),
+    (SshTunnel, String),
+    (SslCertificate, StringOrSecret),
+    (SslCertificateAuthority, StringOrSecret),
+    (SslKey, with_options::Secret),
+    (SslMode, String),
+    (User, StringOrSecret)
+);
+
+impl TryFrom<PostgresConnectionOptionExtracted>
+    for mz_storage::types::connections::PostgresConnection
+{
+    type Error = PlanError;
+
+    fn try_from(options: PostgresConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        let cert = options.ssl_certificate;
+        let key = options.ssl_key.map(|secret| secret.into());
+        let tls_identity = match (cert, key) {
+            (None, None) => None,
+            (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
+            _ => sql_bail!("invalid CONNECTION: both SSL KEY and SSL CERTIFICATE are required"),
+        };
+        let tls_mode = match options.ssl_mode.as_ref().map(|m| m.as_str()) {
+            None | Some("disable") => tokio_postgres::config::SslMode::Disable,
+            // "prefer" intentionally omitted because it has dubious security
+            // properties.
+            Some("require") => tokio_postgres::config::SslMode::Require,
+            Some("verify_ca") | Some("verify-ca") => tokio_postgres::config::SslMode::VerifyCa,
+            Some("verify_full") | Some("verify-full") => {
+                tokio_postgres::config::SslMode::VerifyFull
+            }
+            Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
+        };
+        Ok(mz_storage::types::connections::PostgresConnection {
+            database: options
+                .database
+                .ok_or_else(|| sql_err!("DATABASE option is required"))?,
+            host: options
+                .host
+                .ok_or_else(|| sql_err!("HOST option is required"))?,
+            password: options.password.map(|password| password.into()),
+            port: options.port,
+            ssh_tunnel: options.ssh_tunnel,
+            tls_mode,
+            tls_root_cert: options.ssl_certificate_authority,
+            tls_identity,
+            user: options
+                .user
+                .ok_or_else(|| sql_err!("USER option is required"))?,
+        })
+    }
+}
+
+generate_extracted_config!(
+    SshConnectionOption,
+    (Host, String),
+    (Port, i32),
+    (User, String)
+);
+
+impl TryFrom<SshConnectionOptionExtracted> for mz_storage::types::connections::SshConnection {
+    type Error = PlanError;
+
+    fn try_from(options: SshConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(mz_storage::types::connections::SshConnection {
+            host: options
+                .host
+                .ok_or_else(|| sql_err!("HOST option is required"))?,
+            port: options
+                .port
+                .ok_or_else(|| sql_err!("PORT option is required"))?,
+            user: options
+                .user
+                .ok_or_else(|| sql_err!("USER option is required"))?,
+            public_key: "TODO".to_string(),
+            private_key: GlobalId::Transient(0),
         })
     }
 }
@@ -3102,8 +3065,6 @@ pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("CREATE CONNECTION")?;
-
     let create_sql = normalize::create_statement(&scx, Statement::CreateConnection(stmt.clone()))?;
     let CreateConnectionStatement {
         name,
@@ -3117,8 +3078,19 @@ pub fn plan_create_connection(
         }
         CreateConnection::Csr { with_options } => {
             let c = CsrConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::client::connections::CsrConnection::try_from(c)?;
+            let connection = mz_storage::types::connections::CsrConnection::try_from(c)?;
             Connection::Csr(connection)
+        }
+        CreateConnection::Postgres { with_options } => {
+            let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
+            let connection = mz_storage::types::connections::PostgresConnection::try_from(c)?;
+            Connection::Postgres(connection)
+        }
+        CreateConnection::Ssh { with_options } => {
+            scx.require_unsafe_mode("CREATE CONNECTION ... SSH")?;
+            let c = SshConnectionOptionExtracted::try_from(with_options)?;
+            let connection = mz_storage::types::connections::SshConnection::try_from(c)?;
+            Connection::Ssh(connection)
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;

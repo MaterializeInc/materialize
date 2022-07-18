@@ -22,11 +22,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use mz_expr::explain::Indices;
-use mz_expr::{ExprHumanizer, Id, LocalId, RowSetFinishing};
+use mz_expr::{Id, LocalId, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::str::{bracketed, separated};
-use mz_repr::{RelationType, ScalarType};
+use mz_repr::{explain_new::ExprHumanizer, RelationType, ScalarType};
 
 use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 
@@ -463,9 +463,29 @@ impl<'a> Explanation<'a> {
             Literal(row, _) => write!(f, "{}", row.unpack_first()),
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
-                write!(f, "{}(", func)?;
-                self.fmt_scalar_expr(f, expr)?;
-                write!(f, ")")
+                if let mz_expr::UnaryFunc::Not(_) = *func {
+                    if let CallUnary {
+                        func,
+                        expr: inner_expr,
+                    } = &**expr
+                    {
+                        if let Some(is) = func.is() {
+                            write!(f, "(")?;
+                            self.fmt_scalar_expr(f, inner_expr)?;
+                            write!(f, ") IS NOT {}", is)?;
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Some(is) = func.is() {
+                    write!(f, "(")?;
+                    self.fmt_scalar_expr(f, expr)?;
+                    write!(f, ") IS {}", is)
+                } else {
+                    write!(f, "{}(", func)?;
+                    self.fmt_scalar_expr(f, expr)?;
+                    write!(f, ")")
+                }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {

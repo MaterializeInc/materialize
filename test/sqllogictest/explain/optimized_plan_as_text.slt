@@ -52,7 +52,7 @@ Query:
 
 %3 =
 | Get materialize.public.t (u1)
-| Filter !(isnull(#1))
+| Filter (#1) IS NOT NULL
 | Project (#1)
 | Distinct group=(#0)
 | ArrangeBy (#0)
@@ -82,7 +82,7 @@ EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS TEXT FOR
 VIEW v
 ----
 Source materialize.public.t (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
@@ -90,7 +90,7 @@ Query:
 | Get materialize.public.t (u1)
 | | types = (integer?, integer?)
 | | keys = ()
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | | types = (integer, integer?)
 | | keys = ()
 
@@ -101,7 +101,7 @@ EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS TEXT FOR
 RECORDED VIEW rv
 ----
 Source materialize.public.t (u1):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1)
 
 Query:
@@ -109,7 +109,7 @@ Query:
 | Get materialize.public.t (u1)
 | | types = (integer?, integer?)
 | | keys = ()
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | | types = (integer, integer?)
 | | keys = ()
 

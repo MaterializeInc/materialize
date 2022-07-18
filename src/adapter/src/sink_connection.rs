@@ -15,8 +15,8 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, Top
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
-use mz_storage::client::connections::{ConnectionContext, PopulateClientConfig};
-use mz_storage::client::sinks::{
+use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
+use mz_storage::types::sinks::{
     KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
     KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
 };
@@ -207,7 +207,7 @@ async fn build_kafka(
 ) -> Result<SinkConnection, AdapterError> {
     // Create Kafka topic
     let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-    builder.populate_client_config(&mut config, &connection_context.secrets_reader);
+    builder.populate_client_config(&mut config, &*connection_context.secrets_reader);
 
     let client: AdminClient<_> = config
         .create_with_context(MzClientContext)
@@ -237,14 +237,14 @@ async fn build_kafka(
     .await
     .context("error registering kafka topic for sink")?;
     let published_schema_info = match builder.format {
-        mz_storage::client::sinks::KafkaSinkFormat::Avro {
+        mz_storage::types::sinks::KafkaSinkFormat::Avro {
             key_schema,
             value_schema,
             csr_connection,
             ..
         } => {
             let ccsr = csr_connection
-                .connect(&connection_context.secrets_reader)
+                .connect(&*connection_context.secrets_reader)
                 .await?;
             let (key_schema_id, value_schema_id) = publish_kafka_schemas(
                 &ccsr,
@@ -261,11 +261,11 @@ async fn build_kafka(
                 value_schema_id,
             })
         }
-        mz_storage::client::sinks::KafkaSinkFormat::Json => None,
+        mz_storage::types::sinks::KafkaSinkFormat::Json => None,
     };
 
     let consistency = match builder.consistency_format {
-        Some(mz_storage::client::sinks::KafkaSinkFormat::Avro {
+        Some(mz_storage::types::sinks::KafkaSinkFormat::Avro {
             value_schema,
             csr_connection,
             ..
@@ -289,7 +289,7 @@ async fn build_kafka(
             .context("error registering kafka consistency topic for sink")?;
 
             let ccsr = csr_connection
-                .connect(&connection_context.secrets_reader)
+                .connect(&*connection_context.secrets_reader)
                 .await?;
             let (_, consistency_schema_id) = publish_kafka_schemas(
                 &ccsr,

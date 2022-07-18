@@ -97,12 +97,7 @@ impl UnreliableHandle {
         core.rng.gen_bool(should_timeout)
     }
 
-    async fn run_op<R, F, WorkFn>(
-        &self,
-        deadline: Instant,
-        name: &str,
-        work_fn: WorkFn,
-    ) -> Result<R, ExternalError>
+    async fn run_op<R, F, WorkFn>(&self, name: &str, work_fn: WorkFn) -> Result<R, ExternalError>
     where
         F: Future<Output = Result<R, ExternalError>>,
         WorkFn: FnOnce() -> F,
@@ -117,10 +112,10 @@ impl UnreliableHandle {
         match (should_happen, should_timeout) {
             (true, true) => {
                 let _res = work_fn().await;
-                Err(ExternalError::new_timeout(deadline))
+                Err(ExternalError::new_timeout(Instant::now()))
             }
             (true, false) => work_fn().await,
-            (false, true) => Err(ExternalError::new_timeout(deadline)),
+            (false, true) => Err(ExternalError::new_timeout(Instant::now())),
             (false, false) => Err(ExternalError::Determinate(Determinate::new(anyhow!(
                 "unreliable"
             )))),
@@ -144,36 +139,24 @@ impl UnreliableBlob {
 
 #[async_trait]
 impl Blob for UnreliableBlob {
-    async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        self.handle.run_op("get", || self.blob.get(key)).await
+    }
+
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
         self.handle
-            .run_op(deadline, "get", || self.blob.get(deadline, key))
+            .run_op("list_keys", || self.blob.list_keys())
             .await
     }
 
-    async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         self.handle
-            .run_op(deadline, "list_keys", || self.blob.list_keys(deadline))
+            .run_op("set", || self.blob.set(key, value, atomic))
             .await
     }
 
-    async fn set(
-        &self,
-        deadline: Instant,
-        key: &str,
-        value: Bytes,
-        atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
-        self.handle
-            .run_op(deadline, "set", || {
-                self.blob.set(deadline, key, value, atomic)
-            })
-            .await
-    }
-
-    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
-        self.handle
-            .run_op(deadline, "delete", || self.blob.delete(deadline, key))
-            .await
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
+        self.handle.run_op("delete", || self.blob.delete(key)).await
     }
 }
 
@@ -193,61 +176,40 @@ impl UnreliableConsensus {
 
 #[async_trait]
 impl Consensus for UnreliableConsensus {
-    async fn head(
-        &self,
-        deadline: Instant,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError> {
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         self.handle
-            .run_op(deadline, "head", || self.consensus.head(deadline, key))
+            .run_op("head", || self.consensus.head(key))
             .await
     }
 
     async fn compare_and_set(
         &self,
-        deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
         self.handle
-            .run_op(deadline, "compare_and_set", || {
-                self.consensus.compare_and_set(deadline, key, expected, new)
+            .run_op("compare_and_set", || {
+                self.consensus.compare_and_set(key, expected, new)
             })
             .await
     }
 
-    async fn scan(
-        &self,
-        deadline: Instant,
-        key: &str,
-        from: SeqNo,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         self.handle
-            .run_op(deadline, "scan", || {
-                self.consensus.scan(deadline, key, from)
-            })
+            .run_op("scan", || self.consensus.scan(key, from))
             .await
     }
 
-    async fn truncate(
-        &self,
-        deadline: Instant,
-        key: &str,
-        seqno: SeqNo,
-    ) -> Result<(), ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
         self.handle
-            .run_op(deadline, "truncate", || {
-                self.consensus.truncate(deadline, key, seqno)
-            })
+            .run_op("truncate", || self.consensus.truncate(key, seqno))
             .await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 
     use super::*;
@@ -257,7 +219,6 @@ mod tests {
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default())) as Arc<dyn Blob + Send + Sync>;
         let handle = UnreliableHandle::default();
         let blob = UnreliableBlob::new(blob, handle.clone());
-        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
 
         // Use a fixed seed so this test doesn't flake.
         {
@@ -267,7 +228,7 @@ mod tests {
         // By default, it's partially reliable.
         let mut succeeded = 0;
         for _ in 0..100 {
-            if blob.get(deadline, "a").await.is_ok() {
+            if blob.get("a").await.is_ok() {
                 succeeded += 1;
             }
         }
@@ -277,11 +238,11 @@ mod tests {
 
         // Reliable doesn't error.
         handle.totally_available();
-        assert!(blob.get(deadline, "a").await.is_ok());
+        assert!(blob.get("a").await.is_ok());
 
         // Unreliable does error.
         handle.totally_unavailable();
-        assert!(blob.get(deadline, "a").await.is_err());
+        assert!(blob.get("a").await.is_err());
     }
 
     #[tokio::test]
@@ -289,7 +250,6 @@ mod tests {
         let consensus = Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>;
         let handle = UnreliableHandle::default();
         let consensus = UnreliableConsensus::new(consensus, handle.clone());
-        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
 
         // Use a fixed seed so this test doesn't flake.
         {
@@ -299,7 +259,7 @@ mod tests {
         // By default, it's partially reliable.
         let mut succeeded = 0;
         for _ in 0..100 {
-            if consensus.head(deadline, "key").await.is_ok() {
+            if consensus.head("key").await.is_ok() {
                 succeeded += 1;
             }
         }
@@ -309,10 +269,10 @@ mod tests {
 
         // Reliable doesn't error.
         handle.totally_available();
-        assert!(consensus.head(deadline, "key").await.is_ok());
+        assert!(consensus.head("key").await.is_ok());
 
         // Unreliable does error.
         handle.totally_unavailable();
-        assert!(consensus.head(deadline, "key").await.is_err());
+        assert!(consensus.head("key").await.is_err());
     }
 }

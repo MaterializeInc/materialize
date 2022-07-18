@@ -35,7 +35,7 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
 {"key1": "fish", "key2": 2} {"f1": "fish", "f2": 1000}
 {"key1": "fisch", "key2": 42} {"f1": "fish", "f2": 1000}
 
-> CREATE MATERIALIZED SOURCE upsert_input
+> CREATE SOURCE upsert_input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-upsert-avro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -133,7 +133,7 @@ $ set schema=[
 $ kafka-create-topic topic=input
 
 # (PRIMARY KEY (id) NOT ENFORCED)
-> CREATE MATERIALIZED SOURCE input
+> CREATE SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
@@ -211,7 +211,7 @@ $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort
 
 $ kafka-create-topic topic=input-with-deletions
 
-> CREATE MATERIALIZED SOURCE input_with_deletions
+> CREATE SOURCE input_with_deletions
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-with-deletions-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
@@ -271,7 +271,7 @@ $ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sor
 
 $ kafka-create-topic topic=non-keyed-input
 
-> CREATE MATERIALIZED SOURCE non_keyed_input
+> CREATE SOURCE non_keyed_input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-keyed-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 

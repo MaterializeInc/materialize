@@ -26,7 +26,9 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default().data_directory(data_dir.path());
+    let config = util::Config::default()
+        .data_directory(data_dir.path())
+        .unsafe_mode();
 
     {
         let server = util::start_server(config.clone())?;

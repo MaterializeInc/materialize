@@ -18,7 +18,7 @@ INSERT INTO char_varchar_type VALUES ('a ', 'a ');
 
 $ schema-registry-wait-schema schema=postgres.public.char_varchar_type-value
 
-> CREATE MATERIALIZED SOURCE char_varchar_type
+> CREATE SOURCE char_varchar_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.char_varchar_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

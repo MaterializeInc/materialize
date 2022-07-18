@@ -27,10 +27,10 @@ use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
 use mz_repr::{Diff, Row, Timestamp};
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::errors::DataflowError;
-use crate::client::sources::SourceData;
+use crate::controller::CollectionMetadata;
 use crate::source::{SourceStatus, YIELD_INTERVAL};
+use crate::types::errors::DataflowError;
+use crate::types::sources::SourceData;
 
 /// Creates a new source that reads from a persist shard.
 ///

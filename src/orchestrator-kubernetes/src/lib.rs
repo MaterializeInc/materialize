@@ -12,21 +12,20 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::Utc;
 use clap::ArgEnum;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
-    SecretVolumeSource, Service as K8sService, ServicePort, ServiceSpec, Volume, VolumeMount,
+    Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
+    Service as K8sService, ServicePort, ServiceSpec,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
-use kube::config::{Config, KubeConfigOptions};
 use kube::error::Error;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
@@ -37,8 +36,10 @@ use mz_orchestrator::{
     ServiceStatus,
 };
 
+pub mod secrets;
+pub mod util;
+
 const FIELD_MANAGER: &str = "environmentd";
-const SECRETS_MOUNT_PATH: &str = "/secrets";
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -54,8 +55,6 @@ pub struct KubernetesOrchestratorConfig {
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
     pub image_pull_policy: KubernetesImagePullPolicy,
-    /// The name of the secret used to store user defined secrets.
-    pub user_defined_secret: String,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -84,6 +83,7 @@ pub struct KubernetesOrchestrator {
     client: Client,
     kubernetes_namespace: String,
     config: KubernetesOrchestratorConfig,
+    secret_api: Api<Secret>,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -97,25 +97,12 @@ impl KubernetesOrchestrator {
     pub async fn new(
         config: KubernetesOrchestratorConfig,
     ) -> Result<KubernetesOrchestrator, anyhow::Error> {
-        let kubeconfig_options = KubeConfigOptions {
-            context: Some(config.context.clone()),
-            ..Default::default()
-        };
-        let kubeconfig = match Config::from_kubeconfig(&kubeconfig_options).await {
-            Ok(config) => config,
-            Err(kubeconfig_err) => match Config::from_cluster_env() {
-                Ok(config) => config,
-                Err(in_cluster_err) => {
-                    bail!("failed to infer config: in-cluster: ({in_cluster_err}), kubeconfig: ({kubeconfig_err})");
-                }
-            },
-        };
-        let kubernetes_namespace = kubeconfig.default_namespace.clone();
-        let client = Client::try_from(kubeconfig)?;
+        let (client, kubernetes_namespace) = util::create_client(config.context.clone()).await?;
         Ok(KubernetesOrchestrator {
-            client,
+            client: client.clone(),
             kubernetes_namespace,
             config,
+            secret_api: Api::default_namespaced(client),
         })
     }
 }
@@ -242,17 +229,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
-        let volume_name = "secrets-mount".to_string();
-
-        let secrets_volume = Volume {
-            name: volume_name.clone(),
-            secret: Some(SecretVolumeSource {
-                secret_name: Some(self.config.user_defined_secret.clone()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
         let hosts = (0..scale.get())
             .map(|i| {
                 format!(
@@ -288,7 +264,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             index: None,
             peers: &peers,
         });
-        args.push(format!("--secrets-path={SECRETS_MOUNT_PATH}"));
+        args.push("--secrets-reader=kubernetes".into());
+        args.push(format!(
+            "--secrets-reader-kubernetes-context={}",
+            self.config.context
+        ));
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -315,14 +295,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         limits: Some(limits),
                         ..Default::default()
                     }),
-                    volume_mounts: Some(vec![VolumeMount {
-                        mount_path: SECRETS_MOUNT_PATH.into(),
-                        name: volume_name.clone(),
-                        ..Default::default()
-                    }]),
                     ..Default::default()
                 }],
-                volumes: Some(vec![secrets_volume]),
                 node_selector: Some(node_selector),
                 service_account: self.config.service_account.clone(),
                 ..Default::default()

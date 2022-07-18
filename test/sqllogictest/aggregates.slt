@@ -182,7 +182,7 @@ Source materialize.public.agg_pk (u3):
 Query:
 %0 =
 | Get materialize.public.agg_pk (u3)
-| Map i32toi64(#1)
+| Map integer_to_bigint(#1)
 | Project (#0, #3)
 
 EOF
@@ -203,7 +203,7 @@ Source materialize.public.agg_pk (u3):
 Query:
 %0 =
 | Get materialize.public.agg_pk (u3)
-| Map i64tonumeric(#2)
+| Map bigint_to_numeric(#2)
 | Project (#0, #3)
 
 EOF

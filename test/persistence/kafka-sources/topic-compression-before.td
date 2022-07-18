@@ -28,7 +28,7 @@ $ kafka-create-topic topic=topic-compression compression=gzip
 $ kafka-ingest format=avro topic=topic-compression key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1000
 {"f1": ${kafka-ingest.iteration}} {"f2": "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"}
 
-> CREATE MATERIALIZED SOURCE topic_compression
+> CREATE SOURCE topic_compression
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-topic-compression-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;

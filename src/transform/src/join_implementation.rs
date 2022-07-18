@@ -23,7 +23,7 @@ use mz_expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use self::index_map::IndexMap;
-use crate::TransformArgs;
+use crate::{TransformArgs, TransformError};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -259,15 +259,18 @@ mod delta_queries {
 
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
+    use crate::TransformError;
+
     /// Creates a delta query plan, and any predicates that need to be lifted.
     ///
-    /// The method returns `None` if it fails to find a sufficiently pleasing plan.
+    /// The method returns `Err` if it fails to find a sufficiently pleasing plan or
+    /// if any errors occur during planning.
     pub fn plan(
         join: &MirRelationExpr,
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
-    ) -> Option<MirRelationExpr> {
+    ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
@@ -282,10 +285,12 @@ mod delta_queries {
                 // a filter gets converted into a single input join only when
                 // there are existing arrangements, without this early return,
                 // filters will always be planned as delta queries.
-                return None;
+                return Err(TransformError::Internal(String::from(
+                    "should be planned as differential plan",
+                )));
             }
 
-            // Determine a viable order for each relation, or return `None` if none found.
+            // Determine a viable order for each relation, or return `Err` if none found.
             let orders = super::optimize_orders(equivalences, available, unique_keys, input_mapper);
 
             // A viable delta query requires that, for every order,
@@ -295,7 +300,9 @@ mod delta_queries {
                 .iter()
                 .all(|o| o.iter().skip(1).all(|(c, _, _)| c.arranged))
             {
-                return None;
+                return Err(TransformError::Internal(String::from(
+                    "delta plan not viable",
+                )));
             }
 
             // Convert the order information into specific (input, keys) information.
@@ -315,12 +322,14 @@ mod delta_queries {
 
             *implementation = JoinImplementation::DeltaQuery(orders);
 
-            super::install_lifted_mfp(&mut new_join, lifted_mfp);
+            super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
             // Hooray done!
-            Some(new_join)
+            Ok(new_join)
         } else {
-            panic!("delta_queries::plan call on non-join expression.")
+            Err(TransformError::Internal(String::from(
+                "delta_queries::plan call on non-join expression",
+            )))
         }
     }
 }
@@ -329,13 +338,15 @@ mod differential {
 
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
+    use crate::TransformError;
+
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     pub fn plan(
         join: &MirRelationExpr,
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
-    ) -> Option<MirRelationExpr> {
+    ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
@@ -366,6 +377,11 @@ mod differential {
                     .find(|o| {
                         o.iter().skip(1).map(|(c, _, _)| c).min().unwrap()
                             == &max_min_characteristics
+                    })
+                    .ok_or_else(|| {
+                        TransformError::Internal(String::from(
+                            "could not find max-min characteristics",
+                        ))
                     })?
                     .into_iter()
                     .map(|(_c, k, r)| (r, k))
@@ -404,12 +420,14 @@ mod differential {
             // Install the implementation.
             *implementation = JoinImplementation::Differential((start, start_keys), order);
 
-            super::install_lifted_mfp(&mut new_join, lifted_mfp);
+            super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
             // Hooray done!
-            Some(new_join)
+            Ok(new_join)
         } else {
-            panic!("differential::plan call on non-join expression.")
+            Err(TransformError::Internal(String::from(
+                "differential::plan call on non-join expression.",
+            )))
         }
     }
 }
@@ -498,7 +516,10 @@ fn implement_arrangements<'a>(
         .project(combined_project)
 }
 
-fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
+fn install_lifted_mfp(
+    new_join: &mut MirRelationExpr,
+    mfp: MapFilterProject,
+) -> Result<(), TransformError> {
     if !mfp.is_identity() {
         let (map, filter, project) = mfp.as_map_filter_project();
         if let MirRelationExpr::Join { equivalences, .. } = new_join {
@@ -508,8 +529,7 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
                     expr.permute(&project);
                     // if column references refer to mapped expressions that have been
                     // lifted, replace the column reference with the mapped expression.
-                    #[allow(deprecated)]
-                    expr.visit_mut_pre_post_nolimit(
+                    expr.visit_mut_pre_post(
                         &mut |e| {
                             if let MirScalarExpr::Column(c) = e {
                                 if *c >= mfp.input_arity {
@@ -519,12 +539,13 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
                             None
                         },
                         &mut |_| {},
-                    );
+                    )?;
                 }
             }
         }
         *new_join = new_join.clone().map(map).filter(filter).project(project);
     }
+    Ok(())
 }
 
 fn optimize_orders(

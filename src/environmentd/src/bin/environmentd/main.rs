@@ -15,7 +15,6 @@
 use std::cmp;
 use std::env;
 use std::ffi::CStr;
-use std::fs;
 use std::iter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -30,7 +29,6 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
@@ -38,8 +36,9 @@ use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
+use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
-use mz_environmentd::{SecretsControllerConfig, TlsConfig, TlsMode};
+use mz_environmentd::{TlsConfig, TlsMode};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
@@ -52,8 +51,10 @@ use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist_client::PersistLocation;
-use mz_storage::client::connections::ConnectionContext;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::{PersistConfig, PersistLocation};
+use mz_secrets::SecretsController;
+use mz_storage::types::connections::ConnectionContext;
 
 mod sys;
 
@@ -85,106 +86,16 @@ pub static LONG_VERSION: Lazy<String> = Lazy::new(|| {
     long_version = LONG_VERSION.as_str(),
 )]
 pub struct Args {
-    /// \[DANGEROUS\] Enable unsafe features.
+    // === Special modes. ===
+    /// Enable unsafe features.
     ///
     /// Unsafe features fall into two categories:
     ///
-    ///   * In development features that are not yet ready for production use.
+    ///   * In-development features that are not yet ready for production use.
     ///   * Features useful for development and testing that would pose a
     ///     legitimate security risk if used in Materialize Cloud.
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
-
-    /// The address on which to listen for trusted SQL connections.
-    ///
-    /// Connections to this address are not subject to encryption, authentication,
-    /// or access control. Care should be taken to not expose this address to the
-    /// public internet
-    /// or other unauthorized parties.
-    #[clap(
-        long,
-        hide = true,
-        value_name = "HOST:PORT",
-        env = "MZ_INTERNAL_SQL_LISTEN_ADDR",
-        default_value = "127.0.0.1:6877"
-    )]
-    internal_sql_listen_addr: SocketAddr,
-
-    /// The address on which to listen for trusted HTTP connections.
-    ///
-    /// Connections to this address are not subject to encryption, authentication,
-    /// or access control. Care should be taken to not expose the listen address
-    /// to the public internet or other unauthorized parties.
-    #[clap(
-        long,
-        hide = true,
-        value_name = "HOST:PORT",
-        env = "MZ_INTERNAL_HTTP_LISTEN_ADDR",
-        default_value = "127.0.0.1:6878"
-    )]
-    internal_http_listen_addr: SocketAddr,
-
-    // === Platform options. ===
-    /// The service orchestrator implementation to use.
-    #[structopt(long, default_value = "process", arg_enum)]
-    orchestrator: OrchestratorKind,
-    /// Labels to apply to all services created by the orchestrator in the form
-    /// `KEY=VALUE`.
-    #[structopt(long, hide = true)]
-    orchestrator_service_label: Vec<KeyValueArg<String, String>>,
-    /// Node selector to apply to all services created by the orchestrator in
-    /// the form `KEY=VALUE`.
-    #[structopt(long, hide = true)]
-    orchestrator_service_node_selector: Vec<KeyValueArg<String, String>>,
-    #[structopt(long)]
-    kubernetes_service_account: Option<String>,
-    /// The Kubernetes context to use with the Kubernetes orchestrator.
-    ///
-    /// This defaults to `minikube` to prevent disaster (e.g., connecting to a
-    /// production cluster that happens to be the active Kubernetes context.)
-    #[structopt(long, hide = true, default_value = "minikube")]
-    kubernetes_context: String,
-    /// The name of this pod
-    #[clap(
-        long,
-        hide = true,
-        env = "POD_NAME",
-        required_if_eq("orchestrator", "kubernetes")
-    )]
-    pod_name: Option<String>,
-    /// The name of the Kubernetes secret object to use for storing user secrets
-    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
-    user_defined_secret: Option<String>,
-    /// The mount location of the Kubernetes secret object to use for storing user secrets
-    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
-    user_defined_secret_mount_path: Option<String>,
-    /// The storaged image reference to use.
-    #[structopt(
-        long,
-        hide = true,
-        required_if_eq("orchestrator", "kubernetes"),
-        default_value_if("orchestrator", Some("process"), Some("storaged"))
-    )]
-    storaged_image: Option<String>,
-    /// The computed image reference to use.
-    #[structopt(
-        long,
-        hide = true,
-        required_if_eq("orchestrator", "kubernetes"),
-        default_value_if("orchestrator", Some("process"), Some("computed"))
-    )]
-    computed_image: Option<String>,
-    /// The image pull policy to use for services created by the Kubernetes
-    /// orchestrator.
-    #[structopt(long, default_value = "always", arg_enum)]
-    kubernetes_image_pull_policy: KubernetesImagePullPolicy,
-    /// Base port for spawning various services
-    #[structopt(long, default_value = "2100")]
-    base_service_port: u16,
-
-    // === Tracing options. ===
-    #[clap(flatten)]
-    tracing: TracingCliArgs,
 
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
@@ -194,7 +105,7 @@ pub struct Args {
     /// options.
     #[clap(
         long,
-        env = "MZ_SQL_LISTEN_ADDR",
+        env = "SQL_LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:6875"
     )]
@@ -206,11 +117,40 @@ pub struct Args {
     /// options.
     #[clap(
         long,
-        env = "MZ_HTTP_LISTEN_ADDR",
+        env = "HTTP_LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:6876"
     )]
     http_listen_addr: SocketAddr,
+    /// The address on which to listen for trusted SQL connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose this address to the
+    /// public internet
+    /// or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_SQL_LISTEN_ADDR",
+        default_value = "127.0.0.1:6877"
+    )]
+    internal_sql_listen_addr: SocketAddr,
+    /// The address on which to listen for trusted HTTP connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose the listen address
+    /// to the public internet or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_HTTP_LISTEN_ADDR",
+        default_value = "127.0.0.1:6878"
+    )]
+    internal_http_listen_addr: SocketAddr,
+    /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
+    /// specified origin.
+    #[structopt(long, env = "CORS_ALLOWED_ORIGIN")]
+    cors_allowed_origin: Vec<HeaderValue>,
     /// How stringently to demand TLS authentication and encryption.
     ///
     /// If set to "disable", then environmentd rejects HTTP and PostgreSQL
@@ -245,6 +185,7 @@ pub struct Args {
         value_name = "MODE",
     )]
     tls_mode: String,
+    /// The certificate authority for TLS connections.
     #[clap(
         long,
         env = "TLS_CA",
@@ -271,81 +212,142 @@ pub struct Args {
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,
-    /// Specifies the tenant id when authenticating users. Must be a valid UUID.
+    /// Enables Frontegg authentication for the specified tenant ID.
     #[clap(
         long,
         env = "FRONTEGG_TENANT",
         requires_all = &["frontegg-jwk", "frontegg-api-token-url"],
-        hide = true
+        value_name = "UUID",
     )]
     frontegg_tenant: Option<Uuid>,
-    /// JWK used to validate JWTs during user authentication as a PEM public
+    /// JWK used to validate JWTs during Frontegg authentication as a PEM public
     /// key. Can optionally be base64 encoded with the URL-safe alphabet.
-    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant", hide = true)]
+    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant")]
     frontegg_jwk: Option<String>,
-    /// The full URL (including path) to the api-token endpoint.
-    #[clap(
-        long,
-        env = "FRONTEGG_API_TOKEN_URL",
-        requires = "frontegg-tenant",
-        hide = true
-    )]
+    /// The full URL (including path) to the Frontegg api-token endpoint.
+    #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg-tenant")]
     frontegg_api_token_url: Option<String>,
-    /// A common string prefix that is expected to be present at the beginning of passwords.
-    #[clap(
-        long,
-        env = "FRONTEGG_PASSWORD_PREFIX",
-        requires = "frontegg-tenant",
-        hide = true
-    )]
+    /// A common string prefix that is expected to be present at the beginning
+    /// of all Frontegg passwords.
+    #[clap(long, env = "FRONTEGG_PASSWORD_PREFIX", requires = "frontegg-tenant")]
     frontegg_password_prefix: Option<String>,
-    /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
-    /// specified origin.
-    #[structopt(long, env = "CORS_ALLOWED_ORIGIN", hide = true)]
-    cors_allowed_origin: Vec<HeaderValue>,
 
-    // === Storage options. ===
-    /// Where to store data.
-    #[clap(
-        short = 'D',
+    // === Orchestrator options. ===
+    /// The service orchestrator implementation to use.
+    #[structopt(long, default_value = "process", arg_enum)]
+    orchestrator: OrchestratorKind,
+    /// Labels to apply to all services created by the Kubernetes orchestrator
+    /// in the form `KEY=VALUE`.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_LABEL")]
+    orchestrator_kubernetes_service_label: Vec<KeyValueArg<String, String>>,
+    /// Node selector to apply to all services created by the Kubernetes
+    /// orchestrator in the form `KEY=VALUE`.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_NODE_SELECTOR")]
+    orchestrator_kubernetes_service_node_selector: Vec<KeyValueArg<String, String>>,
+    /// The name of a service account to apply to all services created by the
+    /// Kubernetes orchestrator.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_ACCOUNT")]
+    orchestrator_kubernetes_service_account: Option<String>,
+    /// The Kubernetes context to use with the Kubernetes orchestrator.
+    ///
+    /// This defaults to `minikube` to prevent disaster (e.g., connecting to a
+    /// production cluster that happens to be the active Kubernetes context.)
+    #[structopt(
         long,
-        env = "DATA_DIRECTORY",
+        env = "ORCHESTRATOR_KUBERNETES_CONTEXT",
+        default_value = "minikube"
+    )]
+    orchestrator_kubernetes_context: String,
+    /// The image pull policy to use for services created by the Kubernetes
+    /// orchestrator.
+    #[structopt(
+        long,
+        env = "ORCHESTRATOR_KUBERNETES_IMAGE_PULL_POLICY",
+        default_value = "always",
+        arg_enum
+    )]
+    orchestrator_kubernetes_image_pull_policy: KubernetesImagePullPolicy,
+    /// Prefix commands issued by the process orchestrator with the supplied
+    /// value.
+    #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
+    orchestrator_process_wrapper: Option<String>,
+    /// Base port for services spawned by the process orchestrator.
+    #[structopt(
+        long,
+        env = "ORCHESTRATOR_PROCESS_BASE_SERVICE_PORT",
+        default_value = "2100"
+    )]
+    orchestrator_process_base_service_port: u16,
+    /// Where the process orchestrator should store its metadata.
+    #[clap(
+        long,
+        env = "ORCHESTRATOR_PROCESSDATA_DIRECTORY",
         value_name = "PATH",
         default_value = "mzdata"
     )]
-    data_directory: PathBuf,
+    orchestrator_process_data_directory: PathBuf,
+
+    // === Storage options. ===
     /// Where the persist library should store its blob data.
-    ///
-    /// Defaults to the `persist/blob` in the data directory.
     #[clap(long, env = "PERSIST_BLOB_URL")]
-    persist_blob_url: Option<Url>,
+    persist_blob_url: Url,
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
     persist_consensus_url: Url,
-    /// Postgres catalog stash connection string.
-    #[clap(long, env = "CATALOG_POSTGRES_STASH", value_name = "POSTGRES_URL")]
-    catalog_postgres_stash: String,
-    /// Postgres storage stash connection string.
-    #[clap(long, env = "STORAGE_POSTGRES_STASH", value_name = "POSTGRES_URL")]
-    storage_postgres_stash: String,
+    /// The PostgreSQL URL for the storage stash.
+    #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
+    storage_stash_url: String,
+    /// The storaged image reference to use.
+    #[structopt(
+        long,
+        required_if_eq("orchestrator", "kubernetes"),
+        default_value_if("orchestrator", Some("process"), Some("storaged"))
+    )]
+    storaged_image: Option<String>,
 
-    // === AWS options. ===
+    // === Compute options. ===
+    /// The computed image reference to use.
+    #[structopt(
+        long,
+        required_if_eq("orchestrator", "kubernetes"),
+        default_value_if("orchestrator", Some("process"), Some("computed"))
+    )]
+    computed_image: Option<String>,
+
+    // === Adapter options. ===
+    /// The PostgreSQL URL for the adapter stash.
+    #[clap(long, env = "ADAPTER_STASH_URL", value_name = "POSTGRES_URL")]
+    adapter_stash_url: String,
+
+    // === Cloud options. ===
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, value_name = "ID")]
+    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID")]
     aws_external_id_prefix: Option<String>,
-
-    #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
+    /// A map from size name to resource allocations for cluster replicas.
+    #[clap(
+        long,
+        env = "CLUSTER_REPLICA_SIZES",
+        requires = "bootstrap-default-cluster-replica-size"
+    )]
     cluster_replica_sizes: Option<String>,
+    /// The size of the default cluster replica if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
+        default_value = "1"
+    )]
+    bootstrap_default_cluster_replica_size: String,
 
-    /// Availability zones compute resources may be deployed in.
+    /// Availability zones in which storage and compute resources may be
+    /// deployed.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
     availability_zone: Vec<String>,
 
-    /// Prefix commands issued by the process orchestrator with the supplied value.
-    #[clap(long, env = "PROCESS_ORCHESTRATOR_WRAPPER")]
-    process_orchestrator_wrapper: Option<String>,
+    // === Tracing options. ===
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -478,36 +480,35 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         ])
     };
 
-    // Configure storage.
-    fs::create_dir_all(&args.data_directory)
-        .with_context(|| format!("creating data directory: {}", args.data_directory.display()))?;
-    let catalog_postgres_stash = args.catalog_postgres_stash;
-
     // Configure controller.
-    let cwd = env::current_dir().context("retrieving current working directory")?;
-    let orchestrator: Box<dyn Orchestrator> = match args.orchestrator {
-        OrchestratorKind::Kubernetes => Box::new(
-            runtime
-                .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
-                    context: args.kubernetes_context.clone(),
-                    service_labels: args
-                        .orchestrator_service_label
-                        .into_iter()
-                        .map(|l| (l.key, l.value))
-                        .collect(),
-                    service_node_selector: args
-                        .orchestrator_service_node_selector
-                        .into_iter()
-                        .map(|l| (l.key, l.value))
-                        .collect(),
-                    service_account: args.kubernetes_service_account,
-                    image_pull_policy: args.kubernetes_image_pull_policy,
-                    user_defined_secret: args.user_defined_secret.clone().unwrap_or_default(),
-                }))
-                .context("creating kubernetes orchestrator")?,
-        ),
+    let (orchestrator, secrets_controller) = match args.orchestrator {
+        OrchestratorKind::Kubernetes => {
+            let orchestrator = Arc::new(
+                runtime
+                    .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
+                        context: args.orchestrator_kubernetes_context.clone(),
+                        service_labels: args
+                            .orchestrator_kubernetes_service_label
+                            .into_iter()
+                            .map(|l| (l.key, l.value))
+                            .collect(),
+                        service_node_selector: args
+                            .orchestrator_kubernetes_service_node_selector
+                            .into_iter()
+                            .map(|l| (l.key, l.value))
+                            .collect(),
+                        service_account: args.orchestrator_kubernetes_service_account,
+                        image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
+                    }))
+                    .context("creating kubernetes orchestrator")?,
+            );
+            (
+                Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
+                orchestrator as Arc<dyn SecretsController>,
+            )
+        }
         OrchestratorKind::Process => {
-            Box::new(
+            let orchestrator = Arc::new(
                 runtime
                     .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
                         // Look for binaries in the same directory as the
@@ -517,22 +518,29 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         // binaries.
                         image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                         port_allocator: Arc::new(PortAllocator::new(
-                            args.base_service_port,
-                            args.base_service_port
+                            args.orchestrator_process_base_service_port,
+                            args.orchestrator_process_base_service_port
                                 .checked_add(1000)
                                 .expect("Port number overflow, base-service-port too large."),
                         )),
                         suppress_output: false,
-                        data_dir: args.data_directory.clone(),
+                        data_dir: args.orchestrator_process_data_directory.clone(),
                         command_wrapper: args
-                            .process_orchestrator_wrapper
+                            .orchestrator_process_wrapper
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
                     }))
                     .context("creating process orchestrator")?,
+            );
+            (
+                Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
+                orchestrator as Arc<dyn SecretsController>,
             )
         }
     };
-    let persist_clients = PersistClientCache::new(&metrics_registry);
+    let secrets_reader = secrets_controller.reader();
+    let now = SYSTEM_TIME.clone();
+    let persist_clients =
+        PersistClientCache::new(PersistConfig::new(now.clone()), &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let orchestrator = Arc::new(TracingOrchestrator::new(
         orchestrator,
@@ -540,21 +548,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         otel_enable_callback.clone(),
     ));
     let controller = ControllerConfig {
+        build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
         persist_location: PersistLocation {
-            blob_uri: match args.persist_blob_url {
-                // TODO: need to handle non-UTF-8 paths here.
-                None => format!(
-                    "file://{}/{}/persist/blob",
-                    cwd.display(),
-                    args.data_directory.display()
-                ),
-                Some(blob_url) => blob_url.to_string(),
-            },
+            blob_uri: args.persist_blob_url.to_string(),
             consensus_uri: args.persist_consensus_url.to_string(),
         },
         persist_clients,
-        storage_stash_url: args.storage_postgres_stash,
+        storage_stash_url: args.storage_stash_url,
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),
     };
@@ -628,30 +629,20 @@ max log level: {max_log_level}",
 
     sys::adjust_rlimits();
 
-    let replica_sizes = match args.cluster_replica_sizes {
+    let replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
         None => Default::default(),
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
+    if !replica_sizes
+        .0
+        .contains_key(&args.bootstrap_default_cluster_replica_size)
+    {
+        bail!("--bootstrap-default-cluster-replica-size must name a size in the cluster replica size map");
+    }
 
     if !args.availability_zone.iter().all_unique() {
         bail!("--availability-zone values must be unique");
     }
-
-    let secrets_path = match args.orchestrator {
-        OrchestratorKind::Kubernetes => {
-            PathBuf::from(args.user_defined_secret_mount_path.unwrap_or_default())
-        }
-        OrchestratorKind::Process => args.data_directory.join("secrets"),
-    };
-    let secrets_controller = match args.orchestrator {
-        OrchestratorKind::Kubernetes => SecretsControllerConfig::Kubernetes {
-            context: args.kubernetes_context,
-            user_defined_secret: args.user_defined_secret.unwrap_or_default(),
-            user_defined_secret_mount_path: secrets_path.clone(),
-            refresh_pod_name: args.pod_name.unwrap_or_default(),
-        },
-        OrchestratorKind::Process => SecretsControllerConfig::LocalFileSystem(secrets_path.clone()),
-    };
 
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         sql_listen_addr: args.sql_listen_addr,
@@ -661,18 +652,19 @@ max log level: {max_log_level}",
         tls,
         frontegg,
         cors_allowed_origin,
-        catalog_postgres_stash,
+        adapter_stash_url: args.adapter_stash_url,
         controller,
         secrets_controller,
         unsafe_mode: args.unsafe_mode,
         metrics_registry,
-        now: SYSTEM_TIME.clone(),
+        now,
         replica_sizes,
+        bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         availability_zones: args.availability_zone,
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id_prefix,
-            secrets_path,
+            secrets_reader,
         ),
         otel_enable_callback,
     }))?;

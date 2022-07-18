@@ -130,7 +130,7 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM
 ----
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %1 =
@@ -147,7 +147,7 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM
 
 %3 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0)), !(isnull(#1))
+| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
 | ArrangeBy (#1)
 
 %4 =
@@ -186,7 +186,7 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (S
 
 %4 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0)), !(isnull(#1))
+| Filter (#0) IS NOT NULL, (#1) IS NOT NULL
 | ArrangeBy (#1)
 
 %5 =
@@ -209,7 +209,7 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FR
 
 %1 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 
 %2 =
@@ -671,7 +671,7 @@ SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
 | | implementation = DeltaQuery
 | |   delta %0 %0.(#0)
 | |   delta %0 %0.(#0)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #1, #3)
 
 %2 =

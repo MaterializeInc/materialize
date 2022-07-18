@@ -11,6 +11,13 @@
 # Test the BOOLEAN data type
 #
 
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
+
 
 # Insert data pre-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -27,8 +34,8 @@ INSERT INTO t1 VALUES ('true'),('false');
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
 > SELECT COUNT(*) > 0 FROM mz_source;

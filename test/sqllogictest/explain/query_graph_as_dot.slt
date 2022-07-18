@@ -40,7 +40,7 @@ digraph G {
     node [ shape = box ]
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| !(Q2.C0) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| NOT(Q2.C0) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -84,7 +84,7 @@ digraph G {
     node [ shape = box ]
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer)| 1: Q0.C1 (integer?)| !(isnull(Q0.C0)) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer)| 1: Q0.C1 (integer?)| (Q0.C0) IS NOT NULL }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -115,7 +115,7 @@ digraph G {
     node [ shape = box ]
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer)| 1: Q0.C1 (integer?)| !(isnull(Q0.C0)) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer)| 1: Q0.C1 (integer?)| (Q0.C0) IS NOT NULL }" ]
         {
             rank = same
             node [ shape = circle ]

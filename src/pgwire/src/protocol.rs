@@ -1001,7 +1001,11 @@ where
     }
 
     // Converts a RowsFuture to a stream while also checking for connection close.
-    async fn row_future_to_stream(&self, rows: RowsFuture) -> Result<RowBatchStream, io::Error> {
+    fn row_future_to_stream(
+        &self,
+        parent: &tracing::Span,
+        rows: RowsFuture,
+    ) -> impl Future<Output = Result<RowBatchStream, io::Error>> + '_ {
         let closed = async {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1022,16 +1026,20 @@ where
         // Do not include self.adapter_client.canceled() here because cancel messages
         // will propagate through the PeekResponse. select is safe to use because if
         // close finishes, rows is canceled, which is the intended behavior.
-        tokio::select! {
-            err = closed => {
-                Err(err)
-            },
-            rows = rows => {
-                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                tx.send(rows).expect("send must succeed");
-                Ok(rx)
+        let span = tracing::debug_span!(parent: parent, "row_future_to_stream");
+        async {
+            tokio::select! {
+                err = closed => {
+                    Err(err)
+                },
+                rows = rows => {
+                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                    tx.send(rows).expect("send must succeed");
+                    Ok(rx)
+                }
             }
         }
+        .instrument(span)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1182,7 +1190,7 @@ where
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(self.row_future_to_stream(rx).await?),
+                    InProgressRows::new(self.row_future_to_stream(&span, rx).await?),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1268,11 +1276,7 @@ where
                     ExecuteResponse::SendingRows {
                         future: rows_rx,
                         span,
-                    } => {
-                        let span = tracing::debug_span!(parent: &span, "send_execute_response");
-
-                        self.row_future_to_stream(rows_rx).instrument(span).await?
-                    }
+                    } => self.row_future_to_stream(&span, rows_rx).await?,
                     _ => {
                         return self
                             .error(ErrorResponse::error(

@@ -21,7 +21,7 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${first-writer-sche
 $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-schema} timestamp=1 publish=true
 {"a": 2, "b": 3, "c": {"long": 4}}
 
-> CREATE MATERIALIZED SOURCE schema_strategy_test_inline
+> CREATE SOURCE schema_strategy_test_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   VALUE STRATEGY INLINE '${reader-schema}'
@@ -33,7 +33,7 @@ a
 0
 2
 
-> CREATE MATERIALIZED SOURCE schema_strategy_test_id
+> CREATE SOURCE schema_strategy_test_id
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   VALUE STRATEGY ID 1
@@ -45,7 +45,7 @@ a b
 0 1
 2 3
 
-> CREATE MATERIALIZED SOURCE schema_strategy_test_id2
+> CREATE SOURCE schema_strategy_test_id2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   VALUE STRATEGY ID 2
@@ -57,7 +57,7 @@ a b c
 0 1 <null>
 2 3 4
 
-> CREATE MATERIALIZED SOURCE schema_strategy_test_latest
+> CREATE SOURCE schema_strategy_test_latest
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   VALUE STRATEGY LATEST

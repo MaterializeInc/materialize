@@ -19,7 +19,7 @@ INSERT INTO update_pk_values VALUES (2, 20);
 
 $ schema-registry-wait-schema schema=postgres.public.update_pk_values-value
 
-> CREATE MATERIALIZED SOURCE update_pk_values
+> CREATE SOURCE update_pk_values
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.update_pk_values'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

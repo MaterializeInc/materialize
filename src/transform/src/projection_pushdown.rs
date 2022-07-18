@@ -35,7 +35,7 @@ use std::collections::{BTreeSet, HashMap};
 use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
-use crate::TransformArgs;
+use crate::{TransformArgs, TransformError};
 
 /// Pushes projections down through other operators.
 #[derive(Debug)]
@@ -52,7 +52,7 @@ impl crate::Transform for ProjectionPushdown {
             relation,
             &(0..relation.arity()).collect(),
             &mut HashMap::new(),
-        );
+        )?;
         Ok(())
     }
 }
@@ -69,7 +69,7 @@ impl ProjectionPushdown {
         relation: &mut MirRelationExpr,
         desired_projection: &Vec<usize>,
         gets: &mut HashMap<Id, BTreeSet<usize>>,
-    ) {
+    ) -> Result<(), TransformError> {
         // First, try to push the desired projection down through `relation`.
         // In the process `relation` is transformed to a `MirRelationExpr`
         // equivalent to `relation.project(actual_projection)`.
@@ -97,18 +97,18 @@ impl ProjectionPushdown {
                 // and pushes the sorted union of the requirements at its value.
                 let id = Id::Local(*id);
                 let prior = gets.insert(id, BTreeSet::new());
-                self.action(body, desired_projection, gets);
+                self.action(body, desired_projection, gets)?;
                 let desired_value_projection = gets.remove(&id).unwrap();
                 if let Some(prior) = prior {
                     gets.insert(id, prior);
                 }
                 let desired_value_projection =
                     desired_value_projection.into_iter().collect::<Vec<_>>();
-                self.action(value, &desired_value_projection, gets);
+                self.action(value, &desired_value_projection, gets)?;
                 self.update_projection_around_get(
                     body,
                     &HashMap::from_iter(std::iter::once((id, desired_value_projection))),
-                );
+                )?;
                 desired_projection.clone()
             }
             MirRelationExpr::Join {
@@ -135,7 +135,7 @@ impl ProjectionPushdown {
                 for (input, inp_columns) in inputs.iter_mut().zip(new_columns) {
                     let mut inp_columns = inp_columns.into_iter().collect::<Vec<_>>();
                     inp_columns.sort();
-                    self.action(input, &inp_columns, gets);
+                    self.action(input, &inp_columns, gets)?;
                 }
 
                 reverse_permute(
@@ -158,7 +158,7 @@ impl ProjectionPushdown {
 
                 reverse_permute(exprs.iter_mut(), columns_to_pushdown.iter());
                 let columns_to_pushdown = columns_to_pushdown.into_iter().collect::<Vec<_>>();
-                self.action(input, &columns_to_pushdown, gets);
+                self.action(input, &columns_to_pushdown, gets)?;
                 // The actual projection always has the newly-created columns at
                 // the end.
                 let mut actual_projection = columns_to_pushdown;
@@ -175,7 +175,7 @@ impl ProjectionPushdown {
                 }
                 reverse_permute(predicates.iter_mut(), columns_to_pushdown.iter());
                 let columns_to_pushdown = columns_to_pushdown.into_iter().collect::<Vec<_>>();
-                self.action(input, &columns_to_pushdown, gets);
+                self.action(input, &columns_to_pushdown, gets)?;
                 columns_to_pushdown
             }
             MirRelationExpr::Project { input, outputs } => {
@@ -185,13 +185,13 @@ impl ProjectionPushdown {
                 let unique_outputs = outputs.iter().map(|i| *i).collect::<BTreeSet<_>>();
                 if outputs.len() == unique_outputs.len() {
                     // Push down the project as is.
-                    self.action(input, &outputs, gets);
+                    self.action(input, &outputs, gets)?;
                     *relation = input.take_dangerous();
                 } else {
                     // Push down only the unique elems in `outputs`.
                     let columns_to_pushdown = unique_outputs.into_iter().collect::<Vec<_>>();
                     reverse_permute_columns(outputs.iter_mut(), columns_to_pushdown.iter());
-                    self.action(input, &columns_to_pushdown, gets);
+                    self.action(input, &columns_to_pushdown, gets)?;
                 }
 
                 desired_projection.clone()
@@ -224,7 +224,7 @@ impl ProjectionPushdown {
                         .map(|c| *c)
                         .collect(),
                     gets,
-                );
+                )?;
                 actual_projection.into_iter().collect()
             }
             MirRelationExpr::Reduce {
@@ -261,7 +261,7 @@ impl ProjectionPushdown {
                     input,
                     &columns_to_pushdown.into_iter().collect::<Vec<_>>(),
                     gets,
-                );
+                )?;
                 let mut actual_projection =
                     desired_projection.iter().cloned().collect::<BTreeSet<_>>();
                 actual_projection.extend(0..group_key.len());
@@ -293,17 +293,17 @@ impl ProjectionPushdown {
                         .chain(order_key.iter_mut().map(|o| &mut o.column)),
                     columns_to_pushdown.iter(),
                 );
-                self.action(input, &columns_to_pushdown, gets);
+                self.action(input, &columns_to_pushdown, gets)?;
                 columns_to_pushdown
             }
             MirRelationExpr::Negate { input } => {
-                self.action(input, desired_projection, gets);
+                self.action(input, desired_projection, gets)?;
                 desired_projection.clone()
             }
             MirRelationExpr::Union { base, inputs } => {
-                self.action(base, desired_projection, gets);
+                self.action(base, desired_projection, gets)?;
                 for input in inputs {
-                    self.action(input, desired_projection, gets);
+                    self.action(input, desired_projection, gets)?;
                 }
                 desired_projection.clone()
             }
@@ -312,7 +312,7 @@ impl ProjectionPushdown {
                 // has the potential to change how it thresholds counts. This could
                 // be improved with reasoning about distinctness or non-negativity.
                 let arity = input.arity();
-                self.action(input, &(0..arity).collect(), gets);
+                self.action(input, &(0..arity).collect(), gets)?;
                 (0..arity).collect()
             }
             MirRelationExpr::ArrangeBy { input, keys: _ } => {
@@ -320,7 +320,7 @@ impl ProjectionPushdown {
                 // TODO: how do we handle key sets containing column references
                 // that are not demanded upstream?
                 let arity = input.arity();
-                self.action(input, &(0..arity).collect(), gets);
+                self.action(input, &(0..arity).collect(), gets)?;
                 (0..arity).collect()
             }
         };
@@ -330,6 +330,7 @@ impl ProjectionPushdown {
             reverse_permute_columns(projection_to_add.iter_mut(), actual_projection.iter());
             *relation = relation.take_dangerous().project(projection_to_add);
         }
+        Ok(())
     }
 
     /// When we push the `desired_value_projection` at `value`,
@@ -339,9 +340,8 @@ impl ProjectionPushdown {
         &self,
         relation: &mut MirRelationExpr,
         applied_projections: &HashMap<Id, Vec<usize>>,
-    ) {
-        #[allow(deprecated)]
-        relation.visit_mut_pre_nolimit(&mut |e| {
+    ) -> Result<(), TransformError> {
+        relation.visit_mut_pre(&mut |e| {
             if let MirRelationExpr::Project { input, outputs } = e {
                 if let MirRelationExpr::Get { id: inner_id, .. } = &**input {
                     if let Some(new_projection) = applied_projections.get(inner_id) {
@@ -358,7 +358,8 @@ impl ProjectionPushdown {
             // `Get(get_id)` are required. Thus, the columns returned by
             // `Get(get_id)` will not have changed, so no action
             // is necessary.
-        })
+        })?;
+        Ok(())
     }
 }
 

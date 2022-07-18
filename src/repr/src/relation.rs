@@ -481,6 +481,15 @@ impl RelationDesc {
         &self.names[i]
     }
 
+    /// Mutably gets the name of the `i`th column.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i` is not a valid column index.
+    pub fn get_name_mut(&mut self, i: usize) -> &mut ColumnName {
+        &mut self.names[i]
+    }
+
     /// Gets the name of the `i`th column if that column name is unambiguous.
     ///
     /// If at least one other column has the same name as the `i`th column,

@@ -138,6 +138,7 @@ Having
 Header
 Headers
 Hold
+Host
 Hour
 Hours
 Id
@@ -189,6 +190,7 @@ Message
 Metadata
 Minute
 Minutes
+Mode
 Month
 Months
 Names
@@ -223,6 +225,7 @@ Password
 Physical
 Plan
 Plans
+Port
 Position
 Postgres
 Preceding
@@ -284,6 +287,7 @@ Some
 Source
 Sources
 Sqs
+Ssh
 Ssl
 Start
 Stdin
@@ -312,6 +316,7 @@ Trailing
 Transaction
 Trim
 True
+Tunnel
 Type
 Typed
 Types

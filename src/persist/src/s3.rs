@@ -21,7 +21,10 @@ use aws_config::sts::AssumeRoleProvider;
 use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
+use aws_smithy_http::endpoint::Endpoint;
 use aws_types::credentials::SharedCredentialsProvider;
+use aws_types::region::Region;
+use aws_types::Credentials;
 use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
 use mz_ore::task::RuntimeExt;
@@ -54,17 +57,41 @@ impl S3BlobConfig {
         bucket: String,
         prefix: String,
         role_arn: Option<String>,
+        endpoint: Option<String>,
+        region: Option<String>,
+        credentials: Option<(String, String)>,
     ) -> Result<Self, Error> {
-        let mut loader = aws_config::from_env();
+        let region = match region {
+            Some(region_name) => Some(Region::new(region_name)),
+            None => region::default_provider().region().await,
+        };
+
+        let mut loader = aws_config::from_env().region(region.clone());
+
         if let Some(role_arn) = role_arn {
             let mut role_provider = AssumeRoleProvider::builder(role_arn).session_name("persist");
-            if let Some(region) = region::default_provider().region().await {
+            if let Some(region) = region {
                 role_provider = role_provider.region(region);
             }
             let default_provider =
                 SharedCredentialsProvider::new(credentials::default_provider().await);
             loader = loader.credentials_provider(role_provider.build(default_provider));
         }
+
+        if let Some((access_key_id, secret_access_key)) = credentials {
+            loader = loader.credentials_provider(Credentials::from_keys(
+                access_key_id,
+                secret_access_key,
+                None,
+            ));
+        }
+
+        if let Some(endpoint) = endpoint {
+            loader = loader.endpoint_resolver(Endpoint::immutable(
+                endpoint.parse().expect("valid S3 endpoint URI"),
+            ))
+        }
+
         let client = aws_sdk_s3::Client::new(&loader.load().await);
         Ok(S3BlobConfig {
             client,
@@ -125,7 +152,7 @@ impl S3BlobConfig {
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
         let role_arn = None;
-        let config = S3BlobConfig::new(bucket, prefix, role_arn).await?;
+        let config = S3BlobConfig::new(bucket, prefix, role_arn, None, None, None).await?;
         Ok(Some(config))
     }
 
@@ -163,8 +190,7 @@ impl S3Blob {
         // Connect before returning success. We don't particularly care about
         // what's stored in this blob (nothing writes to it, so presumably it's
         // empty) just that we were able and allowed to fetch it.
-        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
-        let _ = ret.get(deadline, "HEALTH_CHECK").await?;
+        let _ = ret.get("HEALTH_CHECK").await?;
         Ok(ret)
     }
 
@@ -175,7 +201,7 @@ impl S3Blob {
 
 #[async_trait]
 impl Blob for S3Blob {
-    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -393,7 +419,7 @@ impl Blob for S3Blob {
         Ok(Some(val))
     }
 
-    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
         let mut ret = vec![];
         let mut continuation_token = None;
         let prefix = self.get_path("");
@@ -434,13 +460,7 @@ impl Blob for S3Blob {
         Ok(ret)
     }
 
-    async fn set(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        value: Bytes,
-        _atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
         // NB: S3 is always atomic, so we're free to ignore the atomic param.
         let value_len = value.len();
         if self
@@ -456,7 +476,7 @@ impl Blob for S3Blob {
         }
     }
 
-    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
         let path = self.get_path(key);
         self.client
             .delete_object()
@@ -814,11 +834,7 @@ mod tests {
         {
             let blob = S3Blob::open(config_multipart).await?;
             blob.set_multi_part("multipart", "foobar".into()).await?;
-            let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
-            assert_eq!(
-                blob.get(deadline, "multipart").await?,
-                Some("foobar".into())
-            );
+            assert_eq!(blob.get("multipart").await?, Some("foobar".into()));
         }
 
         Ok(())

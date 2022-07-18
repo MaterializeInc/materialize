@@ -127,13 +127,13 @@ Source materialize.public.data (UID):
 Query:
 %0 =
 | Get materialize.public.data (UID)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.data (UID)
-| Filter (#3 = 4), !(isnull(#1))
+| Filter (#3 = 4), (#1) IS NOT NULL
 | Project (#1)
 
 %2 =
@@ -161,13 +161,13 @@ Source materialize.public.data (UID):
 Query:
 %0 =
 | Get materialize.public.data (UID)
-| Filter (#3 = 4), !(isnull(#0))
+| Filter (#3 = 4), (#0) IS NOT NULL
 | Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.data (UID)
-| Filter (#3 = 4), !(isnull(#1))
+| Filter (#3 = 4), (#1) IS NOT NULL
 | Project (#0, #1)
 
 %2 =
@@ -185,13 +185,13 @@ Query:
 
 ? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 | Project (#0, #2)
 
 Query:
 %0 = Let l0 =
 | Get materialize.public.data (UID)
-| Filter !(isnull(#0))
+| Filter (#0) IS NOT NULL
 
 %1 =
 | Get %0 (l0)
@@ -225,25 +225,23 @@ Source materialize.public.data (UID):
 | Project (#0..=#2)
 
 Query:
-%0 = Let l0 =
+%0 =
 | Get materialize.public.data (UID)
 | Filter (#0 = 1)
-
-%1 =
-| Get %0 (l0)
 | Project (#1)
 | Reduce group=()
 | | agg sum(#0)
 | Map 1
 | Project (#1, #0)
 
-%2 =
-| Get %0 (l0)
-| Map i64tonumeric((1 + #2))
+%1 =
+| Get materialize.public.data (UID)
+| Map bigint_to_numeric((1 + #2))
+| Filter (#0 = 1)
 | Project (#0, #4)
 
-%3 =
-| Union %1 %2
+%2 =
+| Union %0 %1
 
 > SELECT * FROM mv
 1 3
@@ -271,7 +269,7 @@ Source materialize.public.data (UID):
 | Project (#0, #2)
 
 Source materialize.public.data2 (UID):
-| Filter isnull(#3)
+| Filter (#3) IS NULL
 | Project (#0, #2, #3)
 
 Query:
@@ -281,7 +279,7 @@ Query:
 
 %1 =
 | Get materialize.public.data2 (UID)
-| Filter isnull(#3)
+| Filter (#3) IS NULL
 | Project (#0, #2)
 | Negate
 

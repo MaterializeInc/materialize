@@ -13,7 +13,7 @@ import "persist/src/persist.proto";
 import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
-import "storage/src/client.proto";
+import "storage/src/protocol/client.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -32,7 +32,7 @@ message ProtoComputeResponse {
     }
 
     oneof kind {
-        mz_storage.client.ProtoFrontierUppersKind frontier_uppers = 1;
+        mz_storage.protocol.client.ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoPeekResponseKind peek_response = 2;
         ProtoTailResponseKind tail_response = 3;
     }

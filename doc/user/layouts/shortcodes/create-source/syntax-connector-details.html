@@ -3,7 +3,6 @@
 
 Field | Use
 ------|-----
-**MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. For more information, see [Key Concepts: Materialized sources](/overview/key-concepts/#materialized-sources).
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
 _col&lowbar;name_ | Override default column name with the provided [identifier](../../identifiers). If used, a _col&lowbar;name_ must be provided for each column in the created source.
 {{ partial (printf "create-source/connector/%s/syntax" $connector ) . -}}

@@ -61,7 +61,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "f64toi16"]
+    #[sqlname = "double_to_smallint"]
     fn cast_float64_to_int16(a: f64) -> Result<i16, EvalError> {
         let f = round_float64(a);
         if (f >= (i16::MIN as f64)) && (f < -(i16::MIN as f64)) {
@@ -73,7 +73,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "f64toi32"]
+    #[sqlname = "double_to_integer"]
     fn cast_float64_to_int32(a: f64) -> Result<i32, EvalError> {
         let f = round_float64(a);
         // This condition is delicate because i32::MIN can be represented exactly by
@@ -105,7 +105,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "f64tof32"]
+    #[sqlname = "double_to_real"]
     fn cast_float64_to_float32(a: f64) -> Result<f32, EvalError> {
         let result = a as f32;
         if result.is_infinite() && !a.is_infinite() {
@@ -119,7 +119,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "f64tostr"]
+    #[sqlname = "double_to_text"]
     fn cast_float64_to_string(a: f64) -> String {
         let mut s = String::new();
         strconv::format_float64(&mut s, a);
@@ -159,7 +159,7 @@ impl<'a> EagerUnaryFunc<'a> for CastFloat64ToNumeric {
 
 impl fmt::Display for CastFloat64ToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("f64tonumeric")
+        f.write_str("double_to_numeric")
     }
 }
 

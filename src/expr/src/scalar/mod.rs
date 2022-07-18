@@ -1318,7 +1318,23 @@ impl fmt::Display for MirScalarExpr {
             Literal(Err(e), _) => write!(f, "(err: {})", e)?,
             CallUnmaterializable(func) => write!(f, "{}()", func)?,
             CallUnary { func, expr } => {
-                write!(f, "{}({})", func, expr)?;
+                if let UnaryFunc::Not(_) = *func {
+                    if let CallUnary {
+                        func,
+                        expr: inner_expr,
+                    } = &**expr
+                    {
+                        if let Some(is) = func.is() {
+                            write!(f, "({}) IS NOT {}", inner_expr, is)?;
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Some(is) = func.is() {
+                    write!(f, "({}) IS {}", expr, is)?;
+                } else {
+                    write!(f, "{}({})", func, expr)?;
+                }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {

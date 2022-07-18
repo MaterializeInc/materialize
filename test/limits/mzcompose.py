@@ -118,7 +118,7 @@ class Indexes(Generator):
 
 
 class KafkaTopics(Generator):
-    COUNT = min(Generator.COUNT, 20)  # CREATE MATERIALIZED SOURCE is slow
+    COUNT = min(Generator.COUNT, 20)  # CREATE SOURCE is slow
 
     @classmethod
     def body(cls) -> None:
@@ -136,7 +136,7 @@ class KafkaTopics(Generator):
             print(f'"{i}" {{"f1": "{i}"}}')
 
             print(
-                f"""> CREATE MATERIALIZED SOURCE s{i}
+                f"""> CREATE SOURCE s{i}
                   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-{topic}-${{testdrive.seed}}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
                   ENVELOPE NONE;
@@ -164,7 +164,7 @@ class KafkaSourcesSameTopic(Generator):
 
         for i in cls.all():
             print(
-                f"""> CREATE MATERIALIZED SOURCE s{i}
+                f"""> CREATE SOURCE s{i}
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-topic-${{testdrive.seed}}'
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
               ENVELOPE NONE;
@@ -196,13 +196,15 @@ class KafkaPartitions(Generator):
             print(f'"{i}" {{"f1": "{i}"}}')
 
         print(
-            """> CREATE MATERIALIZED SOURCE s1
+            """> CREATE SOURCE s1
             FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-partitions-${testdrive.seed}'
             WITH (topic_metadata_refresh_interval_ms = 1000)
             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
             ENVELOPE NONE;
             """
         )
+
+        print("> CREATE DEFAULT INDEX ON s1")
 
         print(
             f"$ kafka-add-partitions topic=kafka-partitions total-partitions={cls.COUNT}"
@@ -232,7 +234,7 @@ class KafkaRecordsEnvelopeNone(Generator):
         print('{"f1": "123"}')
 
         print(
-            f"""> CREATE MATERIALIZED SOURCE kafka_records_envelope_none
+            f"""> CREATE SOURCE kafka_records_envelope_none
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-none-${{testdrive.seed}}'
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
               ENVELOPE NONE;
@@ -260,7 +262,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         print('{"key": "fish"} {"f1": "fish"}')
 
         print(
-            f"""> CREATE MATERIALIZED SOURCE kafka_records_envelope_upsert_same
+            f"""> CREATE SOURCE kafka_records_envelope_upsert_same
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-upsert-same-${{testdrive.seed}}'
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
               ENVELOPE UPSERT;
@@ -291,7 +293,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
 
         print(
-            f"""> CREATE MATERIALIZED SOURCE kafka_records_envelope_upsert_distinct
+            f"""> CREATE SOURCE kafka_records_envelope_upsert_distinct
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${{testdrive.seed}}'
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
               ENVELOPE UPSERT;
@@ -1245,7 +1247,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                          > CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
-                         > CREATE MATERIALIZED SOURCE s_{cluster_name}
+                         > CREATE SOURCE s_{cluster_name}
                            FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC
                            'testdrive-instance-size-${{testdrive.seed}}'
                            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'

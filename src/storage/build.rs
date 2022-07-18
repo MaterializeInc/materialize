@@ -26,14 +26,14 @@ fn main() {
         .extern_path(".mz_repr.url", "::mz_repr::url")
         .compile(
             &[
-                "storage/src/client.proto",
-                "storage/src/client/controller.proto",
-                "storage/src/client/errors.proto",
-                "storage/src/client/connections/aws.proto",
-                "storage/src/client/sinks.proto",
-                "storage/src/client/sources.proto",
-                "storage/src/client/sources/encoding.proto",
-                "storage/src/client/transforms.proto",
+                "storage/src/protocol/client.proto",
+                "storage/src/controller.proto",
+                "storage/src/types/errors.proto",
+                "storage/src/types/connections/aws.proto",
+                "storage/src/types/sinks.proto",
+                "storage/src/types/sources.proto",
+                "storage/src/types/sources/encoding.proto",
+                "storage/src/types/transforms.proto",
             ],
             &[".."],
         )

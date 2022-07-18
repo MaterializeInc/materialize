@@ -22,9 +22,9 @@ use timely::progress::Antichain;
 
 use mz_compute_client::response::{TailBatch, TailResponse};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::client::controller::CollectionMetadata;
-use mz_storage::client::errors::DataflowError;
-use mz_storage::client::sinks::{SinkAsOf, SinkDesc, TailSinkConnection};
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::types::errors::DataflowError;
+use mz_storage::types::sinks::{SinkAsOf, SinkDesc, TailSinkConnection};
 
 use crate::render::sinks::SinkRender;
 

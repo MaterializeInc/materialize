@@ -26,7 +26,7 @@ $ kafka-create-topic topic=input
 $ kafka-ingest format=avro key-format=avro topic=input schema=${schema} key-schema=${key-schema} publish=true
 {}
 
-> CREATE MATERIALIZED SOURCE input
+> CREATE SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
@@ -39,7 +39,7 @@ $ kafka-ingest format=avro key-format=avro topic=input schema=${schema} key-sche
   )
 contains:unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
 
-! CREATE MATERIALIZED SOURCE input_bad
+! CREATE SOURCE input_bad
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (

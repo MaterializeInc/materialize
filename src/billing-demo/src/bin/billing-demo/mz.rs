@@ -120,14 +120,14 @@ pub async fn reingest_sink(
     source_name: &str,
     topic_name: &str,
 ) -> Result<()> {
-    let query = format!("CREATE MATERIALIZED SOURCE {source_name} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic_name}' \
+    let query = format!("CREATE SOURCE {source_name} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic_name}' \
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}' ENVELOPE DEBEZIUM",
                     source_name = source_name,
                     kafka_url = kafka_url,
                     topic_name = topic_name,
                     schema_registry = schema_registry_url);
 
-    debug!("creating materialized source to reingest sink=> {}", query);
+    debug!("creating source to reingest sink=> {}", query);
     mz_client::execute(&mz_client, &query).await?;
 
     Ok(())

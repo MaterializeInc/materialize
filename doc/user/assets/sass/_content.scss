@@ -132,7 +132,7 @@ a {
     }
 
     /* Style external links with a "open in new window" icon. */
-    &[href*="//"]:not([href*="materialize.com"])::after {
+    &[href*="//"]:not([href*="materialize.com"],[href*="materialize/edit"])::after {
         content: "";
         background-image: url('../images/icon_external_link.svg');
         // Use padding rather than `display-inline: block; width: 16px` to keep

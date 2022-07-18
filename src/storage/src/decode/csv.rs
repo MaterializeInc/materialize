@@ -9,9 +9,9 @@
 
 use mz_repr::{Datum, Row};
 
-use crate::client::errors::DecodeError;
-use crate::client::sources::encoding::CsvEncoding;
-use crate::client::transforms::LinearOperator;
+use crate::types::errors::DecodeError;
+use crate::types::sources::encoding::CsvEncoding;
+use crate::types::transforms::LinearOperator;
 
 #[derive(Debug)]
 pub struct CsvDecoderState {

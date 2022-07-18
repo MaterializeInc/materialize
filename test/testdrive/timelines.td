@@ -11,11 +11,11 @@
 
 $ kafka-create-topic topic=input-system
 
-> CREATE MATERIALIZED SOURCE source_system
+> CREATE SOURCE source_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
   FORMAT BYTES
 
-> CREATE MATERIALIZED SOURCE source_system_user
+> CREATE SOURCE source_system_user
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
     WITH (timeline = 'user')
   FORMAT BYTES
@@ -109,12 +109,12 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":4,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
 
-> CREATE MATERIALIZED SOURCE source_cdcv2
+> CREATE SOURCE source_cdcv2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
-! CREATE MATERIALIZED SOURCE source_cdcv2_system
+! CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
     WITH (epoch_ms_timeline=false)
   FORMAT AVRO USING SCHEMA '${schema}'
@@ -122,20 +122,20 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 contains:unsupported epoch_ms_timeline value
 
 # Can't specify epoch_ms_timeline and timeline.
-! CREATE MATERIALIZED SOURCE source_cdcv2_system
+! CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
     WITH (epoch_ms_timeline=false, timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 
-> CREATE MATERIALIZED SOURCE source_cdcv2_system
+> CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
     WITH (epoch_ms_timeline=true)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED SOURCE source_cdcv2_user
+> CREATE SOURCE source_cdcv2_user
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
     WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}'
@@ -147,11 +147,11 @@ contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 
 > CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
-! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_cdcv2;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c) AS SELECT * FROM source_system, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
 
 # Verify that user timelines don't allow things to be joinable with their non-user versions.
-! CREATE MATERIALIZED VIEW must_fail (a, b, c, d) AS SELECT * FROM source_system, source_system_user;
+! CREATE MATERIALIZED VIEW must_fail (a, b) AS SELECT * FROM source_system, source_system_user;
 contains:multiple timelines within one dataflow are not supported
 
 # Can join static view with anything.
@@ -168,7 +168,7 @@ contains:multiple timelines within one dataflow are not supported
 # System things should be joinable only with system sources.
 ! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
-> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k, l) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_system;
+> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_system;
 > CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, input_table;
 
 # EXPLAIN should complain too.
@@ -176,7 +176,7 @@ contains:multiple timelines within one dataflow are not supported
 contains:multiple timelines within one dataflow are not supported
 
 # Can join user-specified timelines.
-> CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c, d) AS SELECT * FROM source_system_user, source_cdcv2_user;
+> CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c) AS SELECT * FROM source_system_user, source_cdcv2_user;
 
 # CDCv2 can only be joined with system time stuff if specified
 > CREATE MATERIALIZED VIEW source_cdcv2_table_system AS SELECT * FROM source_cdcv2_system, input_table;

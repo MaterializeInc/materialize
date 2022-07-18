@@ -13,12 +13,13 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
+use anyhow::anyhow;
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::thread;
 use std::time::{Duration, Instant};
+use std::{env, thread};
 
 use axum::response::IntoResponse;
 use axum::response::Response;
@@ -29,7 +30,10 @@ use mz_ore::retry::Retry;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
+use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
+use tokio_postgres::config::Host;
+use tokio_postgres::Client;
 use tracing::info;
 
 use mz_ore::assert_contains;
@@ -1309,6 +1313,70 @@ fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+    // Set the timestamp to zero for deterministic initial timestamps.
+    let now = Arc::new(Mutex::new(0));
+    let now_fn = {
+        let now = Arc::clone(&now);
+        NowFn::from(move || *now.lock().unwrap())
+    };
+    let config = util::Config::default().with_now(now_fn).unsafe_mode();
+    let server = util::start_server(config).unwrap();
+    let mut mz_client = server.connect(postgres::NoTls)?;
+
+    let (pg_client, cleanup_fn) = create_postgres_source_with_table(
+        &server.runtime,
+        &mut mz_client,
+        "v",
+        "(a INT)",
+        "mz_source",
+    )?;
+
+    // Create user table in Materialize.
+    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
+    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
+    insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))?;
+
+    // Insert data into source.
+    let source_rows: i64 = 10;
+    for _ in 0..source_rows {
+        let _ = server
+            .runtime
+            .block_on(pg_client.execute("INSERT INTO v VALUES (42);", &[]))?;
+    }
+
+    // Wait for view to be populated.
+    Retry::default()
+        .retry(|_| {
+            let rows = mz_client
+                .query_one("SELECT COUNT(*) FROM v;", &[])
+                .unwrap()
+                .get::<_, i64>(0);
+            if rows == source_rows {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Waiting for {source_rows} rows to be ingested. Currently at {rows}."
+                ))
+            }
+        })
+        .unwrap();
+
+    // Make sure that the table and view are joinable immediately at some timestamp.
+    let mut mz_join_client = server.connect(postgres::NoTls)?;
+    let _ = mz_ore::test::timeout(Duration::from_millis(1_000), move || {
+        Ok(mz_join_client
+            .query_one("SELECT COUNT(t.a) FROM t, v;", &[])?
+            .get::<_, i64>(0))
+    })?;
+
+    cleanup_fn(&mut mz_client)?;
+
+    Ok(())
+}
+
 /// Group commit will block writes until the current time has advanced. This can make
 /// performing inserts while using deterministic time difficult. This is a helper
 /// method to perform writes and advance the current time.
@@ -1321,15 +1389,19 @@ fn insert_with_deterministic_timestamps(
     let mut client_write = server.connect(postgres::NoTls)?;
     let mut client_read = server.connect(postgres::NoTls)?;
 
-    let current_ts = get_explain_timestamp(table, &mut client_read);
+    let mut current_ts = get_explain_timestamp(table, &mut client_read);
     let write_thread = thread::spawn(move || {
         client_write
             .execute(&format!("INSERT INTO {table} VALUES {values}"), &[])
             .unwrap();
     });
-    // Bump `now` by enough for the write to succeed. Table advancements may have increased
-    // the global timestamp by an unknown amount so we bump `now` by a large amount to be safe.
-    *now.lock().expect("lock poisoned") = current_ts + 1_000;
+    while !write_thread.is_finished() {
+        // Keep increasing `now` until the write has executed succeed. Table advancements may
+        // have increased the global timestamp by an unknown amount.
+        current_ts += 1;
+        *now.lock().expect("lock poisoned") = current_ts;
+        thread::sleep(Duration::from_millis(1));
+    }
     write_thread.join().unwrap();
     Ok(())
 }
@@ -1342,4 +1414,96 @@ fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMil
     let timestamp_re = Regex::new(r"^\s+timestamp:\s+(\d+)\n").unwrap();
     let timestamp_caps = timestamp_re.captures(&explain).unwrap();
     timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
+}
+
+/// Helper function to create a Postgres source.
+///
+/// IMPORTANT: Make sure to call closure that is returned at
+/// the end of the test to clean up Postgres state.
+fn create_postgres_source_with_table(
+    runtime: &Arc<Runtime>,
+    mz_client: &mut postgres::Client,
+    table_name: &str,
+    table_schema: &str,
+    source_name: &str,
+) -> Result<
+    (
+        Client,
+        impl FnOnce(&mut postgres::Client) -> Result<(), Box<dyn Error>>,
+    ),
+    Box<dyn Error>,
+> {
+    let postgres_url = env::var("POSTGRES_URL")
+        .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
+
+    let (pg_client, connection) =
+        runtime.block_on(tokio_postgres::connect(&postgres_url, postgres::NoTls))?;
+
+    let pg_config: tokio_postgres::Config = postgres_url.parse().unwrap();
+    let user = pg_config.get_user().unwrap_or("postgres");
+    let db_name = pg_config.get_dbname().unwrap_or(user);
+    let ports = pg_config.get_ports();
+    let port = if ports.is_empty() { 5432 } else { ports[0] };
+    let hosts = pg_config.get_hosts();
+    let host = if hosts.is_empty() {
+        "localhost".to_string()
+    } else {
+        match &hosts[0] {
+            Host::Tcp(host) => host.to_string(),
+            Host::Unix(host) => host.to_str().unwrap().to_string(),
+        }
+    };
+    let password = pg_config.get_password();
+
+    let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(runtime);
+    thread::spawn(move || {
+        if let Err(e) = pg_runtime.block_on(connection) {
+            panic!("connection error: {}", e);
+        }
+    });
+
+    // Create table in Postgres with publication.
+    let _ =
+        runtime.block_on(pg_client.execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[]))?;
+    let _ = runtime
+        .block_on(pg_client.execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[]))?;
+    let _ = runtime
+        .block_on(pg_client.execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[]))?;
+    let _ = runtime.block_on(pg_client.execute(
+        &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
+        &[],
+    ))?;
+    let _ = runtime.block_on(pg_client.execute(
+        &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
+        &[],
+    ))?;
+
+    // Create postgres source in Materialize.
+    let mut connection_str = format!("HOST '{host}', PORT {port}, USER {user}, DATABASE {db_name}");
+    if let Some(password) = password {
+        let password = std::str::from_utf8(password).unwrap();
+        mz_client.batch_execute(&format!("CREATE SECRET s AS '{password}'"))?;
+        connection_str = format!("{connection_str}, PASSWORD SECRET s");
+    }
+    mz_client.batch_execute(&format!(
+        "CREATE CONNECTION pgconn FOR POSTGRES {connection_str}"
+    ))?;
+    mz_client.batch_execute(&format!(
+        "CREATE SOURCE {source_name}
+            FROM POSTGRES
+            CONNECTION pgconn
+            PUBLICATION '{source_name}';"
+    ))?;
+    mz_client.batch_execute(&format!(
+        "CREATE MATERIALIZED VIEWS FROM SOURCE {source_name} ({table_name});"
+    ))?;
+
+    let table_name = table_name.to_string();
+    let source_name = source_name.to_string();
+    Ok((pg_client, move |mz_client: &mut postgres::Client| {
+        mz_client.batch_execute(&format!("DROP VIEW {table_name};"))?;
+        mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
+        mz_client.batch_execute(&"DROP CONNECTION pgconn;")?;
+        Ok(())
+    }))
 }

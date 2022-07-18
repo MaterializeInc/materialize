@@ -11,6 +11,13 @@
 # Test that any replication slot can only be materialized once
 #
 
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg FOR POSTGRES
+  HOST postgres,
+  DATABASE postgres,
+  USER postgres,
+  PASSWORD SECRET pgpass
+
 
 # Insert data pre-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -32,7 +39,7 @@ INSERT INTO t2(t1_id, name) VALUES (1, 'example');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
 > CREATE VIEWS FROM SOURCE mz_source;
@@ -56,7 +63,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 # verify that dropping things allows recreation
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source';
 
 > CREATE VIEWS FROM SOURCE mz_source;

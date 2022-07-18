@@ -32,7 +32,7 @@ $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keysch
 {"key": "fish2"} {"f1": "fishval", "f2": 1000}
 
 
-> CREATE MATERIALIZED SOURCE headers_src
+> CREATE SOURCE headers_src
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_src-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -89,7 +89,7 @@ $ kafka-create-topic topic=headers_also partitions=1
 $ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus":"gusfive"}
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
 
-> CREATE MATERIALIZED SOURCE headers_also
+> CREATE SOURCE headers_also
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_also-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -131,7 +131,7 @@ $ set schemaheaders={
 
 $ kafka-create-topic topic=headers_conflict
 
-! CREATE MATERIALIZED SOURCE headers_conflict
+! CREATE SOURCE headers_conflict
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_conflict-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -149,7 +149,7 @@ $ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${k
 {"key": "fish"} {"headers": "value"}
 
 # using AS to resolve it!
-> CREATE MATERIALIZED SOURCE headers_conflict2
+> CREATE SOURCE headers_conflict2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_conflict-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'

@@ -65,7 +65,7 @@ pub trait DateLike: chrono::Datelike {
 impl<T> DateLike for T where T: chrono::Datelike {}
 
 sqlfunc!(
-    #[sqlname = "datetostr"]
+    #[sqlname = "date_to_text"]
     #[preserves_uniqueness = true]
     fn cast_date_to_string(a: NaiveDate) -> String {
         let mut buf = String::new();
@@ -75,7 +75,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "datetots"]
+    #[sqlname = "date_to_timestamp"]
     #[preserves_uniqueness = true]
     fn cast_date_to_timestamp(a: NaiveDate) -> NaiveDateTime {
         a.and_hms(0, 0, 0)
@@ -83,7 +83,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "datetotstz"]
+    #[sqlname = "date_to_timestamp_with_timezone"]
     #[preserves_uniqueness = true]
     fn cast_date_to_timestamp_tz(a: NaiveDate) -> DateTime<Utc> {
         DateTime::<Utc>::from_utc(a.and_hms(0, 0, 0), Utc)

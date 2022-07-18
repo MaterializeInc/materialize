@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::GlobalId;
-use mz_storage::client::connections::StringOrSecret;
+use mz_storage::types::connections::StringOrSecret;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
 use crate::names::ResolvedObjectName;
@@ -158,6 +158,23 @@ impl TryFromValue<Value> for i32 {
 }
 
 impl ImpliedValue for i32 {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an integer value")
+    }
+}
+
+impl TryFromValue<Value> for u16 {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::Number(v) => v
+                .parse::<u16>()
+                .map_err(|e| sql_err!("invalid numeric value: {e}")),
+            _ => sql_bail!("cannot use value as number"),
+        }
+    }
+}
+
+impl ImpliedValue for u16 {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an integer value")
     }

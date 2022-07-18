@@ -36,7 +36,7 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
 {"f1": "b${kafka-ingest.iteration}"} {"f2": "b${kafka-ingest.iteration}"}
 
-> CREATE MATERIALIZED SOURCE failpoint
+> CREATE SOURCE failpoint
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-failpoint-${testdrive.seed}'
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

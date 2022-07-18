@@ -11,7 +11,6 @@
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -59,7 +58,7 @@ impl FileBlob {
 
 #[async_trait]
 impl Blob for FileBlob {
-    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let file_path = self.blob_path(key);
         let mut file = match File::open(file_path).await {
             Ok(file) => file,
@@ -71,7 +70,7 @@ impl Blob for FileBlob {
         Ok(Some(buf))
     }
 
-    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
         let base_dir = self.base_dir.canonicalize()?;
         let mut ret = vec![];
 
@@ -108,13 +107,7 @@ impl Blob for FileBlob {
         Ok(ret)
     }
 
-    async fn set(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        value: Bytes,
-        atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let file_path = self.blob_path(key);
         match atomic {
             Atomicity::RequireAtomic => {
@@ -163,7 +156,7 @@ impl Blob for FileBlob {
         Ok(())
     }
 
-    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
         let file_path = self.blob_path(key);
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.

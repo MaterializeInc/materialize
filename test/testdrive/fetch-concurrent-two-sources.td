@@ -17,13 +17,13 @@ $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "ty
 
 $ kafka-create-topic topic=fetch-concurrent-two-sources
 
-> CREATE MATERIALIZED SOURCE fetch_concurrent_two_sources1
+> CREATE SOURCE fetch_concurrent_two_sources1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}'
   WITH( timestamp_frequency_ms = 100 )
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
 
-> CREATE MATERIALIZED SOURCE fetch_concurrent_two_sources2
+> CREATE SOURCE fetch_concurrent_two_sources2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}'
   WITH( timestamp_frequency_ms = 100 )
   FORMAT AVRO USING SCHEMA '${int}'

@@ -28,16 +28,17 @@ use std::fmt::{self, Debug};
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use mz_persist_types::Codec64;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
+use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row};
-use mz_storage::client::controller::{ReadPolicy, StorageController, StorageError};
-use mz_storage::client::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
+use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
+use mz_storage::types::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 
 use crate::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
@@ -172,7 +173,7 @@ where
     T: Timestamp + Lattice + Debug + Copy,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    pub async fn new(logging: &Option<LoggingConfig>) -> Self {
+    pub async fn new(build_info: &'static BuildInfo, logging: &Option<LoggingConfig>) -> Self {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -186,7 +187,7 @@ where
                 );
             }
         }
-        let mut replicas = ActiveReplication::default();
+        let mut replicas = ActiveReplication::new(build_info);
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
             logging: logging.clone(),
@@ -242,7 +243,7 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice + Codec64 + Debug + Copy,
+    T: Timestamp + Lattice + Codec64 + Debug,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Constructs an immutable handle from this mutable handle.
@@ -673,7 +674,7 @@ where
 
 impl<'a, T> ComputeControllerMut<'a, T>
 where
-    T: Timestamp + Lattice + Codec64 + Copy,
+    T: Timestamp + Lattice + Codec64,
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Acquire a mutable reference to the collection state, should it exist.

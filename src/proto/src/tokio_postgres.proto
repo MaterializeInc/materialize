@@ -1,0 +1,25 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package mz_proto.tokio_postgres;
+
+message ProtoSslMode {
+    oneof kind {
+        google.protobuf.Empty unknown = 1;
+        google.protobuf.Empty disable = 2;
+        google.protobuf.Empty prefer = 3;
+        google.protobuf.Empty require = 4;
+        google.protobuf.Empty verify_ca = 5;
+        google.protobuf.Empty verify_full = 6;
+    }
+}

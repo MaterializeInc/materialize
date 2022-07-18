@@ -21,7 +21,7 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
-use crate::TransformArgs;
+use crate::{TransformArgs, TransformError};
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_repr::RelationType;
@@ -38,14 +38,14 @@ impl crate::Transform for Join {
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_post(&mut |e| Ok(self.action(e)))
+    ) -> Result<(), TransformError> {
+        relation.try_visit_mut_post(&mut |e| self.action(e))
     }
 }
 
 impl Join {
     /// Fuses multiple `Join` operators into one `Join` operator.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
@@ -64,7 +64,7 @@ impl Join {
                         ..
                     } => {
                         // Merge the inputs into the new join being built.
-                        join_builder.add_subjoin(inputs, equivalences, None);
+                        join_builder.add_subjoin(inputs, equivalences, None)?;
                     }
                     MirRelationExpr::Filter { input, predicates } => {
                         if let MirRelationExpr::Join {
@@ -74,7 +74,7 @@ impl Join {
                         } = *input
                         {
                             // Merge the inputs and the predicates into the new join being built.
-                            join_builder.add_subjoin(inputs, equivalences, Some(predicates));
+                            join_builder.add_subjoin(inputs, equivalences, Some(predicates))?;
                         } else {
                             // Retain the input.
                             let input = input.filter(predicates);
@@ -90,6 +90,7 @@ impl Join {
 
             *relation = join_builder.build();
         }
+        Ok(())
     }
 }
 
@@ -137,30 +138,29 @@ impl JoinBuilder {
         inputs: I,
         mut equivalences: Vec<Vec<MirScalarExpr>>,
         predicates: Option<Vec<MirScalarExpr>>,
-    ) where
+    ) -> Result<(), TransformError>
+    where
         I: IntoIterator<Item = MirRelationExpr>,
     {
         // Update and push all of the variables.
         for mut equivalence in equivalences.drain(..) {
             for expr in equivalence.iter_mut() {
-                #[allow(deprecated)]
-                expr.visit_mut_post_nolimit(&mut |e| {
+                expr.visit_mut_post(&mut |e| {
                     if let MirScalarExpr::Column(c) = e {
                         *c += self.num_columns;
                     }
-                });
+                })?;
             }
             self.equivalences.push(equivalence);
         }
 
         if let Some(mut predicates) = predicates {
             for mut expr in predicates.drain(..) {
-                #[allow(deprecated)]
-                expr.visit_mut_post_nolimit(&mut |e| {
+                expr.visit_mut_post(&mut |e| {
                     if let MirScalarExpr::Column(c) = e {
                         *c += self.num_columns;
                     }
-                });
+                })?;
                 self.predicates.push(expr);
             }
         }
@@ -169,6 +169,7 @@ impl JoinBuilder {
         for input in inputs {
             self.add_input(input);
         }
+        Ok(())
     }
 
     fn build(mut self) -> MirRelationExpr {

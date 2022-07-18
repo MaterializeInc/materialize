@@ -39,8 +39,8 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage::client::sinks::{SinkConnectionBuilder, SinkEnvelope};
-use mz_storage::client::sources::{SourceDesc, Timeline};
+use mz_storage::types::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
     ExplainOptions, ExplainStageNew, ExplainStageOld, Expr, FetchDirection, IndexOptionName,
@@ -155,14 +155,14 @@ pub struct CreateRolePlan {
 pub struct CreateComputeInstancePlan {
     pub name: String,
     pub config: Option<ComputeInstanceIntrospectionConfig>,
-    pub replicas: Vec<(String, ReplicaConfig)>,
+    pub replicas: Vec<(String, ComputeInstanceReplicaConfig)>,
 }
 
 #[derive(Debug)]
 pub struct CreateComputeInstanceReplicaPlan {
     pub name: String,
     pub of_cluster: String,
-    pub config: ReplicaConfig,
+    pub config: ComputeInstanceReplicaConfig,
 }
 
 /// Configuration of introspection for a compute instance.
@@ -175,7 +175,7 @@ pub struct ComputeInstanceIntrospectionConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ReplicaConfig {
+pub enum ComputeInstanceReplicaConfig {
     Remote {
         addrs: BTreeSet<String>,
     },
@@ -190,7 +190,6 @@ pub struct CreateSourcePlan {
     pub name: QualifiedObjectName,
     pub source: Source,
     pub if_not_exists: bool,
-    pub materialized: bool,
     pub timeline: Timeline,
     pub remote: Option<String>,
 }
@@ -491,7 +490,7 @@ pub struct Source {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage::client::connections::Connection,
+    pub connection: mz_storage::types::connections::Connection,
 }
 
 #[derive(Clone, Debug)]

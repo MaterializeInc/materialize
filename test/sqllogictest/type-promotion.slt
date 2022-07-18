@@ -117,7 +117,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (i16toi32(i32toi16(1)) > 1)
+| Map (smallint_to_integer(integer_to_smallint(1)) > 1)
 
 EOF
 
@@ -128,7 +128,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (i16tonumeric(i32toi16(1)) > 1.1)
+| Map (smallint_to_numeric(integer_to_smallint(1)) > 1.1)
 
 EOF
 
@@ -139,7 +139,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (i64tonumeric(i32toi64(1)) > 1.11111)
+| Map (bigint_to_numeric(integer_to_bigint(1)) > 1.11111)
 
 EOF
 
@@ -150,7 +150,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (i64tof64(i32toi64(1)) > numerictof64(1.11111))
+| Map (bigint_to_double(integer_to_bigint(1)) > numeric_to_double(1.11111))
 
 EOF
 
@@ -161,7 +161,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (numerictof64(1.1) > i32tof64(1))
+| Map (numeric_to_double(1.1) > integer_to_double(1))
 
 EOF
 
@@ -183,7 +183,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (i32tof64(1) > i32tof64(1))
+| Map (integer_to_double(1) > integer_to_double(1))
 
 EOF
 
@@ -194,7 +194,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map floorf64(i32tof64(1))
+| Map floorf64(integer_to_double(1))
 
 EOF
 
@@ -213,7 +213,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map coalesce(i32tof64(1), numerictof64(i32tonumeric(1)), i32tof64(1))
+| Map coalesce(integer_to_double(1), numeric_to_double(integer_to_numeric(1)), integer_to_double(1))
 
 EOF
 
@@ -236,7 +236,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (strtotstz("2001 03-04") - datetotstz(strtodate("2002 03-04")))
+| Map (text_to_timestamp_with_time_zone("2001 03-04") - date_to_timestamp_with_timezone(text_to_date("2002 03-04")))
 
 EOF
 
@@ -247,7 +247,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (strtotstz("2001 03-04") - tstotstz(strtots("2002 03-04")))
+| Map (text_to_timestamp_with_time_zone("2001 03-04") - timestamp_to_timestamp_with_time_zone(text_to_timestamp("2002 03-04")))
 
 EOF
 
@@ -258,7 +258,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (strtots("2001 03-04") - datetots(strtodate("2002 03-04")))
+| Map (text_to_timestamp("2001 03-04") - date_to_timestamp(text_to_date("2002 03-04")))
 
 EOF
 
@@ -269,7 +269,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map coalesce(datetotstz(strtodate("2001")), tstotstz(strtots("2002")), strtotstz("2003"))
+| Map coalesce(date_to_timestamp_with_timezone(text_to_date("2001")), timestamp_to_timestamp_with_time_zone(text_to_timestamp("2002")), text_to_timestamp_with_time_zone("2003"))
 
 EOF
 
@@ -280,7 +280,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map lower(chartostr(strtochar(strtochar("a"))))
+| Map lower(char_to_text(text_to_char(text_to_char("a"))))
 
 EOF
 
@@ -291,7 +291,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (strtochar(strtochar("a")) < strtochar(strtovarchar("a")))
+| Map (text_to_char(text_to_char("a")) < text_to_char(text_to_varchar("a")))
 
 EOF
 
@@ -303,7 +303,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (chartostr(strtochar(strtochar("a"))) < "a")
+| Map (char_to_text(text_to_char(text_to_char("a"))) < "a")
 
 EOF
 
@@ -313,7 +313,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map (varchartostr(strtovarchar("a")) < "a")
+| Map (varchar_to_text(text_to_varchar("a")) < "a")
 
 EOF
 
@@ -324,7 +324,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map coalesce(strtochar(strtochar("a")), strtochar(strtovarchar("a")), strtochar("a"))
+| Map coalesce(text_to_char(text_to_char("a")), text_to_char(text_to_varchar("a")), text_to_char("a"))
 
 EOF
 

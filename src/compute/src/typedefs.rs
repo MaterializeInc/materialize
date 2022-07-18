@@ -15,7 +15,7 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 
 use mz_repr::{Diff, Row, Timestamp};
-use mz_storage::client::errors::DataflowError;
+use mz_storage::types::errors::DataflowError;
 
 pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;

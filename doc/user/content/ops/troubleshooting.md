@@ -15,15 +15,15 @@ existence of these additional views may itself affect performance.
 
 ### How fast are my sources loading data?
 
-You can count the number of records accepted in a materialized source or view.
-Note that this makes less sense for a non-materialized source or view,
+You can count the number of records accepted in a source or materialized view.
+Note that this makes less sense for a non-materialized view,
 as invoking it will create a new dataflow and run it to the point that
 it is caught up with its sources; that elapsed time may be informative,
 but it tells you something other than how fast a collection is populated.
 
 ```sql
 -- Report the number of records available from the materialization.
-select count(*) from my_materialized_source_or_view;
+select count(*) from my_source_or_materialized_view;
 ```
 
 This logging source indicates the upper frontier of materializations.

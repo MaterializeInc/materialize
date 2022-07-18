@@ -36,7 +36,7 @@ $ kafka-create-topic topic=int2long
 $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema-1-int-key} schema=${schema} publish=true
 {"key": 1234} {"nokey": "nokey1"}
 
-> CREATE MATERIALIZED SOURCE int2long
+> CREATE SOURCE int2long
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-int2long-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

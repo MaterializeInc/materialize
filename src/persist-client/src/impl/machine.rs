@@ -13,7 +13,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -27,18 +27,23 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::{CodecMismatch, InvalidUsage};
+use crate::r#impl::gc::{GarbageCollector, GcReq};
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
-use crate::r#impl::state::{HollowBatch, ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::state::{
+    HollowBatch, ReadCapability, Since, State, StateCollections, Upper, WriterState,
+};
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
+use crate::write::WriterId;
 use crate::ShardId;
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
+    gc: GarbageCollector,
 
     state: State<K, V, T, D>,
 }
@@ -50,6 +55,7 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
             consensus: Arc::clone(&self.consensus),
             metrics: Arc::clone(&self.metrics),
             state: self.state.clone(),
+            gc: self.gc.clone(),
         }
     }
 }
@@ -65,6 +71,7 @@ where
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
+        gc: GarbageCollector,
     ) -> Result<Self, CodecMismatch> {
         let state = metrics
             .cmds
@@ -79,6 +86,7 @@ where
             consensus,
             metrics,
             state,
+            gc,
         })
     }
 
@@ -95,15 +103,29 @@ where
         self.state.upper()
     }
 
-    pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
+    pub async fn register_reader(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap)) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
-                state.register(seqno, reader_id)
+                state.register_reader(seqno, reader_id)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         (shard_upper, read_cap)
+    }
+
+    pub async fn register_writer(
+        &mut self,
+        writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
+    ) -> (Upper<T>, WriterState) {
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, (shard_upper, writer_state)) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
+                state.register_writer(writer_id, heartbeat_timestamp_ms)
+            })
+            .await;
+        (shard_upper, writer_state)
     }
 
     pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
@@ -120,6 +142,7 @@ where
     pub async fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
+        writer_id: &WriterId,
     ) -> Result<
         Result<Result<(SeqNo, Vec<FueledMergeReq<T>>), Upper<T>>, InvalidUsage<T>>,
         Indeterminate,
@@ -128,7 +151,7 @@ where
         loop {
             let (seqno, res) = self
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
-                    state.compare_and_append(batch)
+                    state.compare_and_append(batch, writer_id)
                 })
                 .await?;
 
@@ -189,6 +212,16 @@ where
         let (seqno, _existed) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
                 state.expire_reader(reader_id)
+            })
+            .await;
+        seqno
+    }
+
+    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
+        let metrics = Arc::clone(&self.metrics);
+        let (seqno, _existed) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, state| {
+                state.expire_writer(writer_id)
             })
             .await;
         seqno
@@ -363,12 +396,7 @@ where
                     &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
                     || async {
                         self.consensus
-                            .compare_and_set(
-                                Instant::now() + FOREVER,
-                                &path,
-                                Some(self.state.seqno()),
-                                new.clone(),
-                            )
+                            .compare_and_set(&path, Some(self.state.seqno()), new.clone())
                             .await
                     },
                 )
@@ -386,20 +414,22 @@ where
                             new_state.seqno(),
                             new_state
                         );
+
+                        // If this command has downgraded the seqno_since, fire
+                        // off a background request to the GarbageCollector so
+                        // it can delete eligible blobs and truncate the state
+                        // history.
+                        let old_seqno_since = self.state.seqno_since();
+                        let new_seqno_since = new_state.seqno_since();
+                        if old_seqno_since != new_seqno_since {
+                            self.gc.gc_and_truncate_background(GcReq {
+                                shard_id: self.shard_id(),
+                                old_seqno_since,
+                                new_seqno_since,
+                            });
+                        }
+
                         self.state = new_state;
-
-                        // Bound the number of entries in consensus.
-                        let () = retry_external(
-                            &self.metrics.retries.external.apply_unbatched_cmd_truncate,
-                            || async {
-                                self.consensus
-                                    .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
-                                    .await
-                            },
-                        )
-                        .instrument(debug_span!("apply_unbatched_cmd::truncate"))
-                        .await;
-
                         return Ok((self.state.seqno(), Ok(work_ret)));
                     }
                     Err(current) => {
@@ -432,7 +462,7 @@ where
 
         let path = shard_id.to_string();
         let mut current = retry_external(&retry_metrics.external.maybe_init_state_head, || async {
-            consensus.head(Instant::now() + FOREVER, &path).await
+            consensus.head(&path).await
         })
         .await;
 
@@ -456,9 +486,7 @@ where
                 state
             );
             let cas_res = retry_external(&retry_metrics.external.maybe_init_state_cas, || async {
-                consensus
-                    .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
-                    .await
+                consensus.compare_and_set(&path, None, new.clone()).await
             })
             .await;
             match cas_res {
@@ -489,11 +517,7 @@ where
         let shard_id = self.shard_id();
         let current = retry_external(
             &self.metrics.retries.external.fetch_and_update_state_head,
-            || async {
-                self.consensus
-                    .head(Instant::now() + FOREVER, &shard_id.to_string())
-                    .await
-            },
+            || async { self.consensus.head(&shard_id.to_string()).await },
         )
         .instrument(trace_span!("fetch_and_update_state::head"))
         .await;
@@ -526,8 +550,6 @@ where
 }
 
 pub const INFO_MIN_ATTEMPTS: usize = 3;
-
-pub const FOREVER: Duration = Duration::from_secs(1_000_000_000);
 
 pub async fn retry_external<R, F, WorkFn>(metrics: &RetryMetrics, mut work_fn: WorkFn) -> R
 where
@@ -658,7 +680,8 @@ mod tests {
             let mut client = new_test_client().await;
             // Reset blob_target_size. Individual batch writes and compactions
             // can override it with an arg.
-            client.cfg.blob_target_size = PersistConfig::default().blob_target_size;
+            client.cfg.blob_target_size =
+                PersistConfig::new(client.cfg.now.clone()).blob_target_size;
 
             let state = Arc::new(Mutex::new(DatadrivenState::default()));
 
@@ -856,7 +879,7 @@ mod tests {
                                 .expect("invalid shard types");
                             let (_, mut merge_reqs) = write
                                 .machine
-                                .compare_and_append(batch)
+                                .compare_and_append(batch, &write.writer_id)
                                 .await
                                 .expect("indeterminate")
                                 .expect("invalid usage")
@@ -889,7 +912,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
@@ -909,21 +932,32 @@ mod tests {
         }
         let key = write.machine.shard_id().to_string();
         let consensus_entries = consensus
-            .scan(Instant::now() + FOREVER, &key, SeqNo::minimum())
+            .scan(&key, SeqNo::minimum())
             .await
             .expect("scan failed");
         // Make sure we constructed the key correctly.
         assert!(consensus_entries.len() > 0);
-        // Make sure the number of entries is bounded.
-        //
-        // In practice, this is always 1 right now, but when we implement
-        // incremental state, it will be something like log(NUM_BATCHES).
-        let max_entries = usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
-        assert!(
-            consensus_entries.len() <= max_entries,
-            "expected at most {} entries got {}",
-            max_entries,
-            consensus_entries.len()
-        );
+        // Make sure the number of entries is bounded. (I think we could work
+        // out a tighter bound than this, but the point is only that it's
+        // bounded).
+        let max_entries = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
+
+        // The truncation is done in the background, so wait until the assertion
+        // passes, giving up and failing the test if that takes "too much" time.
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+        loop {
+            if consensus_entries.len() <= max_entries {
+                break;
+            }
+            info!(
+                "expected at most {} entries got {}",
+                max_entries,
+                consensus_entries.len()
+            );
+            if retry.next_sleep() > Duration::from_secs(10) {
+                panic!("did not converge in time");
+            }
+            retry = retry.sleep().await;
+        }
     }
 }
