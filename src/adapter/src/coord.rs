@@ -788,17 +788,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .persisted_logs
                     .get_logs()
                     .iter()
-                    .map(|(variant, id)| {
-                        (
-                            *id,
-                            CollectionDescription {
-                                desc: variant.desc(),
-                                ingestion: None,
-                                remote_addr: None,
-                                since: None,
-                            },
-                        )
-                    })
+                    .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
 
                 // Create collections does not recreate existing collections, so it is safe to
@@ -2839,19 +2829,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
             };
 
-            introspection_collections.extend(persisted_logs.get_logs().iter().map(
-                |(variant, id)| {
-                    (
-                        *id,
-                        CollectionDescription {
-                            desc: variant.desc(),
-                            ingestion: None,
-                            remote_addr: None,
-                            since: None,
-                        },
-                    )
-                },
-            ));
+            introspection_collections.extend(
+                persisted_logs
+                    .get_logs()
+                    .iter()
+                    .map(|(variant, id)| (*id, variant.desc().into())),
+            );
 
             let config = self
                 .catalog
@@ -2927,17 +2910,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let persisted_logs_collections = persisted_logs
             .get_logs()
             .iter()
-            .map(|(variant, id)| {
-                (
-                    *id,
-                    CollectionDescription {
-                        desc: variant.desc(),
-                        ingestion: None,
-                        remote_addr: None,
-                        since: None,
-                    },
-                )
-            })
+            .map(|(variant, id)| (*id, variant.desc().into()))
             .collect();
 
         let config = self
