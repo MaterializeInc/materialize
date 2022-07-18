@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="733" height="157">
+<svg xmlns="http://www.w3.org/2000/svg" width="693" height="113">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="51" y="3" width="110" height="32" rx="10"/>
@@ -9,49 +9,30 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="59" y="21">AVRO USING</text>
-   <rect x="201" y="3" width="246" height="32" rx="10"/>
-   <rect x="199"
+   <rect x="181" y="3" width="246" height="32" rx="10"/>
+   <rect x="179"
          y="1"
          width="246"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="209" y="21">CONFLUENT SCHEMA REGISTRY</text>
-   <rect x="467" y="3" width="36" height="32"/>
-   <rect x="465" y="1" width="36" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="475" y="21">url</text>
-   <rect x="543" y="35" width="102" height="32"/>
-   <rect x="541" y="33" width="102" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="551" y="53">with_options</text>
-   <rect x="201" y="79" width="82" height="32" rx="10"/>
-   <rect x="199"
-         y="77"
-         width="82"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="209" y="97">SCHEMA</text>
-   <rect x="303" y="79" width="48" height="32" rx="10"/>
-   <rect x="301"
-         y="77"
-         width="48"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="311" y="97">FILE</text>
-   <rect x="371" y="79" width="132" height="32"/>
-   <rect x="369" y="77" width="132" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="379" y="97">schema_file_path</text>
-   <rect x="51" y="123" width="58" height="32" rx="10"/>
+   <text class="terminal" x="189" y="21">CONFLUENT SCHEMA REGISTRY</text>
+   <rect x="447" y="3" width="36" height="32"/>
+   <rect x="445" y="1" width="36" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="455" y="21">url</text>
+   <rect x="523" y="35" width="102" height="32"/>
+   <rect x="521" y="33" width="102" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="531" y="53">with_options</text>
+   <rect x="51" y="79" width="58" height="32" rx="10"/>
    <rect x="49"
-         y="121"
+         y="77"
          width="58"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="59" y="141">JSON</text>
+   <text class="terminal" x="59" y="97">JSON</text>
    <path class="line"
-         d="m17 17 h2 m20 0 h10 m110 0 h10 m20 0 h10 m246 0 h10 m0 0 h10 m36 0 h10 m20 0 h10 m0 0 h112 m-142 0 h20 m122 0 h20 m-162 0 q10 0 10 10 m142 0 q0 -10 10 -10 m-152 10 v12 m142 0 v-12 m-142 12 q0 10 10 10 m122 0 q10 0 10 -10 m-132 10 h10 m102 0 h10 m-484 -32 h20 m484 0 h20 m-524 0 q10 0 10 10 m504 0 q0 -10 10 -10 m-514 10 v56 m504 0 v-56 m-504 56 q0 10 10 10 m484 0 q10 0 10 -10 m-494 10 h10 m82 0 h10 m0 0 h10 m48 0 h10 m0 0 h10 m132 0 h10 m0 0 h162 m-654 -76 h20 m654 0 h20 m-694 0 q10 0 10 10 m674 0 q0 -10 10 -10 m-684 10 v100 m674 0 v-100 m-674 100 q0 10 10 10 m654 0 q10 0 10 -10 m-664 10 h10 m58 0 h10 m0 0 h576 m23 -120 h-3"/>
-   <polygon points="723 17 731 13 731 21"/>
-   <polygon points="723 17 715 13 715 21"/>
+         d="m17 17 h2 m20 0 h10 m110 0 h10 m0 0 h10 m246 0 h10 m0 0 h10 m36 0 h10 m20 0 h10 m0 0 h112 m-142 0 h20 m122 0 h20 m-162 0 q10 0 10 10 m142 0 q0 -10 10 -10 m-152 10 v12 m142 0 v-12 m-142 12 q0 10 10 10 m122 0 q10 0 10 -10 m-132 10 h10 m102 0 h10 m-614 -32 h20 m614 0 h20 m-654 0 q10 0 10 10 m634 0 q0 -10 10 -10 m-644 10 v56 m634 0 v-56 m-634 56 q0 10 10 10 m614 0 q10 0 10 -10 m-624 10 h10 m58 0 h10 m0 0 h536 m23 -76 h-3"/>
+   <polygon points="683 17 691 13 691 21"/>
+   <polygon points="683 17 675 13 675 21"/>
 </svg>

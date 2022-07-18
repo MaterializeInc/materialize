@@ -179,14 +179,8 @@ fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec ::=
-  'AVRO USING' (
-        'CONFLUENT SCHEMA REGISTRY' url key_strat? val_strat? with_options? |
-        'SCHEMA FILE' path
-        ) |
-  'PROTOBUF' (
-        'MESSAGE' message_name 'USING SCHEMA FILE' path |
-        'USING CONFLUENT SCHEMA REGISTRY' url with_options
-        ) |
+  'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url key_strat? val_strat? with_options? |
+  'PROTOBUF' 'USING CONFLUENT SCHEMA REGISTRY' url with_options |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
@@ -200,7 +194,6 @@ strat ::=
   'ID' schema_registry_id |
   'LATEST'
 kinesis_format_spec ::=
-  'PROTOBUF MESSAGE' message_name 'USING SCHEMA FILE' path |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
@@ -211,10 +204,7 @@ s3_format_spec ::=
   'TEXT' |
   'BYTES'
 sink_format_spec ::=
-  'AVRO USING' (
-        'CONFLUENT SCHEMA REGISTRY' url with_options? |
-        'SCHEMA' 'FILE' schema_file_path
-        ) |
+  'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url with_options?|
   'JSON'
 consistency_format_spec ::=
   'AVRO USING' (
