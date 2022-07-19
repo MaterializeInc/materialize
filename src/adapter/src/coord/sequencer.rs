@@ -1875,19 +1875,20 @@ impl<S: Append + 'static> Coordinator<S> {
         // Optimize the dataflow across views, and any other ways that appeal.
         mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
 
-        // Finalization optimizes the dataflow as much as possible.
-        let dataflow_plan = self.finalize_dataflow(dataflow, compute_instance);
-
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
         let fast_path = peek::create_plan(
-            dataflow_plan,
+            dataflow,
             view_id,
             index_id,
             key,
             permutation,
             thinning.len(),
         )?;
+
+        // Finalization optimizes the dataflow as much as possible.
+        let fast_path =
+            fast_path.finalize(|dataflow| self.finalize_dataflow(dataflow, compute_instance));
 
         // We only track the peeks in the session if the query is in a transaction,
         // the query doesn't use AS OF, it's a non-constant or timestamp dependent query.
