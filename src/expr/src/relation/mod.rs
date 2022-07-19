@@ -1296,7 +1296,7 @@ impl CollectionPlan for MirRelationExpr {
     }
 }
 
-impl VisitChildren for MirRelationExpr {
+impl VisitChildren<Self> for MirRelationExpr {
     fn visit_children<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),

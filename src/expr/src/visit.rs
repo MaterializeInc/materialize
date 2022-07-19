@@ -38,31 +38,34 @@ use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimit
 
 use crate::RECURSION_LIMIT;
 
-/// A trait for types that can visit their direct children of the same
-/// type.
+/// A trait for types that can visit their direct children of type `T`.
 ///
-/// Implementing this trait for a type automatically also implements
+/// Implementing [`VisitChildren<Self>`] automatically also implements
 /// the [`Visit`] trait, which enables recursive traversal.
-pub trait VisitChildren {
+pub trait VisitChildren<T> {
     /// Apply an infallible immutable function `f` to each direct child.
     fn visit_children<'a, F>(&'a self, f: F)
     where
-        F: FnMut(&'a Self);
+        T: 'a,
+        F: FnMut(&'a T);
 
     /// Apply an infallible mutable function `f` to each direct child.
     fn visit_mut_children<'a, F>(&'a mut self, f: F)
     where
-        F: FnMut(&'a mut Self);
+        T: 'a,
+        F: FnMut(&'a mut T);
 
     /// Apply a fallible immutable function `f` to each direct child.
     fn try_visit_children<'a, F, E>(&'a self, f: F) -> Result<(), E>
     where
-        F: FnMut(&'a Self) -> Result<(), E>;
+        T: 'a,
+        F: FnMut(&'a T) -> Result<(), E>;
 
     /// Apply a fallible mutable function `f` to each direct child.
     fn try_visit_mut_children<'a, F, E>(&'a mut self, f: F) -> Result<(), E>
     where
-        F: FnMut(&'a mut Self) -> Result<(), E>;
+        T: 'a,
+        F: FnMut(&'a mut T) -> Result<(), E>;
 }
 
 /// A trait for types that can recursively visit their children of the
@@ -213,7 +216,7 @@ pub trait Visit {
         F2: FnMut(&mut Self);
 }
 
-impl<T: VisitChildren> Visit for T {
+impl<T: VisitChildren<T>> Visit for T {
     fn visit_post<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
     where
         F: FnMut(&Self),
@@ -350,7 +353,7 @@ impl<T> CheckedRecursion for Visitor<T> {
     }
 }
 
-impl<T: VisitChildren> Visitor<T> {
+impl<T: VisitChildren<T>> Visitor<T> {
     fn new() -> Self {
         Self {
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),

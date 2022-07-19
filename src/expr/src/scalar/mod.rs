@@ -1354,7 +1354,7 @@ impl fmt::Display for MirScalarExpr {
     }
 }
 
-impl VisitChildren for MirScalarExpr {
+impl VisitChildren<Self> for MirScalarExpr {
     fn visit_children<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
