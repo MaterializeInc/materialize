@@ -181,9 +181,6 @@ pub mod id_bundle;
 mod dataflow_builder;
 mod indexes;
 
-/// The default is set to a second to track the default timestamp frequency for sources.
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -640,14 +637,14 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn initialize_storage_read_policies(
         &mut self,
         ids: Vec<GlobalId>,
-        compaction_window_ms: Option<Timestamp>,
+        read_policy: Option<ReadPolicy<mz_repr::Timestamp>>,
     ) {
         self.initialize_read_policies(
             CollectionIdBundle {
                 storage_ids: ids.into_iter().collect(),
                 compute_ids: BTreeMap::new(),
             },
-            compaction_window_ms,
+            read_policy,
         )
         .await;
     }
@@ -655,13 +652,13 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Initialize the compute read policies.
     ///
     /// This should be called only after a compute collection is created, and
-    /// ideally very soon afterwards. The collection is otherwise initialized
-    /// with a read policy that allows no compaction.
+    /// ideally very soon afterwards. An optional read policy can be specified,
+    /// otherwise defaulting to using the timeline's read hold time.
     async fn initialize_compute_read_policies(
         &mut self,
         ids: Vec<GlobalId>,
         instance: ComputeInstanceId,
-        compaction_window_ms: Option<Timestamp>,
+        read_policy: Option<ReadPolicy<mz_repr::Timestamp>>,
     ) {
         let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
         compute_ids.insert(instance, ids.into_iter().collect());
@@ -670,31 +667,33 @@ impl<S: Append + 'static> Coordinator<S> {
                 storage_ids: BTreeSet::new(),
                 compute_ids,
             },
-            compaction_window_ms,
+            read_policy,
         )
         .await;
     }
 
     /// Initialize the storage and compute read policies.
     ///
-    /// This should be called only after a collection is created, and
-    /// ideally very soon afterwards. The collection is otherwise initialized
-    /// with a read policy that allows no compaction.
+    /// This should be called only after a collection is created, and ideally
+    /// very soon afterwards. An optional read policy can be specified, otherwise
+    /// defaulting to using the timeline's read hold time.
     #[tracing::instrument(level = "debug", skip_all)]
     async fn initialize_read_policies(
         &mut self,
         id_bundle: CollectionIdBundle,
-        compaction_window_ms: Option<Timestamp>,
+        // If `None`, default to a read policy that allows compacting up to the upper
+        // (which would force all reads to wait). The read holds below are always
+        // present and will set to the global timestamp, which serves as the actual
+        // base read policy, just not as its own variable.
+        read_policy: Option<ReadPolicy<mz_repr::Timestamp>>,
     ) {
         // We do compute first, and they may result in additional storage policy effects.
         for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
             let mut compute_policy_updates = Vec::new();
             for id in compute_ids.iter() {
-                let policy = match compaction_window_ms {
-                    Some(time) => ReadPolicy::lag_writes_by(time),
-                    None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-                };
-
+                let policy = read_policy
+                    .clone()
+                    .unwrap_or_else(|| ReadPolicy::lag_writes_by(Timestamp::minimum()));
                 let mut read_capability: ReadCapability<_> = policy.into();
 
                 if let Some(timeline) = self.get_timeline(*id) {
@@ -724,10 +723,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let mut storage_policy_updates = Vec::new();
         for id in id_bundle.storage_ids.iter() {
-            let policy = match compaction_window_ms {
-                Some(time) => ReadPolicy::lag_writes_by(time),
-                None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-            };
+            let policy = read_policy
+                .clone()
+                .unwrap_or_else(|| ReadPolicy::lag_writes_by(Timestamp::minimum()));
 
             let mut read_capability: ReadCapability<_> = policy.into();
 
@@ -954,8 +952,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
-        self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
-            .await;
+        self.initialize_read_policies(policies_to_set, None).await;
 
         // Announce the completion of initialization.
         self.controller.initialization_complete();
@@ -2959,11 +2956,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(
-                    vec![table_id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![table_id], None)
+                    .await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -3033,11 +3027,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(
-                    vec![source_id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![source_id], None)
+                    .await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -3446,11 +3437,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(
-                    vec![id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![id], None).await;
 
                 self.ship_dataflow(df, compute_instance).await;
 
@@ -5433,14 +5420,15 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         plan: AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut options = Vec::with_capacity(plan.options.len());
-        for o in plan.options {
-            options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(Duration::from_millis),
-                ),
-            });
-        }
+        let options = plan
+            .options
+            .iter()
+            .map(|o| match o {
+                IndexOptionName::LogicalCompactionWindow => {
+                    IndexOption::LogicalCompactionWindow(Some(Duration::from_millis(0)))
+                }
+            })
+            .collect();
 
         self.set_index_options(plan.id, options).await?;
 
@@ -5873,12 +5861,8 @@ impl<S: Append + 'static> Coordinator<S> {
             .create_dataflows(dataflow_plans)
             .await
             .unwrap();
-        self.initialize_compute_read_policies(
-            output_ids,
-            instance,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-        )
-        .await;
+        self.initialize_compute_read_policies(output_ids, instance, None)
+            .await;
     }
 
     /// Finalizes a dataflow.
@@ -6327,6 +6311,7 @@ pub mod fast_path_peek {
     use std::{collections::HashMap, num::NonZeroUsize};
 
     use futures::{FutureExt, StreamExt};
+    use timely::progress::Antichain;
     use uuid::Uuid;
 
     use mz_compute_client::command::{DataflowDescription, ReplicaId};
@@ -6335,6 +6320,7 @@ pub mod fast_path_peek {
     use mz_expr::{EvalError, Id, MirScalarExpr};
     use mz_repr::{Diff, GlobalId, Row};
     use mz_stash::Append;
+    use mz_storage::controller::ReadPolicy;
 
     use crate::client::ConnectionId;
     use crate::coord::{PeekResponseUnary, PendingPeek};
@@ -6546,7 +6532,7 @@ pub mod fast_path_peek {
                         compute_instance,
                         // Disable compaction by using None as the compaction window so that nothing
                         // can compact before the peek occurs below.
-                        None,
+                        Some(ReadPolicy::ValidFrom(Antichain::from_elem(timestamp))),
                     )
                     .await;
 
