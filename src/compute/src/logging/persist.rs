@@ -43,7 +43,7 @@ pub(crate) fn persist_sink<G>(
 
     let location = target.persist_location.clone();
 
-    let write: Option<WriteHandle<_, _, _, _>> = if active_worker_index == scope.index() {
+    let handles: Option<(WriteHandle<_, _, _, _>, _)> = if active_worker_index == scope.index() {
         let shard_id = target.data_shard;
         let persist_client = futures_executor::block_on(async {
             compute_state
@@ -61,9 +61,7 @@ pub(crate) fn persist_sink<G>(
         )
         .expect("could not open persist shard");
 
-        // TODO(teskje): use `open_write`
-        futures_executor::block_on(read.expire());
-        Some(write)
+        Some((write, read))
     } else {
         None
     };
@@ -89,10 +87,44 @@ pub(crate) fn persist_sink<G>(
     sink.build_async(
         scope,
         move |_capabilities, frontiers, scheduler| async move {
-            let mut write = match write {
+            let (mut write, read) = match handles {
                 Some(w) => w,
                 None => return,
             };
+
+            // Delete existing data in shard, by reading at recent_global_upper - 1
+            // and writing -1s at recent_global_upper.
+            let recent_global_upper = write.fetch_recent_upper().await;
+            let data_is_present = recent_global_upper[0] > 0;
+            if data_is_present {
+                let mut initial_flush: Vec<((SourceData, _), _, i64)> = vec![];
+                // Flush the shard
+                let since = Antichain::from_elem(recent_global_upper[0] - 1);
+                tracing::debug!("Trying to read snapshot at since={:?}", since);
+                match read.snapshot(since).await {
+                    Ok(mut x) => {
+                        while let Some(sdvec) = x.next().await {
+                            for sd in sdvec {
+                                tracing::debug!("Got persist data: {:?}", &sd);
+                                let sd1 = sd.0 .0.unwrap();
+                                let mult = sd.2;
+                                initial_flush.push(((sd1, ()), recent_global_upper[0], -mult));
+                            }
+                        }
+                    }
+                    Err(_err) => {
+                        tracing::warn!("Could not flush logging shard!");
+                    }
+                };
+                tracing::debug!("Snapshot read done, bye!");
+
+                let new_upper = Antichain::from_elem(recent_global_upper[0] + 1);
+                write
+                    .append(initial_flush.into_iter(), recent_global_upper, new_upper)
+                    .await
+                    .expect("cannot append updates (1) ")
+                    .expect("cannot append updates (2)");
+            }
 
             let mut buffer = Vec::new();
             let mut stash = HashMap::<_, Vec<_>>::new();
