@@ -15,7 +15,7 @@
 query T
 SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
 ----
-0
+1
 
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'))
@@ -23,7 +23,7 @@ CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'))
 query T
 SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
 ----
-1
+2
 
 statement ok
 CREATE CLUSTER foo2 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
@@ -31,4 +31,4 @@ CREATE CLUSTER foo2 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
 query T
 SELECT COUNT(*) FROM mz_sources WHERE name LIKE 'mz_peek_active_%';
 ----
-3
+4
