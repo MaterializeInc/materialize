@@ -9,13 +9,11 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::{Collection, Hashable};
-use mz_persist_client::{PersistClient, ShardId};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
@@ -52,7 +50,7 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut ComputeState,
-        _sink: &SinkDesc<CollectionMetadata>,
+        sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
@@ -60,18 +58,20 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let ok_collection = sinked_collection.map(|(key, value)| {
-            assert!(key.is_none(), "persist_source does not support keys");
-            value.expect("persist_source must have values")
-        });
+        let desired_collection = sinked_collection
+            .map(|(key, val)| {
+                assert!(key.is_none(), "persist_source does not support keys");
+                let row = val.expect("persist_source must have values");
+                Ok(row)
+            })
+            .concat(&err_collection.map(Err));
 
         persist_sink(
             sink_id,
             &self.storage_metadata,
-            ok_collection,
-            err_collection,
+            desired_collection,
+            sink.as_of.frontier.clone(),
             compute_state,
-            false,
         )
     }
 }
@@ -79,15 +79,52 @@ where
 pub(crate) fn persist_sink<G>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    ok_collection: Collection<G, Row, Diff>,
-    err_collection: Collection<G, DataflowError, Diff>,
+    desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
-    truncate: bool,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let scope = ok_collection.scope();
+    let scope = desired_collection.scope();
+    let (ok_stream, err_stream, token) = mz_storage::source::persist_source::persist_source(
+        &scope,
+        sink_id.clone(),
+        Arc::clone(&compute_state.persist_clients),
+        target.clone(),
+        as_of.clone(),
+    );
+    use differential_dataflow::AsCollection;
+    let persist_collection = ok_stream
+        .as_collection()
+        .map(Ok)
+        .concat(&err_stream.as_collection().map(Err));
+
+    Some(Rc::new((
+        install_desired_into_persist(
+            sink_id,
+            target,
+            desired_collection,
+            persist_collection,
+            as_of,
+            compute_state,
+        ),
+        token,
+    )))
+}
+
+fn install_desired_into_persist<G>(
+    sink_id: GlobalId,
+    target: &CollectionMetadata,
+    desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    as_of: Antichain<Timestamp>,
+    compute_state: &mut crate::compute_state::ComputeState,
+) -> Option<Rc<dyn Any>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let scope = desired_collection.scope();
 
     let persist_clients = Arc::clone(&compute_state.persist_clients);
     let persist_location = target.persist_location.clone();
@@ -96,21 +133,19 @@ where
     let operator_name = format!("persist_sink({})", shard_id);
     let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
 
-    // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
-    // if other workers from replicated clusters write the same data, though. In the real
-    // implementation, we would use a storage client that transparently handles writing to
-    // multiple shards. One shard would then only be written to by one worker but we get
-    // parallelism from the sharding.
-    // TODO(aljoscha): Storage must learn to keep track of collections, which consist of
-    // multiple persist shards. Then we should set it up such that each worker can write to one
-    // shard.
+    // Only attempt to write from this frontier onward, as our data are not necessarily
+    // correct for times not greater or equal to this frontier.
+    let mut write_lower_bound = as_of;
+
+    // TODO(mcsherry): this is shardable, eventually. But for now use a single writer.
     let hashed_id = sink_id.hashed();
     let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let mut desired_input =
+        persist_op.new_input(&desired_collection.inner, Exchange::new(move |_| hashed_id));
+    let mut persist_input =
+        persist_op.new_input(&persist_collection.inner, Exchange::new(move |_| hashed_id));
 
-    let mut input = persist_op.new_input(&ok_collection.inner, Exchange::new(move |_| hashed_id));
-    let mut err_input =
-        persist_op.new_input(&err_collection.inner, Exchange::new(move |_| hashed_id));
-
+    // Dropping this token signals that the operator should shut down cleanly.
     let token = Rc::new(());
     let token_weak = Rc::downgrade(&token);
 
@@ -128,16 +163,19 @@ where
         .sink_write_frontiers
         .insert(sink_id, Rc::clone(&shared_frontier));
 
-    // NOTE(aljoscha): It might be better to roll our own async operator that deals with
-    // handling multiple in-flight write futures, similar to how the persist operators in
-    // `operators/stream.rs` do it. That would allow us to have multiple write requests in
-    // flight concurrently.
+    // This operator accepts the current and desired update streams for a `persist` shard.
+    // It attempts to write out updates, starting from the current's upper frontier, that
+    // will cause the changes of desired to be committed to persist.
+
     persist_op.build_async(
         scope,
         move |_capabilities, frontiers, scheduler| async move {
             let mut buffer = Vec::new();
-            let mut err_buffer = Vec::new();
-            let mut stash: HashMap<_, Vec<_>> = HashMap::new();
+
+            // Contains `desired - persist`, reflecting the updates we would like to commit
+            // to `persist` in order to "correct" it to track `desired`. This collection is
+            // only modified by updates received from either the `desired` or `persist` inputs.
+            let mut correction = Vec::new();
 
             // TODO(aljoscha): We need to figure out what to do with error results from these calls.
             let persist_client = persist_clients
@@ -147,111 +185,87 @@ where
                 .await
                 .expect("could not open persist client");
 
-            if truncate && active_write_worker {
-                truncate_persist_shard(shard_id, &persist_client).await;
-            }
-
             let mut write = persist_client
                 .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
                 .await
                 .expect("could not open persist shard");
 
             while scheduler.notified().await {
-                let mut input_frontier = Antichain::new();
-                for frontier in frontiers.borrow().clone() {
-                    input_frontier.extend(frontier);
-                }
 
                 if !active_write_worker
                     || token_weak.upgrade().is_none()
+                    // FRANK: I don't understand this case.
                     || shared_frontier.borrow().is_empty()
                 {
                     return;
                 }
 
-                input.for_each(|_cap, data| {
+                // Extract desired rows as positive contributions to `correction`.
+                desired_input.for_each(|_cap, data| {
                     data.swap(&mut buffer);
-
-                    for (row, ts, diff) in buffer.drain(..) {
-                        stash
-                            .entry(ts)
-                            .or_default()
-                            .push(((SourceData(Ok(row)), ()), ts, diff));
-                    }
+                    correction.append(&mut buffer);
                 });
 
-                err_input.for_each(|_cap, data| {
-                    data.swap(&mut err_buffer);
-
-                    for (error, ts, diff) in err_buffer.drain(..) {
-                        stash
-                            .entry(ts)
-                            .or_default()
-                            .push(((SourceData(Err(error)), ()), ts, diff));
-                    }
+                // Extract persist rows as negative contributions to `correction`.
+                persist_input.for_each(|_cap, data| {
+                    data.swap(&mut buffer);
+                    correction.extend(buffer.drain(..).map(|(d,t,r)| (d,t,-r)));
                 });
 
-                let mut updates = stash
-                    .iter()
-                    .filter(|(ts, _updates)| !input_frontier.less_equal(ts))
-                    .flat_map(|(_ts, updates)| updates.iter());
+                // Capture current frontiers.
+                let frontiers = frontiers.borrow().clone();
+                let desired_frontier = &frontiers[0];
+                let persist_frontier = &frontiers[1];
 
-                if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
-                    // We always append, even in case we don't have any updates, because appending
-                    // also advances the frontier.
-                    let lower = shared_frontier.borrow().clone();
-                    // TODO(aljoscha): Figure out how errors from this should be reported.
-                    write
-                        .append(updates, lower, input_frontier.clone())
-                        .await
-                        .expect("cannot append updates")
-                        .expect("invalid/outdated upper");
+                // We should only attempt a commit to an interval at least our lower bound.
+                if PartialOrder::less_equal(&write_lower_bound, persist_frontier) {
 
-                    *shared_frontier.borrow_mut() = input_frontier.clone();
-                } else {
-                    // We cannot have updates without the frontier advancing.
-                    assert!(updates.next().is_none());
+                    // We may have the opportunity to commit updates.
+                    if PartialOrder::less_than(persist_frontier, desired_frontier) {
+
+                        // Advance all updates to `persist`'s frontier.
+                        for (_, time, _) in correction.iter_mut() {
+                            use differential_dataflow::lattice::Lattice;
+                            time.advance_by(persist_frontier.borrow());
+                        }
+                        // Consolidate updates within.
+                        consolidate_updates(&mut correction);
+
+                        let to_append =
+                        correction
+                            .iter()
+                            .filter(|(_, time, _)| persist_frontier.less_equal(time) && !desired_frontier.less_equal(time))
+                            .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff));
+
+                        let result =
+                        write
+                            .compare_and_append(to_append, persist_frontier.clone(), desired_frontier.clone())
+                            .await
+                            .expect("Indeterminate")    // TODO: What does this error mean?
+                            .expect("Invalid usage")    // TODO: What does this error mean?
+                            ;
+
+                        // If the result is `Ok`, we will eventually see the appended data return through `persist_input`,
+                        // which will remove the results from `correction`; we should not do this directly ourselves.
+                        // In either case, we have new information about the next frontier we should attempt to commit from.
+                        match result {
+                            Ok(()) => {
+                                write_lower_bound.clone_from(desired_frontier);
+                            }
+                            Err(mz_persist_client::Upper(frontier)) => {
+                                write_lower_bound.clone_from(&frontier);
+                            }
+                        }
+                    } else {
+                        write_lower_bound.clone_from(&persist_frontier);
+                    }
                 }
 
-                stash.retain(|ts, _updates| input_frontier.less_equal(ts));
+                // Confirm that we only require updates from our lower bound onward.
+                shared_frontier.borrow_mut().clone_from(&write_lower_bound);
             }
         },
     );
 
     Some(token)
-}
-
-async fn truncate_persist_shard(shard_id: ShardId, persist_client: &PersistClient) {
-    let (mut write, mut read) = persist_client
-        .open::<SourceData, (), Timestamp, Diff>(shard_id)
-        .await
-        .expect("could not open persist shard");
-
-    let upper = write.upper().clone();
-    let upper_ts = upper[0];
-    if let Some(ts) = upper_ts.checked_sub(1) {
-        let as_of = Antichain::from_elem(ts);
-
-        let mut updates = read
-            .snapshot_and_fetch(as_of)
-            .await
-            .expect("cannot serve requested as_of");
-
-        consolidate_updates(&mut updates);
-
-        let retractions = updates
-            .into_iter()
-            .map(|((k, v), _ts, diff)| ((k.unwrap(), v.unwrap()), upper_ts, diff * -1));
-
-        let new_upper = Antichain::from_elem(upper_ts + 1);
-        write
-            .compare_and_append(retractions, upper, new_upper)
-            .await
-            .expect("external durability failure")
-            .expect("invalid usage")
-            .expect("unexpected upper");
-    }
-
-    write.expire().await;
-    read.expire().await;
 }
