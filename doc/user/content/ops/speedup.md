@@ -1,18 +1,31 @@
 ---
-title: "Indexing"
+title: "Speedup"
 description: "Find details about how to improve the performance using indexes"
 aliases:
-  - /optimizing-queries
+  - /speedup-queries
 menu:
   main:
     parent: ops
     weight: 50
 ---
 
-Indexes are a way to optimize query performance. In the following sections, you will find different ways to implement them and get faster results.
+Indexes are a way to optimize query performance, from queries between views to queries from the client side. In the following sections, you will find different cases that will be useful for yours.
+
+Before continuing, consider the following example, a simple table with contacts data:
+
+```sql
+CREATE TABLE contacts (
+    first_name TEXT,
+    last_name TEXT,
+    phone INT,
+    prefix INT
+);
+
+INSERT INTO contacts SELECT 'random_name', 'random_last_name', generate_series(0, 100000), 1;
+```
 
 <!-- This will be removed till the PR makes it into production and is available to everyone -->
-### Checking if a query is using an index
+<!-- ### Checking if a query is using an index
 
 The [EXPLAIN](https://materialize.com/docs/sql/explain/#conceptual-framework) command displays if the query plan is including an index to read from.
 
@@ -30,29 +43,18 @@ EXPLAIN SELECT * FROM contacts WHERE first_name = 'Jann';
 ```
 
 `ReadExistingIndex` indicates that the query is using the `contacts_first_name_idx`. An absence of it would mean
-that the query is scanning the whole table resulting in slower results.
+that the query is scanning the whole table resulting in slower results. -->
 
-## Optimizing WHERE filtering
+## WHERE
 
-Setting up an index over a column were filtering by literal values or expressions is common will improve the performance.
-
-Consider the following example, a simple table with contacts data:
-
-```sql
-CREATE TABLE contacts (
-    first_name TEXT,
-    last_name TEXT,
-    phone INT,
-    prefix INT
-);
-
--- 2) Random data
-INSERT INTO contacts SELECT 'random_name', 'random_last_name', generate_series(0, 100000), 1;
-```
+The filtering clause is one of the most common operations in any database.
+Set up an index over the columns that filtering by is frequent to increase the overall query speed.
 
 ### Literal Values
 
-Typical usage is retrieving all the contacts with a particular first name (the literal value). Indexing the column will improve the performance of any query whose only filter is the one the index has.
+Filtering by literal values is a typical case. Indexing the related column will improve the performance.
+
+Back to our example, retrieving all the contacts by a particular first name (a literal value) will get the improvement.
 
 ```sql
 CREATE INDEX contacts_first_name_idx ON contacts (first_name);
@@ -62,7 +64,9 @@ SELECT * FROM contacts WHERE first_name = 'Charlie';
 
 ### Expressions
 
-Expressions can also be part of the index. Back to our example, since contact names are probably not always correctly written, using a function to upper case all the characters can be helpful. An index can do the job incrementally for us rather than calculating those upper values on the fly for every query.
+Expressions can also be part of the index. An index can do the job incrementally rather than calculating those upper values on the fly for every query.
+
+E.g.: Since contact names are probably not always correctly written, using a function to upper case all the characters is helpful.
 
 ```sql
 CREATE INDEX contacts_upper_first_name_idx ON contacts (upper(first_name));
@@ -89,7 +93,7 @@ CREATE INDEX contacts_upper_first_name_phone_idx ON contacts (upper(first_name),
 SELECT * FROM contacts WHERE first_name = 'CHARLIE' AND phone = 873090;
 ```
 
-## Optimizing JOIN
+## JOIN
 
 Optimize the performance of `JOIN` on two relations by ensuring their
 join keys are the key columns in an index.
@@ -116,13 +120,13 @@ In the above example, the index `contacts_prefix_idx`...
 -   Obeys our restrictions by containing only a subset of columns in the result
     set.
 
-## Optimizing Temporal Filters [Research pending]
+## Temporal Filters [Research pending]
 
-<!-- The index pattern can be a good one to add into the SQL patterns -->
+<!-- The index pattern can be a good one to add into the SQL patterns (Maybe in Manual materialization) -->
 
-## The Index Pattern
+<!-- ## The Index Pattern
 
-Creating an index using expressions is an alternative pattern to avoid building downstream views that only apply a function like the one used in the last example: `upper(first_name)`. Take into account that aggregations like `count()` and other non-materializable functions are not possible to use as expressions.
+Creating an index using expressions is an alternative pattern to avoid building downstream views that only apply a function like the one used in the last example: `upper(first_name)`. Take into account that aggregations like `count()` and other non-materializable functions are not possible to use as expressions. -->
 
 <!-- Which query should run faster?
 
