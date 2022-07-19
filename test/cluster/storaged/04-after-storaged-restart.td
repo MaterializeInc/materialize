@@ -11,13 +11,13 @@
 # then try ingesting new data.
 
 > SELECT * from remote1
-one   1
-two   2
-three 3
+one
+two
+three
 > SELECT * from remote2
-one   1
-two   2
-three 3
+one
+two
+three
 
 $ kafka-ingest format=bytes topic=remote1
 four
@@ -25,12 +25,12 @@ $ kafka-ingest format=bytes topic=remote2
 four
 
 > SELECT * from remote1
-one   1
-two   2
-three 3
-four  4
+one
+two
+three
+four
 > SELECT * from remote2
-one   1
-two   2
-three 3
-four  4
+one
+two
+three
+four

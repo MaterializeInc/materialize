@@ -19,7 +19,7 @@ $ kafka-create-topic topic=avro-decode-no-record
 $ kafka-ingest format=avro topic=avro-decode-no-record schema=${no-record} timestamp=1
 123
 
-> CREATE MATERIALIZED SOURCE avro_decode_no_record
+> CREATE SOURCE avro_decode_no_record
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-no-record-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${no-record}'
   ENVELOPE NONE

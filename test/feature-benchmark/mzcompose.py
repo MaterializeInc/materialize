@@ -367,6 +367,11 @@ root_scenario: {args.root_scenario}"""
 
 
 def workflow_mzcloud(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # Make sure Kafka is externally accessible on a predictable port.
+    assert (
+        c.preserve_ports
+    ), "`--preserve-ports` must be specified (BEFORE the `run` command)"
+
     parser.add_argument(
         "--mzcloud-url",
         type=str,
@@ -374,15 +379,9 @@ def workflow_mzcloud(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--kafka-addr",
+        "--external-addr",
         type=str,
-        help="The kafka address for testdrive to use.",
-    )
-
-    parser.add_argument(
-        "--schema-registry-url",
-        type=str,
-        help="The schema registry url for testdrive to use.",
+        help="Kafka and Schema Registry are started by mzcompose and exposed on the public interface. This is the IP address or hostname that is accessible by the mzcloud instance, usually the public IP of your machine.",
     )
 
     parser.add_argument(
@@ -427,73 +426,82 @@ def workflow_mzcloud(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     assert args.mzcloud_url
-    assert args.kafka_addr
-    assert args.schema_registry_url
+    assert args.external_addr
 
     print(
         f"""
 mzcloud url: {args.mzcloud_url}
-kafka addr: {args.kafka_addr}
-schema registry url: {args.schema_registry_url}
+external addr: {args.external_addr}
 
 root_scenario: {args.root_scenario}"""
     )
 
-    # Build the list of scenarios to run
-    root_scenario = globals()[args.root_scenario]
-    initial_scenarios = {}
+    overrides = [
+        KafkaService(
+            extra_environment=[
+                f"KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://{args.external_addr}:9092"
+            ]
+        ),
+    ]
 
-    if root_scenario.__subclasses__():
-        for scenario in root_scenario.__subclasses__():
-            has_children = False
-            for s in scenario.__subclasses__():
-                has_children = True
-                initial_scenarios[s] = 1
+    with c.override(*overrides):
+        c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+        c.up("testdrive", persistent=True)
 
-            if not has_children:
-                initial_scenarios[scenario] = 1
-    else:
-        initial_scenarios[root_scenario] = 1
+        # Build the list of scenarios to run
+        root_scenario = globals()[args.root_scenario]
+        initial_scenarios = {}
 
-    scenarios = initial_scenarios.copy()
+        if root_scenario.__subclasses__():
+            for scenario in root_scenario.__subclasses__():
+                has_children = False
+                for s in scenario.__subclasses__():
+                    has_children = True
+                    initial_scenarios[s] = 1
 
-    for cycle in range(0, args.max_retries):
-        print(
-            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
-        )
+                if not has_children:
+                    initial_scenarios[scenario] = 1
+        else:
+            initial_scenarios[root_scenario] = 1
 
-        report = SingleReport()
+        scenarios = initial_scenarios.copy()
 
-        for scenario in list(scenarios.keys()):
-            name = scenario.__name__
-            if args.test_filter and args.test_filter.lower() not in name.lower():
-                continue
-            print(f"--- Now benchmarking {name} ...")
-            comparator = SuccessComparator(name, threshold=0)
-            common_seed = round(time.time())
-            executor = MzCloud(
-                composition=c,
-                mzcloud_url=args.mzcloud_url,
-                seed=common_seed,
-                kafka_addr=args.kafka_addr,
-                schema_registry_url=args.schema_registry_url,
-            )
-            executor.Reset()
-            mz_id = 0
-
-            benchmark = Benchmark(
-                mz_id=mz_id,
-                scenario=scenario,
-                scale=args.scale,
-                executor=executor,
-                filter=make_filter(args),
-                termination_conditions=make_termination_conditions(args),
-                aggregation=make_aggregation(),
+        for cycle in range(0, args.max_retries):
+            print(
+                f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
             )
 
-            outcome, iterations = benchmark.run()
-            comparator.append(outcome)
-            report.append(comparator)
+            report = SingleReport()
 
-            print(f"+++ Benchmark Report for cycle {cycle+1}:")
-            report.dump()
+            for scenario in list(scenarios.keys()):
+                name = scenario.__name__
+                if args.test_filter and args.test_filter.lower() not in name.lower():
+                    continue
+                print(f"--- Now benchmarking {name} ...")
+                comparator = SuccessComparator(name, threshold=0)
+                common_seed = round(time.time())
+                executor = MzCloud(
+                    composition=c,
+                    mzcloud_url=args.mzcloud_url,
+                    seed=common_seed,
+                    external_addr=args.external_addr,
+                )
+                executor.Reset()
+                mz_id = 0
+
+                benchmark = Benchmark(
+                    mz_id=mz_id,
+                    scenario=scenario,
+                    scale=args.scale,
+                    executor=executor,
+                    filter=make_filter(args),
+                    termination_conditions=make_termination_conditions(args),
+                    aggregation=make_aggregation(),
+                )
+
+                outcome, iterations = benchmark.run()
+                comparator.append(outcome)
+                report.append(comparator)
+
+                print(f"+++ Benchmark Report for cycle {cycle+1}:")
+                report.dump()

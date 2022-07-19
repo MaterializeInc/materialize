@@ -42,7 +42,7 @@ $ kafka-ingest topic=repeated format=protobuf descriptor-file=repeated.pb messag
 {"bool": [true, false], "int32": [2, 1], "int64": [2, 1], "float": [3.2, 1.0], "double": [3.2, 1.0], "bytes": ["YmJi", "YWFh"], "string": ["bbb", "aaa"], "enum": ["ENUM1", "ENUM0"], "message": [{"m1": 4, "m2": 2}, {"m1": 2, "m2": 4}]}
 {}
 
-> CREATE MATERIALIZED SOURCE repeated FROM
+> CREATE SOURCE repeated FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-repeated-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Repeated' USING SCHEMA FILE '${testdrive.temp-dir}/repeated.pb'
 
@@ -58,10 +58,9 @@ bytes      false     list
 string     false     list
 enum       false     list
 message    false     list
-mz_offset  false     bigint
 
-> SELECT bool::text, int32::text, int64::text, float::text, double::text, string::text, bytes::text, enum::text, message::text, mz_offset FROM repeated
-bool    int32  int64  float   double   string     bytes                enum           message                  mz_offset
+> SELECT bool::text, int32::text, int64::text, float::text, double::text, string::text, bytes::text, enum::text, message::text FROM repeated
+bool    int32  int64  float   double   string     bytes                enum           message
 ----
-{t,f}  {2,1}   {2,1}  {3.2,1} {3.2,1}  {bbb,aaa}  {\x626262,\x616161}  {ENUM1,ENUM0}  "{\"(4,2)\",\"(2,4)\"}"  1
-{}     {}      {}     {}      {}       {}         {}                   {}             {}                       2
+{t,f}  {2,1}   {2,1}  {3.2,1} {3.2,1}  {bbb,aaa}  {\x626262,\x616161}  {ENUM1,ENUM0}  "{\"(4,2)\",\"(2,4)\"}"
+{}     {}      {}     {}      {}       {}         {}                   {}             {}

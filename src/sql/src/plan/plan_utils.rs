@@ -20,18 +20,14 @@ use crate::plan::PlanError;
 /// Renames the columns in `desc` with the names in `column_names` if
 /// `column_names` is non-empty.
 ///
-/// Returns an error if the length of `column_names` is not either zero or the
-/// arity of `desc`.
+/// Returns an error if the length of `column_names` is greater than the arity
+/// of `desc`.
 pub fn maybe_rename_columns(
     context: impl fmt::Display,
-    desc: RelationDesc,
+    desc: &mut RelationDesc,
     column_names: &[Ident],
-) -> Result<RelationDesc, PlanError> {
-    if column_names.is_empty() {
-        return Ok(desc);
-    }
-
-    if column_names.len() != desc.typ().column_types.len() {
+) -> Result<(), PlanError> {
+    if column_names.len() > desc.typ().column_types.len() {
         sql_bail!(
             "{0} definition names {1} column{2}, but {0} has {3} column{4}",
             context,
@@ -46,11 +42,11 @@ pub fn maybe_rename_columns(
         )
     }
 
-    let new_names = column_names
-        .iter()
-        .map(|n| normalize::column_name(n.clone()));
+    for (i, name) in column_names.iter().enumerate() {
+        *desc.get_name_mut(i) = normalize::column_name(name.clone());
+    }
 
-    Ok(desc.with_names(new_names))
+    Ok(())
 }
 
 /// Specifies the side of a join.

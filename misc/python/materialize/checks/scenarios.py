@@ -21,7 +21,9 @@ from materialize.checks.actions import Action
 from materialize.checks.actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
-from materialize.checks.actions import Initialize, KillComputed, Manipulate
+from materialize.checks.actions import Initialize, KillComputed
+from materialize.checks.actions import KillStoraged as KillStoragedAction
+from materialize.checks.actions import Manipulate
 from materialize.checks.actions import RestartMz as RestartMzAction
 from materialize.checks.actions import StartComputed, StartMz, UseComputed, Validate
 from materialize.checks.checks import Check
@@ -92,5 +94,21 @@ class RestartComputed(Scenario):
             Manipulate(self.checks, phase=2),
             KillComputed(),
             StartComputed(),
+            Validate(self.checks),
+        ]
+
+
+class KillStoraged(Scenario):
+    """Kill storaged while it is running inside the enviromentd container. The process orchestrator will (try to) start it again."""
+
+    def actions(self) -> List[Action]:
+        return [
+            StartMz(),
+            Initialize(self.checks),
+            KillStoragedAction(),
+            Manipulate(self.checks, phase=1),
+            KillStoragedAction(),
+            Manipulate(self.checks, phase=2),
+            KillStoragedAction(),
             Validate(self.checks),
         ]

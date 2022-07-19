@@ -18,7 +18,7 @@ INSERT INTO alter_allow_nullability VALUES (123),(234);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_allow_nullability-value
 
-> CREATE MATERIALIZED SOURCE alter_allow_nullability
+> CREATE SOURCE alter_allow_nullability
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_allow_nullability'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

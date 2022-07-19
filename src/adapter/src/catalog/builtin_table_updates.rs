@@ -12,7 +12,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaConfig};
+use mz_controller::ComputeInstanceStatus;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -22,18 +22,19 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage::client::sinks::KafkaSinkConnection;
+use mz_storage::types::sinks::KafkaSinkConnection;
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_RECORDED_VIEWS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS,
-    MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, RecordedView, Sink,
-    SinkConnection, SinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, RecordedView,
+    SerializedComputeInstanceReplicaConfig, Sink, SinkConnection, SinkConnectionState, Type, View,
+    SYSTEM_CONN_ID,
 };
 use crate::coord::ReplicaMetadata;
 
@@ -128,13 +129,12 @@ impl CatalogState {
         let id = instance.replica_id_by_name[name];
         let replica = &instance.replicas_by_id[&id];
 
-        let (size, az) = match &replica.config {
-            ConcreteComputeInstanceReplicaConfig::Managed {
-                size_config: _,
-                size_name,
+        let (size, az) = match &replica.serialized_config {
+            SerializedComputeInstanceReplicaConfig::Managed {
+                size,
                 availability_zone,
-            } => (Some(&**size_name), availability_zone.as_deref()),
-            ConcreteComputeInstanceReplicaConfig::Remote { .. } => (None, None),
+            } => (Some(&**size), availability_zone.as_deref()),
+            SerializedComputeInstanceReplicaConfig::Remote { .. } => (None, None),
         };
 
         BuiltinTableUpdate {
@@ -298,7 +298,7 @@ impl CatalogState {
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        vec![BuiltinTableUpdate {
+        let mut updates = vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CONNECTIONS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
@@ -307,11 +307,35 @@ impl CatalogState {
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
                 Datum::String(match connection.connection {
-                    mz_storage::client::connections::Connection::Kafka { .. } => "kafka",
-                    mz_storage::client::connections::Connection::Csr { .. } => {
+                    mz_storage::types::connections::Connection::Kafka { .. } => "kafka",
+                    mz_storage::types::connections::Connection::Csr { .. } => {
                         "confluent-schema-registry"
                     }
+                    mz_storage::types::connections::Connection::Postgres { .. } => "postgres",
+                    mz_storage::types::connections::Connection::Ssh { .. } => "ssh",
                 }),
+            ]),
+            diff,
+        }];
+        if let mz_storage::types::connections::Connection::Ssh(ssh) = &connection.connection {
+            updates.extend(self.pack_ssh_tunnel_connection_update(id, name, &ssh.public_key, diff));
+        }
+        updates
+    }
+
+    fn pack_ssh_tunnel_connection_update(
+        &self,
+        id: GlobalId,
+        name: &str,
+        public_key: &str,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SSH_TUNNEL_CONNECTIONS),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(name),
+                Datum::String(public_key),
             ]),
             diff,
         }]

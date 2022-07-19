@@ -26,10 +26,7 @@ use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::errors::{DataflowError, DecodeError};
-use crate::client::sources::{encoding::*, *};
-use crate::client::transforms::LinearOperator;
+use crate::controller::CollectionMetadata;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::persist_source;
 use crate::source::{
@@ -37,6 +34,9 @@ use crate::source::{
     PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
     SourceOutput,
 };
+use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::sources::{encoding::*, *};
+use crate::types::transforms::LinearOperator;
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -232,7 +232,7 @@ where
                 None => None,
                 Some(csr_connection) => Some(
                     block_on(
-                        csr_connection.connect(&storage_state.connection_context.secrets_reader),
+                        csr_connection.connect(&*storage_state.connection_context.secrets_reader),
                     )
                     .expect("CSR connection unexpectedly missing secrets"),
                 ),
@@ -310,7 +310,7 @@ where
             // render envelopes
             match &envelope {
                 SourceEnvelope::Debezium(dbz_envelope) => {
-                    let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
+                    let (stream, errors) = match &dbz_envelope.dedup.tx_metadata {
                         Some(tx_metadata) => {
                             let tx_storage_metadata = description
                                 .source_imports
@@ -334,18 +334,9 @@ where
                             needed_tokens.push(tx_token);
                             error_collections.push(tx_source_err);
 
-                            super::debezium::render_tx(
-                                dbz_envelope,
-                                &results,
-                                tx_source_ok,
-                                dataflow_debug_name.clone(),
-                            )
+                            super::debezium::render_tx(dbz_envelope, &results, tx_source_ok)
                         }
-                        None => super::debezium::render(
-                            dbz_envelope,
-                            &results,
-                            dataflow_debug_name.clone(),
-                        ),
+                        None => super::debezium::render(dbz_envelope, &results),
                     };
                     (stream.as_collection(), Some(errors.as_collection()))
                 }
@@ -490,9 +481,7 @@ where
 {
     match upsert_envelope {
         UpsertEnvelope {
-            style:
-                UpsertStyle::Default(KeyEnvelope::LegacyUpsert | KeyEnvelope::Flattened)
-                | UpsertStyle::Debezium { .. },
+            style: UpsertStyle::Default(KeyEnvelope::Flattened) | UpsertStyle::Debezium { .. },
             ..
         } => results,
         UpsertEnvelope {
@@ -541,7 +530,7 @@ where
 
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
-        KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
+        KeyEnvelope::Flattened => results
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
                 maybe_kv.map(|(key, value, diff)| {

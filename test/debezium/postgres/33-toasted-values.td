@@ -22,7 +22,7 @@ INSERT INTO toasted_full VALUES (NULL), (REPEAT('a', 32 * 1024) || 'b');
 
 $ schema-registry-wait-schema schema=postgres.public.toasted_full-value
 
-> CREATE MATERIALIZED SOURCE toasted_full
+> CREATE SOURCE toasted_full
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.toasted_full'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

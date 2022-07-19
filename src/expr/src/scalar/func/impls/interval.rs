@@ -15,7 +15,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 
 sqlfunc!(
-    #[sqlname = "ivtostr"]
+    #[sqlname = "interval_to_text"]
     #[preserves_uniqueness = true]
     fn cast_interval_to_string(a: Interval) -> String {
         let mut buf = String::new();
@@ -25,7 +25,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "ivtotime"]
+    #[sqlname = "interval_to_time"]
     fn cast_interval_to_time(mut i: Interval) -> NaiveTime {
         // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
         if i.is_negative() {

@@ -11,7 +11,7 @@ from typing import Dict, Type
 
 from materialize.zippy.framework import Action, Scenario
 from materialize.zippy.kafka_actions import CreateTopic, Ingest, KafkaStart
-from materialize.zippy.mz_actions import MzStart, MzStop
+from materialize.zippy.mz_actions import KillStoraged, MzStart, MzStop
 from materialize.zippy.source_actions import CreateSource
 from materialize.zippy.table_actions import DML, CreateTable, ValidateTable
 from materialize.zippy.view_actions import CreateView, ValidateView
@@ -24,6 +24,7 @@ class KafkaSources(Scenario):
         return {
             MzStart: 1,
             MzStop: 10,
+            KillStoraged: 15,
             KafkaStart: 1,
             CreateTopic: 5,
             CreateSource: 5,

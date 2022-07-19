@@ -24,9 +24,9 @@ use timely::PartialOrder;
 
 use crate::storage_state::StorageState;
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::errors::DataflowError;
-use crate::client::sources::SourceData;
+use crate::controller::CollectionMetadata;
+use crate::types::errors::DataflowError;
+use crate::types::sources::SourceData;
 
 pub fn render<G>(
     scope: &mut G,

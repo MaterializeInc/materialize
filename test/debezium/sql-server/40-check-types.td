@@ -16,7 +16,7 @@ INSERT INTO types_table SELECT * FROM types_table
 
 $ schema-registry-wait-schema schema=sql-server.dbo.types_table-value
 
-> CREATE MATERIALIZED SOURCE types_table
+> CREATE SOURCE types_table
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.types_table'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

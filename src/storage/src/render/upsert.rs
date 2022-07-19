@@ -23,10 +23,10 @@ use mz_ore::result::ResultExt;
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::operator::StreamExt;
 
-use crate::client::errors::{DataflowError, DecodeError};
-use crate::client::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
-use crate::client::transforms::LinearOperator;
 use crate::source::DecodeResult;
+use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
+use crate::types::transforms::LinearOperator;
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {

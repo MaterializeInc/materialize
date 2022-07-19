@@ -39,8 +39,8 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage::client::sinks::{SinkConnectionBuilder, SinkEnvelope};
-use mz_storage::client::sources::{SourceDesc, Timeline};
+use mz_storage::types::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
     ExplainOptions, ExplainStageNew, ExplainStageOld, Expr, FetchDirection, IndexOptionName,
@@ -68,6 +68,7 @@ pub(crate) mod with_options;
 pub use self::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 pub use error::PlanError;
 pub use explain::Explanation;
+use mz_sql_parser::ast::TransactionIsolationLevel;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
@@ -131,6 +132,7 @@ pub enum Plan {
 #[derive(Debug)]
 pub struct StartTransactionPlan {
     pub access: Option<TransactionAccessMode>,
+    pub isolation_level: Option<TransactionIsolationLevel>,
 }
 
 #[derive(Debug)]
@@ -155,14 +157,14 @@ pub struct CreateRolePlan {
 pub struct CreateComputeInstancePlan {
     pub name: String,
     pub config: Option<ComputeInstanceIntrospectionConfig>,
-    pub replicas: Vec<(String, ReplicaConfig)>,
+    pub replicas: Vec<(String, ComputeInstanceReplicaConfig)>,
 }
 
 #[derive(Debug)]
 pub struct CreateComputeInstanceReplicaPlan {
     pub name: String,
     pub of_cluster: String,
-    pub config: ReplicaConfig,
+    pub config: ComputeInstanceReplicaConfig,
 }
 
 /// Configuration of introspection for a compute instance.
@@ -175,7 +177,7 @@ pub struct ComputeInstanceIntrospectionConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ReplicaConfig {
+pub enum ComputeInstanceReplicaConfig {
     Remote {
         addrs: BTreeSet<String>,
     },
@@ -190,7 +192,6 @@ pub struct CreateSourcePlan {
     pub name: QualifiedObjectName,
     pub source: Source,
     pub if_not_exists: bool,
-    pub materialized: bool,
     pub timeline: Timeline,
     pub remote: Option<String>,
 }
@@ -491,7 +492,7 @@ pub struct Source {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage::client::connections::Connection,
+    pub connection: mz_storage::types::connections::Connection,
 }
 
 #[derive(Clone, Debug)]
@@ -571,17 +572,17 @@ impl QueryWhen {
         }
     }
     /// Returns whether the candidate must be advanced to the upper.
-    pub fn advance_to_upper(&self, uses_tables: bool) -> bool {
+    pub fn advance_to_upper(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => !uses_tables,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
-    /// Returns whether the candidate must be advanced to the global table timestamp.
-    pub fn advance_to_table_ts(&self, uses_tables: bool) -> bool {
+    /// Returns whether the candidate must be advanced to the global timestamp.
+    pub fn advance_to_global_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => uses_tables,
-            QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately => true,
+            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
         }
     }
 }

@@ -24,7 +24,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
 > CREATE SECRET password_csr AS 'sekurity'
 
-> CREATE MATERIALIZED SOURCE data
+> CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
@@ -57,7 +57,7 @@ a
 
 # Ensure that our test infra correctly sets up certs by failing when CSR is not
 # specifically configured
-! CREATE MATERIALIZED SOURCE data
+! CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
@@ -77,7 +77,7 @@ contains:sslv3 alert certificate unknown
 
 # Ensure that our test infra correctly sets up certs by failing when CSR is not
 # specifically configured, AND we are specifically setting certs
-! CREATE MATERIALIZED SOURCE data
+! CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',

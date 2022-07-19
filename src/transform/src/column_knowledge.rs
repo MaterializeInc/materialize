@@ -19,7 +19,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, RelationType, ScalarType};
 use mz_repr::{Datum, Row};
 
-use crate::TransformArgs;
+use crate::{TransformArgs, TransformError};
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
@@ -47,7 +47,7 @@ impl crate::Transform for ColumnKnowledge {
         &self,
         expr: &mut MirRelationExpr,
         _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
+    ) -> Result<(), TransformError> {
         let mut knowledge_stack = Vec::<DatumKnowledge>::new();
         self.harvest(expr, &mut HashMap::new(), &mut knowledge_stack)
             .map(|_| ())
@@ -63,7 +63,7 @@ impl ColumnKnowledge {
         expr: &mut MirRelationExpr,
         knowledge: &mut HashMap<mz_expr::Id, Vec<DatumKnowledge>>,
         knowledge_stack: &mut Vec<DatumKnowledge>,
-    ) -> Result<Vec<DatumKnowledge>, crate::TransformError> {
+    ) -> Result<Vec<DatumKnowledge>, TransformError> {
         self.checked_recur(|_| {
             match expr {
                 MirRelationExpr::ArrangeBy { input, .. } => {
@@ -112,7 +112,7 @@ impl ColumnKnowledge {
                     let input_typ = input.typ();
                     for scalar in scalars.iter_mut() {
                         let know =
-                            optimize(scalar, &input_typ, &input_knowledge[..], knowledge_stack);
+                            optimize(scalar, &input_typ, &input_knowledge[..], knowledge_stack)?;
                         input_knowledge.push(know);
                     }
                     Ok(input_knowledge)
@@ -121,7 +121,7 @@ impl ColumnKnowledge {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     let input_typ = input.typ();
                     for expr in exprs {
-                        optimize(expr, &input_typ, &input_knowledge[..], knowledge_stack);
+                        optimize(expr, &input_typ, &input_knowledge[..], knowledge_stack)?;
                     }
                     let func_typ = func.output_type();
                     input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
@@ -131,7 +131,7 @@ impl ColumnKnowledge {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     let input_typ = input.typ();
                     for predicate in predicates.iter_mut() {
-                        optimize(predicate, &input_typ, &input_knowledge[..], knowledge_stack);
+                        optimize(predicate, &input_typ, &input_knowledge[..], knowledge_stack)?;
                     }
                     // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
                     for predicate in predicates.iter() {
@@ -212,7 +212,7 @@ impl ColumnKnowledge {
 
                         // We can produce composite knowledge for everything in the equivalence class.
                         for expr in equivalence.iter_mut() {
-                            optimize(expr, &folded_inputs_typ, &knowledges, knowledge_stack);
+                            optimize(expr, &folded_inputs_typ, &knowledges, knowledge_stack)?;
                             if let MirScalarExpr::Column(c) = expr {
                                 knowledge.absorb(&knowledges[*c]);
                             }
@@ -239,7 +239,7 @@ impl ColumnKnowledge {
                     let mut output = group_key
                         .iter_mut()
                         .map(|k| optimize(k, &input_typ, &input_knowledge[..], knowledge_stack))
-                        .collect::<Vec<_>>();
+                        .collect::<Result<Vec<_>, _>>()?;
                     for aggregate in aggregates.iter_mut() {
                         use mz_expr::AggregateFunc;
                         let knowledge = optimize(
@@ -247,7 +247,7 @@ impl ColumnKnowledge {
                             &input_typ,
                             &input_knowledge[..],
                             knowledge_stack,
-                        );
+                        )?;
                         // This could be improved.
                         let knowledge = match aggregate.func {
                             AggregateFunc::MaxInt16
@@ -384,7 +384,7 @@ pub fn optimize(
     input_type: &RelationType,
     column_knowledge: &[DatumKnowledge],
     knowledge_stack: &mut Vec<DatumKnowledge>,
-) -> DatumKnowledge {
+) -> Result<DatumKnowledge, TransformError> {
     // Storage for `DatumKnowledge` being propagated up through the
     // `MirScalarExpr`. When a node is visited, pop off as many `DatumKnowledge`
     // as the number of children the node has, and then push the
@@ -393,8 +393,7 @@ pub fn optimize(
     // `DatumKnowledge` in the stack are the `DatumKnowledge` corresponding to
     // the children.
 
-    #[allow(deprecated)]
-    expr.visit_mut_pre_post_nolimit(
+    expr.visit_mut_pre_post(
         &mut |e| {
             // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.
@@ -463,6 +462,9 @@ pub fn optimize(
             };
             knowledge_stack.push(result);
         },
-    );
-    knowledge_stack.pop().unwrap()
+    )?;
+    let knowledge_datum = knowledge_stack.pop();
+    knowledge_datum.ok_or_else(|| {
+        TransformError::Internal(String::from("unexpectedly empty stack in optimize"))
+    })
 }

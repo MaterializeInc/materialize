@@ -44,14 +44,14 @@ use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::metrics::DecodeMetrics;
 use self::protobuf::ProtobufDecoderState;
-use crate::client::connections::ConnectionContext;
-use crate::client::errors::DecodeError;
-use crate::client::sources::encoding::{
+use crate::source::{DecodeResult, SourceOutput};
+use crate::types::connections::ConnectionContext;
+use crate::types::errors::DecodeError;
+use crate::types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
-use crate::client::sources::{IncludedColumnSource, MzOffset};
-use crate::client::transforms::LinearOperator;
-use crate::source::{DecodeResult, SourceOutput};
+use crate::types::sources::{IncludedColumnSource, MzOffset};
+use crate::types::transforms::LinearOperator;
 
 mod avro;
 mod csv;
@@ -266,7 +266,7 @@ fn get_decoder(
             let csr_client = match csr_connection {
                 None => None,
                 Some(csr_connection) => Some(
-                    block_on(csr_connection.connect(&connection_context.secrets_reader))
+                    block_on(csr_connection.connect(&*connection_context.secrets_reader))
                         .expect("CSR connection unexpectedly missing secrets"),
                 ),
             };
@@ -674,7 +674,7 @@ fn to_metadata_row(
             for item in metadata_items.iter() {
                 match item {
                     IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
-                    IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => {
+                    IncludedColumnSource::Offset => {
                         // note this is bitwise cast, so offsets > i64::MAX will be
                         // rendered as negative
                         // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
@@ -722,17 +722,8 @@ fn to_metadata_row(
             }
         }
         PartitionId::None => {
-            for item in metadata_items.iter() {
-                match item {
-                    IncludedColumnSource::DefaultPosition => {
-                        // note this is bitwise cast, so offsets > i64::MAX will be
-                        // rendered as negative
-                        // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
-                        // is resolved.
-                        packer.push(Datum::from(position as i64))
-                    }
-                    _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
-                }
+            if !metadata_items.is_empty() {
+                unreachable!("Only Kafka supports metadata items");
             }
         }
     }

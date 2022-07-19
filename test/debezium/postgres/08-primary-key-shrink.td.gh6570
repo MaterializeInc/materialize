@@ -17,7 +17,7 @@ CREATE TABLE alter_shrink_primary_key (f1 INTEGER DEFAULT 1, f2 INTEGER DEFAULT 
 ALTER TABLE alter_shrink_primary_key REPLICA IDENTITY FULL;
 INSERT INTO alter_shrink_primary_key VALUES (123,234),(345,456);
 
-> CREATE MATERIALIZED SOURCE alter_shrink_primary_key
+> CREATE SOURCE alter_shrink_primary_key
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_shrink_primary_key'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

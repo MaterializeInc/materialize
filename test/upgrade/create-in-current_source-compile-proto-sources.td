@@ -28,6 +28,6 @@ $ kafka-ingest topic=upgrade-proto-source-${arg.upgrade-from-version} format=pro
 {"id": "c"}
 {"id": "h"}
 
-> CREATE MATERIALIZED SOURCE kafka_proto_source
+> CREATE SOURCE kafka_proto_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upgrade-proto-source-${arg.upgrade-from-version}-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

@@ -13,7 +13,7 @@ $ set schema={}
 
 $ kafka-create-topic topic=headers_src
 
-! CREATE MATERIALIZED SOURCE headers_src
+! CREATE SOURCE headers_src
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_src-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -22,7 +22,7 @@ $ kafka-create-topic topic=headers_src
   ENVELOPE DEBEZIUM
 contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
-! CREATE MATERIALIZED SOURCE headers_src
+! CREATE SOURCE headers_src
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_src-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -31,7 +31,7 @@ contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
   ENVELOPE DEBEZIUM UPSERT
 contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
-! CREATE MATERIALIZED SOURCE headers_src
+! CREATE SOURCE headers_src
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_src-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -40,7 +40,7 @@ contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
   ENVELOPE MATERIALIZE
 contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
-! CREATE MATERIALIZED SOURCE headers_src
+! CREATE SOURCE headers_src
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_src-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'

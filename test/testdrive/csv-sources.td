@@ -30,7 +30,7 @@ place""",CA,92679
   FORMAT CSV WITH 3 COLUMNS
 contains:unexpected parameters for CREATE SOURCE: badoption
 
-> CREATE MATERIALIZED SOURCE mismatched_column_count
+> CREATE SOURCE mismatched_column_count
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -43,7 +43,7 @@ contains:unexpected parameters for CREATE SOURCE: badoption
 ! SELECT * FROM mismatched_column_count
 contains:CSV error at record number 1: expected 2 columns, got 3.
 
-> CREATE MATERIALIZED SOURCE matching_column_names
+> CREATE SOURCE matching_column_names
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -55,11 +55,11 @@ contains:CSV error at record number 1: expected 2 columns, got 3.
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM matching_column_names where zip = '14618'
-city state zip mz_record
--------------------------
-Rochester NY 14618 1
+city state zip
+------------------
+Rochester NY 14618
 
-> CREATE MATERIALIZED SOURCE matching_column_names_alias (a, b, c)
+> CREATE SOURCE matching_column_names_alias (a, b, c)
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -71,11 +71,11 @@ Rochester NY 14618 1
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM matching_column_names_alias where c = '14618'
-a b c mz_record
+a b c
 ----------------
-Rochester NY 14618 1
+Rochester NY 14618
 
-> CREATE MATERIALIZED SOURCE mismatched_column_names
+> CREATE SOURCE mismatched_column_names
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -88,7 +88,7 @@ Rochester NY 14618 1
 ! SELECT * FROM mismatched_column_names
 contains:first mismatched column at index 1 expected=cities actual="city"
 
-> CREATE MATERIALIZED SOURCE mismatched_column_names_count
+> CREATE SOURCE mismatched_column_names_count
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -102,7 +102,7 @@ contains:first mismatched column at index 1 expected=cities actual="city"
 contains:CSV error at record number 1: expected 2 columns, got 3
 
 # Static CSV without headers.
-> CREATE MATERIALIZED SOURCE static_csv
+> CREATE SOURCE static_csv
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -114,12 +114,12 @@ contains:CSV error at record number 1: expected 2 columns, got 3
   FORMAT CSV WITH 3 COLUMNS
 
 > SELECT * FROM static_csv
-column1        column2  column3  mz_record
---------------------------------------------
-city           state     zip     1
-Rochester      NY        14618   2
-"New York"     NY        10004   3
-"bad,\nplace\""  CA        92679   4
+column1        column2  column3
+---------------------------------
+city           state     zip
+Rochester      NY        14618
+"New York"     NY        10004
+"bad,\nplace\""  CA      92679
 
 ! CREATE SOURCE static_csv_nothing_demanded_src
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
@@ -133,13 +133,14 @@ Rochester      NY        14618   2
   FORMAT CSV WITH HEADER
 contains:Expected a list of columns in parentheses, found EOF
 
-# The timestamp chosen when reading from a static CSV should be the end of time,
+# The write frontier of a source from  a static CSV should be empty,
 # since the definition of "static" means "will never change again".
-> SELECT count(*), mz_logical_timestamp() FROM static_csv
-4  18446744073709551615
+$ set-regex match=(\d{13}|u\d{1,2}) replacement=<>
+> EXPLAIN TIMESTAMP FOR SELECT * FROM static_csv
+"     timestamp: <>\n         since:[<>]\n         upper:[]\n     has table: false\n\nsource materialize.public.static_csv (<>, storage):\n read frontier:[<>]\nwrite frontier:[]\n"
 
 # Static CSV with manual headers.
-> CREATE MATERIALIZED SOURCE static_csv_manual_header (city_man, state_man, zip_man)
+> CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -151,17 +152,17 @@ contains:Expected a list of columns in parentheses, found EOF
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > SELECT * FROM static_csv_manual_header
-city_man       state_man  zip_man  mz_record
----------------------------------------------
-Rochester      NY         14618    1
-"New York"     NY         10004    2
-"bad,\nplace\""  CA         92679    3
+city_man       state_man  zip_man
+-----------------------------------
+Rochester      NY         14618
+"New York"     NY         10004
+"bad,\nplace\""  CA       92679
 
 # Dynamic CSV with automatic headers.
 
 $ kafka-create-topic topic=dynamic
 
-> CREATE MATERIALIZED SOURCE dynamic_csv (city, state, zip)
+> CREATE SOURCE dynamic_csv (city, state, zip)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dynamic-${testdrive.seed}'
   FORMAT CSV WITH 3 COLUMNS
 
@@ -171,18 +172,18 @@ $ kafka-ingest topic=dynamic format=bytes
 Rochester,NY,14618
 
 > SELECT * FROM dynamic_csv
-city           state     zip     mz_offset
-------------------------------------------
-Rochester      NY        14618   1
+city           state     zip
+------------------------------
+Rochester      NY        14618
 
 $ kafka-ingest topic=dynamic format=bytes
 New York,NY,10004
 
 > SELECT * FROM dynamic_csv
-city           state     zip     mz_offset
-------------------------------------------
-Rochester      NY        14618   1
-"New York"     NY        10004   2
+city           state     zip
+------------------------------
+Rochester      NY        14618
+"New York"     NY        10004
 
 # Static malformed CSV
 $ s3-put-object bucket=test key=malformed.csv
@@ -192,7 +193,7 @@ dollars,category
 ,badrow
 badint,
 
-> CREATE MATERIALIZED SOURCE malformed_csv
+> CREATE SOURCE malformed_csv
   FROM S3 DISCOVER OBJECTS MATCHING 'malformed.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -211,7 +212,7 @@ $ s3-put-object bucket=test key=bad-text.csv
 dollars,category
 5161669,\x80
 
-> CREATE MATERIALIZED SOURCE bad_text_csv
+> CREATE SOURCE bad_text_csv
   FROM S3 DISCOVER OBJECTS MATCHING 'bad-text.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -229,7 +230,7 @@ contains:Decode error: Text: CSV error at record number 2: invalid UTF-8
 
 $ kafka-create-topic topic=static-csv-pkne-sink
 
-> CREATE MATERIALIZED SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
+> CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
   FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
@@ -246,6 +247,6 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
-{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004", "mz_record": 2}
-{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618", "mz_record": 1}
-{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679", "mz_record": 3}
+{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004"}
+{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618"}
+{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679"}

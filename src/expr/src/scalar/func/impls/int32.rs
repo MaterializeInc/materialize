@@ -41,21 +41,21 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i32tobool"]
+    #[sqlname = "integer_to_boolean"]
     fn cast_int32_to_bool(a: i32) -> bool {
         a != 0
     }
 );
 
 sqlfunc!(
-    #[sqlname = "i32tof32"]
+    #[sqlname = "integer_to_real"]
     fn cast_int32_to_float32(a: i32) -> f32 {
         a as f32
     }
 );
 
 sqlfunc!(
-    #[sqlname = "i32tof64"]
+    #[sqlname = "integer_to_double"]
     #[preserves_uniqueness = true]
     fn cast_int32_to_float64(a: i32) -> f64 {
         f64::from(a)
@@ -63,7 +63,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i32toi16"]
+    #[sqlname = "integer_to_smallint"]
     #[preserves_uniqueness = true]
     fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
@@ -71,7 +71,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i32toi64"]
+    #[sqlname = "integer_to_bigint"]
     #[preserves_uniqueness = true]
     fn cast_int32_to_int64(a: i32) -> i64 {
         i64::from(a)
@@ -79,7 +79,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i32tostr"]
+    #[sqlname = "integer_to_text"]
     #[preserves_uniqueness = true]
     fn cast_int32_to_string(a: i32) -> String {
         let mut buf = String::new();
@@ -113,12 +113,12 @@ impl<'a> EagerUnaryFunc<'a> for CastInt32ToNumeric {
 
 impl fmt::Display for CastInt32ToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("i32tonumeric")
+        f.write_str("integer_to_numeric")
     }
 }
 
 sqlfunc!(
-    #[sqlname = "i32tooid"]
+    #[sqlname = "integer_to_oid"]
     #[preserves_uniqueness = true]
     fn cast_int32_to_oid(a: i32) -> Oid {
         // For historical reasons in PostgreSQL, the bytes of the `i32` are
@@ -133,7 +133,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i32topglegacychar"]
+    #[sqlname = "integer_to_\"char\""]
     #[preserves_uniqueness = true]
     fn cast_int32_to_pg_legacy_char(a: i32) -> Result<PgLegacyChar, EvalError> {
         // Per PostgreSQL, casts to `PgLegacyChar` are performed as if

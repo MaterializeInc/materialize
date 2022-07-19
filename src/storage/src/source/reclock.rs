@@ -31,8 +31,8 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::Timestamp;
 
-use crate::client::controller::CollectionMetadata;
-use crate::client::sources::MzOffset;
+use crate::controller::CollectionMetadata;
+use crate::types::sources::MzOffset;
 
 /// The reclock operator reclocks a stream that is timestamped with some timestamp `SourceTime`
 /// into another time domain that is timestamped with some timestamp `DestTime`.
@@ -54,6 +54,9 @@ pub struct ReclockOperator {
     /// Write handle of the remap persist shard
     write_handle: WriteHandle<(), PartitionId, Timestamp, MzOffset>,
     /// Read handle of the remap persist shard
+    ///
+    /// NB: Until #13534 is addressed, this intentionally holds back the since
+    /// of the remap shard indefinitely.
     read_handle: ReadHandle<(), PartitionId, Timestamp, MzOffset>,
     /// A listener to tail the remap shard for new updates
     listener: Listen<(), PartitionId, Timestamp, MzOffset>,
@@ -97,6 +100,8 @@ impl ReclockOperator {
         );
 
         let listener = read_handle
+            .clone()
+            .await
             .listen(as_of.clone())
             .await
             .expect("since <= as_of asserted");
@@ -212,7 +217,7 @@ impl ReclockOperator {
             consolidation::consolidate(bindings);
         }
         self.since = new_since;
-        self.read_handle.downgrade_since(self.since.clone()).await;
+        self.read_handle.maybe_downgrade_since(&self.since).await;
     }
 
     /// Advances the upper of the reclock operator if appropriate
@@ -492,13 +497,18 @@ mod tests {
     use std::time::Duration;
 
     use itertools::Itertools;
+    use mz_ore::now::SYSTEM_TIME;
     use once_cell::sync::Lazy;
 
     use mz_ore::metrics::MetricsRegistry;
-    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
 
-    static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> =
-        Lazy::new(|| Arc::new(Mutex::new(PersistClientCache::new(&MetricsRegistry::new()))));
+    static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> = Lazy::new(|| {
+        Arc::new(Mutex::new(PersistClientCache::new(
+            PersistConfig::new(SYSTEM_TIME.clone()),
+            &MetricsRegistry::new(),
+        )))
+    });
 
     async fn make_test_operator(shard: ShardId, as_of: Antichain<Timestamp>) -> ReclockOperator {
         let start = tokio::time::Instant::now();

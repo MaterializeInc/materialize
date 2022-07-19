@@ -34,14 +34,14 @@ use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
-    #[sqlname = "strtobool"]
+    #[sqlname = "text_to_boolean"]
     fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
         strconv::parse_bool(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtopglegacychar"]
+    #[sqlname = "text_to_\"char\""]
     #[preserves_uniqueness = true]
     fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
         PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
@@ -49,7 +49,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "strtobytes"]
+    #[sqlname = "text_to_bytea"]
     #[preserves_uniqueness = true]
     fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
         strconv::parse_bytes(a).err_into()
@@ -57,42 +57,42 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "strtoi16"]
+    #[sqlname = "text_to_smallint"]
     fn cast_string_to_int16<'a>(a: &'a str) -> Result<i16, EvalError> {
         strconv::parse_int16(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtoi32"]
+    #[sqlname = "text_to_integer"]
     fn cast_string_to_int32<'a>(a: &'a str) -> Result<i32, EvalError> {
         strconv::parse_int32(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtoi64"]
+    #[sqlname = "text_to_bigint"]
     fn cast_string_to_int64<'a>(a: &'a str) -> Result<i64, EvalError> {
         strconv::parse_int64(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtof32"]
+    #[sqlname = "text_to_real"]
     fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
         strconv::parse_float32(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtof64"]
+    #[sqlname = "text_to_double"]
     fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
         strconv::parse_float64(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtooid"]
+    #[sqlname = "text_to_oid"]
     fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
         Ok(Oid(strconv::parse_oid(a)?))
     }
@@ -124,47 +124,47 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
 
 impl fmt::Display for CastStringToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("strtonumeric")
+        f.write_str("text_to_numeric")
     }
 }
 
 sqlfunc!(
-    #[sqlname = "strtodate"]
+    #[sqlname = "text_to_date"]
     fn cast_string_to_date<'a>(a: &'a str) -> Result<NaiveDate, EvalError> {
         strconv::parse_date(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtotime"]
+    #[sqlname = "text_to_time"]
     fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
         strconv::parse_time(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtots"]
+    #[sqlname = "text_to_timestamp"]
     fn cast_string_to_timestamp<'a>(a: &'a str) -> Result<NaiveDateTime, EvalError> {
         strconv::parse_timestamp(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtotstz"]
+    #[sqlname = "text_to_timestamp_with_time_zone"]
     fn cast_string_to_timestamp_tz<'a>(a: &'a str) -> Result<DateTime<Utc>, EvalError> {
         strconv::parse_timestamptz(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtoiv"]
+    #[sqlname = "text_to_interval"]
     fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
         strconv::parse_interval(a).err_into()
     }
 );
 
 sqlfunc!(
-    #[sqlname = "strtouuid"]
+    #[sqlname = "text_to_uuid"]
     fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
         strconv::parse_uuid(a).err_into()
     }
@@ -408,7 +408,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
 
 impl fmt::Display for CastStringToChar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("strtochar")
+        f.write_str("text_to_char")
     }
 }
 
@@ -447,7 +447,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
 
 impl fmt::Display for CastStringToVarChar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("strtovarchar")
+        f.write_str("text_to_varchar")
     }
 }
 
@@ -513,7 +513,7 @@ impl fmt::Display for CastStringToInt2Vector {
 }
 
 sqlfunc!(
-    #[sqlname = "strtojsonb"]
+    #[sqlname = "text_to_jsonb"]
     // TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
     fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
         Ok(strconv::parse_jsonb(a)?)

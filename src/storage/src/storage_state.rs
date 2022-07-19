@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -24,11 +24,16 @@ use tokio::sync::{mpsc, Mutex};
 use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
 
-use crate::client::connections::ConnectionContext;
-use crate::client::{StorageCommand, StorageResponse};
+use crate::controller::CollectionMetadata;
+use crate::protocol::client::{StorageCommand, StorageResponse};
+use crate::types::connections::ConnectionContext;
+use crate::types::sources::IngestionDescription;
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
+
+type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;
+type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
 /// State maintained for each worker thread.
 ///
@@ -37,10 +42,9 @@ use crate::source::metrics::SourceBaseMetrics;
 pub struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'w mut TimelyWorker<A>,
-    /// The channel from which commands are drawn.
-    pub command_rx: crossbeam_channel::Receiver<StorageCommand>,
-    /// The channel over which storage responses are reported.
-    pub response_tx: mpsc::UnboundedSender<StorageResponse>,
+    /// The channel over which communication handles for newly connected clients
+    /// are delivered.
+    pub client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -60,6 +64,8 @@ pub struct StorageState {
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Descriptions of each installed ingestion.
+    pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
@@ -76,28 +82,41 @@ pub struct StorageState {
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
-    /// Draws from `dataflow_command_receiver` until shutdown.
+    /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
         let mut shutdown = false;
         while !shutdown {
+            match self.client_rx.recv() {
+                Ok((rx, tx)) => self.run_client(rx, tx),
+                Err(_) => shutdown = true,
+            }
+        }
+    }
+
+    /// Draws commands from a single client until disconnected.
+    fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
+        self.reconcile(&command_rx);
+
+        let mut disconnected = false;
+        while !disconnected {
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
             // unparking us when there's new work to be done, e.g., when sending
             // a command or when new Kafka messages have arrived.
             self.timely_worker.step_or_park(None);
 
-            self.report_frontier_progress();
+            self.report_frontier_progress(&response_tx);
 
             // Handle any received commands.
             let mut cmds = vec![];
             let mut empty = false;
             while !empty {
-                match self.command_rx.try_recv() {
+                match command_rx.try_recv() {
                     Ok(cmd) => cmds.push(cmd),
                     Err(TryRecvError::Empty) => empty = true,
                     Err(TryRecvError::Disconnected) => {
                         empty = true;
-                        shutdown = true;
+                        disconnected = true;
                     }
                 }
             }
@@ -110,8 +129,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
+            StorageCommand::InitializationComplete => (),
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
+                    // Remember the ingestion description to facilitate possible
+                    // reconciliation later.
+                    self.storage_state
+                        .ingestions
+                        .insert(ingestion.id, ingestion.description.clone());
+
                     // Initialize shared frontier tracking.
                     self.storage_state.source_uppers.insert(
                         ingestion.id,
@@ -158,7 +184,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Specifically, this sends information about new timestamp bindings created by dataflow workers,
     /// with the understanding if that if made durable (and ack'd back to the workers) the source will
     /// in fact progress with this write frontier.
-    pub fn report_frontier_progress(&mut self) {
+    pub fn report_frontier_progress(&mut self, response_tx: &ResponseSender) {
         let mut changes = Vec::new();
 
         // Check if any observed frontier should advance the reported frontiers.
@@ -189,14 +215,97 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         if !changes.is_empty() {
-            self.send_storage_response(StorageResponse::FrontierUppers(changes));
+            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(changes));
         }
     }
 
     /// Send a response to the coordinator.
-    fn send_storage_response(&self, response: StorageResponse) {
+    fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(response);
+        let _ = response_tx.send(response);
+    }
+
+    /// Extract commands until `InitializationComplete`, and make the worker
+    /// reflect those commands. If the worker can not be made to reflect the
+    /// commands, exit the process.
+    ///
+    /// This method is meant to be a function of the commands received thus far
+    /// (as recorded in the compute state command history) and the new commands
+    /// from `command_rx`. It should not be a function of other characteristics,
+    /// like whether the worker has managed to respond to a peek or not. Some
+    /// effort goes in to narrowing our view to only the existing commands we
+    /// can be sure are live at all other workers.
+    ///
+    /// The methodology here is to drain `command_rx` until an
+    /// `InitializationComplete`, at which point the prior commands are
+    /// "reconciled" in. Reconciliation takes each goal dataflow and looks for
+    /// an existing "compatible" dataflow (per `compatible()`) it can repurpose,
+    /// with some additional tests to be sure that we can cut over from one to
+    /// the other (no additional compaction, no tails/sinks). With any
+    /// connections established, old orphaned dataflows are allow to compact
+    /// away, and any new dataflows are created from scratch. "Kept" dataflows
+    /// are allowed to compact up to any new `as_of`.
+    ///
+    /// Some additional tidying happens, e.g. cleaning up reported frontiers.
+    /// tail response buffer. We will need to be vigilant with future
+    /// modifications to `StorageState` to line up changes there with clean
+    /// resets here.
+    fn reconcile(&mut self, command_rx: &CommandReceiver) {
+        // To initialize the connection, we want to drain all commands until we
+        // receive a `StorageCommand::InitializationComplete` command to form a
+        // target command state.
+        let mut commands = vec![];
+        while let Ok(command) = command_rx.recv() {
+            match command {
+                StorageCommand::InitializationComplete => break,
+                _ => commands.push(command),
+            }
+        }
+
+        // Elide any ingestions we're already aware of while determining what
+        // ingestions no longer exist.
+        let mut stale_ingestions = self.storage_state.ingestions.keys().collect::<HashSet<_>>();
+        for command in &mut commands {
+            match command {
+                StorageCommand::IngestSources(ingestions) => {
+                    ingestions.retain_mut(|ingestion| {
+                        if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
+                            stale_ingestions.remove(&ingestion.id);
+                            // If we've been asked to create an ingestion that is
+                            // already installed, the descriptions must match
+                            // exactly.
+                            assert_eq!(
+                                *existing, ingestion.description,
+                                "New ingestion with same ID {:?}",
+                                ingestion.id,
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    })
+                }
+                _ => (),
+            }
+        }
+
+        // Synthesize a drop command to remove stale ingestions.
+        commands.push(StorageCommand::AllowCompaction(
+            stale_ingestions
+                .into_iter()
+                .map(|id| (*id, Antichain::new()))
+                .collect(),
+        ));
+
+        // Reset the reported frontiers.
+        for (_, frontier) in &mut self.storage_state.reported_frontiers {
+            *frontier = Antichain::from_elem(<_>::minimum());
+        }
+
+        // Execute the modified commands.
+        for command in commands {
+            self.handle_storage_command(command);
+        }
     }
 }

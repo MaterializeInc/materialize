@@ -25,6 +25,12 @@ name       type
 ------------------------------
 testconn   kafka
 
+> SHOW CONNECTIONS
+testconn
+
+> SHOW FULL CONNECTIONS
+testconn user
+
 > SHOW CREATE CONNECTION testconn
 Connection   "Create Connection"
 ---------------------------------
@@ -39,16 +45,16 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 > CREATE CONNECTION testconn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-> CREATE MATERIALIZED SOURCE connection_source (first, second)
+> CREATE SOURCE connection_source (first, second)
   FROM KAFKA CONNECTION testconn
   TOPIC 'testdrive-connection_test-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS
 
 > SELECT * FROM connection_source
-first second mz_offset
-----------------------
-1     2      1
-2     3      2
+first second
+------------
+1     2
+2     3
 
 # Confirm we cannot drop the connection while a source depends upon it
 ! DROP CONNECTION testconn;
@@ -117,7 +123,7 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
   FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}'
 
-> CREATE MATERIALIZED SOURCE csr_source
+> CREATE SOURCE csr_source
     FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csr_test-${testdrive.seed}'
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -133,7 +139,7 @@ id creature
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 
-> CREATE MATERIALIZED SOURCE two_connection_source
+> CREATE SOURCE two_connection_source
   FROM KAFKA CONNECTION broker_connection
   TOPIC 'testdrive-csr_test-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -149,13 +155,13 @@ contains:depended upon by catalog item 'materialize.public.csr_source'
 
 > DROP CONNECTION csr_conn CASCADE
 
-! CREATE MATERIALIZED SOURCE should_fail
+! CREATE SOURCE should_fail
   FROM KAFKA CONNECTION does_not_exist
   TOPIC 'error_topic'
   FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
 
-! CREATE MATERIALIZED SOURCE should_fail
+! CREATE SOURCE should_fail
   FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-csr_test-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
@@ -234,14 +240,27 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
     FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}'
 
-> CREATE MATERIALIZED SOURCE import_connection_csr FROM
+> CREATE SOURCE import_connection_csr FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 
-> SELECT importee1::text, importee2::text, mz_offset FROM import_connection_csr
-importee1  importee2            mz_offset
------------------------------------------
-(f)        "(\"(1234,5678)\")"  1
+> SELECT importee1::text, importee2::text FROM import_connection_csr
+importee1  importee2
+--------------------------------
+(f)        "(\"(1234,5678)\")"
+
+# SSH
+
+> CREATE CONNECTION ssh_conn
+  FOR SSH TUNNEL
+    HOST 'host',
+    USER 'user',
+    PORT 1
+
+> SELECT name, public_key from mz_ssh_tunnel_connections
+name public_key
+-----------
+ssh_conn TODO
 
 # Test invalid connection parameter combinations
 
@@ -316,3 +335,9 @@ contains: requires both SSL KEY and SSL CERTIFICATE
      URL 'http://localhost',
     SSL CERTIFICATE = ''
 contains: requires both SSL KEY and SSL CERTIFICATE
+
+## SSH
+! CREATE CONNECTION missing_user
+    FOR SSH TUNNEL
+    USER 'foo'
+contains: HOST option is required

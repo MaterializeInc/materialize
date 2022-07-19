@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Fuses reduce operators with parent operators if possible.
-use crate::TransformArgs;
+use crate::{TransformArgs, TransformError};
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 
@@ -21,14 +21,14 @@ impl crate::Transform for Reduce {
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)))
+    ) -> Result<(), TransformError> {
+        relation.try_visit_mut_pre(&mut |e| self.action(e))
     }
 }
 
 impl Reduce {
     /// Fuses reduce operators with parent operators if possible.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         if let MirRelationExpr::Reduce {
             input,
             group_key,
@@ -48,18 +48,17 @@ impl Reduce {
                 // Collect all columns referenced by outer
                 let mut outer_cols = vec![];
                 for expr in group_key.iter() {
-                    #[allow(deprecated)]
-                    expr.visit_post_nolimit(&mut |e| {
+                    expr.visit_post(&mut |e| {
                         if let MirScalarExpr::Column(i) = e {
                             outer_cols.push(*i);
                         }
-                    });
+                    })?;
                 }
 
                 // We can fuse reduce operators as long as the outer one doesn't
                 // group by an aggregation performed by the inner one.
                 if outer_cols.iter().any(|c| *c >= inner_group_key.len()) {
-                    return;
+                    return Ok(());
                 }
 
                 if aggregates.is_empty() && inner_aggregates.is_empty() {
@@ -81,5 +80,6 @@ impl Reduce {
                 }
             }
         }
+        Ok(())
     }
 }

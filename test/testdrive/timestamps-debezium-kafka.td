@@ -91,12 +91,12 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
 $ kafka-ingest format=avro topic=bar schema=${schema}
 {"array":[{"data":{"a":10,"b":1},"time":1,"diff":1}]}
 
-> CREATE MATERIALIZED SOURCE data_foo
+> CREATE SOURCE data_foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
     WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED SOURCE data_bar
+> CREATE SOURCE data_bar
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bar-${testdrive.seed}'
     WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
@@ -155,6 +155,11 @@ b  sum
 1  1
 2  2
 
+> SELECT * FROM data_bar;
+a   b
+-----
+10  1
+
 > SELECT * FROM bar;
 b  sum
 ------
@@ -183,7 +188,17 @@ b  sum
 b  sum
 ------
 1  10
+
+# Under weaker isolation levels we can see the row at time 2 before all objects have closed time 2.
+> SET transaction_isolation = SERIALIZABLE
+
+> SELECT * FROM bar;
+b  sum
+------
+1  10
 3  30
+
+> SET transaction_isolation = STRICT_SERIALIZABLE
 
 > SELECT * FROM join;
 b foo_sum bar_sum
@@ -200,6 +215,12 @@ b  sum
 2  2
 3  3
 4  4
+
+> SELECT * FROM bar;
+b  sum
+------
+1  10
+3  30
 
 > SELECT * FROM join;
 b foo_sum bar_sum

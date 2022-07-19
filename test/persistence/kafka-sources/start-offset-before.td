@@ -41,13 +41,13 @@ $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} 
 $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count} timestamp=3
 {"f1": "c${kafka-ingest.iteration}"} {"f2": "c${kafka-ingest.iteration}"}
 
-> CREATE MATERIALIZED SOURCE start_offset
+> CREATE SOURCE start_offset
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-offset-${testdrive.seed}'
   WITH (start_offset = 100)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED SOURCE kafka_time_offset
+> CREATE SOURCE kafka_time_offset
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-offset-${testdrive.seed}'
   WITH (kafka_time_offset=2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

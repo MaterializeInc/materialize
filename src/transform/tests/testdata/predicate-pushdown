@@ -90,7 +90,7 @@ build apply=PredicatePushdown
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 = mz_logical_timestamp()), !(isnull(#1))
+| Filter (#1 = mz_logical_timestamp()), (#1) IS NOT NULL
 
 %1 =
 | Get x (u0)
@@ -112,7 +112,7 @@ build apply=PredicatePushdown
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 = mz_logical_timestamp()), !(isnull(#1))
+| Filter (#1 = mz_logical_timestamp()), (#1) IS NOT NULL
 
 %1 =
 | Get x (u0)

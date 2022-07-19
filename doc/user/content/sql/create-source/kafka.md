@@ -109,8 +109,6 @@ Primary keys are **automatically** inferred for Kafka sources using the `UPSERT`
 
 {{< debezium-json >}}
 
-{{< debezium-warning >}}
-
 Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
 
 ```sql
@@ -235,7 +233,7 @@ Note that:
 To start consuming a Kafka stream from a specific offset, you can use the `start_offset` option.
 
 ```sql
-CREATE MATERIALIZED SOURCE kafka_offset
+CREATE SOURCE kafka_offset
   FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
   -- Start reading from the earliest offset in the first partition,
   -- the second partition at 10, and the third partition at 100
@@ -279,7 +277,7 @@ To connect to a Kafka broker that requires [SSL authentication](https://docs.con
 
 ```sql
 CREATE SECRET materialized_key AS '...';
-CREATE MATERIALIZED SOURCE kafka_ssl
+CREATE SOURCE kafka_ssl
   FROM KAFKA BROKER 'localhost:9092' TOPIC 'top-secret' WITH (
       security_protocol = 'SSL',
       ssl_key_pem = SECRET materialized_key,

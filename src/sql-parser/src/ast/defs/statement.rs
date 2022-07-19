@@ -466,18 +466,13 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub format: CreateSourceFormat<T>,
     pub envelope: Option<Envelope<T>>,
     pub if_not_exists: bool,
-    pub materialized: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub remote: Option<String>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CREATE ");
-        if self.materialized {
-            f.write_str("MATERIALIZED ");
-        }
-        f.write_str("SOURCE ");
+        f.write_str("CREATE SOURCE ");
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
@@ -2090,6 +2085,7 @@ pub enum TransactionIsolationLevel {
     ReadCommitted,
     RepeatableRead,
     Serializable,
+    StrictSerializable,
 }
 
 impl AstDisplay for TransactionIsolationLevel {
@@ -2100,6 +2096,7 @@ impl AstDisplay for TransactionIsolationLevel {
             ReadCommitted => "READ COMMITTED",
             RepeatableRead => "REPEATABLE READ",
             Serializable => "SERIALIZABLE",
+            StrictSerializable => "STRICT SERIALIZABLE",
         })
     }
 }

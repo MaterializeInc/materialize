@@ -1576,7 +1576,7 @@ impl<'a> Parser<'a> {
             }
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
-        } else if self.peek_keyword(SOURCE) || self.peek_keywords(&[MATERIALIZED, SOURCE]) {
+        } else if self.peek_keyword(SOURCE) {
             self.parse_create_source()
         } else if self.peek_keyword(TABLE)
             || self.peek_keywords(&[TEMP, TABLE])
@@ -1940,7 +1940,7 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
+        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT, POSTGRES, SSH])? {
             KAFKA => {
                 let with_options =
                     self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
@@ -1951,6 +1951,17 @@ impl<'a> Parser<'a> {
                 let with_options =
                     self.parse_comma_separated(Parser::parse_csr_connection_options)?;
                 CreateConnection::Csr { with_options }
+            }
+            POSTGRES => {
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_postgres_connection_options)?;
+                CreateConnection::Postgres { with_options }
+            }
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_ssh_connection_options)?;
+                CreateConnection::Ssh { with_options }
             }
             _ => unreachable!(),
         };
@@ -2020,8 +2031,59 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_postgres_connection_options(
+        &mut self,
+    ) -> Result<PostgresConnectionOption<Raw>, ParserError> {
+        let name = match self
+            .expect_one_of_keywords(&[DATABASE, HOST, PASSWORD, PORT, SSH, SSL, USER, USERNAME])?
+        {
+            DATABASE => PostgresConnectionOptionName::Database,
+            HOST => PostgresConnectionOptionName::Host,
+            PASSWORD => PostgresConnectionOptionName::Password,
+            PORT => PostgresConnectionOptionName::Port,
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                PostgresConnectionOptionName::SshTunnel
+            }
+            SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
+                CERTIFICATE => {
+                    if self.parse_keyword(AUTHORITY) {
+                        PostgresConnectionOptionName::SslCertificateAuthority
+                    } else {
+                        PostgresConnectionOptionName::SslCertificate
+                    }
+                }
+                KEY => PostgresConnectionOptionName::SslKey,
+                MODE => PostgresConnectionOptionName::SslMode,
+                _ => unreachable!(),
+            },
+            USER | USERNAME => PostgresConnectionOptionName::User,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(PostgresConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
+    fn parse_ssh_connection_options(&mut self) -> Result<SshConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[HOST, PORT, USER])? {
+            HOST => SshConnectionOptionName::Host,
+            PORT => SshConnectionOptionName::Port,
+            USER => SshConnectionOptionName::User,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(SshConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(SOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
@@ -2064,7 +2126,6 @@ impl<'a> Parser<'a> {
             include_metadata,
             envelope,
             if_not_exists,
-            materialized,
             key_constraint,
             remote,
         }))
@@ -2182,7 +2243,7 @@ impl<'a> Parser<'a> {
             }
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
-                let conn = self.parse_literal_string()?;
+                let connection = self.parse_raw_name()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;
                 let details = if self.parse_keyword(DETAILS) {
@@ -2192,7 +2253,7 @@ impl<'a> Parser<'a> {
                 };
 
                 Ok(CreateSourceConnection::Postgres {
-                    conn,
+                    connection,
                     publication,
                     details,
                 })
@@ -4262,7 +4323,7 @@ impl<'a> Parser<'a> {
 
         let materialized = self.parse_keyword(MATERIALIZED);
         if materialized {
-            self.expect_one_of_keywords(&[SOURCES, VIEWS])?;
+            self.expect_keyword(VIEWS)?;
             self.prev_token();
         }
 

@@ -21,7 +21,7 @@ use mz_compute_client::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, De
 use mz_compute_client::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
 use mz_repr::{DatumVec, Diff, Row, RowArena};
-use mz_storage::client::errors::DataflowError;
+use mz_storage::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};

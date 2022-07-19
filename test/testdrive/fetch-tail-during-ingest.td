@@ -17,7 +17,7 @@ $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "ty
 
 $ kafka-create-topic topic=tail-fetch-during-ingest
 
-> CREATE MATERIALIZED SOURCE fetch_during_ingest
+> CREATE SOURCE fetch_during_ingest
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tail-fetch-during-ingest-${testdrive.seed}'
   WITH( timestamp_frequency_ms = 100 )
   FORMAT AVRO USING SCHEMA '${int}'

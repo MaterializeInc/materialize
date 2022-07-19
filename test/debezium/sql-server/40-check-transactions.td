@@ -9,14 +9,14 @@
 
 $ schema-registry-wait-schema schema=sql-server.dbo.transaction_table1-value
 
-> CREATE MATERIALIZED SOURCE transaction_table1
+> CREATE SOURCE transaction_table1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.transaction_table1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 
 $ schema-registry-wait-schema schema=sql-server.dbo.transaction_table2-value
 
-> CREATE MATERIALIZED SOURCE transaction_table2
+> CREATE SOURCE transaction_table2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.transaction_table2'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

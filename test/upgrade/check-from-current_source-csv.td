@@ -8,13 +8,13 @@
 # by the Apache License, Version 2.0.
 
 > select * from csv_upgrade_no_header
-column1  column2  mz_offset
----------------------------
-id       value    1
-1        person   2
+column1  column2
+------------------
+id       value
+1        person
 
 > select * from csv_upgrade_no_header_alias
-al  sia     mz_offset
----------------------
-id  value   1
-1   person  2
+al  sia
+------------
+id  value
+1   person

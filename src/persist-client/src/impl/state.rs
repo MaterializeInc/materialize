@@ -20,8 +20,10 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
+use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
+use crate::write::WriterId;
 use crate::ShardId;
 
 include!(concat!(
@@ -30,9 +32,17 @@ include!(concat!(
 ));
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ReadCapability<T> {
+pub struct ReaderState<T> {
     pub seqno: SeqNo,
     pub since: Antichain<T>,
+    /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
+    pub last_heartbeat_timestamp_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WriterState {
+    /// UNIX_EPOCH timestamp (in millis) of this writer's most recent heartbeat
+    pub last_heartbeat_timestamp_ms: u64,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -43,7 +53,7 @@ pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
     /// Pointers usable to retrieve the updates.
-    pub keys: Vec<String>,
+    pub keys: Vec<PartialBlobKey>,
     /// The number of updates in the batch.
     pub len: usize,
 }
@@ -51,7 +61,8 @@ pub struct HollowBatch<T> {
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 pub struct StateCollections<T> {
-    pub(crate) readers: HashMap<ReaderId, ReadCapability<T>>,
+    pub(crate) readers: HashMap<ReaderId, ReaderState<T>>,
+    pub(crate) writers: HashMap<WriterId, WriterState>,
 
     pub(crate) trace: Trace<T>,
 }
@@ -60,30 +71,46 @@ impl<T> StateCollections<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    pub fn register(
+    pub fn register_reader(
         &mut self,
-        seqno: SeqNo,
         reader_id: &ReaderId,
-    ) -> ControlFlow<Infallible, (Upper<T>, ReadCapability<T>)> {
+        seqno: SeqNo,
+        heartbeat_timestamp_ms: u64,
+    ) -> ControlFlow<Infallible, (Upper<T>, ReaderState<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
         // retry).
-        let read_cap = ReadCapability {
+        let read_cap = ReaderState {
             seqno,
             since: self.trace.since().clone(),
+            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
         Continue((Upper(self.trace.upper().clone()), read_cap))
     }
 
+    pub fn register_writer(
+        &mut self,
+        writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
+    ) -> ControlFlow<Infallible, (Upper<T>, WriterState)> {
+        let writer_state = WriterState {
+            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+        };
+        self.writers.insert(writer_id.clone(), writer_state.clone());
+        Continue((Upper(self.trace.upper().clone()), writer_state))
+    }
+
     pub fn clone_reader(
         &mut self,
-        seqno: SeqNo,
         new_reader_id: &ReaderId,
-    ) -> ControlFlow<Infallible, ReadCapability<T>> {
+        seqno: SeqNo,
+        heartbeat_timestamp_ms: u64,
+    ) -> ControlFlow<Infallible, ReaderState<T>> {
         // TODO: Handle if the reader already exists (probably with a retry).
-        let read_cap = ReadCapability {
+        let read_cap = ReaderState {
             seqno,
             since: self.trace.since().clone(),
+            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
         };
         self.readers.insert(new_reader_id.clone(), read_cap.clone());
         Continue(read_cap)
@@ -92,7 +119,12 @@ where
     pub fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
+        writer_id: &WriterId,
     ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, Vec<FueledMergeReq<T>>> {
+        if !self.writers.contains_key(writer_id) {
+            return Break(Err(InvalidUsage::UnknownWriter(writer_id.clone())));
+        }
+
         if PartialOrder::less_than(batch.desc.upper(), batch.desc.lower()) {
             return Break(Err(InvalidUsage::InvalidBounds {
                 lower: batch.desc.lower().clone(),
@@ -131,19 +163,38 @@ where
     pub fn downgrade_since(
         &mut self,
         reader_id: &ReaderId,
+        seqno: SeqNo,
         new_since: &Antichain<T>,
+        heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, Since<T>> {
-        let read_cap = self.reader(reader_id);
-        let reader_current_since = if PartialOrder::less_than(&read_cap.since, new_since) {
-            read_cap.since.clone_from(new_since);
+        let reader_state = self.reader(reader_id);
+
+        // Also use this as an opportunity to heartbeat the reader and downgrade
+        // the seqno capability.
+        reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        reader_state.seqno = seqno;
+
+        let reader_current_since = if PartialOrder::less_than(&reader_state.since, new_since) {
+            reader_state.since.clone_from(new_since);
             self.update_since();
             new_since.clone()
         } else {
             // No-op, but still commit the state change so that this gets
             // linearized.
-            read_cap.since.clone()
+            reader_state.since.clone()
         };
+
         Continue(Since(reader_current_since))
+    }
+
+    pub fn heartbeat_reader(
+        &mut self,
+        reader_id: &ReaderId,
+        heartbeat_timestamp_ms: u64,
+    ) -> ControlFlow<Infallible, ()> {
+        let reader_state = self.reader(reader_id);
+        reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        Continue(())
     }
 
     pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
@@ -156,7 +207,14 @@ where
         Continue(existed)
     }
 
-    fn reader(&mut self, id: &ReaderId) -> &mut ReadCapability<T> {
+    pub fn expire_writer(&mut self, writer_id: &WriterId) -> ControlFlow<Infallible, bool> {
+        let existed = self.writers.remove(writer_id).is_some();
+        // No-op if existed is false, but still commit the state change so that
+        // this gets linearized.
+        Continue(existed)
+    }
+
+    fn reader(&mut self, id: &ReaderId) -> &mut ReaderState<T> {
         self.readers
             .get_mut(id)
             // The only (tm) ways to hit this are (1) inventing a ReaderId
@@ -226,6 +284,7 @@ where
             seqno: SeqNo::minimum(),
             collections: StateCollections {
                 readers: HashMap::new(),
+                writers: HashMap::new(),
                 trace: Trace::default(),
             },
             _phantom: PhantomData,
@@ -242,6 +301,14 @@ where
 
     pub fn upper(&self) -> Antichain<T> {
         self.collections.trace.upper().clone()
+    }
+
+    pub fn seqno_since(&self) -> SeqNo {
+        let mut seqno_since = self.seqno;
+        for cap in self.collections.readers.values() {
+            seqno_since = std::cmp::min(seqno_since, cap.seqno);
+        }
+        seqno_since
     }
 
     pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> ControlFlow<E, (R, Self)>
@@ -333,6 +400,8 @@ impl<T> Determinacy for Upper<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::now::SYSTEM_TIME;
+
     use super::*;
 
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
@@ -344,7 +413,10 @@ mod tests {
                 Antichain::from_elem(upper),
                 Antichain::from_elem(T::minimum()),
             ),
-            keys: keys.iter().map(|x| (*x).to_owned()).collect(),
+            keys: keys
+                .iter()
+                .map(|x| PartialBlobKey((*x).to_owned()))
+                .collect(),
             len,
         }
     }
@@ -353,7 +425,9 @@ mod tests {
     fn downgrade_since() {
         let mut state = State::<(), (), u64, i64>::new(ShardId::new());
         let reader = ReaderId::new();
-        let _ = state.collections.register(SeqNo::minimum(), &reader);
+        let seqno = SeqNo::minimum();
+        let now = SYSTEM_TIME.clone();
+        let _ = state.collections.register_reader(&reader, seqno, now());
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
@@ -362,7 +436,7 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
+                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -370,7 +444,7 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
+                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -378,20 +452,20 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(1)),
+                .downgrade_since(&reader, seqno, &Antichain::from_elem(1), now()),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
 
         // Create a second reader.
         let reader2 = ReaderId::new();
-        let _ = state.collections.register(SeqNo::minimum(), &reader2);
+        let _ = state.collections.register_reader(&reader2, seqno, now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader2, &Antichain::from_elem(3)),
+                .downgrade_since(&reader2, seqno, &Antichain::from_elem(3), now()),
             Continue(Since(Antichain::from_elem(3)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -399,7 +473,7 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(5)),
+                .downgrade_since(&reader, seqno, &Antichain::from_elem(5), now()),
             Continue(Since(Antichain::from_elem(5)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -410,13 +484,13 @@ mod tests {
 
         // Create a third reader.
         let reader3 = ReaderId::new();
-        let _ = state.collections.register(SeqNo::minimum(), &reader3);
+        let _ = state.collections.register_reader(&reader3, seqno, now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader3, &Antichain::from_elem(10)),
+                .downgrade_since(&reader3, seqno, &Antichain::from_elem(10), now()),
             Continue(Since(Antichain::from_elem(10)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -435,6 +509,9 @@ mod tests {
         mz_ore::test::init_logging();
         let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
 
+        let writer_id = WriterId::new();
+        let _ = state.register_writer(&writer_id, 0);
+
         // State is initially empty.
         assert_eq!(state.trace.num_spine_batches(), 0);
         assert_eq!(state.trace.num_hollow_batches(), 0);
@@ -442,18 +519,18 @@ mod tests {
 
         // Cannot insert a batch with a lower != current shard upper.
         assert_eq!(
-            state.compare_and_append(&hollow(1, 2, &["key1"], 1)),
+            state.compare_and_append(&hollow(1, 2, &["key1"], 1), &writer_id),
             Break(Ok(Upper(Antichain::from_elem(0))))
         );
 
         // Insert an empty batch with an upper > lower..
         assert!(state
-            .compare_and_append(&hollow(0, 5, &[], 0))
+            .compare_and_append(&hollow(0, 5, &[], 0), &writer_id)
             .is_continue());
 
         // Cannot insert a batch with a upper less than the lower.
         assert_eq!(
-            state.compare_and_append(&hollow(5, 4, &["key1"], 1)),
+            state.compare_and_append(&hollow(5, 4, &["key1"], 1), &writer_id),
             Break(Err(InvalidBounds {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(4)
@@ -462,23 +539,24 @@ mod tests {
 
         // Cannot insert a nonempty batch with an upper equal to lower.
         assert_eq!(
-            state.compare_and_append(&hollow(5, 5, &["key1"], 1)),
+            state.compare_and_append(&hollow(5, 5, &["key1"], 1), &writer_id),
             Break(Err(InvalidEmptyTimeInterval {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(5),
-                keys: vec!["key1".to_owned()],
+                keys: vec![PartialBlobKey("key1".to_owned())],
             }))
         );
 
         // Can insert an empty batch with an upper equal to lower.
         assert!(state
-            .compare_and_append(&hollow(5, 5, &[], 0))
+            .compare_and_append(&hollow(5, 5, &[], 0), &writer_id)
             .is_continue());
     }
 
     #[test]
     fn snapshot() {
         mz_ore::test::init_logging();
+        let now = SYSTEM_TIME.clone();
 
         let mut state = State::<String, String, u64, i64>::new(ShardId::new());
         // Cannot take a snapshot with as_of == shard upper.
@@ -493,10 +571,13 @@ mod tests {
             Ok(Err(Upper(Antichain::from_elem(0))))
         );
 
+        let writer_id = WriterId::new();
+        let _ = state.collections.register_writer(&writer_id, 0);
+
         // Advance upper to 5.
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 5, &["key1"], 1))
+            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id)
             .is_continue());
 
         // Can take a snapshot with as_of < upper.
@@ -523,11 +604,16 @@ mod tests {
 
         let reader = ReaderId::new();
         // Advance the since to 2.
-        let _ = state.collections.register(SeqNo::minimum(), &reader);
+        let _ = state
+            .collections
+            .register_reader(&reader, SeqNo::minimum(), now());
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
+            state.collections.downgrade_since(
+                &reader,
+                SeqNo::minimum(),
+                &Antichain::from_elem(2),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -540,7 +626,7 @@ mod tests {
         // Advance the upper to 10 via an empty batch.
         assert!(state
             .collections
-            .compare_and_append(&hollow(5, 10, &[], 0))
+            .compare_and_append(&hollow(5, 10, &[], 0), &writer_id)
             .is_continue());
 
         // Can still take snapshots at times < upper.
@@ -558,7 +644,7 @@ mod tests {
         // Advance upper to 15.
         assert!(state
             .collections
-            .compare_and_append(&hollow(10, 15, &["key2"], 1))
+            .compare_and_append(&hollow(10, 15, &["key2"], 1), &writer_id)
             .is_continue());
 
         // Filter out batches whose lowers are less than the requested as of (the
@@ -599,14 +685,17 @@ mod tests {
         assert_eq!(state.next_listen_batch(&Antichain::from_elem(0)), None);
         assert_eq!(state.next_listen_batch(&Antichain::new()), None);
 
+        let writer_id = WriterId::new();
+        let _ = state.collections.register_writer(&writer_id, 0);
+
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 5, &["key1"], 1))
+            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id)
             .is_continue());
         assert!(state
             .collections
-            .compare_and_append(&hollow(5, 10, &["key2"], 1))
+            .compare_and_append(&hollow(5, 10, &["key2"], 1), &writer_id)
             .is_continue());
 
         // All frontiers in [0, 5) return the first batch.
@@ -631,5 +720,58 @@ mod tests {
         // By definition, there is no frontier ever at the empty antichain which
         // is the time after all possible times.
         assert_eq!(state.next_listen_batch(&Antichain::new()), None);
+    }
+
+    #[test]
+    fn expire_writer() {
+        mz_ore::test::init_logging();
+
+        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+
+        let writer_id_one = WriterId::new();
+
+        // Writer has not been registered and should be unable to write
+        assert_eq!(
+            state
+                .collections
+                .compare_and_append(&hollow(0, 2, &["key1"], 1), &writer_id_one),
+            Break(Err(InvalidUsage::UnknownWriter(writer_id_one.clone())))
+        );
+
+        assert!(state
+            .collections
+            .register_writer(&writer_id_one, 0)
+            .is_continue());
+
+        let writer_id_two = WriterId::new();
+        assert!(state
+            .collections
+            .register_writer(&writer_id_two, 0)
+            .is_continue());
+
+        // Writer is registered and is now eligible to write
+        assert!(state
+            .collections
+            .compare_and_append(&hollow(0, 2, &["key1"], 1), &writer_id_one)
+            .is_continue());
+
+        assert!(state
+            .collections
+            .expire_writer(&writer_id_one)
+            .is_continue());
+
+        // Writer has been expired and should be fenced off from further writes
+        assert_eq!(
+            state
+                .collections
+                .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_one),
+            Break(Err(InvalidUsage::UnknownWriter(writer_id_one.clone())))
+        );
+
+        // But other writers should still be able to write
+        assert!(state
+            .collections
+            .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_two)
+            .is_continue());
     }
 }

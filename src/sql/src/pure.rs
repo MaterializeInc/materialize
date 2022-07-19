@@ -34,9 +34,9 @@ use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
 use mz_repr::strconv;
-use mz_storage::client::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_storage::client::connections::{Connection, ConnectionContext};
-use mz_storage::client::sources::PostgresSourceDetails;
+use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_storage::types::connections::{Connection, ConnectionContext};
+use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
@@ -101,7 +101,7 @@ pub async fn purify_create_source(
                         KafkaAddrs::from_str(&broker)?.to_string().into(),
                     );
 
-                    mz_storage::client::connections::KafkaConnection::try_from(
+                    mz_storage::types::connections::KafkaConnection::try_from(
                         &mut connection_options,
                     )?
                 }
@@ -111,7 +111,7 @@ pub async fn purify_create_source(
                 &connection,
                 &connection_options,
                 connection_context.librdkafka_log_level,
-                &connection_context.secrets_reader,
+                &*connection_context.secrets_reader,
             )
             .await
             .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
@@ -168,12 +168,23 @@ pub async fn purify_create_source(
             .await?;
         }
         CreateSourceConnection::Postgres {
-            conn,
+            connection,
             publication,
             details: details_ast,
         } => {
+            let scx = StatementContext::new(None, &*catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                match item.connection()? {
+                    Connection::Postgres(connection) => connection.clone(),
+                    _ => bail!("{} is not a postgres connection", item.name()),
+                }
+            };
             // verify that we can connect upstream and snapshot publication metadata
-            let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
+            let config = connection
+                .config(&*connection_context.secrets_reader)
+                .await?;
+            let tables = mz_postgres_util::publication_info(&config, &publication).await?;
 
             let details = PostgresSourceDetails {
                 tables,
@@ -335,7 +346,7 @@ async fn purify_csr_connection_proto(
             };
 
             let ccsr_client = ccsr_connection
-                .connect(&connection_context.secrets_reader)
+                .connect(&*connection_context.secrets_reader)
                 .await?;
 
             let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
@@ -392,7 +403,7 @@ async fn purify_csr_connection_avro(
             }
         };
         let ccsr_client = ccsr_connection
-            .connect(&connection_context.secrets_reader)
+            .connect(&*connection_context.secrets_reader)
             .await?;
         let Schema {
             key_schema,

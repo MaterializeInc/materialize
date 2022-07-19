@@ -43,14 +43,14 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i64tobool"]
+    #[sqlname = "bigint_to_boolean"]
     fn cast_int64_to_bool(a: i64) -> bool {
         a != 0
     }
 );
 
 sqlfunc!(
-    #[sqlname = "i64toi16"]
+    #[sqlname = "bigint_to_smallint"]
     #[preserves_uniqueness = true]
     fn cast_int64_to_int16(a: i64) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
@@ -58,7 +58,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i64toi32"]
+    #[sqlname = "bigint_to_integer"]
     #[preserves_uniqueness = true]
     fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
         i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
@@ -66,7 +66,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "i64tooid"]
+    #[sqlname = "bigint_to_oid"]
     #[preserves_uniqueness = true]
     fn cast_int64_to_oid(a: i64) -> Result<Oid, EvalError> {
         // Unlike casting a 16-bit or 32-bit integers to OID, casting a 64-bit
@@ -100,26 +100,26 @@ impl<'a> EagerUnaryFunc<'a> for CastInt64ToNumeric {
 
 impl fmt::Display for CastInt64ToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("i64tonumeric")
+        f.write_str("bigint_to_numeric")
     }
 }
 
 sqlfunc!(
-    #[sqlname = "i64tof32"]
+    #[sqlname = "bigint_to_real"]
     fn cast_int64_to_float32(a: i64) -> f32 {
         a as f32
     }
 );
 
 sqlfunc!(
-    #[sqlname = "i64tof64"]
+    #[sqlname = "bigint_to_double"]
     fn cast_int64_to_float64(a: i64) -> f64 {
         a as f64
     }
 );
 
 sqlfunc!(
-    #[sqlname = "i64tostr"]
+    #[sqlname = "bigint_to_text"]
     #[preserves_uniqueness = true]
     fn cast_int64_to_string(a: i64) -> String {
         let mut buf = String::new();

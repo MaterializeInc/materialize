@@ -19,7 +19,7 @@ $ kafka-create-topic topic=resolution-arrays
 $ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} publish=true timestamp=1
 {"f1": [ 123 ] }
 
-> CREATE MATERIALIZED SOURCE resolution_arrays
+> CREATE SOURCE resolution_arrays
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-arrays-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE

@@ -24,7 +24,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=2
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=3
 {"f1": "01-03" }
 
-> CREATE MATERIALIZED SOURCE kafka_multi_broker
+> CREATE SOURCE kafka_multi_broker
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-multi-broker-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE

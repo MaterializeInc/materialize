@@ -9,6 +9,9 @@
 
 fn main() {
     prost_build::Config::new()
-        .compile_protos(&["proto/src/proto.proto"], &[".."])
+        .compile_protos(
+            &["proto/src/proto.proto", "proto/src/tokio_postgres.proto"],
+            &[".."],
+        )
         .unwrap();
 }

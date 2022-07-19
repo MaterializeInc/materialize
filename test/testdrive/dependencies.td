@@ -248,7 +248,7 @@ contains:unknown catalog item 'i4'
 
 # Materialized source tests
 
-> CREATE MATERIALIZED SOURCE s3
+> CREATE SOURCE s3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -259,8 +259,6 @@ contains:unknown catalog item 'i4'
 cluster on_name  key_name        seq_in_index  column_name expression             nullable
 ----------------------------------------------------------------------------------------------
 <CLUSTER_NAME> s3       j1              1             <null>      "pg_catalog.ascii(y)"  false
-<CLUSTER_NAME> s3       s3_primary_idx  1             x           <null>                 false
-<CLUSTER_NAME> s3       s3_primary_idx  2             y           <null>                 false
 
 > DROP SOURCE s3;
 
@@ -272,7 +270,7 @@ contains:unknown catalog item 'j1'
 
 # Test cascade deletes all indexes associated with cascaded sources and views
 
-> CREATE MATERIALIZED SOURCE s4
+> CREATE SOURCE s4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -286,8 +284,6 @@ contains:unknown catalog item 'j1'
 cluster on_name  key_name        seq_in_index   column_name expression  nullable
 ------------------------------------------------------------------------------------
 <CLUSTER_NAME> s4       j2              1               <null>      "x + 2"    false
-<CLUSTER_NAME> s4       s4_primary_idx  1               x           <null>     false
-<CLUSTER_NAME> s4       s4_primary_idx  2               y           <null>     false
 
 > SHOW INDEXES FROM w;
 cluster on_name  key_name   seq_in_index  column_name expression nullable
@@ -310,9 +306,11 @@ contains:unknown catalog item 'j2'
 
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
-> CREATE MATERIALIZED SOURCE s5
+> CREATE SOURCE s5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
+
+> CREATE DEFAULT INDEX ON s5;
 
 > DROP INDEX s5_primary_idx CASCADE;
 

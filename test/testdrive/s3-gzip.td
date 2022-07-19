@@ -21,7 +21,7 @@ b1
 b2
 b3
 
-> CREATE MATERIALIZED SOURCE s3_all_none
+> CREATE SOURCE s3_all_none
   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-no-compression-${testdrive.seed}'
   COMPRESSION NONE
   WITH (
@@ -33,13 +33,13 @@ b3
   )
   FORMAT TEXT;
 
-> SELECT * FROM s3_all_none ORDER BY mz_record;
-a1 1
-a2 2
-a3 3
-b1 4
-b2 5
-b3 6
+> SELECT * FROM s3_all_none
+a1
+a2
+a3
+b1
+b2
+b3
 
 # Test explicit lack of compression
 
@@ -58,7 +58,7 @@ b1
 b2
 b3
 
-> CREATE MATERIALIZED SOURCE s3_all_gzip
+> CREATE SOURCE s3_all_gzip
   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-gzip-compression-${testdrive.seed}'
   COMPRESSION GZIP
   WITH (
@@ -70,13 +70,13 @@ b3
   )
   FORMAT TEXT;
 
-> SELECT * FROM s3_all_gzip ORDER BY mz_record;
-a1 1
-a2 2
-a3 3
-b1 4
-b2 5
-b3 6
+> SELECT * FROM s3_all_gzip
+a1
+a2
+a3
+b1
+b2
+b3
 
 # Test automatic decompression handling
 # $ set bucket=materialize-ci-testdrive-auto-${testdrive.seed}
@@ -93,7 +93,7 @@ b3 6
 # b2
 # b3
 #
-# > CREATE MATERIALIZED SOURCE s3_all_auto
+# > CREATE SOURCE s3_all_auto
 #   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
 #   COMPRESSION AUTO
 #   WITH (
@@ -105,10 +105,10 @@ b3 6
 #   )
 #   FORMAT TEXT;
 #
-# > SELECT * FROM s3_all ORDER BY mz_record;
-# a1 1
-# a2 2
-# a3 3
-# b1 4
-# b2 5
-# b3 6
+# > SELECT * FROM s3_all
+# a1
+# a2
+# a3
+# b1
+# b2
+# b3

@@ -18,7 +18,7 @@ $ kafka-create-topic topic=avro-decode-type-multi-record
 $ kafka-ingest format=avro topic=avro-decode-type-multi-record schema=${multi-record} timestamp=1
 {"f1": {"f1":123}}
 
-> CREATE MATERIALIZED SOURCE avro_decode_type_multi_record
+> CREATE SOURCE avro_decode_type_multi_record
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-type-multi-record-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${multi-record}'
   ENVELOPE NONE

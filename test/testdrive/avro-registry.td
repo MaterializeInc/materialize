@@ -35,7 +35,42 @@ $ set schema-v1={
           "null"
         ]
       },
-      { "name": "after", "type": ["row", "null"] }
+      { "name": "op", "type": "string" },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "io.debezium.connector.mysql",
+          "fields": [
+            {
+              "name": "file",
+              "type": "string"
+            },
+            {
+              "name": "pos",
+              "type": "long"
+            },
+            {
+              "name": "row",
+              "type": "int"
+            },
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "boolean",
+                  "connect.default": false
+                },
+                "null"
+              ],
+              "default": false
+            }
+          ],
+          "connect.name": "io.debezium.connector.mysql.Source"
+        }
+      }
     ]
   }
 
@@ -57,16 +92,51 @@ $ set schema-v2={
           "null"
         ]
       },
-      { "name": "after", "type": ["row", "null"] }
+      { "name": "op", "type": "string" },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "io.debezium.connector.mysql",
+          "fields": [
+            {
+              "name": "file",
+              "type": "string"
+            },
+            {
+              "name": "pos",
+              "type": "long"
+            },
+            {
+              "name": "row",
+              "type": "int"
+            },
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "boolean",
+                  "connect.default": false
+                },
+                "null"
+              ],
+              "default": false
+            }
+          ],
+          "connect.name": "io.debezium.connector.mysql.Source"
+        }
+      }
     ]
   }
 
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=1
-{"before": null, "after": {"row": {"a": 1}}}
+{"before": null, "after": {"row": {"a": 1}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
-> CREATE MATERIALIZED SOURCE data_v1
+> CREATE SOURCE data_v1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
@@ -77,9 +147,9 @@ a
 1
 
 $ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=3
-{"before": null, "after": {"row": {"a": 2, "b": -1}}}
+{"before": null, "after": {"row": {"a": 2, "b": -1}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
-> CREATE MATERIALIZED SOURCE data_v2
+> CREATE SOURCE data_v2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
@@ -106,9 +176,9 @@ $ set valid-key-schema={
 
 $ kafka-ingest topic=data publish=true timestamp=5
   format=avro schema=${schema-v1} key-format=avro key-schema=${valid-key-schema}
-{"a": 1} {"before": null, "after": {"row": {"a": 1}}}
+{"a": 1} {"before": null, "after": {"row": {"a": 1}}, "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
-> CREATE MATERIALIZED SOURCE data_v3
+> CREATE SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
@@ -135,7 +205,7 @@ a count
 
 # When ignoring source keys, it should give correct results.
 
-> CREATE MATERIALIZED SOURCE data_v4
+> CREATE SOURCE data_v4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (ignore_source_keys = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

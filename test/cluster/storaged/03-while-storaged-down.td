@@ -10,12 +10,14 @@
 # Verify that the data ingested before `storaged` crashed is still present but
 # that newly ingested data does not appear.
 
+> SET transaction_isolation = SERIALIZABLE
+
 > SELECT * from remote1
-one   1
-two   2
+one
+two
 > SELECT * from remote2
-one  1
-two  2
+one
+two
 
 $ kafka-ingest format=bytes topic=remote1
 three
@@ -23,8 +25,10 @@ $ kafka-ingest format=bytes topic=remote2
 three
 
 > SELECT * from remote1
-one   1
-two   2
+one
+two
 > SELECT * from remote2
-one  1
-two  2
+one
+two
+
+> SET transaction_isolation = STRICT_SERIALIZABLE

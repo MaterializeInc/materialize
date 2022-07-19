@@ -17,7 +17,7 @@ INSERT INTO array_type VALUES ('{foo, null}');
 
 $ schema-registry-wait-schema schema=postgres.public.array_type-value
 
-> CREATE MATERIALIZED SOURCE array_type
+> CREATE SOURCE array_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.array_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM

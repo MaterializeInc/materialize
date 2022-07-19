@@ -12,7 +12,7 @@ use futures::executor::block_on;
 use mz_interchange::avro::Decoder;
 use mz_repr::Row;
 
-use crate::client::errors::DecodeError;
+use crate::types::errors::DecodeError;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {

@@ -27,7 +27,7 @@ $ kafka-create-topic topic=total-garbage
 $ kafka-ingest format=bytes topic=total-garbage
 garbage
 
-> CREATE MATERIALIZED SOURCE total_garbage FROM
+> CREATE SOURCE total_garbage FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-total-garbage-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.OneInt' USING SCHEMA FILE '${testdrive.temp-dir}/simple.pb'
 
@@ -39,7 +39,7 @@ $ kafka-create-topic topic=wrong-message
 $ kafka-ingest topic=wrong-message format=protobuf descriptor-file=simple.pb message=OneInt
 {"f": 1}
 
-> CREATE MATERIALIZED SOURCE wrong_message FROM
+> CREATE SOURCE wrong_message FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-wrong-message-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.OneString' USING SCHEMA FILE '${testdrive.temp-dir}/simple.pb'
 

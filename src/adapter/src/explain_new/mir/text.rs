@@ -9,6 +9,7 @@
 
 //! `EXPLAIN` support for `Mir` structures.
 
+use std::fmt;
 use std::fmt::Display;
 
 use mz_expr::OptimizedMirRelationExpr;
@@ -17,7 +18,7 @@ use mz_repr::explain_new::DisplayText;
 use crate::explain_new::common::{DataflowGraphFormatter, Explanation};
 
 impl<'a> DisplayText for Explanation<'a, DataflowGraphFormatter<'a>, OptimizedMirRelationExpr> {
-    fn fmt_text(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         self.fmt(f)
     }
 }

@@ -13,7 +13,7 @@
 
 $ kafka-create-topic topic=input_csv
 
-> CREATE MATERIALIZED SOURCE input_csv (first, second)
+> CREATE SOURCE input_csv (first, second)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_csv-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS;
 
@@ -22,10 +22,10 @@ $ kafka-ingest format=bytes topic=input_csv
 2,3
 
 > SELECT * from input_csv;
-first second mz_offset
-----------------------
-1     2      1
-2     3      2
+first second
+------------
+1     2
+2     3
 
 $ file-append path=input.proto
 syntax = "proto3";
@@ -38,7 +38,7 @@ $ protobuf-compile-descriptors inputs=input.proto output=input.pb
 
 $ kafka-create-topic topic=input_proto
 
-> CREATE MATERIALIZED SOURCE input_proto
+> CREATE SOURCE input_proto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_proto-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Input' USING SCHEMA FILE '${testdrive.temp-dir}/input.pb'
 
@@ -47,10 +47,10 @@ $ kafka-ingest format=protobuf topic=input_proto message=Input descriptor-file=i
 {"field": "b"}
 
 > SELECT * from input_proto
-field  mz_offset
-----------------
-a      1
-b      2
+field
+-----
+a
+b
 
 $ set schema={
     "type": "record",
@@ -69,16 +69,30 @@ $ set schema={
           "null"
         ]
       },
-      { "name": "after", "type": ["row", "null"] }
+      { "name": "after", "type": ["row", "null"] },
+      { "name": "op", "type": "string" },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "whatever",
+          "fields": [
+            { "name": "snapshot", "type": "boolean" },
+            { "name": "lsn", "type": ["long", "null"] },
+            { "name": "sequence", "type": ["string", "null"] }
+          ]
+        }
+      }
     ]
   }
 
 $ kafka-create-topic topic=input_avro
 
 $ kafka-ingest format=avro topic=input_avro schema=${schema} publish=true timestamp=1
-{"before": null, "after": {"row": {"a": 123}}}
+{"before": null, "after": {"row": {"a": 123}}, "op": "c", "source": {"snapshot": false, "lsn": null, "sequence": null}}
 
-> CREATE MATERIALIZED SOURCE input_avro
+> CREATE SOURCE input_avro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_avro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM

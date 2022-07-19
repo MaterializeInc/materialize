@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
@@ -26,14 +25,18 @@ use tokio::sync::Mutex;
 use tower_http::cors::AllowOrigin;
 
 use mz_controller::ControllerConfig;
-use mz_environmentd::{SecretsControllerConfig, TlsMode};
+use mz_environmentd::TlsMode;
 use mz_frontegg_auth::FronteggAuthentication;
+use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
-use mz_persist_client::PersistLocation;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::{PersistConfig, PersistLocation};
+use mz_secrets::SecretsController;
+use mz_storage::types::connections::ConnectionContext;
 
 pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
     Lazy::new(|| match env::var("KAFKA_ADDRS") {
@@ -123,43 +126,47 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         }
         Some(data_directory) => (data_directory, None),
     };
-    let (consensus_uri, catalog_postgres_stash, storage_postgres_stash) = {
+    let (consensus_uri, adapter_stash_url, storage_stash_url) = {
         let seed = config.seed;
         let postgres_url = env::var("POSTGRES_URL")
             .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
         let mut conn = postgres::Client::connect(&postgres_url, NoTls)?;
         conn.batch_execute(&format!(
             "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
-             CREATE SCHEMA IF NOT EXISTS catalog_{seed};
+             CREATE SCHEMA IF NOT EXISTS adapter_{seed};
              CREATE SCHEMA IF NOT EXISTS storage_{seed};",
         ))?;
         (
             format!("{postgres_url}?options=--search_path=consensus_{seed}"),
-            format!("{postgres_url}?options=--search_path=catalog_{seed}"),
+            format!("{postgres_url}?options=--search_path=adapter_{seed}"),
             format!("{postgres_url}?options=--search_path=storage_{seed}"),
         )
     };
     let metrics_registry = MetricsRegistry::new();
-    let orchestrator = runtime.block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
-        image_dir: env::current_exe()?
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf(),
-        port_allocator: PORT_ALLOCATOR.clone(),
-        // NOTE(benesch): would be nice to not have to do this, but
-        // the subprocess output wreaks havoc on cargo2junit.
-        suppress_output: true,
-        data_dir: data_directory.clone(),
-        command_wrapper: vec![],
-    }))?;
-    let persist_clients = PersistClientCache::new(&metrics_registry);
+    let orchestrator = Arc::new(
+        runtime.block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
+            image_dir: env::current_exe()?
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf(),
+            port_allocator: PORT_ALLOCATOR.clone(),
+            // NOTE(benesch): would be nice to not have to do this, but
+            // the subprocess output wreaks havoc on cargo2junit.
+            suppress_output: true,
+            data_dir: data_directory.clone(),
+            command_wrapper: vec![],
+        }))?,
+    );
+    let persist_clients =
+        PersistClientCache::new(PersistConfig::new(config.now.clone()), &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
-        catalog_postgres_stash,
+        adapter_stash_url,
         controller: ControllerConfig {
-            orchestrator: Arc::new(orchestrator),
+            build_info: &mz_environmentd::BUILD_INFO,
+            orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
             persist_location: PersistLocation {
@@ -167,11 +174,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 consensus_uri,
             },
             persist_clients,
-            storage_stash_url: storage_postgres_stash,
+            storage_stash_url,
         },
-        secrets_controller: SecretsControllerConfig::LocalFileSystem(
-            data_directory.join("secrets"),
-        ),
+        secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -183,8 +188,11 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         now: config.now,
         cors_allowed_origin: AllowOrigin::list([]),
         replica_sizes: Default::default(),
+        bootstrap_default_cluster_replica_size: "1".into(),
         availability_zones: Default::default(),
-        connection_context: Default::default(),
+        connection_context: ConnectionContext::for_tests(
+            (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
+        ),
         otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
     }))?;
     let server = Server {

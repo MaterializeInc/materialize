@@ -1019,6 +1019,7 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::r#impl::paths::PartialBlobKey;
 
     #[test]
     fn trace_datadriven() {
@@ -1041,7 +1042,10 @@ mod tests {
                     Antichain::from_elem(since),
                 ),
                 len,
-                keys: keys.iter().map(|x| (*x).to_owned()).collect(),
+                keys: keys
+                    .iter()
+                    .map(|x| PartialBlobKey((*x).to_owned()))
+                    .collect(),
             }
         }
 
@@ -1119,6 +1123,7 @@ mod tests {
                                     .iter()
                                     .flat_map(|x| x.keys.iter())
                                     .cloned()
+                                    .map(|x| x.0)
                                     .collect::<Vec<_>>()
                                     .join(" ")
                             );

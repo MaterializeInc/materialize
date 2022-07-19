@@ -16,7 +16,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_column_primary_key (f1 INTEGER);
 INSERT INTO alter_add_column_primary_key VALUES (123);
 
-> CREATE MATERIALIZED SOURCE alter_add_column_primary_key
+> CREATE SOURCE alter_add_column_primary_key
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_add_column_primary_key'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;

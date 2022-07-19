@@ -29,10 +29,10 @@ use mz_expr::{
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationType, Row};
-use mz_storage::client::controller::CollectionMetadata;
-use mz_storage::client::sinks::SinkDesc;
-use mz_storage::client::transforms::LinearOperator;
-use mz_storage::client::ProtoAllowCompaction;
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::protocol::client::ProtoAllowCompaction;
+use mz_storage::types::sinks::SinkDesc;
+use mz_storage::types::transforms::LinearOperator;
 
 use crate::command::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
@@ -49,6 +49,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     CreateInstance(InstanceConfig),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
+
+    /// Indicates that the controller has sent all commands reflecting its
+    /// initial state.
+    InitializationComplete,
 
     /// Create a sequence of dataflows.
     ///
@@ -83,6 +87,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             kind: Some(match self {
                 ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::DropInstance => DropInstance(()),
+                ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
                         dataflows: dataflows.into_proto(),
@@ -107,6 +112,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         match proto.kind {
             Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
+            Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
             }

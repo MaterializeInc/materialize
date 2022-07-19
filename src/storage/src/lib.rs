@@ -11,12 +11,13 @@
 
 //! Materialize's storage layer.
 
-pub mod client;
+pub mod controller;
 pub mod decode;
+pub mod protocol;
 pub mod render;
-pub(crate) mod server;
 pub mod source;
 pub mod storage_state;
+pub mod types;
 
 pub use decode::metrics::DecodeMetrics;
-pub use server::{serve, Config, Server};
+pub use protocol::server::{serve, Config, Server};

@@ -29,9 +29,10 @@ use std::fmt;
 use std::iter;
 
 use mz_ore::str::{bracketed, separated, StrExt};
+use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::RelationType;
 
-use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr};
+use crate::{Id, JoinImplementation, LocalId, MirRelationExpr};
 
 /// An `ViewExplanation` facilitates pretty-printing of a [`MirRelationExpr`].
 ///

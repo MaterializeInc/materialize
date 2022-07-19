@@ -29,16 +29,18 @@ use tokio::sync::{mpsc, Mutex};
 use mz_compute_client::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId,
 };
+use mz_compute_client::controller::replicated::ComputeCommandHistory;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, TailResponse};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::client::connections::ConnectionContext;
-use mz_storage::client::controller::CollectionMetadata;
-use mz_storage::client::errors::DataflowError;
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::types::connections::ConnectionContext;
+use mz_storage::types::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
+use tracing::{span, Level};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
@@ -56,7 +58,7 @@ pub struct ComputeState {
     pub traces: TraceManager,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+    pub sink_tokens: HashMap<GlobalId, SinkToken>,
     /// Shared buffer with TAIL operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the tail instance)
@@ -79,6 +81,8 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// History of commands received by this workers and all its peers.
+    pub command_history: ComputeCommandHistory,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
@@ -91,15 +95,24 @@ pub struct ActiveComputeState<'a, A: Allocate> {
     pub response_tx: &'a mut mpsc::UnboundedSender<ComputeResponse>,
 }
 
+/// A token that keeps a sink alive.
+pub struct SinkToken {
+    /// The underlying token.
+    pub token: Box<dyn Any>,
+    /// Whether the sink token is keeping a tail alive.
+    pub is_tail: bool,
+}
+
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
-
+        self.compute_state.command_history.push(cmd.clone());
         match cmd {
             CreateInstance(config) => self.handle_create_instance(config),
             DropInstance => (),
+            InitializationComplete => (),
             CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
             AllowCompaction(list) => self.handle_allow_compaction(list),
             Peek(peek) => {
@@ -167,7 +180,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
                 // Sink-specific work:
                 self.compute_state.sink_write_frontiers.remove(&id);
-                self.compute_state.dataflow_tokens.remove(&id);
+                self.compute_state.sink_tokens.remove(&id);
                 // Index-specific work:
                 self.compute_state.traces.del_trace(&id);
 
@@ -230,6 +243,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
             self.send_peek_response(peek, response);
         } else {
+            peek.span = span!(parent: &peek.span, Level::DEBUG, "pending peek");
             self.compute_state.pending_peeks.push(peek);
         }
     }
@@ -543,14 +557,14 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         for (id, traces) in self.compute_state.traces.traces.iter_mut() {
             // Read the upper frontier and compare to what we've reported.
             traces.oks_mut().read_upper(&mut new_frontier);
-            let prev_frontier = self
-                .compute_state
-                .reported_frontiers
-                .get_mut(&id)
-                .expect("Index frontier missing!");
-            if prev_frontier != &new_frontier {
-                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                prev_frontier.clone_from(&new_frontier);
+            if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
+                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
+                if prev_frontier != &new_frontier {
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    prev_frontier.clone_from(&new_frontier);
+                }
+            } else {
+                panic!("Frontier update for untracked identifier: {:?}", id);
             }
         }
 
@@ -565,18 +579,17 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
         for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
-            let prev_frontier = self
-                .compute_state
-                .reported_frontiers
-                .get_mut(&id)
-                .expect("Sink frontier missing!");
-            assert!(<_ as PartialOrder>::less_equal(
-                prev_frontier,
-                &new_frontier
-            ));
-            if prev_frontier != &new_frontier {
-                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                prev_frontier.clone_from(&new_frontier);
+            if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
+                assert!(<_ as PartialOrder>::less_equal(
+                    prev_frontier,
+                    &new_frontier
+                ));
+                if prev_frontier != &new_frontier {
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    prev_frontier.clone_from(&new_frontier);
+                }
+            } else {
+                panic!("Frontier update for untracked identifier: {:?}", id);
             }
         }
 

@@ -21,7 +21,7 @@ Materialize offers the following components through its SQL API:
 
 Component | Use
 ----------|-----
-**Sources** | Sources represent streams (e.g. Kafka) or files that provide data to Materialize.
+**Sources** | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
 **Views** | Views represent queries of sources and other views that you want to save for repeated execution.
 **Indexes** | Indexes represent query results stored in memory.
 **Clusters** | Clusters represent a logical set of indexes that share physical resources.
@@ -29,10 +29,7 @@ Component | Use
 
 ## Sources
 
-Sources represent a connection to the data external to Materialize you want to process, as
-well as details about the structure of that data. A simplistic way to think of
-this is that sources represent streams and their schemas; this isn't entirely
-accurate, but provides an illustrative mental model.
+Sources describe external systems you want Materialize to read data from, and provide details about how to decode and interpret that data. A simplistic way to think of this is that sources represent streams and their schemas; this isn't entirely accurate, but provides an illustrative mental model.
 
 In terms of SQL, sources are similar to a combination of tables and
 clients.
@@ -43,6 +40,8 @@ clients.
 
 By looking at what comprises a source, we can develop a sense for how this
 combination works.
+
+[//]: # "TODO(morsapaes) Add details about source persistence."
 
 ### Source components
 
@@ -56,10 +55,13 @@ Component | Use | Example
 
 #### Connectors
 
-Materialize can connect to the following types of sources:
+Materialize bundles native connectors for the following external systems:
 
-- Streaming sources like Kafka
-- File sources like `.csv` or unstructured log files
+- [Kafka](/sql/create-source/kafka)
+- [Redpanda](/sql/create-source/kafka)
+- [PostgreSQL](/sql/create-source/postgres)
+
+For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
 
 #### Formats
 
@@ -83,24 +85,6 @@ Envelope | Action
 **Append-only** | Inserts all received data; does not support updates or deletes.
 **Debezium** | Treats data as wrapped in a "diff envelope" that indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Kafka&mdash;Using Debezium](/sql/create-source/kafka/#using-debezium).
 **Upsert** | Treats data as having a key and a value. New records with non-null value that have the same key as a preexisting record in the dataflow will replace the preexisting record. New records with null value that have the same key as preexisting record will cause the preexisting record to be deleted. <br/><br/>For more information, see [`CREATE SOURCE`: &mdash;Handling upserts](/sql/create-source/kafka/#handling-upserts)
-
-### Materialized sources
-
-You can materialize a source, which keeps data it receives in an in-memory
-[index](#indexes) and makes the
-source directly queryable. In contrast, non-materialized sources cannot process
-queries directly; to access the data the source receives, you need to create
-[materialized views](#materialized-views) that `SELECT` from the
-source.
-
-For a mental model, materializing the source is approximately equivalent to
-creating a non-materialized source, and then creating a materialized view from
-all of the source's columns. The actual implementation of materialized sources differs, though, by letting
-you refer to the source's name directly in queries.
-
-Because keeping the entire source in memory can be prohibitive for large sources, we recommend that you exercise caution before doing so. For more details about the impact of materializing sources (and implicitly
-creating an index), see [`CREATE INDEX`: Details &mdash; Memory
-footprint](/sql/create-index/#memory-footprint).
 
 ## Views
 

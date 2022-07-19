@@ -187,13 +187,6 @@ SHOW SOURCES
 ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
-SHOW MATERIALIZED SOURCES FROM foo
-----
-SHOW MATERIALIZED SOURCES FROM foo
-=>
-ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedSchemaName([Ident("foo")])), in_cluster: None, extended: false, full: false, materialized: true, filter: None })
-
-parse-statement
 SHOW MATERIALIZED VIEWS FROM foo LIKE '%foo%'
 ----
 SHOW MATERIALIZED VIEWS FROM foo LIKE '%foo%'

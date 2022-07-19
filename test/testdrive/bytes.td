@@ -15,25 +15,26 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 ©1
 ©2
 
-> CREATE MATERIALIZED SOURCE data
+> CREATE SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
   FORMAT BYTES
+  INCLUDE OFFSET
 
 > SHOW COLUMNS FROM data
 name       nullable  type
 --------------------------
 data       false     bytea
-mz_offset  false     bigint
+offset     false     bigint
 
 > SELECT * FROM data
-data           mz_offset
+data           offset
 ------------------------
 "\\xc2\\xa91"  1
 "\\xc2\\xa92"  2
 
 # Test that CREATE SOURCE can specify a custom name for the column.
 
-> CREATE MATERIALIZED SOURCE data_named_col (named_col)
+> CREATE SOURCE data_named_col (named_col)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
   FORMAT BYTES
 
@@ -41,15 +42,15 @@ data           mz_offset
 name       nullable  type
 --------------------------
 named_col  false     bytea
-mz_offset  false     bigint
 
-> CREATE MATERIALIZED SOURCE data_offset
+> CREATE SOURCE data_offset
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
   WITH (start_offset=1)
   FORMAT BYTES
+  INCLUDE OFFSET
 
 > SELECT * FROM data_offset
-data           mz_offset
+data           offset
 ------------------------
 "\\xc2\\xa92"  2
 
@@ -61,12 +62,13 @@ $ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=0
 $ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=1
 ©2
 
-> CREATE MATERIALIZED SOURCE data_offset_2
+> CREATE SOURCE data_offset_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-partitions-${testdrive.seed}'
   WITH (start_offset=[0,1])
   FORMAT BYTES
+  INCLUDE OFFSET
 
 > SELECT * FROM data_offset_2
-data           mz_offset
+data           offset
 ------------------------
 "\\xc2\\xa91"  1

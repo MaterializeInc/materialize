@@ -42,6 +42,8 @@ pub struct Metrics {
     pub user: BatchWriteMetrics,
     /// Metrics for compaction.
     pub compaction: CompactionMetrics,
+    /// Metrics for garbage collection.
+    pub gc: GcMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
 }
@@ -58,6 +60,7 @@ impl Metrics {
             codecs: vecs.codecs_metrics(),
             user: BatchWriteMetrics::new(registry, "user"),
             compaction: CompactionMetrics::new(registry),
+            gc: GcMetrics::new(registry),
             _vecs: vecs,
         }
     }
@@ -209,7 +212,9 @@ impl MetricsVecs {
             clone_reader: self.cmd_metrics("clone_reader"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
+            heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
             expire_reader: self.cmd_metrics("expire_reader"),
+            expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
         }
     }
@@ -231,7 +236,6 @@ impl MetricsVecs {
                 apply_unbatched_cmd_cas: self.retry_metrics("apply_unbatched_cmd::cas"),
             },
             external: RetryExternal {
-                apply_unbatched_cmd_truncate: self.retry_metrics("apply_unbatched_cmd::truncate"),
                 batch_set: self.retry_metrics("batch::set"),
                 blob_open: self.retry_metrics("blob::open"),
                 consensus_open: self.retry_metrics("consensus::open"),
@@ -239,6 +243,9 @@ impl MetricsVecs {
                 fetch_batch_get: self.retry_metrics("fetch_batch::get"),
                 maybe_init_state_cas: self.retry_metrics("maybe_init_state::cas"),
                 maybe_init_state_head: self.retry_metrics("maybe_init_state::head"),
+                gc_scan: self.retry_metrics("gc::scan"),
+                gc_delete: self.retry_metrics("gc::delete"),
+                gc_truncate: self.retry_metrics("gc::truncate"),
             },
             append_batch: self.retry_metrics("append_batch"),
             fetch_batch_part: self.retry_metrics("fetch_batch_part"),
@@ -343,7 +350,9 @@ pub struct CmdsMetrics {
     pub(crate) clone_reader: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
+    pub(crate) heartbeat_reader: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
+    pub(crate) expire_writer: CmdMetrics,
     pub(crate) merge_res: CmdMetrics,
 }
 
@@ -369,7 +378,6 @@ pub struct RetryDeterminate {
 
 #[derive(Debug)]
 pub struct RetryExternal {
-    pub(crate) apply_unbatched_cmd_truncate: RetryMetrics,
     pub(crate) batch_set: RetryMetrics,
     pub(crate) blob_open: RetryMetrics,
     pub(crate) consensus_open: RetryMetrics,
@@ -377,6 +385,9 @@ pub struct RetryExternal {
     pub(crate) fetch_batch_get: RetryMetrics,
     pub(crate) maybe_init_state_cas: RetryMetrics,
     pub(crate) maybe_init_state_head: RetryMetrics,
+    pub(crate) gc_scan: RetryMetrics,
+    pub(crate) gc_delete: RetryMetrics,
+    pub(crate) gc_truncate: RetryMetrics,
 }
 
 #[derive(Debug)]
@@ -454,6 +465,37 @@ impl CompactionMetrics {
                 help: "time spent in compaction",
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GcMetrics {
+    pub(crate) skipped: IntCounter,
+    pub(crate) started: IntCounter,
+    pub(crate) finished: IntCounter,
+    pub(crate) seconds: Counter,
+}
+
+impl GcMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        GcMetrics {
+            skipped: registry.register(metric!(
+                name: "mz_persist_gc_skipped",
+                help: "count of garbage collections skipped due to heuristics",
+            )),
+            started: registry.register(metric!(
+                name: "mz_persist_gc_started",
+                help: "count of garbage collections started",
+            )),
+            finished: registry.register(metric!(
+                name: "mz_persist_gc_finished",
+                help: "count of garbage collections finished",
+            )),
+            seconds: registry.register(metric!(
+                name: "mz_persist_gc_seconds",
+                help: "time spent in garbage collections",
+            )),
         }
     }
 }
@@ -597,13 +639,8 @@ impl MetricsBlob {
 
 #[async_trait]
 impl Blob for MetricsBlob {
-    async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        let res = self
-            .metrics
-            .blob
-            .get
-            .run_op(|| self.blob.get(deadline, key))
-            .await;
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        let res = self.metrics.blob.get.run_op(|| self.blob.get(key)).await;
         if let Ok(Some(value)) = res.as_ref() {
             self.metrics
                 .blob
@@ -614,12 +651,12 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
         let res = self
             .metrics
             .blob
             .list_keys
-            .run_op(|| self.blob.list_keys(deadline))
+            .run_op(|| self.blob.list_keys())
             .await;
         if let Ok(keys) = res.as_ref() {
             let bytes = keys.iter().map(|x| x.len()).sum();
@@ -632,19 +669,13 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn set(
-        &self,
-        deadline: Instant,
-        key: &str,
-        value: Bytes,
-        atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let bytes = value.len();
         let res = self
             .metrics
             .blob
             .set
-            .run_op(|| self.blob.set(deadline, key, value, atomic))
+            .run_op(|| self.blob.set(key, value, atomic))
             .await;
         if res.is_ok() {
             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
@@ -652,12 +683,12 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
         // It'd be nice if this could also track bytes somehow.
         self.metrics
             .blob
             .delete
-            .run_op(|| self.blob.delete(deadline, key))
+            .run_op(|| self.blob.delete(key))
             .await
     }
 }
@@ -684,16 +715,12 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
-    async fn head(
-        &self,
-        deadline: Instant,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError> {
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let res = self
             .metrics
             .consensus
             .head
-            .run_op(|| self.consensus.head(deadline, key))
+            .run_op(|| self.consensus.head(key))
             .await;
         if let Ok(Some(data)) = res.as_ref() {
             self.metrics
@@ -707,7 +734,6 @@ impl Consensus for MetricsConsensus {
 
     async fn compare_and_set(
         &self,
-        deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -717,7 +743,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .compare_and_set
-            .run_op(|| self.consensus.compare_and_set(deadline, key, expected, new))
+            .run_op(|| self.consensus.compare_and_set(key, expected, new))
             .await;
         if let Ok(Ok(())) = res.as_ref() {
             self.metrics
@@ -729,17 +755,12 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    async fn scan(
-        &self,
-        deadline: Instant,
-        key: &str,
-        from: SeqNo,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         let res = self
             .metrics
             .consensus
             .scan
-            .run_op(|| self.consensus.scan(deadline, key, from))
+            .run_op(|| self.consensus.scan(key, from))
             .await;
         if let Ok(dataz) = res.as_ref() {
             let bytes = dataz.iter().map(|x| x.data.len()).sum();
@@ -752,16 +773,11 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    async fn truncate(
-        &self,
-        deadline: Instant,
-        key: &str,
-        seqno: SeqNo,
-    ) -> Result<(), ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
         self.metrics
             .consensus
             .truncate
-            .run_op(|| self.consensus.truncate(deadline, key, seqno))
+            .run_op(|| self.consensus.truncate(key, seqno))
             .await
     }
 }

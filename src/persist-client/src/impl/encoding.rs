@@ -21,14 +21,15 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::CodecMismatch;
+use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::{
-    HollowBatch, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReader, ProtoSnapshotSplit,
-    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ReadCapability, State,
-    StateCollections,
+    HollowBatch, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReaderState, ProtoSnapshotSplit,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
+    ReaderState, State, StateCollections, WriterState,
 };
 use crate::r#impl::trace::Trace;
 use crate::read::{ReaderId, SnapshotSplit};
-use crate::ShardId;
+use crate::{ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {
@@ -63,6 +64,29 @@ impl RustType<String> for ReaderId {
             Ok(x) => Ok(ReaderId(x)),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
+    }
+}
+
+impl RustType<String> for WriterId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        match parse_id('w', "WriterId", &proto) {
+            Ok(x) => Ok(WriterId(x)),
+            Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
+        }
+    }
+}
+
+impl RustType<String> for PartialBlobKey {
+    fn into_proto(&self) -> String {
+        self.0.clone()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(PartialBlobKey(proto))
     }
 }
 
@@ -134,10 +158,20 @@ where
                 .collections
                 .readers
                 .iter()
-                .map(|(id, cap)| ProtoReader {
+                .map(|(id, cap)| ProtoReaderState {
                     reader_id: id.into_proto(),
                     since: Some(cap.since.into_proto()),
                     seqno: cap.seqno.into_proto(),
+                    last_heartbeat_timestamp_ms: cap.last_heartbeat_timestamp_ms,
+                })
+                .collect(),
+            writers: self
+                .collections
+                .writers
+                .iter()
+                .map(|(id, writer)| ProtoWriterState {
+                    writer_id: id.into_proto(),
+                    last_heartbeat_timestamp_ms: writer.last_heartbeat_timestamp_ms,
                 })
                 .collect(),
             trace: Some(self.collections.trace.into_proto()),
@@ -180,14 +214,26 @@ where
         let mut readers = HashMap::with_capacity(x.readers.len());
         for proto in x.readers {
             let reader_id = proto.reader_id.into_rust()?;
-            let cap = ReadCapability {
+            let cap = ReaderState {
                 since: proto.since.into_rust_if_some("since")?,
                 seqno: proto.seqno.into_rust()?,
+                last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
             };
             readers.insert(reader_id, cap);
         }
+        let mut writers = HashMap::with_capacity(x.writers.len());
+        for proto in x.writers {
+            let writer_id = proto.writer_id.into_rust()?;
+            writers.insert(
+                writer_id,
+                WriterState {
+                    last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
+                },
+            );
+        }
         let collections = StateCollections {
             readers,
+            writers,
             trace: x.trace.into_rust_if_some("trace")?,
         };
         Ok(Ok(State {
@@ -315,6 +361,7 @@ impl<T: Timestamp + Codec64> From<SerdeSnapshotSplit> for SnapshotSplit<T> {
 impl<T: Timestamp + Codec64> RustType<ProtoSnapshotSplit> for SnapshotSplit<T> {
     fn into_proto(&self) -> ProtoSnapshotSplit {
         ProtoSnapshotSplit {
+            reader_id: self.reader_id.into_proto(),
             shard_id: self.shard_id.into_proto(),
             as_of: Some(self.as_of.into_proto()),
             batches: self
@@ -332,9 +379,10 @@ impl<T: Timestamp + Codec64> RustType<ProtoSnapshotSplit> for SnapshotSplit<T> {
         let mut batches = Vec::new();
         for batch in proto.batches.into_iter() {
             let desc = batch.desc.into_rust_if_some("desc")?;
-            batches.push((batch.key, desc));
+            batches.push((PartialBlobKey(batch.key), desc));
         }
         Ok(SnapshotSplit {
+            reader_id: proto.reader_id.into_rust()?,
             shard_id: proto.shard_id.into_rust()?,
             as_of: proto.as_of.into_rust_if_some("as_of")?,
             batches,

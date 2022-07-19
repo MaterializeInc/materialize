@@ -89,7 +89,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{trace, warn, Instrument};
+use tracing::{event, span, warn, Instrument, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -102,11 +102,10 @@ use mz_compute_client::explain::{
 };
 use mz_compute_client::response::PeekResponse;
 use mz_controller::{
-    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent,
-    ConcreteComputeInstanceReplicaConfig, ControllerResponse,
+    ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
 };
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
+    permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::metrics::MetricsRegistry;
@@ -116,10 +115,11 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::{stack, task};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
 };
-use mz_secrets::{SecretOp, SecretsController};
+use mz_secrets::SecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSourceStatement, ExplainStageNew, ExplainStageOld, FetchStatement,
@@ -141,23 +141,23 @@ use mz_sql::plan::{
     DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
     ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
     MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    RecordedView, ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    RecordedView, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
-use mz_storage::client::connections::ConnectionContext;
-use mz_storage::client::controller::{CollectionDescription, ReadPolicy};
-use mz_storage::client::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
-use mz_storage::client::sources::{
+use mz_storage::controller::{CollectionDescription, ReadPolicy};
+use mz_storage::protocol::client::Update;
+use mz_storage::types::connections::ConnectionContext;
+use mz_storage::types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
+use mz_storage::types::sources::{
     IngestionDescription, PostgresSourceConnection, SourceConnection, Timeline,
 };
-use mz_storage::client::Update;
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
-    Connection, SinkConnectionState,
+    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ClusterReplicaSizeMap,
+    ComputeInstance, Connection, SinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{
@@ -165,10 +165,12 @@ use crate::command::{
 };
 use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::read_holds::ReadHolds;
 use crate::error::AdapterError;
-use crate::explain_new::{ExplainContext, Explainable};
+use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    vars, EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus,
+    WriteOp,
 };
 use crate::sink_connection;
 use crate::tail::PendingTail;
@@ -179,7 +181,8 @@ pub mod id_bundle;
 mod dataflow_builder;
 mod indexes;
 
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1);
+/// The default is set to a second to track the default timestamp frequency for sources.
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
@@ -263,7 +266,7 @@ pub struct Config<S> {
     pub build_info: &'static BuildInfo,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
-    pub secrets_controller: Box<dyn SecretsController>,
+    pub secrets_controller: Arc<dyn SecretsController>,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
     pub connection_context: ConnectionContext,
@@ -320,52 +323,6 @@ pub struct WriteTimestamp {
 pub struct CatalogTxn<'a, T> {
     dataflow_client: &'a mz_controller::Controller<T>,
     catalog: &'a CatalogState,
-}
-
-fn concretize_replica_config(
-    config: ReplicaConfig,
-    replica_sizes: &ClusterReplicaSizeMap,
-    availability_zones: &[String],
-) -> Result<ConcreteComputeInstanceReplicaConfig, AdapterError> {
-    let config = match config {
-        ReplicaConfig::Remote { addrs } => ConcreteComputeInstanceReplicaConfig::Remote { addrs },
-        ReplicaConfig::Managed {
-            size,
-            availability_zone,
-        } => {
-            let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
-                let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
-                entries.sort_by_key(
-                    |(
-                        _name,
-                        ClusterReplicaSizeConfig {
-                            scale, cpu_limit, ..
-                        },
-                    )| (*scale, *cpu_limit),
-                );
-                let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                AdapterError::InvalidClusterReplicaSize {
-                    size: size.clone(),
-                    expected,
-                }
-            })?;
-
-            if let Some(az) = &availability_zone {
-                if !availability_zones.contains(az) {
-                    return Err(AdapterError::InvalidClusterReplicaAz {
-                        az: az.to_string(),
-                        expected: availability_zones.to_vec(),
-                    });
-                }
-            }
-            ConcreteComputeInstanceReplicaConfig::Managed {
-                size_config: *size_config,
-                size_name: size,
-                availability_zone,
-            }
-        }
-    };
-    Ok(config)
 }
 
 /// Holds tables needing advancement.
@@ -462,7 +419,7 @@ pub struct Coordinator<S> {
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
-    global_timelines: BTreeMap<Timeline, timeline::DurableTimestampOracle<Timestamp>>,
+    global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
 
     /// Tracks tables needing advancement, which can be processed at a low priority
     /// in the biased select loop.
@@ -504,11 +461,7 @@ pub struct Coordinator<S> {
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
-    secrets_controller: Box<dyn SecretsController>,
-    /// Map of strings to corresponding compute replica sizes.
-    replica_sizes: ClusterReplicaSizeMap,
-    /// Valid availability zones for replicas.
-    availability_zones: Vec<String>,
+    secrets_controller: Arc<dyn SecretsController>,
 
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
@@ -519,6 +472,16 @@ pub struct Coordinator<S> {
     /// `None` is used as a tombstone value for replicas that have been
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
+}
+
+/// Global state for a single timeline.
+///
+/// For each timeline we maintain a timestamp oracle, which is responsible for
+/// providing read (and sometimes write) timestamps, and a set of read holds which
+/// guarantee that those read timestamps are valid.
+struct TimelineState<T> {
+    oracle: timeline::DurableTimestampOracle<T>,
+    read_holds: ReadHolds<T>,
 }
 
 /// Metadata about an active connection.
@@ -582,9 +545,11 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
     fn get_local_timestamp_oracle(&self) -> &timeline::DurableTimestampOracle<Timestamp> {
-        self.global_timelines
+        &self
+            .global_timelines
             .get(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
+            .oracle
     }
 
     /// Returns a mutable reference to the timestamp oracle used for reads and writes
@@ -592,9 +557,11 @@ impl<S: Append + 'static> Coordinator<S> {
     fn get_local_timestamp_oracle_mut(
         &mut self,
     ) -> &mut timeline::DurableTimestampOracle<Timestamp> {
-        self.global_timelines
+        &mut self
+            .global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
+            .oracle
     }
 
     /// Assign a timestamp for a read from a local input. Reads following writes
@@ -611,6 +578,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
+            .oracle
             .write_ts(|ts| {
                 self.catalog
                     .persist_timestamp(&Timeline::EpochMilliseconds, ts)
@@ -626,6 +594,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
+            .oracle
             .write_ts(|ts| {
                 self.catalog
                     .persist_timestamp(&Timeline::EpochMilliseconds, ts)
@@ -673,20 +642,14 @@ impl<S: Append + 'static> Coordinator<S> {
         ids: Vec<GlobalId>,
         compaction_window_ms: Option<Timestamp>,
     ) {
-        let mut policy_updates = Vec::new();
-        for id in ids.into_iter() {
-            let policy = match compaction_window_ms {
-                Some(time) => ReadPolicy::lag_writes_by(time),
-                None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-            };
-            self.read_capability.insert(id, policy.clone().into());
-            policy_updates.push((id, self.read_capability[&id].policy()));
-        }
-        self.controller
-            .storage_mut()
-            .set_read_policy(policy_updates)
-            .await
-            .unwrap();
+        self.initialize_read_policies(
+            CollectionIdBundle {
+                storage_ids: ids.into_iter().collect(),
+                compute_ids: BTreeMap::new(),
+            },
+            compaction_window_ms,
+        )
+        .await;
     }
 
     /// Initialize the compute read policies.
@@ -700,21 +663,112 @@ impl<S: Append + 'static> Coordinator<S> {
         instance: ComputeInstanceId,
         compaction_window_ms: Option<Timestamp>,
     ) {
-        let mut policy_updates = Vec::new();
-        for id in ids.into_iter() {
+        let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        compute_ids.insert(instance, ids.into_iter().collect());
+        self.initialize_read_policies(
+            CollectionIdBundle {
+                storage_ids: BTreeSet::new(),
+                compute_ids,
+            },
+            compaction_window_ms,
+        )
+        .await;
+    }
+
+    /// Initialize the storage and compute read policies.
+    ///
+    /// This should be called only after a collection is created, and
+    /// ideally very soon afterwards. The collection is otherwise initialized
+    /// with a read policy that allows no compaction.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn initialize_read_policies(
+        &mut self,
+        id_bundle: CollectionIdBundle,
+        compaction_window_ms: Option<Timestamp>,
+    ) {
+        // We do compute first, and they may result in additional storage policy effects.
+        for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
+            let mut compute_policy_updates = Vec::new();
+            for id in compute_ids.iter() {
+                let policy = match compaction_window_ms {
+                    Some(time) => ReadPolicy::lag_writes_by(time),
+                    None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
+                };
+
+                let mut read_capability: ReadCapability<_> = policy.into();
+
+                if let Some(timeline) = self.get_timeline(*id) {
+                    let TimelineState { read_holds, .. } =
+                        self.ensure_timeline_state(timeline).await;
+                    read_capability
+                        .holds
+                        .update_iter(Some((read_holds.time, 1)));
+                    read_holds
+                        .id_bundle
+                        .compute_ids
+                        .entry(*compute_instance)
+                        .or_default()
+                        .insert(*id);
+                }
+
+                self.read_capability.insert(*id, read_capability);
+                compute_policy_updates.push((*id, self.read_capability[&id].policy()));
+            }
+            self.controller
+                .compute_mut(*compute_instance)
+                .unwrap()
+                .set_read_policy(compute_policy_updates)
+                .await
+                .unwrap();
+        }
+
+        let mut storage_policy_updates = Vec::new();
+        for id in id_bundle.storage_ids.iter() {
             let policy = match compaction_window_ms {
                 Some(time) => ReadPolicy::lag_writes_by(time),
                 None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
             };
-            self.read_capability.insert(id, policy.clone().into());
-            policy_updates.push((id, self.read_capability[&id].policy()));
+
+            let mut read_capability: ReadCapability<_> = policy.into();
+
+            if let Some(timeline) = self.get_timeline(*id) {
+                let TimelineState { read_holds, .. } = self.ensure_timeline_state(timeline).await;
+                read_capability
+                    .holds
+                    .update_iter(Some((read_holds.time, 1)));
+                read_holds.id_bundle.storage_ids.insert(*id);
+            }
+
+            self.read_capability.insert(*id, read_capability);
+            storage_policy_updates.push((*id, self.read_capability[&id].policy()));
         }
         self.controller
-            .compute_mut(instance)
-            .unwrap()
-            .set_read_policy(policy_updates)
+            .storage_mut()
+            .set_read_policy(storage_policy_updates)
             .await
             .unwrap();
+    }
+
+    /// Ensures that a global timeline state exists for `timeline`.
+    async fn ensure_timeline_state(&mut self, timeline: Timeline) -> &mut TimelineState<Timestamp> {
+        if !self.global_timelines.contains_key(&timeline) {
+            self.global_timelines.insert(
+                timeline.clone(),
+                TimelineState {
+                    oracle: timeline::DurableTimestampOracle::new(
+                        Timestamp::minimum(),
+                        Timestamp::minimum,
+                        *timeline::TIMESTAMP_PERSIST_INTERVAL,
+                        |ts| self.catalog.persist_timestamp(&timeline, ts),
+                    )
+                    .await,
+                    read_holds: ReadHolds::new(Timestamp::minimum()),
+                },
+            );
+        }
+        self.global_timelines
+            .get_mut(&timeline)
+            .expect("inserted above")
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be
@@ -731,7 +785,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.controller
-                    .add_replica_to_instance(instance.id, replica_id, replica.config)
+                    .add_replica_to_instance(instance.id, replica_id, replica.concrete_config)
                     .await
                     .unwrap();
             }
@@ -755,8 +809,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
-        let mut storage_policies_to_set = Vec::new();
-        let mut compute_policies_to_set = BTreeMap::new();
+        let mut policies_to_set: CollectionIdBundle = Default::default();
 
         for entry in &entries {
             match entry.item() {
@@ -788,44 +841,41 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 ingestion: Some(ingestion),
                                 remote_addr: source.remote_addr.clone(),
+                                since: None,
                             },
                         )])
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
                 }
                 CatalogItem::Table(table) => {
+                    let collection_desc = table.desc.clone().into();
                     self.controller
                         .storage_mut()
-                        .create_collections(vec![(
-                            entry.id(),
-                            CollectionDescription {
-                                desc: table.desc.clone(),
-                                ingestion: None,
-                                remote_addr: None,
-                            },
-                        )])
+                        .create_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
                 }
                 CatalogItem::Index(idx) => {
                     if logs.contains(&idx.on) {
-                        compute_policies_to_set
+                        policies_to_set
+                            .compute_ids
                             .entry(idx.compute_instance)
-                            .or_insert_with(Vec::new)
-                            .push(entry.id());
+                            .or_insert_with(BTreeSet::new)
+                            .insert(entry.id());
                     } else {
                         let dataflow = self
                             .dataflow_builder(idx.compute_instance)
                             .build_index_dataflow(entry.id())?;
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.compute_instance)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
-                        compute_policies_to_set
+                        policies_to_set
+                            .compute_ids
                             .entry(idx.compute_instance)
-                            .or_insert_with(Vec::new)
+                            .or_insert_with(BTreeSet::new)
                             .extend(dataflow.export_ids());
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
@@ -840,20 +890,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::View(_) => (),
                 CatalogItem::RecordedView(rview) => {
                     // Re-create the storage collection.
+                    let collection_desc = rview.desc.clone().into();
                     self.controller
                         .storage_mut()
-                        .create_collections(vec![(
-                            entry.id(),
-                            CollectionDescription {
-                                desc: rview.desc.clone(),
-                                ingestion: None,
-                                remote_addr: None,
-                            },
-                        )])
+                        .create_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
 
-                    storage_policies_to_set.push(entry.id());
+                    policies_to_set.storage_ids.insert(entry.id());
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
@@ -910,24 +954,11 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
-        // We do compute first, and they may result in additional storage policy effects.
-        for (instance, mut ids) in compute_policies_to_set.into_iter() {
-            ids.sort();
-            ids.dedup();
-            self.initialize_compute_read_policies(
-                ids,
-                instance,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-            )
+        self.initialize_read_policies(policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
             .await;
-        }
-        storage_policies_to_set.sort();
-        storage_policies_to_set.dedup();
-        self.initialize_storage_read_policies(
-            storage_policies_to_set,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-        )
-        .await;
+
+        // Announce the completion of initialization.
+        self.controller.initialization_complete();
 
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
@@ -1059,9 +1090,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `next()` on any stream is cancel-safe:
                 // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
                 Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
-                // `tick()` on `Interval` is cancel-safe:
-                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
                 // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
                 () = self.controller.ready() => {
@@ -1073,6 +1101,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
+                // `tick()` on `Interval` is cancel-safe:
+                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
 
                 // At the lowest priority, process table advancements. This is a blocking
                 // HashMap instead of a channel so that we can delay the determination of
@@ -1086,6 +1117,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     Message::AdvanceLocalInput(inputs)
                 },
             };
+
+            // All message processing functions trace. Start a parent span for them to make
+            // it easy to find slow messages.
+            let span = span!(Level::DEBUG, "coordinator message processing");
+            let _enter = span.enter();
 
             match msg {
                 Message::Command(cmd) => self.message_command(cmd).await,
@@ -1163,7 +1199,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     // Advance a local input (table). This downgrades the capabilitiy of a table,
     // which means that it can no longer produce new data before this timestamp.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "debug", skip_all, fields(num_tables = inputs.ids.len()))]
     async fn advance_local_input(&mut self, inputs: AdvanceLocalInput<mz_repr::Timestamp>) {
         // We split up table advancement into batches of requests so that user queries
         // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
@@ -1212,12 +1248,6 @@ impl<S: Append + 'static> Coordinator<S> {
         let num_updates = appends.len();
         self.controller.storage_mut().append(appends).await.unwrap();
         let elapsed = start.elapsed();
-        trace!(
-            "advance_local_inputs for {} tables to {} took: {} ms",
-            num_updates,
-            inputs.advance_to,
-            elapsed.as_millis()
-        );
         if elapsed > (MAX_WAIT + WINDOW) {
             self.advance_tables.decrease_batch();
         } else if elapsed < (MAX_WAIT - WINDOW) && num_updates == self.advance_tables.batch_size {
@@ -1231,6 +1261,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn try_group_commit(&mut self) {
         if self.pending_writes.is_empty() {
             return;
@@ -1286,6 +1317,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the write.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn group_commit(&mut self) {
         if self.pending_writes.is_empty() {
             return;
@@ -1351,8 +1383,9 @@ impl<S: Append + 'static> Coordinator<S> {
         self.pending_writes.push(pending_write_txn);
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_controller(&mut self, message: ControllerResponse) {
+        event!(Level::TRACE, message = format!("{:?}", message));
         match message {
             ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
                 // We expect exactly one peek response, which we forward. Then we clean up the
@@ -1426,6 +1459,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self, tx, session))]
     async fn message_create_source_statement_ready(
         &mut self,
         CreateSourceStatementReady {
@@ -1474,6 +1508,7 @@ impl<S: Append + 'static> Coordinator<S> {
         tx.send(result, session);
     }
 
+    #[tracing::instrument(level = "debug", skip(self, tx, session))]
     async fn message_sink_connection_ready(
         &mut self,
         SinkConnectionReady {
@@ -1532,6 +1567,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(id, kind))]
     fn message_send_diffs(
         &mut self,
         SendDiffs {
@@ -1543,6 +1579,7 @@ impl<S: Append + 'static> Coordinator<S> {
             returning,
         }: SendDiffs,
     ) {
+        event!(Level::TRACE, diffs = format!("{:?}", diffs));
         match diffs {
             Ok(diffs) => {
                 tx.send(
@@ -1564,6 +1601,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn message_advance_timelines(&mut self) {
         // Convince the coordinator it needs to open a new timestamp
         // and advance inputs.
@@ -1575,31 +1613,32 @@ impl<S: Append + 'static> Coordinator<S> {
         // is in. We step back the value of `now()` so that the
         // next write can happen at `now()` and not a value above
         // `now()`
-        let nows: HashMap<_, _> = self
-            .global_timelines
-            .keys()
-            .cloned()
-            .map(|timeline| {
-                let now = if timeline == Timeline::EpochMilliseconds {
-                    let now = self.now();
-                    now.step_back().unwrap_or(now)
-                } else {
-                    // For non realtime sources, we define now as the largest timestamp, not in
-                    // advance of any object's upper. This is the largest timestamp that is closed
-                    // to writes.
-                    let id_bundle = self.ids_in_timeline(&timeline);
-                    self.largest_not_in_advance_of_upper(&id_bundle)
-                };
-                (timeline, now)
-            })
-            .collect();
-
-        for (timeline, timestamp_oracle) in &mut self.global_timelines {
-            let now = nows[timeline];
-            timestamp_oracle
-                .fast_forward(now, |ts| self.catalog.persist_timestamp(timeline, ts))
+        let global_timelines = std::mem::take(&mut self.global_timelines);
+        for (
+            timeline,
+            TimelineState {
+                mut oracle,
+                read_holds,
+            },
+        ) in global_timelines
+        {
+            let now = if timeline == Timeline::EpochMilliseconds {
+                let now = self.now();
+                now.step_back().unwrap_or(now)
+            } else {
+                // For non realtime sources, we define now as the largest timestamp, not in
+                // advance of any object's upper. This is the largest timestamp that is closed
+                // to writes.
+                let id_bundle = self.ids_in_timeline(&timeline);
+                self.largest_not_in_advance_of_upper(&id_bundle)
+            };
+            oracle
+                .fast_forward(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
-            let _ = timestamp_oracle.read_ts();
+            let read_ts = oracle.read_ts();
+            let read_holds = self.update_read_hold(read_holds, read_ts).await;
+            self.global_timelines
+                .insert(timeline, TimelineState { oracle, read_holds });
         }
     }
 
@@ -1636,6 +1675,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Remove all pending peeks that were initiated by `conn_id`.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn remove_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
         // The peek is present on some specific compute instance.
         // Allow dataflow to cancel any pending peeks.
@@ -1662,7 +1702,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_command(&mut self, cmd: Command) {
+        event!(Level::TRACE, cmd = format!("{:?}", cmd));
         match cmd {
             Command::Startup {
                 session,
@@ -1742,7 +1784,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
 
-                let span = tracing::debug_span!(parent: &span, "message_command");
+                let span = tracing::debug_span!(parent: &span, "message_command (execute)");
                 self.handle_execute(portal_name, session, tx)
                     .instrument(span)
                     .await;
@@ -1809,7 +1851,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } => {
                 let now = self.now_datetime();
                 let session = match implicit {
-                    None => session.start_transaction(now, None),
+                    None => session.start_transaction(now, None, None),
                     Some(stmts) => session.start_transaction_implicit(now, stmts),
                 };
                 let _ = tx.send(Response {
@@ -1840,6 +1882,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
+        event!(Level::TRACE, event = format!("{:?}", event));
         self.catalog_transact(
             None,
             vec![catalog::Op::UpdateComputeInstanceStatus { event }],
@@ -1977,7 +2020,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Handles an execute command.
-    #[tracing::instrument(level = "debug", skip(self, tx, session))]
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn handle_execute(
         &mut self,
         portal_name: String,
@@ -2000,6 +2043,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.handle_execute_inner(stmt, params, session, tx).await
     }
 
+    #[tracing::instrument(level = "trace", skip(self, tx, session))]
     async fn handle_execute_inner(
         &mut self,
         stmt: Statement<Raw>,
@@ -2257,7 +2301,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
-            self.release_read_hold(txn_reads.read_holds).await;
+            self.release_read_hold(&txn_reads.read_holds).await;
         }
         txn
     }
@@ -2313,7 +2357,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(session, ops, |txn| {
                 let mut builder = txn.dataflow_builder(compute_instance);
                 let from_entry = builder.catalog.get_entry(&sink.from);
-                let sink_description = mz_storage::client::sinks::SinkDesc {
+                let sink_description = mz_storage::types::sinks::SinkDesc {
                     from: sink.from,
                     from_desc: from_entry
                         .desc(
@@ -2334,6 +2378,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(self.ship_dataflow(df, compute_instance).await)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_plan(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
@@ -2341,6 +2386,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
+        event!(Level::TRACE, plan = format!("{:?}", plan));
         match plan {
             Plan::CreateConnection(plan) => {
                 tx.send(
@@ -2460,7 +2506,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(self.now_datetime(), plan.access);
+                let session = session.start_transaction(
+                    self.now_datetime(),
+                    plan.access,
+                    plan.isolation_level,
+                );
                 tx.send(
                     Ok(ExecuteResponse::StartedTransaction { duplicated }),
                     session,
@@ -2632,7 +2682,6 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     // Returns the name of the portal to execute.
-    #[tracing::instrument(level = "debug", skip(self))]
     fn sequence_execute(
         &mut self,
         session: &mut Session,
@@ -2759,17 +2808,10 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
 
         for (replica_name, config) in replicas {
-            let logical_size = match &config {
-                ReplicaConfig::Managed { size, .. } => Some(size.clone()),
-                ReplicaConfig::Remote { .. } => None,
-            };
-            let config =
-                concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
-                config,
+                config: config.into(),
                 on_cluster_name: name.clone(),
-                logical_size,
             });
         }
         self.catalog_transact(Some(session), ops, |_| Ok(()))
@@ -2783,7 +2825,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
-                .add_replica_to_instance(instance.id, replica_id, replica.config)
+                .add_replica_to_instance(instance.id, replica_id, replica.concrete_config)
                 .await
                 .unwrap();
         }
@@ -2799,17 +2841,10 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let logical_size = match &config {
-            ReplicaConfig::Managed { size, .. } => Some(size.clone()),
-            ReplicaConfig::Remote { .. } => None,
-        };
-        let config =
-            concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
-            config: config.clone(),
+            config: config.into(),
             on_cluster_name: of_cluster.clone(),
-            logical_size,
         };
 
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
@@ -2817,8 +2852,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
         let replica_id = instance.replica_id_by_name[&name];
+        let replica = &instance.replicas_by_id[&replica_id];
         self.controller
-            .add_replica_to_instance(instance.id, replica_id, config)
+            .add_replica_to_instance(instance.id, replica_id, replica.concrete_config.clone())
             .await
             .unwrap();
         Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false })
@@ -2844,12 +2880,7 @@ impl<S: Append + 'static> Coordinator<S> {
             create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
 
-        self.secrets_controller
-            .apply(vec![SecretOp::Ensure {
-                id,
-                contents: payload,
-            }])
-            .await?;
+        self.secrets_controller.ensure(id, &payload).await?;
 
         let ops = vec![catalog::Op::CreateItem {
             id,
@@ -2865,24 +2896,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
             Err(err) => {
-                match self
-                    .secrets_controller
-                    .apply(vec![SecretOp::Delete { id }])
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!(
-                            "Dropping newly created secrets has encountered an error: {}",
-                            e
-                        );
-                    }
+                if let Err(e) = self.secrets_controller.delete(id).await {
+                    warn!(
+                        "Dropping newly created secrets has encountered an error: {}",
+                        e
+                    );
                 }
                 Err(err)
             }
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_table(
         &mut self,
         session: &Session,
@@ -2920,16 +2945,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Determine the initial validity for the table.
                 let since_ts = self.get_local_write_ts().await;
 
+                let collection_desc = table.desc.clone().into();
                 self.controller
                     .storage_mut()
-                    .create_collections(vec![(
-                        table_id,
-                        CollectionDescription {
-                            desc: table.desc.clone(),
-                            ingestion: None,
-                            remote_addr: None,
-                        },
-                    )])
+                    .create_collections(vec![(table_id, collection_desc)])
                     .await
                     .unwrap();
 
@@ -2978,56 +2997,11 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name.clone(),
             item: CatalogItem::Source(source.clone()),
         });
-        let index = if plan.materialized {
-            let compute_instance = self
-                .catalog
-                .resolve_compute_instance(session.vars().cluster())?
-                .id;
-            let mut index_name = plan.name.clone();
-            index_name.item += "_primary_idx";
-            index_name = self
-                .catalog
-                .for_session(session)
-                .find_available_name(index_name);
-            let index_id = self.catalog.allocate_user_id().await?;
-            let full_name = self
-                .catalog
-                .resolve_full_name(&plan.name, Some(session.conn_id()));
-            let index = auto_generate_primary_idx(
-                index_name.item.clone(),
-                compute_instance,
-                full_name,
-                source_id,
-                &source.desc,
-                None,
-                vec![source_id],
-            );
-            let index_oid = self.catalog.allocate_oid().await?;
-            ops.push(catalog::Op::CreateItem {
-                id: index_id,
-                oid: index_oid,
-                name: index_name,
-                item: CatalogItem::Index(index),
-            });
-            Some((index_id, compute_instance))
-        } else {
-            None
-        };
         match self
-            .catalog_transact(Some(session), ops, move |txn| {
-                if let Some((index_id, compute_instance)) = index {
-                    let mut builder = txn.dataflow_builder(compute_instance);
-                    Ok(Some((
-                        builder.build_index_dataflow(index_id)?,
-                        compute_instance,
-                    )))
-                } else {
-                    Ok(None)
-                }
-            })
+            .catalog_transact(Some(session), ops, move |_| Ok(()))
             .await
         {
-            Ok(df) => {
+            Ok(()) => {
                 // Do everything to instantiate the source at the coordinator and
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
@@ -3053,6 +3027,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc: source.desc.clone(),
                             ingestion: Some(ingestion),
                             remote_addr: source.remote_addr,
+                            since: None,
                         },
                     )])
                     .await
@@ -3063,9 +3038,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
                 )
                 .await;
-                if let Some((df, compute_instance)) = df {
-                    self.ship_dataflow(df, compute_instance).await;
-                }
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -3143,7 +3115,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .build_sink_dataflow(
                             "dummy".into(),
                             id,
-                            mz_storage::client::sinks::SinkDesc {
+                            mz_storage::types::sinks::SinkDesc {
                                 from: sink.from,
                                 from_desc: from_entry
                                     .desc(
@@ -3453,7 +3425,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // it to storage.
                 let df = txn
                     .dataflow_builder(compute_instance)
-                    .build_recorded_view_dataflow(id, as_of, internal_view_id)?;
+                    .build_recorded_view_dataflow(id, as_of.clone(), internal_view_id)?;
                 Ok(df)
             })
             .await
@@ -3468,6 +3440,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc,
                             ingestion: None,
                             remote_addr: None,
+                            since: Some(as_of),
                         },
                     )])
                     .await
@@ -3657,7 +3630,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, replica) in replicas {
-                self.drop_replica(instance_id, replica_id, replica.config)
+                self.drop_replica(instance_id, replica_id, replica.concrete_config)
                     .await
                     .unwrap();
             }
@@ -3696,7 +3669,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
 
         for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.drop_replica(compute_id, replica_id, replica.config)
+            self.drop_replica(compute_id, replica_id, replica.concrete_config)
                 .await
                 .unwrap();
         }
@@ -3907,7 +3880,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item_ids.extend(schema.items.values());
         }
 
-        // Gather the indexes and unmaterialized sources used by those items.
+        // Gather the dependencies of those items.
         let mut id_bundle: CollectionIdBundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(item_ids.iter());
@@ -3943,12 +3916,13 @@ impl<S: Append + 'static> Coordinator<S> {
     /// deploying the most efficient evaluation plan. The peek could evaluate to a constant,
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
-    #[tracing::instrument(level = "debug", skip(self, session))]
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_peek(
         &mut self,
         session: &mut Session,
         plan: PeekPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        event!(Level::TRACE, plan = format!("{:?}", plan));
         fn check_no_invalid_log_reads<S: Append>(
             catalog: &Catalog<S>,
             compute_instance: &ComputeInstance,
@@ -4467,16 +4441,37 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&ts);
         }
 
-        if when.advance_to_since() {
-            candidate.advance_by(since.borrow());
+        let isolation_level = session.vars().transaction_isolation();
+        let timeline = self.validate_timeline(id_bundle.iter())?;
+        let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
+            && timeline.is_some()
+            && when.advance_to_global_ts();
+
+        if use_timestamp_oracle {
+            let timeline = timeline.expect("checked that timeline exists above");
+            let timestamp_oracle = &mut self
+                .global_timelines
+                .get_mut(&timeline)
+                .expect("all timelines have a timestamp oracle")
+                .oracle;
+            candidate.join_assign(&timestamp_oracle.read_ts());
+        } else {
+            if when.advance_to_since() {
+                candidate.advance_by(since.borrow());
+            }
+            if when.advance_to_upper() {
+                let upper = self.largest_not_in_advance_of_upper(&id_bundle);
+                candidate.join_assign(&upper);
+            }
         }
-        let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-        if when.advance_to_table_ts(uses_tables) {
-            candidate.join_assign(&self.get_local_read_ts());
-        }
-        if when.advance_to_upper(uses_tables) {
-            let upper = self.largest_not_in_advance_of_upper(&id_bundle);
-            candidate.join_assign(&upper);
+
+        if use_timestamp_oracle && when == &QueryWhen::Immediately {
+            assert!(
+                since.less_equal(&candidate),
+                "the strict serializable isolation level guarantees that the timestamp chosen \
+                ({candidate}) is greater than or equal to since ({:?}) via read holds",
+                since
+            )
         }
 
         // If the timestamp is greater or equal to some element in `since` we are
@@ -4597,8 +4592,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut raw_plan).explain(&format, &config, &context)?
@@ -4609,8 +4607,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut model).explain(&format, &config, &context)?
@@ -4622,8 +4623,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut model).explain(&format, &config, &context)?
@@ -4636,8 +4640,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -4650,8 +4657,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -4669,8 +4679,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
+                    config: &config,
                     humanizer: &catalog,
+                    used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
+                    fast_path_plan: Default::default(),
                 };
                 // explain plan
                 Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
@@ -4937,6 +4950,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(send_immediate_rows(rows))
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn sequence_send_diffs(
         &mut self,
         session: &mut Session,
@@ -4974,6 +4988,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
             usize::try_from(affected_rows).expect("positive isize must fit")
         };
+        event!(
+            Level::TRACE,
+            affected_rows,
+            id = format!("{:?}", plan.id),
+            kind = format!("{:?}", plan.kind),
+            updates = plan.updates.len(),
+            returning = plan.returning.len(),
+        );
 
         session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
             id: plan.id,
@@ -5434,12 +5456,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let payload = self.extract_secret(session, &mut secret_as)?;
 
-        self.secrets_controller
-            .apply(vec![SecretOp::Ensure {
-                id,
-                contents: payload,
-            }])
-            .await?;
+        self.secrets_controller.ensure(id, &payload).await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
@@ -5496,12 +5513,14 @@ impl<S: Append + 'static> Coordinator<S> {
     where
         F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, AdapterError>,
     {
+        event!(Level::TRACE, ops = format!("{:?}", ops));
+
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut recorded_views_to_drop = vec![];
-        let mut replication_slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
+        let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
 
         for op in &ops {
@@ -5514,14 +5533,17 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources_to_drop.push(*id);
                         match &source.source_desc.connection {
                             SourceConnection::Postgres(PostgresSourceConnection {
-                                conn,
+                                connection,
                                 details,
                                 ..
                             }) => {
-                                replication_slots_to_drop
-                                    .entry(conn.clone())
-                                    .or_insert_with(Vec::new)
-                                    .push(details.slot.clone());
+                                let config = connection
+                                    .config(&*self.connection_context.secrets_reader)
+                                    .await
+                                    .unwrap_or_else(|e| {
+                                        panic!("Postgres source {id} missing secrets: {e}")
+                                    });
+                                replication_slots_to_drop.push((config, details.slot.clone()));
                             }
                             _ => {}
                         }
@@ -5551,6 +5573,21 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        self.remove_global_read_holds_storage(
+            sources_to_drop
+                .iter()
+                .chain(tables_to_drop.iter())
+                .chain(recorded_views_to_drop.iter().map(|(_, id)| id))
+                .cloned(),
+        );
+        self.remove_global_read_holds_compute(
+            sinks_to_drop
+                .iter()
+                .chain(indexes_to_drop.iter())
+                .chain(recorded_views_to_drop.iter())
+                .cloned(),
+        );
+
         let (builtin_table_updates, result) = self
             .catalog
             .transact(session, ops, |catalog| {
@@ -5567,24 +5604,10 @@ impl<S: Append + 'static> Coordinator<S> {
             self.send_builtin_table_updates(builtin_table_updates).await;
 
             if !sources_to_drop.is_empty() {
-                for id in &sources_to_drop {
-                    self.read_capability.remove(id);
-                }
-                self.controller
-                    .storage_mut()
-                    .drop_sources(sources_to_drop)
-                    .await
-                    .unwrap();
+                self.drop_sources(sources_to_drop).await;
             }
             if !tables_to_drop.is_empty() {
-                for id in &tables_to_drop {
-                    self.read_capability.remove(id);
-                }
-                self.controller
-                    .storage_mut()
-                    .drop_sources(tables_to_drop)
-                    .await
-                    .unwrap();
+                self.drop_sources(tables_to_drop).await;
             }
             if !sinks_to_drop.is_empty() {
                 self.drop_sinks(sinks_to_drop).await;
@@ -5607,12 +5630,16 @@ impl<S: Append + 'static> Coordinator<S> {
             if !replication_slots_to_drop.is_empty() {
                 // TODO(guswynn): see if there is more relevant info to add to this name
                 task::spawn(|| "drop_replication_slots", async move {
-                    for (conn, slot_names) in replication_slots_to_drop {
+                    for (config, slot_name) in replication_slots_to_drop {
                         // Try to drop the replication slots, but give up after a while.
                         let _ = Retry::default()
                             .max_duration(Duration::from_secs(30))
-                            .retry_async(|_state| {
-                                mz_postgres_util::drop_replication_slots(&conn, &slot_names)
+                            .retry_async(|_state| async {
+                                mz_postgres_util::drop_replication_slots(
+                                    config.clone(),
+                                    &[&slot_name],
+                                )
+                                .await
                             })
                             .await;
                     }
@@ -5624,7 +5651,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(result)
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
         // table writes are not batched in a group commit. This is mostly due to the complexity
@@ -5663,6 +5690,17 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .collect();
         self.controller.storage_mut().append(appends).await.unwrap();
+    }
+
+    async fn drop_sources(&mut self, sources: Vec<GlobalId>) {
+        for id in &sources {
+            self.read_capability.remove(id);
+        }
+        self.controller
+            .storage_mut()
+            .drop_sources(sources)
+            .await
+            .unwrap();
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -5728,6 +5766,47 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
     }
 
+    fn remove_global_read_holds_storage<I>(&mut self, ids: I)
+    where
+        I: IntoIterator<Item = GlobalId>,
+    {
+        for id in ids {
+            if let Some(timeline) = self.get_timeline(id) {
+                let TimelineState { read_holds, .. } = self
+                    .global_timelines
+                    .get_mut(&timeline)
+                    .expect("all timelines have a timestamp oracle");
+                read_holds.id_bundle.storage_ids.remove(&id);
+                if read_holds.id_bundle.is_empty() {
+                    self.global_timelines.remove(&timeline);
+                }
+            }
+        }
+    }
+
+    fn remove_global_read_holds_compute<I>(&mut self, ids: I)
+    where
+        I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
+    {
+        for (compute_instance, id) in ids {
+            if let Some(timeline) = self.get_timeline(id) {
+                let TimelineState { read_holds, .. } = self
+                    .global_timelines
+                    .get_mut(&timeline)
+                    .expect("all timelines have a timestamp oracle");
+                if let Some(ids) = read_holds.id_bundle.compute_ids.get_mut(&compute_instance) {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        read_holds.id_bundle.compute_ids.remove(&compute_instance);
+                    }
+                    if read_holds.id_bundle.is_empty() {
+                        self.global_timelines.remove(&timeline);
+                    }
+                }
+            }
+        }
+    }
+
     async fn set_index_options(
         &mut self,
         id: GlobalId,
@@ -5767,14 +5846,8 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {
-        let ops = secrets
-            .into_iter()
-            .map(|id| SecretOp::Delete { id })
-            .collect_vec();
-
-        match self.secrets_controller.apply(ops).await {
-            Ok(_) => {}
-            Err(e) => {
+        for secret in secrets {
+            if let Err(e) = self.secrets_controller.delete(secret).await {
                 warn!("Dropping secrets has encountered an error: {}", e);
             }
         }
@@ -5889,7 +5962,6 @@ impl<S: Append + 'static> Coordinator<S> {
         I: IntoIterator<Item = GlobalId>,
     {
         let timelines = self.get_timelines(ids);
-
         // If there's more than one timeline, we will not produce meaningful
         // data to a user. Take, for example, some realtime source and a debezium
         // consistency topic source. The realtime source uses something close to now
@@ -5916,12 +5988,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Return the timeline belonging to a GlobalId, if one exists.
     fn get_timeline(&self, id: GlobalId) -> Option<Timeline> {
         let timelines = self.get_timelines(vec![id]);
-
         assert!(
             timelines.len() <= 1,
             "impossible for a single object to belong to two timelines"
         );
-
         timelines.into_iter().next()
     }
 
@@ -5942,24 +6012,28 @@ impl<S: Append + 'static> Coordinator<S> {
             if timelines.contains_key(&id) {
                 continue;
             }
-            let entry = self.catalog.get_entry(&id);
-            match entry.item() {
-                CatalogItem::Source(source) => {
-                    timelines.insert(id, source.timeline.clone());
+            if let Some(entry) = self.catalog.try_get_entry(&id) {
+                match entry.item() {
+                    CatalogItem::Source(source) => {
+                        timelines.insert(id, source.timeline.clone());
+                    }
+                    CatalogItem::Index(index) => {
+                        ids.push(index.on);
+                    }
+                    CatalogItem::View(view) => {
+                        ids.extend(view.optimized_expr.depends_on());
+                    }
+                    CatalogItem::RecordedView(rview) => {
+                        ids.extend(rview.optimized_expr.depends_on());
+                    }
+                    CatalogItem::Table(table) => {
+                        timelines.insert(id, table.timeline());
+                    }
+                    CatalogItem::Log(_) => {
+                        timelines.insert(id, Timeline::EpochMilliseconds);
+                    }
+                    _ => {}
                 }
-                CatalogItem::Index(index) => {
-                    ids.push(index.on);
-                }
-                CatalogItem::View(view) => {
-                    ids.extend(view.optimized_expr.depends_on());
-                }
-                CatalogItem::RecordedView(rview) => {
-                    ids.extend(rview.optimized_expr.depends_on());
-                }
-                CatalogItem::Table(table) => {
-                    timelines.insert(id, table.timeline());
-                }
-                _ => {}
             }
         }
 
@@ -6033,6 +6107,8 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
+        replica_sizes,
+        availability_zones,
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;
@@ -6055,7 +6131,7 @@ pub async fn serve<S: Append + 'static>(
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
             for (timeline, initial_timestamp) in initial_timestamps {
-                let timestamp_oracle = if timeline == Timeline::EpochMilliseconds {
+                let oracle = if timeline == Timeline::EpochMilliseconds {
                     let now = now.clone();
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
@@ -6071,7 +6147,13 @@ pub async fn serve<S: Append + 'static>(
                         |ts| catalog.persist_timestamp(&timeline, ts),
                     ))
                 };
-                timestamp_oracles.insert(timeline, timestamp_oracle);
+                timestamp_oracles.insert(
+                    timeline,
+                    TimelineState {
+                        oracle,
+                        read_holds: ReadHolds::new(initial_timestamp),
+                    },
+                );
             }
 
             let mut coord = Coordinator {
@@ -6092,8 +6174,6 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
-                replica_sizes,
-                availability_zones,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
             };
@@ -6257,7 +6337,7 @@ pub mod fast_path_peek {
     use mz_stash::Append;
 
     use crate::client::ConnectionId;
-    use crate::coord::{PeekResponseUnary, PendingPeek, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS};
+    use crate::coord::{PeekResponseUnary, PendingPeek};
     use crate::AdapterError;
 
     #[derive(Debug)]
@@ -6464,7 +6544,9 @@ pub mod fast_path_peek {
                     self.initialize_compute_read_policies(
                         output_ids,
                         compute_instance,
-                        DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                        // Disable compaction by using None as the compaction window so that nothing
+                        // can compact before the peek occurs below.
+                        None,
                     )
                     .await;
 
@@ -6563,6 +6645,7 @@ pub mod fast_path_peek {
 
             // If it was created, drop the dataflow once the peek command is sent.
             if let Some(index_id) = drop_dataflow {
+                self.remove_global_read_holds_compute(vec![(compute_instance, index_id)]);
                 self.drop_indexes(vec![(compute_instance, index_id)]).await;
             }
 
@@ -6587,9 +6670,20 @@ pub mod read_holds {
     use crate::coord::id_bundle::CollectionIdBundle;
 
     /// Relevant information for acquiring or releasing a bundle of read holds.
+    #[derive(Clone)]
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
         pub(super) id_bundle: CollectionIdBundle,
+    }
+
+    impl<T> ReadHolds<T> {
+        /// Return empty `ReadHolds` at `time`.
+        pub fn new(time: T) -> Self {
+            ReadHolds {
+                time,
+                id_bundle: CollectionIdBundle::default(),
+            }
+        }
     }
 
     impl<S> crate::coord::Coordinator<S> {
@@ -6632,6 +6726,62 @@ pub mod read_holds {
                 compute.set_read_policy(policy_changes).await.unwrap();
             }
         }
+        /// Update the timestamp of the read holds on the indicated collections from the
+        /// indicated time within `read_holds` to `new_time`.
+        ///
+        /// This method relies on a previous call to `acquire_read_holds` with the same
+        /// `read_holds` argument or a previous call to `update_read_hold` that returned
+        /// `read_holds`, and its behavior will be erratic if called on anything else.
+        pub(super) async fn update_read_hold(
+            &mut self,
+            mut read_holds: ReadHolds<mz_repr::Timestamp>,
+            new_time: mz_repr::Timestamp,
+        ) -> ReadHolds<mz_repr::Timestamp> {
+            let ReadHolds {
+                time: old_time,
+                id_bundle:
+                    CollectionIdBundle {
+                        storage_ids,
+                        compute_ids,
+                    },
+            } = &read_holds;
+
+            // Update STORAGE read policies.
+            let mut policy_changes = Vec::new();
+            let storage = self.controller.storage_mut();
+            for id in storage_ids.iter() {
+                let collection = storage.collection(*id).unwrap();
+                assert!(collection
+                    .read_capabilities
+                    .frontier()
+                    .less_equal(&new_time));
+                let read_needs = self.read_capability.get_mut(id).unwrap();
+                read_needs.holds.update_iter(Some((new_time, 1)));
+                read_needs.holds.update_iter(Some((*old_time, -1)));
+                policy_changes.push((*id, read_needs.policy()));
+            }
+            storage.set_read_policy(policy_changes).await.unwrap();
+            // Update COMPUTE read policies
+            for (compute_instance, compute_ids) in compute_ids.iter() {
+                let mut policy_changes = Vec::new();
+                let mut compute = self.controller.compute_mut(*compute_instance).unwrap();
+                for id in compute_ids.iter() {
+                    let collection = compute.as_ref().collection(*id).unwrap();
+                    assert!(collection
+                        .read_capabilities
+                        .frontier()
+                        .less_equal(&new_time));
+                    let read_needs = self.read_capability.get_mut(id).unwrap();
+                    read_needs.holds.update_iter(Some((new_time, 1)));
+                    read_needs.holds.update_iter(Some((*old_time, -1)));
+                    policy_changes.push((*id, read_needs.policy()));
+                }
+                compute.set_read_policy(policy_changes).await.unwrap();
+            }
+
+            read_holds.time = new_time;
+            read_holds
+        }
         /// Release read holds on the indicated collections at the indicated time.
         ///
         /// This method relies on a previous call to `acquire_read_holds` with the same
@@ -6639,7 +6789,7 @@ pub mod read_holds {
         /// called more than once on the same bundle of read holds.
         pub(super) async fn release_read_hold(
             &mut self,
-            read_holds: ReadHolds<mz_repr::Timestamp>,
+            read_holds: &ReadHolds<mz_repr::Timestamp>,
         ) {
             let ReadHolds {
                 time,
@@ -6655,7 +6805,7 @@ pub mod read_holds {
             for id in storage_ids.iter() {
                 // It's possible that a concurrent DDL statement has already dropped this GlobalId
                 if let Some(read_needs) = self.read_capability.get_mut(id) {
-                    read_needs.holds.update_iter(Some((time, -1)));
+                    read_needs.holds.update_iter(Some((*time, -1)));
                     policy_changes.push((*id, read_needs.policy()));
                 }
             }
@@ -6670,7 +6820,7 @@ pub mod read_holds {
                 for id in compute_ids.iter() {
                     // It's possible that a concurrent DDL statement has already dropped this GlobalId
                     if let Some(read_needs) = self.read_capability.get_mut(id) {
-                        read_needs.holds.update_iter(Some((time, -1)));
+                        read_needs.holds.update_iter(Some((*time, -1)));
                         policy_changes.push((*id, read_needs.policy()));
                     }
                 }

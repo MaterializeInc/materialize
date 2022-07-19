@@ -19,7 +19,7 @@ $ kafka-create-topic topic=resolution-enums
 $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} publish=true timestamp=1
 {"f1": "E1" }
 
-> CREATE MATERIALIZED SOURCE resolution_enums
+> CREATE SOURCE resolution_enums
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-enums-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE

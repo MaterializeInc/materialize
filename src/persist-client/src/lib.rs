@@ -19,9 +19,11 @@
 
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
@@ -34,9 +36,10 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::encoding::parse_id;
+use crate::r#impl::gc::GarbageCollector;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
-use crate::write::WriteHandle;
+use crate::write::{WriteHandle, WriterId};
 
 pub mod batch;
 pub mod cache;
@@ -50,8 +53,10 @@ pub use crate::r#impl::state::{Since, Upper};
 pub(crate) mod r#impl {
     pub mod compact;
     pub mod encoding;
+    pub mod gc;
     pub mod machine;
     pub mod metrics;
+    pub mod paths;
     pub mod state;
     pub mod trace;
 }
@@ -144,6 +149,8 @@ impl ShardId {
 /// The tunable knobs for persist.
 #[derive(Debug, Clone)]
 pub struct PersistConfig {
+    /// A clock to use for all leasing and other non-debugging use.
+    pub now: NowFn,
     /// A target maximum size of blob payloads in bytes. If a logical "batch" is
     /// bigger than this, it will be broken up into smaller, independent pieces.
     /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen
@@ -209,12 +216,14 @@ pub struct PersistConfig {
 //   an `O(n*log(n))` upper bound on the number of unconsolidated updates that
 //   would be consolidated if we compacted as the in-mem Spine does. The initial
 //   value is a placeholder and should be revisited at some point.
-impl Default for PersistConfig {
-    fn default() -> Self {
+impl PersistConfig {
+    /// Returns a new instance of [PersistConfig] with default tuning.
+    pub fn new(now: NowFn) -> Self {
         // Escape hatch in case we need to disable compaction.
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         const MB: usize = 1024 * 1024;
         Self {
+            now,
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
@@ -222,6 +231,11 @@ impl Default for PersistConfig {
             compaction_heuristic_min_updates: 1024,
         }
     }
+}
+
+impl PersistConfig {
+    // Move this to a PersistConfig field when we actually have read leases.
+    pub(crate) const FAKE_READ_LEASE_DURATION: Duration = Duration::from_secs(60);
 }
 
 /// A handle for interacting with the set of persist shard made durable at a
@@ -296,39 +310,10 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open shard_id={:?}", shard_id);
-        let mut machine = Machine::new(
-            shard_id,
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.metrics),
-        )
-        .await?;
-        let compactor = self.cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-            )
-        });
-        let reader_id = ReaderId::new();
-        let (shard_upper, read_cap) = machine.register(&reader_id).await;
-        let writer = WriteHandle {
-            cfg: self.cfg.clone(),
-            metrics: Arc::clone(&self.metrics),
-            machine: machine.clone(),
-            compactor,
-            blob: Arc::clone(&self.blob),
-            upper: shard_upper.0,
-        };
-        let reader = ReadHandle {
-            metrics: Arc::clone(&self.metrics),
-            reader_id,
-            machine,
-            blob: Arc::clone(&self.blob),
-            since: read_cap.since,
-            explicitly_expired: false,
-        };
-
-        Ok((writer, reader))
+        Ok((
+            self.open_writer(shard_id).await?,
+            self.open_reader(shard_id).await?,
+        ))
     }
 
     /// [Self::open], but returning only a [ReadHandle].
@@ -347,10 +332,32 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open_reader shard_id={:?}", shard_id);
-        // At the moment, writers aren't registered, so there's nothing special
-        // to do here. Introduce the method, though, so that code using persist
-        // doesn't have to change if we bring writer registration back.
-        let (_, reader) = self.open(shard_id).await?;
+        let gc = GarbageCollector::new(
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        let mut machine = Machine::new(
+            shard_id,
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.metrics),
+            gc,
+        )
+        .await?;
+
+        let reader_id = ReaderId::new();
+        let (_, read_cap) = machine.register_reader(&reader_id, (self.cfg.now)()).await;
+        let reader = ReadHandle {
+            cfg: self.cfg.clone(),
+            metrics: Arc::clone(&self.metrics),
+            reader_id,
+            machine,
+            blob: Arc::clone(&self.blob),
+            since: read_cap.since,
+            last_heartbeat: Instant::now(),
+            explicitly_expired: false,
+        };
+
         Ok(reader)
     }
 
@@ -370,27 +377,37 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open_writer shard_id={:?}", shard_id);
+        let gc = GarbageCollector::new(
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
         let mut machine = Machine::new(
             shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
+            gc,
         )
         .await?;
-        let compactor = self.cfg.compaction_enabled.then(|| {
+        let writer_id = WriterId::new();
+        let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.metrics),
+                writer_id.clone(),
             )
         });
-        let shard_upper = machine.fetch_upper().await;
+        let (shard_upper, _) = machine.register_writer(&writer_id, (self.cfg.now)()).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
+            writer_id,
             machine,
-            compactor,
+            compact,
             blob: Arc::clone(&self.blob),
-            upper: shard_upper,
+            upper: shard_upper.0,
+            explicitly_expired: false,
         };
         Ok(writer)
     }
@@ -426,7 +443,6 @@ mod tests {
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
-    use std::time::{Duration, Instant};
 
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
@@ -442,6 +458,7 @@ mod tests {
     use crate::r#impl::state::Upper;
     use crate::read::ListenEvent;
 
+    use crate::r#impl::paths::BlobKey;
     use proptest::prelude::*;
 
     use super::*;
@@ -491,7 +508,7 @@ mod tests {
 
     pub async fn expect_fetch_part<K, V, T, D>(
         blob: &(dyn Blob + Send + Sync),
-        key: &str,
+        key: &BlobKey,
     ) -> (
         BlobTraceBatchPart,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
@@ -502,9 +519,8 @@ mod tests {
         T: Codec64,
         D: Codec64,
     {
-        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
         let value = blob
-            .get(deadline, key)
+            .get(&key)
             .await
             .expect("failed to fetch part")
             .expect("missing part");
@@ -543,7 +559,7 @@ mod tests {
 
         // Grab a snapshot and listener as_of 1.
         let mut snap = read.expect_snapshot(1).await;
-        let mut listen = read.expect_listen(1).await;
+        let mut listen = read.clone().await.expect_listen(1).await;
 
         // Snapshot should only have part of what we wrote.
         assert_eq!(snap.read_all().await, all_ok(&data[..1], 1));
@@ -1023,7 +1039,7 @@ mod tests {
         let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener before we do any writing
-        let mut listen = read.expect_listen(0).await;
+        let mut listen = read.clone().await.expect_listen(0).await;
 
         // Write a [0,3) batch.
         write1
@@ -1380,7 +1396,7 @@ mod tests {
         let (mut write, read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
-        let mut listen = read.expect_listen(1).await;
+        let mut listen = read.clone().await.expect_listen(1).await;
         let mut listen_next = Box::pin(listen.next());
         // Intentionally don't await the listen_next, but instead manually poke
         // it for a while and assert that it doesn't resolve yet. See below for

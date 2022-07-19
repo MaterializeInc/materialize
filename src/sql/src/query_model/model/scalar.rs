@@ -104,7 +104,23 @@ impl fmt::Display for BoxScalarExpr {
                 write!(f, "{}()", func)
             }
             BoxScalarExpr::CallUnary { func, expr } => {
-                write!(f, "{}({})", func, expr)
+                if let UnaryFunc::Not(_) = *func {
+                    if let BoxScalarExpr::CallUnary {
+                        func,
+                        expr: inner_expr,
+                    } = &**expr
+                    {
+                        if let Some(is) = func.is() {
+                            write!(f, "({}) IS NOT {}", inner_expr, is)?;
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Some(is) = func.is() {
+                    write!(f, "({}) IS {}", expr, is)
+                } else {
+                    write!(f, "{}({})", func, expr)
+                }
             }
             BoxScalarExpr::CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {

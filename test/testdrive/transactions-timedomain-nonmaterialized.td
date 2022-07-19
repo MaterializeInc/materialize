@@ -15,10 +15,12 @@ $ kafka-ingest topic=static format=bytes
 2
 4
 
-> CREATE MATERIALIZED SOURCE indexed (c)
+> CREATE SOURCE indexed (c)
   FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-static-${testdrive.seed}'
   FORMAT TEXT
+
+> CREATE DEFAULT INDEX ON indexed
 
 > CREATE SOURCE unindexed (c)
   FROM KAFKA BROKER '${testdrive.kafka-addr}'

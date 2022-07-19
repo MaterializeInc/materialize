@@ -244,7 +244,7 @@ pub enum SchemaPiece {
     /// A value written as `float` and read as `double`
     ResolveFloatDouble,
     /// A concrete (i.e., non-`union`) type in the writer,
-    /// resolved against one specific variant of a `union` in the writer.
+    /// resolved against one specific variant of a `union` in the reader.
     ResolveConcreteUnion {
         /// The index of the variant in the reader
         index: usize,

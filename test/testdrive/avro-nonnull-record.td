@@ -33,7 +33,7 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 {"a": {"b": 1, "c": 1}}
 {"a": {"b": 2, "c": 1}}
 
-> CREATE MATERIALIZED SOURCE basic
+> CREATE SOURCE basic
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 

@@ -19,16 +19,13 @@ use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use timely::progress::frontier::MutableAntichain;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::debug;
 use uuid::Uuid;
 
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{
-    BidiProtoClient, GrpcClient, GrpcServer, GrpcServerCommand, ResponseStream,
-};
+use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
 
 use crate::command::{BuildDesc, ComputeCommand, DataflowDescription, ProtoComputeCommand};
 use crate::response::{
@@ -57,30 +54,30 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     }
 }
 
-pub type ComputeGrpcClient =
-    GrpcClient<ProtoComputeClient<Channel>, ProtoComputeCommand, ProtoComputeResponse>;
+pub type ComputeGrpcClient = GrpcClient<ProtoComputeClient<ClientTransport>>;
 
 #[async_trait]
-impl BidiProtoClient<ProtoComputeCommand, ProtoComputeResponse> for ProtoComputeClient<Channel> {
-    async fn connect(addr: String) -> Result<Self, tonic::transport::Error>
-    where
-        Self: Sized,
-    {
-        ProtoComputeClient::connect(addr).await
+impl BidiProtoClient for ProtoComputeClient<ClientTransport> {
+    type PC = ProtoComputeCommand;
+    type PR = ProtoComputeResponse;
+
+    fn new(inner: ClientTransport) -> Self {
+        ProtoComputeClient::new(inner)
     }
 
     async fn establish_bidi_stream(
         &mut self,
-        rx: UnboundedReceiverStream<ProtoComputeCommand>,
-    ) -> Result<Response<Streaming<ProtoComputeResponse>>, Status> {
+        rx: UnboundedReceiverStream<Self::PC>,
+    ) -> Result<Response<Streaming<Self::PR>>, Status> {
         self.command_response_stream(rx).await
     }
 }
 
 #[async_trait]
-impl<G> ProtoCompute for GrpcServer<G>
+impl<F, G> ProtoCompute for GrpcServer<F>
 where
-    G: GenericClient<GrpcServerCommand<ComputeCommand>, ComputeResponse> + 'static,
+    F: Fn() -> G + Send + Sync + 'static,
+    G: ComputeClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
 
@@ -112,7 +109,7 @@ pub struct PartitionedComputeState<T> {
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
     for (ComputeCommand<T>, ComputeResponse<T>)
 where
-    T: timely::progress::Timestamp + Copy,
+    T: timely::progress::Timestamp,
 {
     type PartitionedState = PartitionedComputeState<T>;
 
@@ -128,7 +125,7 @@ where
 
 impl<T> PartitionedComputeState<T>
 where
-    T: timely::progress::Timestamp + Copy,
+    T: timely::progress::Timestamp,
 {
     fn reset(&mut self) {
         let PartitionedComputeState {
@@ -175,7 +172,7 @@ where
 
 impl<T> PartitionedState<ComputeCommand<T>, ComputeResponse<T>> for PartitionedComputeState<T>
 where
-    T: timely::progress::Timestamp + Copy,
+    T: timely::progress::Timestamp,
 {
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<ComputeCommand<T>> {
         self.observe_command(&command);

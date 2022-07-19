@@ -32,7 +32,7 @@ $ s3-put-object bucket=sqs-repeated key=1
 $ s3-delete-objects bucket=sqs-repeated
 1
 
-> CREATE MATERIALIZED SOURCE s3_source
+> CREATE SOURCE s3_source
   FROM S3
   DISCOVER OBJECTS USING
   SQS NOTIFICATIONS 'testdrive-sqs-repeated-${testdrive.seed}'

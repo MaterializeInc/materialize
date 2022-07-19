@@ -20,7 +20,7 @@ $ kafka-create-topic topic=resolution-records-int2double
 $ kafka-ingest format=avro topic=resolution-records-int2double schema=${int-col} publish=true timestamp=1
 {"f1": { "f1": 123 }}
 
-> CREATE MATERIALIZED SOURCE resolution_records_int2double
+> CREATE SOURCE resolution_records_int2double
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-records-int2double-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE

@@ -21,7 +21,7 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 {"f1": 234}
 {"f1": 345}
 
-> CREATE MATERIALIZED SOURCE tail_without_snapshot
+> CREATE SOURCE tail_without_snapshot
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tail-without-snapshot-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE

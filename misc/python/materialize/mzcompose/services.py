@@ -86,7 +86,8 @@ class Materialized(Service):
             volumes.extend(volumes_extra)
 
         command_list = [
-            f"--data-directory={data_directory}",
+            f"--persist-blob-url=file://{data_directory}/persist/blob",
+            f"--orchestrator-process-data-directory={data_directory}",
         ]
 
         config_ports: List[Union[str, int]] = (
@@ -146,6 +147,8 @@ class Computed(Service):
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
         workers: Optional[int] = None,
+        secrets_reader: str = "process",
+        secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
         if environment is None:
             environment = [
@@ -182,7 +185,10 @@ class Computed(Service):
             command_list.append(f"--process {peers.index(name)}")
             command_list.append(" ".join(f"{peer}:2102" for peer in peers))
 
-        command_list.append("--secrets-path=/mzdata/secrets")
+        command_list.append(f"--secrets-reader {secrets_reader}")
+        command_list.append(
+            f"--secrets-reader-process-dir {secrets_reader_process_dir}"
+        )
 
         config.update(
             {
@@ -208,6 +214,8 @@ class Storaged(Service):
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
         workers: Optional[int] = None,
+        secrets_reader: str = "process",
+        secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
         if environment is None:
             environment = [
@@ -240,7 +248,10 @@ class Storaged(Service):
         if workers:
             command_list.append(f"--workers {workers}")
 
-        command_list.append("--secrets-path=/mzdata/secrets")
+        command_list.append(f"--secrets-reader {secrets_reader}")
+        command_list.append(
+            f"--secrets-reader-process-dir {secrets_reader_process_dir}"
+        )
 
         config.update(
             {
@@ -295,6 +306,7 @@ class Kafka(Service):
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
             "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
+        extra_environment: List[str] = [],
         depends_on: List[str] = ["zookeeper"],
         volumes: List[str] = [],
         listener_type: str = "PLAINTEXT",
@@ -303,6 +315,7 @@ class Kafka(Service):
             *environment,
             f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:{port}",
             f"KAFKA_BROKER_ID={broker_id}",
+            *extra_environment,
         ]
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
@@ -641,7 +654,7 @@ class Testdrive(Service):
 
         if validate_postgres_stash:
             entrypoint.append(
-                "--validate-postgres-stash=postgres://materialize@materialized/materialize?options=--search_path=catalog"
+                "--validate-postgres-stash=postgres://materialize@materialized/materialize?options=--search_path=adapter"
             )
 
         if no_reset:

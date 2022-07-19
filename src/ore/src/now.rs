@@ -50,7 +50,7 @@ impl fmt::Debug for NowFn {
 }
 
 impl Deref for NowFn {
-    type Target = dyn Fn() -> EpochMillis;
+    type Target = dyn Fn() -> EpochMillis + Send + Sync;
 
     fn deref(&self) -> &Self::Target {
         &(*self.0)

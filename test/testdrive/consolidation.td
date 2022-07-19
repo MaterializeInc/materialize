@@ -91,10 +91,12 @@ $ set nums-schema=[
 
 $ kafka-create-topic topic=nums
 
-> CREATE MATERIALIZED SOURCE nums
+> CREATE SOURCE nums
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nums-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
+
+> CREATE DEFAULT INDEX ON nums
 
 # Disable logical compaction, to ensure we can view historical detail.
 > ALTER INDEX materialize.public.nums_primary_idx
