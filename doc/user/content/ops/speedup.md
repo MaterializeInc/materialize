@@ -9,7 +9,7 @@ menu:
     weight: 50
 ---
 
-Indexes are a way to optimize query performance, from queries between views to queries from the client side. In the following sections, you will find different cases that will be useful for yours.
+Indexes are a way to optimize query performance, from queries between views to queries from the client side. The following sections will display familiar scenarios that suit many common use cases.
 
 Before continuing, consider the following example, a simple table with contacts data:
 
@@ -47,14 +47,13 @@ that the query is scanning the whole table resulting in slower results. -->
 
 ## WHERE
 
-The filtering clause is one of the most common operations in any database.
-Set up an index over the columns that filtering by is frequent to increase the overall query speed.
+The filtering clause is one of the most used operations in any database. Set up an index over the columns that a query filters by to increase the speed.
 
 ### Literal Values
 
-Filtering by literal values is a typical case. Indexing the related column will improve the performance.
+Filtering by literal values is a typical case. An index over the column filtered will do the work.
 
-Back to our example, retrieving all the contacts by a particular first name (a literal value) will get the improvement.
+Back to our example, to improve retrieving all the contacts by a particular first name (the literal value):
 
 ```sql
 CREATE INDEX contacts_first_name_idx ON contacts (first_name);
@@ -64,9 +63,9 @@ SELECT * FROM contacts WHERE first_name = 'Charlie';
 
 ### Expressions
 
-Expressions can also be part of the index. An index can do the job incrementally rather than calculating those upper values on the fly for every query.
+Expressions can also be part of the index. Materialize will calculate them faster using an index instead of calculating them on the fly for every query.
 
-E.g.: Since contact names are probably not always correctly written, using a function to upper case all the characters is helpful.
+E.g., Since contact names are probably not always correctly written, using a function to upper case the name is helpful.
 
 ```sql
 CREATE INDEX contacts_upper_first_name_idx ON contacts (upper(first_name));
@@ -92,6 +91,25 @@ CREATE INDEX contacts_upper_first_name_phone_idx ON contacts (upper(first_name),
 
 SELECT * FROM contacts WHERE first_name = 'CHARLIE' AND phone = 873090;
 ```
+
+### Compound index
+
+When using a compound index, consider how the optimizer works. It's rule-based, and if it detects an index it is helpful for a query, it will use it. Creating an index over all the columns doesn't mean that all
+all the queries will be faster. Only the ones that use all the columns will receive an improvement.
+
+E.g., There is indecision about what to index by, and a we decide to create a compound index.
+
+```sql
+CREATE INDEX contacts_all_index ON contacts(first_name, last_name, phone, prefix);
+
+-- NO improvement over this query:
+SELECT * FROM contacts WHERE first_name = 'CHARLIE' AND phone = 873090;
+
+-- Improvement over this query:
+SELECT * FROM contacts WHERE first_name = 'CHARLIE' AND last_name = 'EILR' AND phone = 873090 AND prefix = 1;
+```
+
+It is important to clarify that it is a good practice to create a compound index over all the columns of a view to distribute records between workers properly.
 
 ## JOIN
 
@@ -120,56 +138,12 @@ In the above example, the index `contacts_prefix_idx`...
 -   Obeys our restrictions by containing only a subset of columns in the result
     set.
 
-## Temporal Filters [Research pending]
+
+
+<!-- ## Temporal Filters [Research pending] -->
 
 <!-- The index pattern can be a good one to add into the SQL patterns (Maybe in Manual materialization) -->
 
 <!-- ## The Index Pattern
 
 Creating an index using expressions is an alternative pattern to avoid building downstream views that only apply a function like the one used in the last example: `upper(first_name)`. Take into account that aggregations like `count()` and other non-materializable functions are not possible to use as expressions. -->
-
-<!-- Which query should run faster?
-
-```sql
--- a)
-SELECT * FROM phones WHERE first_name = 'Jann';
-
--- b)
-SELECT * FROM phones WHERE first_name = 'Jann' and last_name = 'Johnson' and phone = 12233344;
-```
-
-At first *a)* sounds like the candidate since it's filtering by one field, but answer *b)* is the correct one! It's more than **ten times faster** than the alternative option (it can vary by setup). -->
-
-<!-- Eanble `\timing` command and run both queries using `psql` to tell the difference in your setup. -->
-
-<!-- ### What is happening?
-
-The `phones_index` in the step *2)* is a multicolumn index and Materialize will take advantage of it only and only when all the columns are present in the filter clause. (Check fact)
-
-Improving the performance of querying by the person first name, like in query *a)*, requires an index like the following:
-
-```
-CREATE INDEX first_name_index ON phones (first_name);
-``` -->
-
-
-<!-- ```sql
-CREATE MATERIALIZED VIEW active_customers AS
-    SELECT guid, geo_id, last_active_on
-    FROM customer_source
-    GROUP BY geo_id;
-
-CREATE INDEX active_customers_idx ON active_customers (guid);
-
-SELECT * FROM active_customers WHERE guid = 'd868a5bf-2430-461d-a665-40418b1125e7';
-
--- Using expressions
-CREATE INDEX active_customers_exp_idx ON active_customers (upper(guid));
-
-SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7';
-
--- Filter using an expression in one field and a literal in another field
-CREATE INDEX active_customers_exp_field_idx ON active_customers (upper(guid), geo_id);
-
-SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7' and geo_id = 'ID_8482';
-``` -->
