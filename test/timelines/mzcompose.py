@@ -17,7 +17,6 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-
 SERVICES = [
     Materialized(),
     Testdrive(volumes_extra=["../testdrive:/workdir/testdrive"]),
@@ -31,7 +30,13 @@ SERVICES = [
 def workflow_default(c: Composition) -> None:
     for _ in range(3):
         c.start_and_wait_for_tcp(
-            services=["zookeeper", "kafka", "schema-registry", "materialized", "localstack"]
+            services=[
+                "zookeeper",
+                "kafka",
+                "schema-registry",
+                "materialized",
+                "localstack",
+            ]
         )
         c.wait_for_materialized()
         c.run("testdrive", "timelines.td")

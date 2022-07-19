@@ -5589,11 +5589,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .cloned(),
             ),
         );
-        ops.extend(
-            empty_timelines
-                .into_iter()
-                .map(|timeline| catalog::Op::DropTimeline(timeline)),
-        );
+        ops.extend(empty_timelines.into_iter().map(catalog::Op::DropTimeline));
 
         let (builtin_table_updates, result) = self
             .catalog
