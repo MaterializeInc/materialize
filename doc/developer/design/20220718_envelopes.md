@@ -33,7 +33,7 @@ and with in-memory state proportional to the size of the output collection.
 with the same space requirements as above, assuming the upstream tables
 have primary keys.
 
-**Nice to Have**: We should be able to ingest Debezium-formatted data (`ENVELOPE DEBEZIUM`) 
+**Nice to Have**: We should be able to ingest Debezium-formatted data (`ENVELOPE DEBEZIUM`)
 with only O(1) persisted and in-memory space requirements in the steady state
 (O(n) in the set of unique keys when reading Debezium's initial snapshot),
 subject to the following constraints:
@@ -47,7 +47,7 @@ subject to the following constraints:
   * The data is uncompacted at the time we begin reading it
     (it's okay if things get compacted away after we're done reading them
 	once, because we make state definite in `persist`).
-  * The data has both `before` and `after` fields, which requires 
+  * The data has both `before` and `after` fields, which requires
     the upstream database to be configured in a particular way (e.g.,
 	`FULL` replication mode for Postgres).
 
@@ -130,7 +130,7 @@ to do with `persist`'s current APIs.
 
 For the classic `DEBEZIUM` envelope, we must validate that the topic meets the constraints
 described above in the "Goals" section, and emit an error if it does not. We will
-continue using the `ordered` deduplication logic that exists now, which tracks the 
+continue using the `ordered` deduplication logic that exists now, which tracks the
 data with the highest "offset", and drops data from below that "offset". I use "offset"
 in quotes because this does not correspond to a Kafka offset, but is instead a variety of metadata
 included inline with the data, which we _only_ know how to correctly interpret assuming the
