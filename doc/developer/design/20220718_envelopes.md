@@ -20,7 +20,10 @@ support `UPSERT` and `DEBEZIUM UPSERT` by the Alpha launch.
   `DEBEZIUM` envelope by GA, subject to the detailed constraints expressed below.
 
 * I am weakly pessimistic about being able to support the transaction
-  topic by GA, but it's at least worth trying.
+  topic by GA. I originally felt strongly about supporting this,
+  but after further discussion with Nikhil and others,
+  I now agree that it's not worth the effort unless we
+  run out of other stuff to work on.
 
 
 ## Goals
@@ -106,6 +109,13 @@ Although the one customer they were designed for is indeed important, we
 were happily able to confirm recently that they are able to use `DEBEZIUM UPSERT`
 for all of their topics, making the issue moot.
 
+It is _currently_ a non-goal to support Microsoft SQL Server in the classic `DEBEZIUM` envelope,
+due to [this issue](https://issues.redhat.com/browse/DBZ-3375) preventing us from
+precisely duplicating records. If we come up with a way to deduplicate records that we're
+confident in, we will re-evaluate this. Note that Debezium data from
+Microsoft SQL Server should work
+fine with `DEBEZIUM UPSERT`
+
 Solving the issue of [bounded input reliance](https://github.com/MaterializeInc/materialize/issues/13534)
 is outside the scope of this project; until that issue is solved, we must assume
 that data is not being compacted away while we're busy reading it, which is
@@ -182,7 +192,8 @@ requirement and restart time requirement are unacceptable for many real-world us
 
 ## Open questions
 
-Robustness - bad data can cause us to end up with negatively many copies of a given row.
+Robustness - bad data with the classic `DEBEZIUM` envelope
+can cause us to end up with negatively many copies of a given row.
 We need to ensure that this is handled gracefully by all downstream operators, and
 can at worst cause Materialize to emit errors for affected sources, but not to crash.
 
