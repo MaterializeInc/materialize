@@ -778,6 +778,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
+        let mut persisted_log_ids = vec![];
         for instance in self.catalog.compute_instances() {
             self.controller
                 .create_instance(instance.id, instance.logging.clone())
@@ -799,12 +800,17 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
+                persisted_log_ids.extend(replica.config.persisted_logs.get_log_ids().iter());
+
                 self.controller
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
         }
+
+        self.initialize_storage_read_policies(persisted_log_ids, None)
+            .await;
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
         // Topologically sort entries based on the used_by relationship
