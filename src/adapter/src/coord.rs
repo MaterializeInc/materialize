@@ -1622,6 +1622,8 @@ impl<S: Append + 'static> Coordinator<S> {
             },
         ) in global_timelines
         {
+            let id_bundle = self.ids_in_timeline(&timeline);
+            let upper = self.largest_not_in_advance_of_upper(&id_bundle);
             let now = if timeline == Timeline::EpochMilliseconds {
                 let now = self.now();
                 now.step_back().unwrap_or(now)
@@ -1629,14 +1631,23 @@ impl<S: Append + 'static> Coordinator<S> {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
-                let id_bundle = self.ids_in_timeline(&timeline);
-                self.largest_not_in_advance_of_upper(&id_bundle)
+                upper
             };
             oracle
                 .fast_forward(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
-            let read_holds = self.update_read_hold(read_holds, read_ts).await;
+            // Use the least common upper as the read hold time to always immediately
+            // provide serializable reads. Using `_read_ts` here instead would provide the
+            // same for strictly serializable reads. This is useful for expensive views
+            // that would otherwise always be behind their global timestamp.
+            let mut read_hold_ts = upper;
+            // Also cap read hold by the global timestamp so that strict serializable reads
+            // can always immediately read.
+            if read_ts.less_than(&read_hold_ts) {
+                read_hold_ts = read_ts;
+            }
+            let read_holds = self.update_read_hold(read_holds, read_hold_ts).await;
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
         }
