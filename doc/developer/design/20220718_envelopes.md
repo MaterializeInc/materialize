@@ -154,7 +154,7 @@ The most difficult part of the project is supporting full consistency; i.e.,
 correctly interpreting the transaction metadata topic. Currently, that topic
 cannot be deduplicated without keeping O(k) in-memory state in the number of transations
 that have ever been processed in the lifetime of the upstream database; clearly,
-this cost will be unacceptable for many upstream users. One possible approach is to
+this cost will be unacceptable for many users. One possible approach is to
 change Debezium upstream to improve this situation; this is very feasible, but
 would mean we can't expect to support anyone but users of extremely recent Debezium versions.
 Another possibility is tolerating some amount of duplication; it's possible that we
@@ -188,3 +188,10 @@ can at worst cause Materialize to emit errors for affected sources, but not to c
 
 The open issues for the transaction metadata topic as described in the "Description"
 section.
+
+Petros had an idea last year about doing deduplication by reading Debezium's internal offset
+commit topic, and only keeping state proportional to the size of data _between_ any two offsets.
+This might work, but it seems like relying on internal Debezium state is suboptimal unless
+it's unavoidable. But maybe it could let us more ingest the initial snapshot without requiring
+O(n) state in the number of keys? That could be a game-changer for use cases where that data is too
+much to keep in memory even on the largest storage host.
