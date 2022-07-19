@@ -500,7 +500,6 @@ impl CatalogState {
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) {
-        tracing::debug!("in insert_compute_instance_replica");
         let mut log_collections_by_variant = HashMap::new();
         for (variant, source_id) in config.persisted_logs.get_logs() {
             let oid = self.allocate_oid().expect("cannot return error here");
@@ -1034,7 +1033,7 @@ pub struct Sink {
 #[derive(Debug, Clone, Serialize)]
 pub enum SinkConnectionState {
     Pending(SinkConnectionBuilder),
-    Ready(SinkConnection<()>),
+    Ready(SinkConnection),
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -92,23 +92,21 @@ pub(crate) fn persist_sink<G>(
                 None => return,
             };
 
-            // Delete existing data in shard, by reading at recent_global_upper - 1
-            // and writing -1s at recent_global_upper.
-            let recent_global_upper = write.fetch_recent_upper().await;
-            let data_is_present = recent_global_upper[0] > 0;
-            if data_is_present {
+            // Delete existing data in shard, by reading at recent_upper - 1
+            // and writing -1s at recent_upper.
+            let recent_upper = write.fetch_recent_upper().await;
+            // If this is true, we can obtain a snapshot. Otherwise, we assume the shard is empty
+            if recent_upper[0] > 0 {
                 let mut initial_flush: Vec<((SourceData, _), _, i64)> = vec![];
                 // Flush the shard
-                let since = Antichain::from_elem(recent_global_upper[0] - 1);
-                tracing::debug!("Trying to read snapshot at since={:?}", since);
+                let since = Antichain::from_elem(recent_upper[0] - 1);
                 match read.snapshot(since).await {
                     Ok(mut x) => {
-                        while let Some(sdvec) = x.next().await {
-                            for sd in sdvec {
-                                tracing::debug!("Got persist data: {:?}", &sd);
-                                let sd1 = sd.0 .0.unwrap();
-                                let mult = sd.2;
-                                initial_flush.push(((sd1, ()), recent_global_upper[0], -mult));
+                        while let Some(result_vec) = x.next().await {
+                            for result in result_vec {
+                                let sd = result.0 .0.unwrap();
+                                let mult = result.2;
+                                initial_flush.push(((sd, ()), recent_upper[0], -mult));
                             }
                         }
                     }
@@ -116,11 +114,11 @@ pub(crate) fn persist_sink<G>(
                         tracing::warn!("Could not flush logging shard!");
                     }
                 };
-                tracing::debug!("Snapshot read done, bye!");
 
-                let new_upper = Antichain::from_elem(recent_global_upper[0] + 1);
+                // Use smallest possible new_upper
+                let new_upper = Antichain::from_elem(recent_upper[0] + 1);
                 write
-                    .append(initial_flush.into_iter(), recent_global_upper, new_upper)
+                    .append(initial_flush.into_iter(), recent_upper, new_upper)
                     .await
                     .expect("cannot append updates (1) ")
                     .expect("cannot append updates (2)");
