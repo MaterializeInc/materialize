@@ -183,34 +183,44 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
 pub fn and<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    a_expr: &'a MirScalarExpr,
-    b_expr: &'a MirScalarExpr,
+    exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
-    match a_expr.eval(datums, temp_storage)? {
-        Datum::False => Ok(Datum::False),
-        a => match (a, b_expr.eval(datums, temp_storage)?) {
-            (_, Datum::False) => Ok(Datum::False),
-            (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
-            (Datum::True, Datum::True) => Ok(Datum::True),
+    // If any is false, then return false. Else, if any is null, then return null. Else, return true.
+    let mut null = false;
+    for expr in exprs {
+        match expr.eval(datums, temp_storage)? {
+            Datum::False => return Ok(Datum::False), // short-circuit
+            Datum::True => {}
+            Datum::Null => null = true, // No return here, because we might still see a false
             _ => unreachable!(),
-        },
+        }
+    }
+    if null {
+        Ok(Datum::Null)
+    } else {
+        Ok(Datum::True)
     }
 }
 
 pub fn or<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    a_expr: &'a MirScalarExpr,
-    b_expr: &'a MirScalarExpr,
+    exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
-    match a_expr.eval(datums, temp_storage)? {
-        Datum::True => Ok(Datum::True),
-        a => match (a, b_expr.eval(datums, temp_storage)?) {
-            (_, Datum::True) => Ok(Datum::True),
-            (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
-            (Datum::False, Datum::False) => Ok(Datum::False),
+    // If any is true, then return true. Else, if any is null, then return null. Else, return false.
+    let mut null = false;
+    for expr in exprs {
+        match expr.eval(datums, temp_storage)? {
+            Datum::False => {}
+            Datum::True => return Ok(Datum::True), // short-circuit
+            Datum::Null => null = true, // No return here, because we might still see a true
             _ => unreachable!(),
-        },
+        }
+    }
+    if null {
+        Ok(Datum::Null)
+    } else {
+        Ok(Datum::False)
     }
 }
 
@@ -1753,8 +1763,6 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
-    And,
-    Or,
     AddInt16,
     AddInt32,
     AddInt64,
@@ -1915,8 +1923,6 @@ impl BinaryFunc {
         }
 
         match self {
-            BinaryFunc::And => and(datums, temp_storage, a_expr, b_expr),
-            BinaryFunc::Or => or(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddInt16 => eager!(add_int16),
             BinaryFunc::AddInt32 => eager!(add_int32),
             BinaryFunc::AddInt64 => eager!(add_int64),
@@ -2147,7 +2153,7 @@ impl BinaryFunc {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
         match self {
-            And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
+            Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
                 ScalarType::Bool.nullable(in_nullable)
             }
 
@@ -2282,11 +2288,11 @@ impl BinaryFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
+        // NOTE: The following is a list of the binary functions
+        // that **DO NOT** propagate nulls.
         !matches!(
             self,
-            BinaryFunc::And
-                | BinaryFunc::Or
-                | BinaryFunc::ArrayArrayConcat
+            BinaryFunc::ArrayArrayConcat
                 | BinaryFunc::ListListConcat
                 | BinaryFunc::ListElementConcat
                 | BinaryFunc::ElementListConcat
@@ -2304,9 +2310,7 @@ impl BinaryFunc {
         use BinaryFunc::*;
         !matches!(
             self,
-            And | Or
-                | Eq
-                | NotEq
+            Eq | NotEq
                 | Lt
                 | Lte
                 | Gt
@@ -2378,9 +2382,7 @@ impl BinaryFunc {
     pub fn is_infix_op(&self) -> bool {
         use BinaryFunc::*;
         match self {
-            And
-            | Or
-            | AddInt16
+            AddInt16
             | AddInt32
             | AddInt64
             | AddFloat32
@@ -2538,8 +2540,6 @@ impl BinaryFunc {
 impl fmt::Display for BinaryFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            BinaryFunc::And => f.write_str("&&"),
-            BinaryFunc::Or => f.write_str("||"),
             BinaryFunc::AddInt16 => f.write_str("+"),
             BinaryFunc::AddInt32 => f.write_str("+"),
             BinaryFunc::AddInt64 => f.write_str("+"),
@@ -2704,8 +2704,6 @@ impl Arbitrary for BinaryFunc {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            Just(BinaryFunc::And),
-            Just(BinaryFunc::Or),
             Just(BinaryFunc::AddInt16),
             Just(BinaryFunc::AddInt32),
             Just(BinaryFunc::AddInt64),
@@ -2853,8 +2851,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
     fn into_proto(&self) -> ProtoBinaryFunc {
         use crate::scalar::proto_binary_func::Kind::*;
         let kind = match self {
-            BinaryFunc::And => And(()),
-            BinaryFunc::Or => Or(()),
             BinaryFunc::AddInt16 => AddInt16(()),
             BinaryFunc::AddInt32 => AddInt32(()),
             BinaryFunc::AddInt64 => AddInt64(()),
@@ -3001,8 +2997,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
         use crate::scalar::proto_binary_func::Kind::*;
         if let Some(kind) = proto.kind {
             match kind {
-                And(()) => Ok(BinaryFunc::And),
-                Or(()) => Ok(BinaryFunc::Or),
                 AddInt16(()) => Ok(BinaryFunc::AddInt16),
                 AddInt32(()) => Ok(BinaryFunc::AddInt32),
                 AddInt64(()) => Ok(BinaryFunc::AddInt64),
@@ -3155,7 +3149,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
 }
 
 /// A description of an SQL unary function that has the ability to lazy evaluate its arguments
-// This trait will eventualy be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
+// This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
 trait LazyUnaryFunc {
     fn eval<'a>(
         &'a self,
@@ -5515,6 +5509,8 @@ pub enum VariadicFunc {
     ErrorIfNull,
     DateBinTimestamp,
     DateBinTimestampTz,
+    And,
+    Or,
 }
 
 impl VariadicFunc {
@@ -5576,6 +5572,8 @@ impl VariadicFunc {
                 d[1].unwrap_timestamptz(),
                 d[2].unwrap_timestamptz(),
             )),
+            VariadicFunc::And => and(datums, temp_storage, exprs),
+            VariadicFunc::Or => or(datums, temp_storage, exprs),
         }
     }
 
@@ -5643,6 +5641,7 @@ impl VariadicFunc {
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
             DateBinTimestamp => ScalarType::Timestamp.nullable(true),
             DateBinTimestampTz => ScalarType::TimestampTz.nullable(true),
+            And | Or => ScalarType::Bool.nullable(in_nullable),
         }
     }
 
@@ -5652,7 +5651,9 @@ impl VariadicFunc {
         // that **DO NOT** propagate nulls.
         !matches!(
             self,
-            VariadicFunc::Coalesce
+            VariadicFunc::And
+                | VariadicFunc::Or
+                | VariadicFunc::Coalesce
                 | VariadicFunc::Greatest
                 | VariadicFunc::Least
                 | VariadicFunc::Concat
@@ -5664,6 +5665,52 @@ impl VariadicFunc {
                 | VariadicFunc::ArrayToString { .. }
                 | VariadicFunc::ErrorIfNull
         )
+    }
+
+    /// Whether the function might return NULL even if none of its inputs are
+    /// NULL.
+    ///
+    /// This is presently conservative, and may indicate that a function
+    /// introduces nulls even when it does not.
+    pub fn introduces_nulls(&self) -> bool {
+        use VariadicFunc::*;
+        // Note the negation
+        !matches!(
+            self,
+            And | Or //todo: add more
+        )
+    }
+
+    pub fn switch_and_or(&self) -> Self {
+        match self {
+            VariadicFunc::And => VariadicFunc::Or,
+            VariadicFunc::Or => VariadicFunc::And,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn is_infix_op(&self) -> bool {
+        use VariadicFunc::*;
+        matches!(self, And | Or)
+    }
+
+    /// Gives the unit (u) of OR or AND, such that `u AND/OR x == x`.
+    /// Note that a 0-arg AND/OR evaluates to unit_of_and_or.
+    pub fn unit_of_and_or(&self) -> MirScalarExpr {
+        match self {
+            VariadicFunc::And => MirScalarExpr::literal_true(),
+            VariadicFunc::Or => MirScalarExpr::literal_false(),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Gives the zero (z) of OR or AND, such that `z AND/OR x == z`.
+    pub fn zero_of_and_or(&self) -> MirScalarExpr {
+        match self {
+            VariadicFunc::And => MirScalarExpr::literal_false(),
+            VariadicFunc::Or => MirScalarExpr::literal_true(),
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -5693,6 +5740,8 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ErrorIfNull => f.write_str("error_if_null"),
             VariadicFunc::DateBinTimestamp => f.write_str("timestamp_bin"),
             VariadicFunc::DateBinTimestampTz => f.write_str("timestamptz_bin"),
+            VariadicFunc::And => f.write_str("&&"),
+            VariadicFunc::Or => f.write_str("||"),
         }
     }
 }
@@ -5735,6 +5784,8 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::ErrorIfNull),
             Just(VariadicFunc::DateBinTimestamp),
             Just(VariadicFunc::DateBinTimestampTz),
+            Just(VariadicFunc::And),
+            Just(VariadicFunc::Or),
         ]
     }
 }
@@ -5770,6 +5821,8 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::ErrorIfNull => ErrorIfNull(()),
             VariadicFunc::DateBinTimestamp => DateBinTimestamp(()),
             VariadicFunc::DateBinTimestampTz => DateBinTimestampTz(()),
+            VariadicFunc::And => And(()),
+            VariadicFunc::Or => Or(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -5813,6 +5866,8 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 ErrorIfNull(()) => Ok(VariadicFunc::ErrorIfNull),
                 DateBinTimestamp(()) => Ok(VariadicFunc::DateBinTimestamp),
                 DateBinTimestampTz(()) => Ok(VariadicFunc::DateBinTimestampTz),
+                And(()) => Ok(VariadicFunc::And),
+                Or(()) => Ok(VariadicFunc::Or),
             }
         } else {
             Err(TryFromProtoError::missing_field(
