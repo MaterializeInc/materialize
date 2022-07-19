@@ -2875,6 +2875,10 @@ impl<S: Append> Catalog<S> {
                     }
                     vec![Action::DropItem(id)]
                 }
+                Op::DropTimeline(timeline) => {
+                    tx.remove_timestamp(timeline);
+                    Vec::new()
+                }
                 Op::RenameItem {
                     id,
                     to_name,
@@ -3550,6 +3554,7 @@ pub enum Op {
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
     /// may be violated.
     DropItem(GlobalId),
+    DropTimeline(Timeline),
     RenameItem {
         id: GlobalId,
         current_full_name: FullObjectName,

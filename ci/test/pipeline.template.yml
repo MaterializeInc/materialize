@@ -438,6 +438,17 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: timelines
+    label: Timeline tests
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/timelines]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: timelines
+    agents:
+      queue: linux-x86_64
+
   - id: persist-maelstrom
     label: Maelstrom coverage of persist
     depends_on: build-x86_64

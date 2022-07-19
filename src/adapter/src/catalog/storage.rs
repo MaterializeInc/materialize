@@ -1036,6 +1036,14 @@ impl<'a, S: Append> Transaction<'a, S> {
         Ok(())
     }
 
+    pub fn remove_timestamp(&mut self, timeline: Timeline) {
+        let n = self
+            .timestamps
+            .delete(|k, _v| k.id == timeline.to_string())
+            .len();
+        assert_eq!(n, 1);
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
         let mut batches = Vec::new();
