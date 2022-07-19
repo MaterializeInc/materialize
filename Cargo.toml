@@ -20,6 +20,7 @@ members = [
     "src/lowertest-derive",
     "src/environmentd",
     "src/lowertest",
+    "src/mz",
     "src/metabase",
     "src/npm",
     "src/ore",

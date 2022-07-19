@@ -1,0 +1,21 @@
+[package]
+name = "mz"
+description = "Materialize's CLI."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.62.0"
+publish = false
+
+
+[dependencies]
+serde = { version = "1.0.137", features = ["derive"] }
+clap = { version = "3.2.6", features = [ "derive" ] }
+tokio = { version = "1.19.2", features = ["full"] }
+open = "3.0.1"
+axum = "0.5.13"
+rpassword = "6.0"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+toml = "0.5.8"
+dirs = "4.0.0"
+subprocess = "0.2.9"
+mz-ore = { path = "../ore", features = ["task"] }
