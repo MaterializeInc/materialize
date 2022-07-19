@@ -2850,7 +2850,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        let introspection_collection_ids = introspection_collections
+        let introspection_collection_ids: Vec<GlobalId> = introspection_collections
             .iter()
             .map(|(id, _)| *id)
             .collect();
@@ -2875,11 +2875,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap();
         }
 
-        if let Some(c) = compute_instance_config {
-            self.initialize_compute_read_policies(
+        if !introspection_collection_ids.is_empty() {
+            self.initialize_storage_read_policies(
                 introspection_collection_ids,
-                instance.id,
-                Some(c.granularity.as_millis() as u64),
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
         }
@@ -2938,9 +2937,8 @@ impl<S: Append + 'static> Coordinator<S> {
         let replica = instance.replicas_by_id[&replica_id].clone();
 
         if instance.logging.is_some() {
-            self.initialize_compute_read_policies(
+            self.initialize_storage_read_policies(
                 persisted_log_ids,
-                instance_id,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
