@@ -179,6 +179,41 @@ impl Indent {
     }
 }
 
+/// Convenience methods for pretty-printing based on indentation
+/// that are automatically available for context objects that can
+/// be mutably referenced as an [`Indent`] instance.
+pub trait IndentLike {
+    /// Print a block of code defined in `f` one step deeper
+    /// from the current [`Indent`].
+    fn indented<F>(&mut self, f: F) -> fmt::Result
+    where
+        F: FnMut(&mut Self) -> fmt::Result;
+}
+
+impl IndentLike for Indent {
+    fn indented<F>(&mut self, mut f: F) -> fmt::Result
+    where
+        F: FnMut(&mut Self) -> fmt::Result,
+    {
+        *self += 1;
+        let result = f(self);
+        *self -= 1;
+        result
+    }
+}
+
+impl<T: AsMut<Indent>> IndentLike for T {
+    fn indented<F>(&mut self, mut f: F) -> fmt::Result
+    where
+        F: FnMut(&mut Self) -> fmt::Result,
+    {
+        *self.as_mut() += 1;
+        let result = f(self);
+        *self.as_mut() -= 1;
+        result
+    }
+}
+
 impl Default for Indent {
     fn default() -> Self {
         Indent::new(' ', 2)
