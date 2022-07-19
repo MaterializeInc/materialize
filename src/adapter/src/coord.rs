@@ -7141,7 +7141,7 @@ mod timeline {
             Fut: Future<Output = Result<(), crate::catalog::Error>>,
         {
             if self.durable_timestamp.less_equal(ts)
-                // Since the timestamp is at its max value, we know that know other Coord can
+                // Since the timestamp is at its max value, we know that no other Coord can
                 // allocate a higher value.
                 && self.durable_timestamp.less_than(&T::maximum())
             {
@@ -7196,6 +7196,6 @@ impl CoordTimestamp for mz_repr::Timestamp {
     }
 
     fn maximum() -> Self {
-        mz_repr::Timestamp::MAX
+        Self::MAX
     }
 }

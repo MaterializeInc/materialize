@@ -1037,10 +1037,8 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     pub fn remove_timestamp(&mut self, timeline: Timeline) {
-        let n = self
-            .timestamps
-            .delete(|k, _v| k.id == timeline.to_string())
-            .len();
+        let timeline_str = timeline.to_string();
+        let n = self.timestamps.delete(|k, _v| k.id == timeline_str).len();
         assert_eq!(n, 1);
     }
 
