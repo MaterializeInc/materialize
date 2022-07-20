@@ -1492,6 +1492,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
         WHEN mz_objects.type = 'source' THEN 'r'
         WHEN mz_objects.type = 'index' THEN 'i'
         WHEN mz_objects.type = 'view' THEN 'v'
+        WHEN mz_objects.type = 'materialized view' THEN 'm'
     END relkind,
     -- MZ doesn't support CHECK constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
