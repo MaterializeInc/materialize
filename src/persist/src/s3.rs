@@ -35,7 +35,7 @@ use uuid::Uuid;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, ExternalError};
+use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
 
 /// Configuration for opening an [S3Blob].
 #[derive(Clone, Debug)]
@@ -419,10 +419,13 @@ impl Blob for S3Blob {
         Ok(Some(val))
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        let mut ret = vec![];
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: Option<&str>,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
         let mut continuation_token = None;
-        let prefix = self.get_path("");
+        let prefix = self.get_path(key_prefix.unwrap_or(""));
 
         loop {
             let resp = self
@@ -439,7 +442,13 @@ impl Blob for S3Blob {
                 for object in contents.iter() {
                     if let Some(key) = object.key.as_ref() {
                         if let Some(key) = key.strip_prefix(&prefix) {
-                            ret.push(key.to_string());
+                            f(BlobMetadata {
+                                key,
+                                size_in_bytes: object
+                                    .size
+                                    .try_into()
+                                    .expect("file in S3 cannot have negative size"),
+                            });
                         } else {
                             return Err(ExternalError::from(anyhow!(
                                 "found key with invalid prefix: {}",
@@ -457,7 +466,7 @@ impl Blob for S3Blob {
             }
         }
 
-        Ok(ret)
+        Ok(())
     }
 
     async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {

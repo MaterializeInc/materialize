@@ -17,7 +17,9 @@ use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
-use mz_persist::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::location::{
+    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+};
 use mz_persist::retry::RetryStream;
 use prometheus::{CounterVec, IntCounterVec};
 
@@ -651,21 +653,29 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: Option<&str>,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        let mut byte_total = 0;
+        let mut instrumented = |blob_metadata: BlobMetadata| {
+            byte_total += blob_metadata.size_in_bytes;
+            f(blob_metadata)
+        };
+
         let res = self
             .metrics
             .blob
             .list_keys
-            .run_op(|| self.blob.list_keys())
+            .run_op(|| {
+                self.blob
+                    .list_keys_and_metadata(key_prefix, &mut instrumented)
+            })
             .await;
-        if let Ok(keys) = res.as_ref() {
-            let bytes = keys.iter().map(|x| x.len()).sum();
-            self.metrics
-                .blob
-                .list_keys
-                .bytes
-                .inc_by(u64::cast_from(bytes));
-        }
+
+        self.metrics.blob.list_keys.bytes.inc_by(byte_total);
+
         res
     }
 
