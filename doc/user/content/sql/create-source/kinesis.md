@@ -99,18 +99,6 @@ CREATE MATERIALIZED VIEW jsonified_kinesis_source AS
 ```
 
 {{< /tab >}}
-{{< tab "Protobuf">}}
-
-```sql
-CREATE SOURCE proto_source
-  FROM KINESIS ARN 'arn:aws:kinesis:aws-region::stream/fake-stream'
-  WITH ( access_key_id = 'access_key_id',
-         secret_access_key = 'secret_access_key' )
-  FORMAT PROTOBUF MESSAGE 'billing.Batch'
-    USING SCHEMA FILE '[path to schema]';
-```
-
-{{< /tab >}}
 {{< tab "Text/bytes">}}
 
 ```sql

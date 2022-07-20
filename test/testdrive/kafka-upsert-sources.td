@@ -65,13 +65,10 @@ mammal1: {"f1": "moose", "f2": 1}
   VALUE FORMAT AVRO USING SCHEMA  '${schema}'
   ENVELOPE UPSERT
 
-$ file-append path=data-schema.json
-\${schema}
-
 > CREATE SOURCE textavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
   KEY FORMAT TEXT
-  VALUE FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE UPSERT
 
 > select * from bytesavro

@@ -245,28 +245,6 @@ a    b
 ---------
 101  101
 
-
-#
-# Create a source using a file schema
-#
-$ file-append path=data-schema.json
-\${schema}
-
-> CREATE SOURCE data_schema_file
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
-    ENVELOPE DEBEZIUM (
-      TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data-${testdrive.seed}')
-  )
-
-> SELECT a, b FROM data_schema_file
-a  b
-----
-1  1
-2  3
-4  5
-8  9
-
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true

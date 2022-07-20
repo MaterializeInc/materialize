@@ -163,36 +163,6 @@ a  b  json                     c            d             e                   f
 -1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
 42 19 "[4,5,6]"                FileNotFound True          <null>              <null>
 
-# Create a source using a file schema. This should fail if the named schema file
-# does not exist.
-
-! CREATE SOURCE data_schema_file
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA FILE 'data-schema.json'
-  ENVELOPE DEBEZIUM
-contains:No such file or directory
-
-$ file-append path=data-schema.json
-\${schema}
-
-> CREATE SOURCE data_schema_file
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
-  ENVELOPE DEBEZIUM
-
-> SHOW CREATE SOURCE data_schema_file
-Source   "Create Source"
-------------------------
-materialize.public.data_schema_file "CREATE SOURCE \"materialize\".\"public\".\"data_schema_file\" FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}\n' ENVELOPE DEBEZIUM"
-
-> SELECT a, b, json, c, d FROM data_schema_file
-a  b  json                     c            d
---------------------------------------------------------
-1  1  null                     True         False
-2  3  "{\"hello\":\"world\"}"  False        FileNotFound
--1  7 "[1,2,3]"                FileNotFound True
-42 19 "[4,5,6]"                FileNotFound True
-
 # Test an Avro source without a Debezium envelope.
 
 $ set non-dbz-schema={
