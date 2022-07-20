@@ -44,28 +44,24 @@ use crate::RECURSION_LIMIT;
 /// the [`Visit`] trait, which enables recursive traversal.
 pub trait VisitChildren<T> {
     /// Apply an infallible immutable function `f` to each direct child.
-    fn visit_children<'a, F>(&'a self, f: F)
+    fn visit_children<F>(&self, f: F)
     where
-        T: 'a,
-        F: FnMut(&'a T);
+        F: FnMut(&T);
 
     /// Apply an infallible mutable function `f` to each direct child.
-    fn visit_mut_children<'a, F>(&'a mut self, f: F)
+    fn visit_mut_children<F>(&mut self, f: F)
     where
-        T: 'a,
-        F: FnMut(&'a mut T);
+        F: FnMut(&mut T);
 
     /// Apply a fallible immutable function `f` to each direct child.
-    fn try_visit_children<'a, F, E>(&'a self, f: F) -> Result<(), E>
+    fn try_visit_children<F, E>(&self, f: F) -> Result<(), E>
     where
-        T: 'a,
-        F: FnMut(&'a T) -> Result<(), E>;
+        F: FnMut(&T) -> Result<(), E>;
 
     /// Apply a fallible mutable function `f` to each direct child.
-    fn try_visit_mut_children<'a, F, E>(&'a mut self, f: F) -> Result<(), E>
+    fn try_visit_mut_children<F, E>(&mut self, f: F) -> Result<(), E>
     where
-        T: 'a,
-        F: FnMut(&'a mut T) -> Result<(), E>;
+        F: FnMut(&mut T) -> Result<(), E>;
 }
 
 /// A trait for types that can recursively visit their children of the
