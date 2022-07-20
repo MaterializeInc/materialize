@@ -669,7 +669,7 @@ mod tests {
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
         let mut count_before = 0;
-        blob.list_keys_and_metadata(None, &mut |_| {
+        blob.list_keys_and_metadata("", &mut |_| {
             count_before += 1;
         })
         .await
@@ -680,7 +680,7 @@ mod tests {
             upper = new_upper;
         }
         let mut count_after = 0;
-        blob.list_keys_and_metadata(None, &mut |_| {
+        blob.list_keys_and_metadata("", &mut |_| {
             count_after += 1;
         })
         .await

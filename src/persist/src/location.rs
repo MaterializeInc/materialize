@@ -368,7 +368,7 @@ pub trait Blob: std::fmt::Debug {
     /// given prefix.
     async fn list_keys_and_metadata(
         &self,
-        key_prefix: Option<&str>,
+        key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError>;
 

@@ -89,7 +89,7 @@ impl Blob for FileBlob {
 
     async fn list_keys_and_metadata(
         &self,
-        key_prefix: Option<&str>,
+        key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
         let base_dir = self.base_dir.canonicalize()?;
@@ -120,10 +120,8 @@ impl Blob for FileBlob {
             if let Some(name) = file_name {
                 let name = name.to_str();
                 if let Some(name) = name {
-                    if let Some(prefix) = key_prefix {
-                        if !name.starts_with(prefix) {
-                            continue;
-                        }
+                    if !name.starts_with(key_prefix) {
+                        continue;
                     }
 
                     f(BlobMetadata {

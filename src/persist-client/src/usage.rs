@@ -41,7 +41,7 @@ impl StorageUsageClient {
     pub async fn shard_size(&self, shard_id: &ShardId) -> Result<u64, ExternalError> {
         let mut total_size = 0;
         self.blob
-            .list_keys_and_metadata(Some(&shard_id.to_string()), &mut |metadata| {
+            .list_keys_and_metadata(&shard_id.to_string(), &mut |metadata| {
                 total_size += metadata.size_in_bytes;
             })
             .await?;

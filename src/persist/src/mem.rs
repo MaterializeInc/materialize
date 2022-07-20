@@ -73,14 +73,12 @@ impl MemBlobCore {
 
     fn list_keys_and_metadata(
         &self,
-        key_prefix: Option<&str>,
+        key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
         for (key, value) in &self.dataz {
-            if let Some(prefix) = key_prefix {
-                if !key.starts_with(prefix) {
-                    continue;
-                }
+            if !key.starts_with(key_prefix) {
+                continue;
             }
 
             f(BlobMetadata {
@@ -125,7 +123,7 @@ impl Blob for MemBlob {
 
     async fn list_keys_and_metadata(
         &self,
-        key_prefix: Option<&str>,
+        key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
         self.core.lock().await.list_keys_and_metadata(key_prefix, f)

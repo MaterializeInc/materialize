@@ -196,8 +196,8 @@ impl Blob for MaelstromBlob {
 
     async fn list_keys_and_metadata(
         &self,
-        _key_prefix: Option<&str>,
-        _f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
         unimplemented!("not yet used")
     }
@@ -270,7 +270,7 @@ impl Blob for CachingBlob {
 
     async fn list_keys_and_metadata(
         &self,
-        key_prefix: Option<&str>,
+        key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
         self.blob.list_keys_and_metadata(key_prefix, f).await

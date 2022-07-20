@@ -655,7 +655,7 @@ impl Blob for MetricsBlob {
 
     async fn list_keys_and_metadata(
         &self,
-        key_prefix: Option<&str>,
+        key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
         let mut byte_total = 0;
