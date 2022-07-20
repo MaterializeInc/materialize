@@ -7,24 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
+use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use mz_persist_client::write::WriteHandle;
-use mz_repr::GlobalId;
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::sources::SourceData;
+use differential_dataflow::Hashable;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
-use timely::PartialOrder;
-
-use mz_repr::{Diff, Row, Timestamp};
-use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
+use timely::PartialOrder;
+
+use mz_repr::GlobalId;
+use mz_repr::{Diff, Row, Timestamp};
+use mz_storage::controller::CollectionMetadata;
+use mz_storage::types::errors::DataflowError;
+use mz_storage::types::sinks::SinkAsOf;
+use mz_storage::types::sources::SourceData;
+use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::compute_state::ComputeState;
 
@@ -33,133 +37,195 @@ pub(crate) fn persist_sink<G>(
     target_id: GlobalId,
     target: &CollectionMetadata,
     compute_state: &mut ComputeState,
-    collection: &Collection<G, Row, Diff>,
+    desired_collection: &Collection<G, Row, Diff>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let scope = collection.scope();
-    // TODO(teskje): vary active_worker_index, to distribute work for multiple sinks
-    let active_worker_index = 0;
-
-    let location = target.persist_location.clone();
-
-    let handles: Option<(WriteHandle<_, _, _, _>, _)> = if active_worker_index == scope.index() {
-        let shard_id = target.data_shard;
-        let persist_client = futures_executor::block_on(async {
-            compute_state
-                .persist_clients
-                .lock()
-                .await
-                .open(location)
-                .await
-        });
-
-        let persist_client = persist_client.expect("Successful connection");
-
-        let (write, read) = futures_executor::block_on(
-            persist_client.open::<SourceData, (), Timestamp, Diff>(shard_id),
-        )
-        .expect("could not open persist shard");
-
-        Some((write, read))
-    } else {
-        None
+    let scope = desired_collection.scope();
+    let as_of: SinkAsOf = SinkAsOf {
+        frontier: Antichain::from_elem(0),
+        strict: false,
     };
 
-    let mut sink = OperatorBuilder::new("Logging Persist Sink".into(), scope.clone());
-    let mut input = sink.new_input(
-        &collection.inner,
-        Exchange::new(move |_| active_worker_index as u64),
+    // To create the diffs we also need to read from persist.
+    let (ok_stream, err_stream, token) = mz_storage::source::persist_source::persist_source(
+        &scope,
+        Arc::clone(&compute_state.persist_clients),
+        target.clone(),
+        as_of.frontier.clone(),
     );
+    let persist_collection = ok_stream
+        .as_collection()
+        .map(Ok)
+        .concat(&err_stream.as_collection().map(Err));
 
-    let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(
-        TimelyTimestamp::minimum(),
-    )));
+    let token = Rc::new((
+        install_desired_into_persist(
+            target,
+            compute_state,
+            as_of,
+            target_id,
+            desired_collection.map(|r| Ok(r)),
+            persist_collection,
+        ),
+        token,
+    ));
 
+    // Report frontier of collection back to coord
     compute_state
         .reported_frontiers
         .insert(target_id, Antichain::from_elem(0));
 
+    // We don't allow these dataflows to be dropped, so the tokens could
+    // be stored anywhere.
+    compute_state.sink_tokens.insert(
+        target_id,
+        crate::compute_state::SinkToken {
+            token: Box::new(token),
+            is_tail: false,
+        },
+    );
+}
+
+//TODO(lh): Replace this with persist_sink::install_desired_sink once #13740 is merged.
+fn install_desired_into_persist<G>(
+    target: &CollectionMetadata,
+    compute_state: &mut crate::compute_state::ComputeState,
+    sink_as_of: SinkAsOf,
+    sink_id: GlobalId,
+    desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+) -> Option<Rc<dyn Any>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let scope = desired_collection.scope();
+
+    let persist_clients = Arc::clone(&compute_state.persist_clients);
+    let persist_location = target.persist_location.clone();
+    let shard_id = target.data_shard;
+
+    let operator_name = format!("persist_sink({})", shard_id);
+    let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
+
+    // Only attempt to write from this frontier onward, as our data are not necessarily
+    // correct for times not greater or equal to this frontier. Ignore as_of strictness.
+    let mut write_lower_bound = sink_as_of.frontier.clone();
+
+    // TODO(mcsherry): this is shardable, eventually. But for now use a single writer.
+    let hashed_id = sink_id.hashed();
+    let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let mut desired_input =
+        persist_op.new_input(&desired_collection.inner, Exchange::new(move |_| hashed_id));
+    let mut persist_input =
+        persist_op.new_input(&persist_collection.inner, Exchange::new(move |_| hashed_id));
+
+    // Dropping this token signals that the operator should shut down cleanly.
+    let token = Rc::new(());
+    let token_weak = Rc::downgrade(&token);
+
+    // Only the active_write_worker will ever produce data so all other workers have
+    // an empty frontier. It's necessary to insert all of these into `compute_state.
+    // sink_write_frontier` below so we properly clear out default frontiers of
+    // non-active workers.
+    let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
+        Antichain::from_elem(TimelyTimestamp::minimum())
+    } else {
+        Antichain::new()
+    }));
+
     compute_state
         .sink_write_frontiers
-        .insert(target_id, Rc::clone(&shared_frontier));
+        .insert(sink_id, Rc::clone(&shared_frontier));
 
-    sink.build_async(
+    // This operator accepts the current and desired update streams for a `persist` shard.
+    // It attempts to write out updates, starting from the current's upper frontier, that
+    // will cause the changes of desired to be committed to persist.
+
+    persist_op.build_async(
         scope,
         move |_capabilities, frontiers, scheduler| async move {
-            let (mut write, read) = match handles {
-                Some(w) => w,
-                None => return,
-            };
-
-            // Delete existing data in shard, by reading at recent_upper - 1
-            // and writing -1s at recent_upper.
-            let recent_upper = write.fetch_recent_upper().await;
-            // If this is true, we can obtain a snapshot. Otherwise, we assume the shard is empty
-            if recent_upper[0] > 0 {
-                let mut initial_flush: Vec<((SourceData, _), _, i64)> = vec![];
-                // Flush the shard
-                let since = Antichain::from_elem(recent_upper[0] - 1);
-                match read.snapshot(since).await {
-                    Ok(mut x) => {
-                        while let Some(result_vec) = x.next().await {
-                            for result in result_vec {
-                                let sd = result.0 .0.unwrap();
-                                let mult = result.2;
-                                initial_flush.push(((sd, ()), recent_upper[0], -mult));
-                            }
-                        }
-                    }
-                    Err(_err) => {
-                        tracing::warn!("Could not flush logging shard!");
-                    }
-                };
-
-                // Use smallest possible new_upper
-                let new_upper = Antichain::from_elem(recent_upper[0] + 1);
-                write
-                    .append(initial_flush.into_iter(), recent_upper, new_upper)
-                    .await
-                    .expect("cannot append updates (1) ")
-                    .expect("cannot append updates (2)");
-            }
-
             let mut buffer = Vec::new();
-            let mut stash = HashMap::<_, Vec<_>>::new();
+
+            // Contains `desired - persist`, reflecting the updates we would like to commit
+            // to `persist` in order to "correct" it to track `desired`.
+            let mut correction = Vec::new();
+
+            // TODO(aljoscha): We need to figure out what to do with error results from these calls.
+            let mut write = persist_clients
+                .lock()
+                .await
+                .open(persist_location)
+                .await
+                .expect("could not open persist client")
+                .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
+                .await
+                .expect("could not open persist shard");
 
             while scheduler.notified().await {
-                input.for_each(|_cap, data| {
-                    data.swap(&mut buffer);
-                    for (key, ts, diff) in buffer.drain(..) {
-                        stash
-                            .entry(ts)
-                            .or_default()
-                            .push(((SourceData(Ok(key)), ()), ts, diff));
-                    }
-                });
-
-                let input_frontier = &frontiers.borrow()[0].clone();
-                let mut updates = stash
-                    .iter()
-                    .filter(|(ts, _updates)| !input_frontier.less_equal(ts))
-                    .flat_map(|(_ts, updates)| updates.iter());
-
-                if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
-                    let lower = shared_frontier.borrow().clone();
-
-                    write
-                        .append(updates, lower, input_frontier.clone())
-                        .await
-                        .expect("cannot append updates")
-                        .expect("cannot append updates");
-
-                    *shared_frontier.borrow_mut() = input_frontier.clone();
-                } else {
-                    assert!(updates.next().is_none());
+                if !active_write_worker
+                    || token_weak.upgrade().is_none()
+                    // FRANK: I don't understand this case.
+                    || shared_frontier.borrow().is_empty()
+                {
+                    return;
                 }
 
-                stash.retain(|ts, _updates| input_frontier.less_equal(ts));
+                // Extract desired rows as positive contributions to `correction`.
+                desired_input.for_each(|_cap, data| {
+                    data.swap(&mut buffer);
+                    correction.append(&mut buffer);
+                });
+
+                // Extract persist rows as negative contributions to `correction`.
+                persist_input.for_each(|_cap, data| {
+                    data.swap(&mut buffer);
+                    correction.extend(buffer.drain(..).map(|(d,t,r)| (d,t,-r)));
+                });
+
+                // Capture current frontiers.
+                let frontiers = frontiers.borrow().clone();
+                let desired_frontier = &frontiers[0];
+                let persist_frontier = &frontiers[1];
+
+                // Advance all updates to `persist`'s frontier.
+                for (_, time, _) in correction.iter_mut() {
+                    use differential_dataflow::lattice::Lattice;
+                    time.advance_by(persist_frontier.borrow());
+                }
+                // Consolidate updates within.
+                differential_dataflow::consolidation::consolidate_updates(&mut correction);
+
+                if PartialOrder::less_equal(&write_lower_bound, persist_frontier) && PartialOrder::less_than(persist_frontier, desired_frontier) {
+                    let to_append =
+                    correction
+                        .iter()
+                        .filter(|(_, time, _)| persist_frontier.less_equal(time) && !desired_frontier.less_equal(time))
+                        .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff));
+
+                    let result =
+                    write
+                        .compare_and_append(to_append, persist_frontier.clone(), desired_frontier.clone())
+                        .await
+                        .expect("Indeterminate")    // TODO: What does this error mean?
+                        .expect("Invalid usage")    // TODO: What does this error mean?
+                        ;
+                    tracing::debug!("write done!");
+
+                    *shared_frontier.borrow_mut() = desired_frontier.clone();
+
+                    match result {
+                        Ok(()) => {
+                        },
+                        Err(mz_persist_client::Upper(frontier)) => {
+                            // The update bounced! We should advance our write lower bound to not spam `persist`.
+                            write_lower_bound = frontier;
+                        }
+                    }
+                }
             }
         },
     );
+
+    Some(token)
 }
