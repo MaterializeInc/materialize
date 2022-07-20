@@ -59,6 +59,8 @@ class Materialized(Service):
                 "MZ_SOFT_ASSERTIONS=1",
                 "MZ_UNSAFE_MODE=1",
                 "MZ_EXPERIMENTAL=1",
+                f"MZ_PERSIST_BLOB_URL=file://{data_directory}/persist/blob",
+                f"MZ_ORCHESTRATOR_PROCESSDATA_DIRECTORY={data_directory}",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -85,11 +87,6 @@ class Materialized(Service):
         if volumes_extra:
             volumes.extend(volumes_extra)
 
-        command_list = [
-            f"--persist-blob-url=file://{data_directory}/persist/blob",
-            f"--orchestrator-process-data-directory={data_directory}",
-        ]
-
         config_ports: List[Union[str, int]] = (
             [*ports, *extra_ports] if ports else [6875, 5432, *extra_ports, 6876]
         )
@@ -99,6 +96,8 @@ class Materialized(Service):
             if version.parse(requested_version) < version.parse("0.27.0"):
                 # HTTP and SQL ports in older versions of Materialize are the same
                 config_ports.pop()
+
+        command_list = []
 
         if workers:
             command_list.append(f"--workers {workers}")
