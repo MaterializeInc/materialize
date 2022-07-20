@@ -196,6 +196,7 @@ pub async fn purify_create_source(
             *details_ast = Some(hex::encode(details.into_proto().encode_to_vec()));
         }
         CreateSourceConnection::PubNub { .. } => (),
+        CreateSourceConnection::LoadGenerator { .. } => (),
     }
 
     purify_source_format(

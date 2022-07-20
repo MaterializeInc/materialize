@@ -1423,3 +1423,17 @@ CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, US
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST = 'ssh-bastion', PORT = 1234, USER = 'blah'
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("my_ssh_tunnel")]), connection: Ssh { with_options: [SshConnectionOption { name: Host, value: Some(Value(String("ssh-bastion"))) }, SshConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, SshConnectionOption { name: User, value: Some(Value(String("blah"))) }] }, if_not_exists: false })
+
+parse-statement
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
+----
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, remote: None })
+
+parse-statement
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER TICK INTERVAL '1s'
+----
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER TICK INTERVAL = '1s'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, remote: None })

@@ -21,7 +21,7 @@ use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::SshConnectionOption;
+use mz_sql_parser::ast::{LoadGenerator, SshConnectionOption};
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
@@ -49,10 +49,10 @@ use mz_storage::types::sources::encoding::{
 };
 use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
-    DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
-    KinesisSourceConnection, MzOffset, PostgresSourceConnection, PostgresSourceDetails,
-    ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection, SourceConnection,
-    SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    DebeziumTransactionMetadata, Generator, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
+    KinesisSourceConnection, LoadGeneratorSourceConnection, MzOffset, PostgresSourceConnection,
+    PostgresSourceDetails, ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection,
+    SourceConnection, SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -70,12 +70,13 @@ use crate::ast::{
     DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
     DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
-    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op,
-    PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
-    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedObjectName, Value, ViewDefinition, WithOptionValue,
+    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
+    PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
+    SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
+    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -617,6 +618,26 @@ pub fn plan_create_source(
                 SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Text)),
             )
         }
+        CreateSourceConnection::LoadGenerator { generator, options } => {
+            scx.require_unsafe_mode("LOAD GENERATOR")?;
+            let generator = match generator {
+                LoadGenerator::Counter => Generator::Counter,
+            };
+            let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
+            let tick_micros = match tick_interval {
+                Some(interval) => {
+                    let micros: u64 = interval.as_microseconds().try_into()?;
+                    Some(micros)
+                }
+                None => None,
+            };
+            let encoding = generator.data_encoding();
+            let connection = SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+                generator,
+                tick_micros,
+            });
+            (connection, encoding)
+        }
     };
     let (key_desc, value_desc) = encoding.desc()?;
 
@@ -841,6 +862,8 @@ pub fn plan_create_source(
         remote,
     }))
 }
+
+generate_extracted_config!(LoadGeneratorOption, (TickInterval, Interval));
 
 fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
     let (before_idx, before_ty) = value_desc

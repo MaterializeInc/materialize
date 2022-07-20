@@ -28,7 +28,7 @@ use uuid::Uuid;
 use mz_persist_types::Codec;
 use mz_proto::{any_uuid, TryFromProtoError};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 pub mod encoding;
 
@@ -36,6 +36,8 @@ use crate::controller::CollectionMetadata;
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
 use crate::types::errors::DataflowError;
+
+use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sources.rs"));
 
@@ -1184,6 +1186,11 @@ impl SourceDesc {
                 connection: SourceConnection::Postgres(_),
                 ..
             } => false,
+            // Loadgen can produce retractions (deletes)
+            SourceDesc {
+                connection: SourceConnection::LoadGenerator(_),
+                ..
+            } => false,
             // Other sources the `None` envelope are append-only.
             SourceDesc {
                 envelope: SourceEnvelope::None(_),
@@ -1219,6 +1226,7 @@ pub enum SourceConnection {
     S3(S3SourceConnection),
     Postgres(PostgresSourceConnection),
     PubNub(PubNubSourceConnection),
+    LoadGenerator(LoadGeneratorSourceConnection),
 }
 
 impl RustType<ProtoSourceConnection> for SourceConnection {
@@ -1231,6 +1239,7 @@ impl RustType<ProtoSourceConnection> for SourceConnection {
                 SourceConnection::S3(s3) => Kind::S3(s3.into_proto()),
                 SourceConnection::Postgres(postgres) => Kind::Postgres(postgres.into_proto()),
                 SourceConnection::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
+                SourceConnection::LoadGenerator(loadgen) => Kind::Loadgen(loadgen.into_proto()),
             }),
         }
     }
@@ -1246,6 +1255,7 @@ impl RustType<ProtoSourceConnection> for SourceConnection {
             Kind::S3(s3) => SourceConnection::S3(s3.into_rust()?),
             Kind::Postgres(postgres) => SourceConnection::Postgres(postgres.into_rust()?),
             Kind::Pubnub(pubnub) => SourceConnection::PubNub(pubnub.into_rust()?),
+            Kind::Loadgen(loadgen) => SourceConnection::LoadGenerator(loadgen.into_rust()?),
         })
     }
 }
@@ -1313,6 +1323,7 @@ impl SourceConnection {
             Self::S3(_) => vec![],
             Self::Postgres(_) => vec![],
             Self::PubNub(_) => vec![],
+            Self::LoadGenerator(_) => vec![],
         }
     }
 
@@ -1345,8 +1356,11 @@ impl SourceConnection {
                 items.into_values().collect()
             }
 
-            SourceConnection::Kinesis(_) | SourceConnection::S3(_) => vec![],
-            SourceConnection::Postgres(_) | SourceConnection::PubNub(_) => Vec::new(),
+            SourceConnection::Kinesis(_)
+            | SourceConnection::S3(_)
+            | SourceConnection::Postgres(_)
+            | SourceConnection::PubNub(_)
+            | SourceConnection::LoadGenerator(_) => Vec::new(),
         }
     }
 
@@ -1358,6 +1372,7 @@ impl SourceConnection {
             SourceConnection::S3(_) => "s3",
             SourceConnection::Postgres(_) => "postgres",
             SourceConnection::PubNub(_) => "pubnub",
+            SourceConnection::LoadGenerator(_) => "loadgen",
         }
     }
 
@@ -1373,6 +1388,7 @@ impl SourceConnection {
             SourceConnection::S3(_) => None,
             SourceConnection::Postgres(_) => None,
             SourceConnection::PubNub(_) => None,
+            SourceConnection::LoadGenerator(_) => None,
         }
     }
 
@@ -1383,7 +1399,8 @@ impl SourceConnection {
             SourceConnection::Kafka(_)
             | SourceConnection::Kinesis(_)
             | SourceConnection::Postgres(_)
-            | SourceConnection::PubNub(_) => false,
+            | SourceConnection::PubNub(_)
+            | SourceConnection::LoadGenerator(_) => false,
         }
     }
 }
@@ -1485,6 +1502,70 @@ impl RustType<ProtoPubNubSourceConnection> for PubNubSourceConnection {
         Ok(PubNubSourceConnection {
             subscribe_key: proto.subscribe_key,
             channel: proto.channel,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LoadGeneratorSourceConnection {
+    pub generator: Generator,
+    pub tick_micros: Option<u64>,
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Generator {
+    Counter,
+}
+
+impl Generator {
+    pub fn data_encoding(&self) -> SourceDataEncoding {
+        let inner = match self {
+            Generator::Counter => DataEncodingInner::RowCodec(
+                RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
+            ),
+        };
+        SourceDataEncoding::Single(DataEncoding::new(inner))
+    }
+
+    pub fn by_offset(&self, offset: MzOffset) -> Row {
+        match self {
+            Self::Counter => Row::pack_slice(&[Datum::Int64(offset.offset as i64)]),
+        }
+    }
+}
+
+impl FromStr for Generator {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "counter" => Ok(Self::Counter),
+            _ => Err("unknown load generator".into()),
+        }
+    }
+}
+
+impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
+    fn into_proto(&self) -> ProtoLoadGeneratorSourceConnection {
+        use proto_load_generator_source_connection::Generator as ProtoGenerator;
+        ProtoLoadGeneratorSourceConnection {
+            generator: Some(match self.generator {
+                Generator::Counter => ProtoGenerator::Counter(()),
+            }),
+            tick_micros: self.tick_micros,
+        }
+    }
+
+    fn from_proto(proto: ProtoLoadGeneratorSourceConnection) -> Result<Self, TryFromProtoError> {
+        use proto_load_generator_source_connection::Generator as ProtoGenerator;
+        let generator = proto.generator.ok_or_else(|| {
+            TryFromProtoError::missing_field("ProtoLoadGeneratorSourceConnection::generator")
+        })?;
+        Ok(LoadGeneratorSourceConnection {
+            generator: match generator {
+                ProtoGenerator::Counter(()) => Generator::Counter,
+            },
+            tick_micros: proto.tick_micros,
         })
     }
 }
