@@ -171,10 +171,10 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 /// do the export dataflow thing
 pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
-    storage_state: &mut StorageState,
+    _storage_state: &mut StorageState,
     id: GlobalId,
-    description: SinkDesc<CollectionMetadata, mz_repr::Timestamp>,
-    resume_upper: Antichain<mz_repr::Timestamp>,
+    _description: SinkDesc<CollectionMetadata, mz_repr::Timestamp>,
+    _resume_upper: Antichain<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
@@ -185,7 +185,7 @@ pub fn build_export_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            let debug_name = format!("{debug_name}-sinks");
+            let _debug_name = format!("{debug_name}-sinks");
             let _: &mut timely::dataflow::scopes::Child<
                 timely::dataflow::scopes::Child<TimelyWorker<A>, _>,
                 mz_repr::Timestamp,
