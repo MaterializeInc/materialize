@@ -83,7 +83,6 @@ pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
-    pub externally_managed: bool,
 }
 
 #[derive(Clone, Debug, Hash, Serialize)]
@@ -937,7 +936,6 @@ pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
 pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_view_keys",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("global_id", ScalarType::String.nullable(false))
         .with_column("column", ScalarType::Int64.nullable(false))
@@ -947,7 +945,6 @@ pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
     BuiltinTable {
         name: "mz_view_foreign_keys",
         schema: MZ_CATALOG_SCHEMA,
-        externally_managed: false,
         desc: RelationDesc::empty()
             .with_column("child_id", ScalarType::String.nullable(false))
             .with_column("child_column", ScalarType::Int64.nullable(false))
@@ -960,7 +957,6 @@ pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("sink_id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
@@ -970,7 +966,6 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::Int64.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -979,7 +974,6 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_schemas",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::Int64.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -989,7 +983,6 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_columns",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -1002,7 +995,6 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_indexes",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1013,7 +1005,6 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_index_columns",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("index_id", ScalarType::String.nullable(false))
         .with_column("index_position", ScalarType::Int64.nullable(false))
@@ -1024,7 +1015,6 @@ pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_tables",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1034,7 +1024,6 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_connections",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1045,7 +1034,6 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_ssh_tunnel_connections",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -1054,7 +1042,6 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1065,7 +1052,6 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1077,7 +1063,6 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1088,7 +1073,6 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_RECORDED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_recorded_views",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1100,7 +1084,6 @@ pub static MZ_RECORDED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_types",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1111,7 +1094,6 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_array_types",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("type_id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
@@ -1119,13 +1101,11 @@ pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty().with_column("type_id", ScalarType::String.nullable(false)),
 });
 pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_list_types",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("type_id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
@@ -1133,7 +1113,6 @@ pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_map_types",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("type_id", ScalarType::String.nullable(false))
         .with_column("key_id", ScalarType::String.nullable(false))
@@ -1142,7 +1121,6 @@ pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_roles",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::Int64.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1151,13 +1129,11 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty().with_column("type_id", ScalarType::String.nullable(false)),
 });
 pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_functions",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1174,7 +1150,6 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
@@ -1182,7 +1157,6 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_secrets",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("schema_id", ScalarType::Int64.nullable(false))
@@ -1191,7 +1165,6 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_CLUSTER_REPLICAS_BASE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replicas_base",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("cluster_id", ScalarType::Int64.nullable(false))
         .with_column("id", ScalarType::Int64.nullable(false))
@@ -1203,7 +1176,6 @@ pub static MZ_CLUSTER_REPLICAS_BASE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
 pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_statuses",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::Int64.nullable(false))
         .with_column("process_id", ScalarType::Int64.nullable(false))
@@ -1214,7 +1186,6 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::Int64.nullable(false))
         .with_column("last_heartbeat", ScalarType::TimestampTz.nullable(false)),
@@ -1223,7 +1194,6 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| Buil
 pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
-    externally_managed: false,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::Int64.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))

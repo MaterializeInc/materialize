@@ -1010,8 +1010,6 @@ pub struct Table {
     pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
-    /// Flag for tables whose collections are managed externally, outside of the coordinator
-    pub externally_managed: bool,
 }
 
 impl Table {
@@ -1354,16 +1352,6 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Table(_))
     }
 
-    /// Indicates whether this catalog entry is an externally managed table
-    pub fn is_externally_managed_table(&self) -> bool {
-        match self.item() {
-            CatalogItem::Table(Table {
-                externally_managed, ..
-            }) => *externally_managed,
-            _ => false,
-        }
-    }
-
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {
@@ -1595,7 +1583,6 @@ impl<S: Append> Catalog<S> {
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
-                            externally_managed: table.externally_managed,
                         }),
                     );
                 }
@@ -3460,7 +3447,6 @@ impl<S: Append> Catalog<S> {
                 defaults: table.defaults,
                 conn_id: None,
                 depends_on,
-                externally_managed: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
