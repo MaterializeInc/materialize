@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Exchange, Map, OkErr};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
+use tracing::Span;
 
 use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
@@ -68,6 +69,16 @@ enum SourceType<Delimited, ByteStream, RowSource, AppendRowSource> {
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/pull/12109>
+
+/// `tracing_execution_span` is a tracing span that records the execution of the
+/// dataflow. Operators that call into `tracing`-instrumented code are
+/// encouraged (but not required) to enter this span before performing work.
+///
+/// Note that work associated with the rendering of the dataflow (rather than
+/// runtime) should *not* enter `tracing_execution_span`. This can be tricky to
+/// assess. Closures passed to `Scope::region` are executed during rendering,
+/// for example, but closures passed to `Collection::map` are executed during
+/// runtime.
 // TODO(guswynn): Link to merged document
 pub fn render_source<G>(
     scope: &mut G,
@@ -77,6 +88,7 @@ pub fn render_source<G>(
     resume_upper: Antichain<G::Timestamp>,
     mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
+    tracing_execution_span: Span,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
     Rc<dyn Any>,
@@ -326,6 +338,7 @@ where
                                     persist_clients,
                                     tx_storage_metadata,
                                     as_of,
+                                    tracing_execution_span,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),

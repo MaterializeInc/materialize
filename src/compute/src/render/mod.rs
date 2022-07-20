@@ -168,6 +168,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
+                    context.tracing_execution_span.clone(),
                 );
 
                 // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
