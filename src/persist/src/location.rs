@@ -405,7 +405,7 @@ pub mod tests {
 
     async fn get_keys(b: &impl Blob) -> Result<Vec<String>, ExternalError> {
         let mut keys = vec![];
-        b.list_keys_and_metadata(None, &mut |entry| keys.push(entry.key.to_string()))
+        b.list_keys_and_metadata("", &mut |entry| keys.push(entry.key.to_string()))
             .await?;
         Ok(keys)
     }
@@ -415,7 +415,7 @@ pub mod tests {
         prefix: &str,
     ) -> Result<Vec<String>, ExternalError> {
         let mut keys = vec![];
-        b.list_keys_and_metadata(Some(prefix), &mut |entry| keys.push(entry.key.to_string()))
+        b.list_keys_and_metadata(prefix, &mut |entry| keys.push(entry.key.to_string()))
             .await?;
         Ok(keys)
     }

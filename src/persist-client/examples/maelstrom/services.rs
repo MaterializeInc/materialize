@@ -196,8 +196,8 @@ impl Blob for MaelstromBlob {
 
     async fn list_keys_and_metadata(
         &self,
-        key_prefix: &str,
-        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+        _key_prefix: &str,
+        _f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
         unimplemented!("not yet used")
     }

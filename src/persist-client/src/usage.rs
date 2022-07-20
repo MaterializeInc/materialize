@@ -15,7 +15,8 @@ use std::sync::Arc;
 use mz_persist::cfg::BlobConfig;
 use mz_persist::location::{Blob, ExternalError};
 
-use crate::{retry_external, Metrics, ShardId};
+use crate::r#impl::paths::BlobKeyPrefix;
+use crate::{retry_external, Metrics};
 
 /// Provides access to storage usage metrics for a specific Blob
 #[derive(Debug)]
@@ -37,11 +38,12 @@ impl StorageUsageClient {
         Ok(StorageUsageClient { blob })
     }
 
-    /// Returns the size (in bytes) of a shard's data stored within this Blob
-    pub async fn shard_size(&self, shard_id: &ShardId) -> Result<u64, ExternalError> {
+    /// Returns the size (in bytes) of a subset of blobs
+    /// specified by [crate::r#impl::paths::BlobKeyPrefix]
+    pub async fn size(&self, prefix: BlobKeyPrefix<'_>) -> Result<u64, ExternalError> {
         let mut total_size = 0;
         self.blob
-            .list_keys_and_metadata(&shard_id.to_string(), &mut |metadata| {
+            .list_keys_and_metadata(&prefix.to_string(), &mut |metadata| {
                 total_size += metadata.size_in_bytes;
             })
             .await?;
@@ -59,17 +61,19 @@ impl StorageUsageClient {
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
+    use crate::ShardId;
 
     use super::*;
 
     #[tokio::test]
-    async fn shard_size() {
+    async fn size() {
         mz_ore::test::init_logging();
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "four".to_owned()), 4, 1),
         ];
 
         let client = new_test_client().await;
@@ -82,24 +86,47 @@ mod tests {
             .await;
         write.expect_append(&data[..1], vec![0], vec![2]).await;
 
-        // write two rows into shard 2
+        // write two rows into shard 2 from writer 1
         let (mut write, _) = client
             .expect_open::<String, String, u64, i64>(shard_id_two)
             .await;
-        write.expect_append(&data[1..], vec![0], vec![4]).await;
+        write.expect_append(&data[1..3], vec![0], vec![4]).await;
+        let writer_one = write.writer_id.clone();
+
+        // write one row into shard 2 from writer 2
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(shard_id_two)
+            .await;
+        write.expect_append(&data[4..], vec![0], vec![5]).await;
+        let writer_two = write.writer_id.clone();
 
         let usage = StorageUsageClient::open_from_blob(Arc::clone(&write.blob));
+
         let shard_one_size = usage
-            .shard_size(&shard_id_one)
+            .size(BlobKeyPrefix::Shard(&shard_id_one))
             .await
             .expect("must have shard size");
         let shard_two_size = usage
-            .shard_size(&shard_id_two)
+            .size(BlobKeyPrefix::Shard(&shard_id_two))
+            .await
+            .expect("must have shard size");
+        let writer_one_size = usage
+            .size(BlobKeyPrefix::Writer(&shard_id_two, &writer_one))
+            .await
+            .expect("must have shard size");
+        let writer_two_size = usage
+            .size(BlobKeyPrefix::Writer(&shard_id_two, &writer_two))
+            .await
+            .expect("must have shard size");
+        let all_size = usage
+            .size(BlobKeyPrefix::All)
             .await
             .expect("must have shard size");
 
         assert!(shard_one_size > 0);
         assert!(shard_two_size > 0);
         assert!(shard_one_size < shard_two_size);
+        assert_eq!(shard_two_size, writer_one_size + writer_two_size);
+        assert_eq!(all_size, shard_one_size + shard_two_size);
     }
 }
