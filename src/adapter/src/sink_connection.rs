@@ -207,7 +207,9 @@ async fn build_kafka(
 ) -> Result<SinkConnection, AdapterError> {
     // Create Kafka topic
     let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-    builder.populate_client_config(&mut config, &*connection_context.secrets_reader);
+    builder
+        .populate_client_config(&mut config, &*connection_context.secrets_reader)
+        .await;
 
     let client: AdminClient<_> = config
         .create_with_context(MzClientContext)

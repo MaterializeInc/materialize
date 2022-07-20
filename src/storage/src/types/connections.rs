@@ -14,7 +14,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail};
-use futures::executor::block_on;
+use async_trait::async_trait;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -574,19 +574,20 @@ impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
 /// - Performs blocking reads when extracting SECRETS.
 /// - Does not ensure that the keys from the Kafka connection and
 ///   additional options are disjoint.
-pub fn populate_client_config(
+pub async fn populate_client_config<'a>(
     kafka_connection: KafkaConnection,
-    options: &BTreeMap<String, StringOrSecret>,
+    options: &'a BTreeMap<String, StringOrSecret>,
     drop_option_keys: HashSet<&'static str>,
-    config: &mut rdkafka::ClientConfig,
-    secrets_reader: &dyn SecretsReader,
+    config: &'a mut rdkafka::ClientConfig,
+    secrets_reader: &'a dyn SecretsReader,
 ) {
     let config_options: BTreeMap<String, StringOrSecret> = kafka_connection.into();
     for (k, v) in options.iter().chain(config_options.iter()) {
         if !drop_option_keys.contains(k.as_str()) {
             config.set(
                 k,
-                block_on(v.get_string(secrets_reader))
+                v.get_string(secrets_reader)
+                    .await
                     .expect("reading kafka secret unexpectedly failed"),
             );
         }
@@ -595,13 +596,14 @@ pub fn populate_client_config(
 
 /// Provides cleaner access to the `populate_client_config` implementation for
 /// structs.
+#[async_trait]
 pub trait PopulateClientConfig {
     fn kafka_connection(&self) -> &KafkaConnection;
     fn options(&self) -> &BTreeMap<String, StringOrSecret>;
     fn drop_option_keys() -> HashSet<&'static str> {
         HashSet::new()
     }
-    fn populate_client_config(
+    async fn populate_client_config(
         &self,
         config: &mut rdkafka::ClientConfig,
         secrets_reader: &dyn SecretsReader,
@@ -613,6 +615,7 @@ pub trait PopulateClientConfig {
             config,
             secrets_reader,
         )
+        .await
     }
 }
 

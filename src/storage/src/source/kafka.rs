@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use futures::executor::block_on;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -104,14 +105,14 @@ impl SourceReader for KafkaSourceReader {
             cluster_id,
             ..
         } = kc;
-        let kafka_config = create_kafka_config(
+        let kafka_config = block_on(create_kafka_config(
             &source_name,
             group_id_prefix,
             cluster_id,
             &connection,
             &options,
             &connection_context,
-        );
+        ));
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext {
@@ -517,7 +518,7 @@ impl KafkaSourceReader {
 /// `options` set additional configuration operations from the user. While these
 /// look arbitrary, other layers of the system tightly control which
 /// configuration options are allowable.
-fn create_kafka_config(
+async fn create_kafka_config(
     name: &str,
     group_id_prefix: Option<String>,
     cluster_id: Uuid,
@@ -533,7 +534,8 @@ fn create_kafka_config(
         std::collections::HashSet::new(),
         &mut kafka_config,
         &*connection_context.secrets_reader,
-    );
+    )
+    .await;
 
     // Default to disabling Kafka auto commit. This can be explicitly enabled
     // by the user if they want to use it for progress tracking.
