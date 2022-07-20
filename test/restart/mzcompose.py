@@ -63,6 +63,7 @@ def workflow_audit_log(c: Composition) -> None:
         raise Exception("audit logs not equal after restart")
 
 
+# Test for GitHub issue #13726
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
         c.start_and_wait_for_tcp(
@@ -71,7 +72,6 @@ def workflow_timelines(c: Composition) -> None:
                 "kafka",
                 "schema-registry",
                 "materialized",
-                "localstack",
             ]
         )
         c.wait_for_materialized()
@@ -88,3 +88,4 @@ def workflow_timelines(c: Composition) -> None:
 def workflow_default(c: Composition) -> None:
     workflow_github_8021(c)
     workflow_audit_log(c)
+    workflow_timelines(c)
