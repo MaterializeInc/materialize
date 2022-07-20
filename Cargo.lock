@@ -3102,7 +3102,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.26.1-dev"
+version = "0.27.0-alpha.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3212,7 +3212,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.26.1-dev"
+version = "0.27.0-alpha.2"
 dependencies = [
  "anyhow",
  "askama",
@@ -4161,7 +4161,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storaged"
-version = "0.26.1-dev"
+version = "0.27.0-alpha.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -4519,7 +4519,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "360bcc8316bf6363aa3954c3ccc4de8add167b087e0259190a043c9514f910fe"
 dependencies = [
  "pathdiff",
- "windows-sys 0.36.1",
+ "windows-sys",
 ]
 
 [[package]]
