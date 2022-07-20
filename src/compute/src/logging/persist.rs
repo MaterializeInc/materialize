@@ -65,7 +65,7 @@ pub(crate) fn persist_sink<G>(
             compute_state,
             as_of,
             target_id,
-            desired_collection.map(|r| Ok(r)),
+            desired_collection.map(Ok),
             persist_collection,
         ),
         token,
@@ -110,7 +110,7 @@ where
 
     // Only attempt to write from this frontier onward, as our data are not necessarily
     // correct for times not greater or equal to this frontier. Ignore as_of strictness.
-    let mut write_lower_bound = sink_as_of.frontier.clone();
+    let mut write_lower_bound = sink_as_of.frontier;
 
     // TODO(mcsherry): this is shardable, eventually. But for now use a single writer.
     let hashed_id = sink_id.hashed();
