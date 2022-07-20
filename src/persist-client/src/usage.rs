@@ -9,14 +9,12 @@
 
 //! Introspection of storage utilization by persist
 
-use mz_ore::metrics::MetricsRegistry;
 use std::sync::Arc;
 
-use mz_persist::cfg::BlobConfig;
 use mz_persist::location::{Blob, ExternalError};
 
+use crate::cache::PersistClientCache;
 use crate::r#impl::paths::BlobKeyPrefix;
-use crate::{retry_external, Metrics};
 
 /// Provides access to storage usage metrics for a specific Blob
 #[derive(Debug)]
@@ -26,15 +24,11 @@ pub struct StorageUsageClient {
 
 impl StorageUsageClient {
     /// Creates a new StorageUsageClient pointed to a specific Blob
-    pub async fn open(blob_uri: &str) -> Result<StorageUsageClient, ExternalError> {
-        let blob = BlobConfig::try_from(blob_uri).await?;
-
-        // TODO: what do we want to do about the metrics here?
-        let metrics_registry = MetricsRegistry::new();
-        let metrics = Metrics::new(&metrics_registry);
-        let blob =
-            retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
-
+    pub async fn open(
+        blob_uri: String,
+        client_cache: &mut PersistClientCache,
+    ) -> Result<StorageUsageClient, ExternalError> {
+        let blob = client_cache.open_blob(blob_uri).await?;
         Ok(StorageUsageClient { blob })
     }
 
