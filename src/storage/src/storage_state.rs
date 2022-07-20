@@ -27,6 +27,7 @@ use mz_repr::{GlobalId, Timestamp};
 use crate::controller::CollectionMetadata;
 use crate::protocol::client::{StorageCommand, StorageResponse};
 use crate::types::connections::ConnectionContext;
+use crate::types::sinks::SinkDesc;
 use crate::types::sources::IngestionDescription;
 
 use crate::decode::metrics::DecodeMetrics;
@@ -66,6 +67,8 @@ pub struct StorageState {
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Descriptions of each installed ingestion.
     pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
+    /// Descriptions of each installed export.
+    pub exports: HashMap<GlobalId, SinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
@@ -146,7 +149,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ))),
                     );
 
-                    crate::render::build_storage_dataflow(
+                    crate::render::build_ingestion_dataflow(
                         &mut self.timely_worker,
                         &mut self.storage_state,
                         ingestion.id,
@@ -158,6 +161,23 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ingestion.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
+                }
+            }
+            StorageCommand::ExportSinks(exports) => {
+                for export in exports {
+                    self.storage_state
+                        .exports
+                        .insert(export.id, export.description.clone());
+
+                    // TODO(chae): will we need sink_uppers/since tracking done here??
+
+                    crate::render::build_export_dataflow(
+                        &mut self.timely_worker,
+                        &mut self.storage_state,
+                        export.id,
+                        export.description,
+                        export.resume_upper,
+                    )
                 }
             }
             StorageCommand::AllowCompaction(list) => {

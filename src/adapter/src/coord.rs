@@ -145,7 +145,7 @@ use mz_sql::plan::{
     StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ReadPolicy};
+use mz_storage::controller::{CollectionDescription, ExportDescription, ReadPolicy};
 use mz_storage::protocol::client::Update;
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
@@ -3138,6 +3138,34 @@ impl<S: Append + 'static> Coordinator<S> {
                 },
             )
             .await;
+
+        let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
+        let storage_sink_desc = mz_storage::types::sinks::SinkDesc {
+            from: sink.from,
+            from_desc: storage_sink_from_entry
+                .desc(&self.catalog.resolve_full_name(
+                    storage_sink_from_entry.name(),
+                    storage_sink_from_entry.conn_id(),
+                ))
+                .unwrap()
+                .into_owned(),
+            connection: SinkConnection::Tail(TailSinkConnection {}),
+            envelope: Some(sink.envelope),
+            as_of: SinkAsOf {
+                frontier: Antichain::new(),
+                strict: false,
+            },
+        };
+
+        // TODO(chae): This is where we'll create the export/sink in storaged
+        let _ = self.controller.storage_mut().create_exports(vec![(
+            id,
+            ExportDescription {
+                sink: storage_sink_desc,
+                remote_addr: None,
+            },
+        )]);
+
         match transact_result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {

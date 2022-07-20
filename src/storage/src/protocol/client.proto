@@ -13,6 +13,7 @@ import "persist/src/persist.proto";
 import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
 import "storage/src/types/sources.proto";
+import "storage/src/types/sinks.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -41,6 +42,16 @@ message ProtoIngestSources {
     repeated ProtoIngestSourceCommand ingestions = 1;
 }
 
+message ProtoExportSinkCommand {
+    mz_repr.global_id.ProtoGlobalId id = 1;
+    mz_storage.types.sinks.ProtoSinkDesc description = 2;
+    mz_persist.gen.persist.ProtoU64Antichain resume_upper = 3;
+}
+
+message ProtoExportSinks {
+    repeated ProtoExportSinkCommand exports = 1;
+}
+
 message ProtoFrontierUppersKind {
     repeated ProtoTrace traces = 1;
 }
@@ -60,6 +71,7 @@ message ProtoStorageCommand {
         ProtoIngestSources ingest_sources = 1;
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
+        ProtoExportSinks export_sinks = 4;
     }
 }
 
