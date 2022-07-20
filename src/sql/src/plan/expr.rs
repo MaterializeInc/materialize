@@ -182,6 +182,7 @@ impl WindowExpr {
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.func.visit_expressions(f)?;
         for expr in self.partition.iter() {
             f(expr)?;
@@ -196,6 +197,7 @@ impl WindowExpr {
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.func.visit_expressions_mut(f)?;
         for expr in self.partition.iter_mut() {
             f(expr)?;
@@ -286,20 +288,24 @@ pub enum WindowExprType {
 }
 
 impl WindowExprType {
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
     pub fn visit_expressions<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         match self {
             Self::Scalar(expr) => expr.visit_expressions(f),
             Self::Value(expr) => expr.visit_expressions(f),
         }
     }
 
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_mut_children` instead."]
     pub fn visit_expressions_mut<'a, F, E>(&'a mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         match self {
             Self::Scalar(expr) => expr.visit_expressions_mut(f),
             Self::Value(expr) => expr.visit_expressions_mut(f),
@@ -370,6 +376,7 @@ pub struct ScalarWindowExpr {
 }
 
 impl ScalarWindowExpr {
+    #[deprecated = "Implement `VisitChildren<HirScalarExpr>` if needed."]
     pub fn visit_expressions<'a, F, E>(&'a self, _f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
@@ -381,6 +388,7 @@ impl ScalarWindowExpr {
         Ok(())
     }
 
+    #[deprecated = "Implement `VisitChildren<HirScalarExpr>` if needed."]
     pub fn visit_expressions_mut<'a, F, E>(&'a mut self, _f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
@@ -438,6 +446,7 @@ pub struct ValueWindowExpr {
 }
 
 impl ValueWindowExpr {
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
     pub fn visit_expressions<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
@@ -445,6 +454,7 @@ impl ValueWindowExpr {
         f(&self.expr)
     }
 
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_mut_children` instead."]
     pub fn visit_expressions_mut<'a, F, E>(&'a mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
@@ -1047,6 +1057,7 @@ impl HirRelationExpr {
     /// direct parent scope.
     pub fn is_correlated(&self) -> bool {
         let mut correlated = false;
+        #[allow(deprecated)]
         self.visit_columns(0, &mut |depth, col| {
             if col.level > depth && col.level - depth == 1 {
                 correlated = true;
@@ -1176,6 +1187,7 @@ impl HirRelationExpr {
             // The join can be elided, but we need to adjust column references
             // on the right-hand side to account for the removal of the scope
             // introduced by the join.
+            #[allow(deprecated)]
             right.visit_columns_mut(0, &mut |depth, col| {
                 if col.level > depth {
                     col.level -= 1;
@@ -1204,10 +1216,12 @@ impl HirRelationExpr {
         )
     }
 
+    #[deprecated = "Use `Visit::visit_post`."]
     pub fn visit<'a, F>(&'a self, depth: usize, f: &mut F)
     where
         F: FnMut(&'a Self, usize),
     {
+        #[allow(deprecated)]
         let _ = self.visit_fallible(depth, &mut |e: &HirRelationExpr,
                                                  depth: usize|
          -> Result<(), ()> {
@@ -1216,16 +1230,19 @@ impl HirRelationExpr {
         });
     }
 
+    #[deprecated = "Use `Visit::try_visit_post`."]
     pub fn visit_fallible<'a, F, E>(&'a self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a Self, usize) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.visit1(depth, |e: &HirRelationExpr, depth: usize| {
             e.visit_fallible(depth, f)
         })?;
         f(self, depth)
     }
 
+    #[deprecated = "Use `VisitChildren<HirRelationExpr>::try_visit_children` instead."]
     pub fn visit1<'a, F, E>(&'a self, depth: usize, mut f: F) -> Result<(), E>
     where
         F: FnMut(&'a Self, usize) -> Result<(), E>,
@@ -1276,10 +1293,12 @@ impl HirRelationExpr {
         Ok(())
     }
 
+    #[deprecated = "Use `Visit::visit_mut_post` instead."]
     pub fn visit_mut<F>(&mut self, depth: usize, f: &mut F)
     where
         F: FnMut(&mut Self, usize),
     {
+        #[allow(deprecated)]
         let _ = self.visit_mut_fallible(depth, &mut |e: &mut HirRelationExpr,
                                                      depth: usize|
          -> Result<(), ()> {
@@ -1288,16 +1307,19 @@ impl HirRelationExpr {
         });
     }
 
+    #[deprecated = "Use `Visit::try_visit_mut_post` instead."]
     pub fn visit_mut_fallible<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut Self, usize) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.visit1_mut(depth, |e: &mut HirRelationExpr, depth: usize| {
             e.visit_mut_fallible(depth, f)
         })?;
         f(self, depth)
     }
 
+    #[deprecated = "Use `VisitChildren<HirRelationExpr>::try_visit_mut_children` instead."]
     pub fn visit1_mut<'a, F, E>(&'a mut self, depth: usize, mut f: F) -> Result<(), E>
     where
         F: FnMut(&'a mut Self, usize) -> Result<(), E>,
@@ -1348,6 +1370,7 @@ impl HirRelationExpr {
         Ok(())
     }
 
+    #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
     /// Visits all scalar expressions within the sub-tree of the given relation.
     ///
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
@@ -1357,6 +1380,7 @@ impl HirRelationExpr {
     where
         F: FnMut(&HirScalarExpr, usize) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.visit_fallible(depth, &mut |e: &HirRelationExpr,
                                          depth: usize|
          -> Result<(), E> {
@@ -1398,11 +1422,13 @@ impl HirRelationExpr {
         })
     }
 
+    #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
     /// Like `visit_scalar_expressions`, but permits mutating the expressions.
     pub fn visit_scalar_expressions_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr, usize) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.visit_mut_fallible(depth, &mut |e: &mut HirRelationExpr,
                                              depth: usize|
          -> Result<(), E> {
@@ -1444,6 +1470,7 @@ impl HirRelationExpr {
         })
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Visits the column references in this relation expression.
     ///
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
@@ -1453,6 +1480,7 @@ impl HirRelationExpr {
     where
         F: FnMut(usize, &ColumnRef),
     {
+        #[allow(deprecated)]
         let _ = self.visit_scalar_expressions(depth, &mut |e: &HirScalarExpr,
                                                            depth: usize|
          -> Result<(), ()> {
@@ -1461,11 +1489,13 @@ impl HirRelationExpr {
         });
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Like `visit_columns`, but permits mutating the column references.
     pub fn visit_columns_mut<F>(&mut self, depth: usize, f: &mut F)
     where
         F: FnMut(usize, &mut ColumnRef),
     {
+        #[allow(deprecated)]
         let _ = self.visit_scalar_expressions_mut(depth, &mut |e: &mut HirScalarExpr,
                                                                depth: usize|
          -> Result<(), ()> {
@@ -1477,6 +1507,7 @@ impl HirRelationExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
+        #[allow(deprecated)]
         self.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _: usize| {
             e.bind_parameters(params)
         })
@@ -1484,6 +1515,7 @@ impl HirRelationExpr {
 
     /// See the documentation for [`HirScalarExpr::splice_parameters`].
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
+        #[allow(deprecated)]
         let _ = self.visit_scalar_expressions_mut(depth, &mut |e: &mut HirScalarExpr,
                                                                depth: usize|
          -> Result<(), ()> {
@@ -2105,6 +2137,7 @@ impl HirScalarExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
+        #[allow(deprecated)]
         self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
             if let HirScalarExpr::Parameter(n) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
@@ -2131,6 +2164,7 @@ impl HirScalarExpr {
     /// Column references in parameters will be corrected to account for the
     /// depth at which they are spliced.
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
+        #[allow(deprecated)]
         let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
                                                         e: &mut HirScalarExpr|
          -> Result<(), ()> {
@@ -2273,22 +2307,27 @@ impl HirScalarExpr {
         }
     }
 
+    #[deprecated = "Use `Visit::visit_post` instead."]
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
+        #[allow(deprecated)]
         self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
         f(self);
     }
 
+    #[deprecated = "Use `Visit::visit_mut_pre` instead."]
     pub fn visit_mut_pre<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
         f(self);
+        #[allow(deprecated)]
         self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
     }
 
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
     pub fn visit1_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut Self),
@@ -2321,6 +2360,7 @@ impl HirScalarExpr {
         }
     }
 
+    #[deprecated = "Use `Visit::visit_pre_post` instead."]
     /// A generalization of `visit`. The function `pre` runs on a
     /// `HirScalarExpr` before it runs on any of the child `HirScalarExpr`s.
     /// The function `post` runs on child `HirScalarExpr`s first before the
@@ -2342,6 +2382,7 @@ impl HirScalarExpr {
         post(self);
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Visits the column references in this scalar expression.
     ///
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
@@ -2351,6 +2392,7 @@ impl HirScalarExpr {
     where
         F: FnMut(usize, &ColumnRef),
     {
+        #[allow(deprecated)]
         let _ = self.visit_recursively(depth, &mut |depth: usize,
                                                     e: &HirScalarExpr|
          -> Result<(), ()> {
@@ -2361,11 +2403,13 @@ impl HirScalarExpr {
         });
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Like `visit_columns`, but permits mutating the column references.
     pub fn visit_columns_mut<F>(&mut self, depth: usize, f: &mut F)
     where
         F: FnMut(usize, &mut ColumnRef),
     {
+        #[allow(deprecated)]
         let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
                                                         e: &mut HirScalarExpr|
          -> Result<(), ()> {
@@ -2376,6 +2420,7 @@ impl HirScalarExpr {
         });
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Like `visit` but it enters the subqueries visiting the scalar expressions contained
     /// in them. It takes the current depth of the expression and increases it when
     /// entering a subquery.
@@ -2404,6 +2449,7 @@ impl HirScalarExpr {
                 els.visit_recursively(depth, f)?;
             }
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+                #[allow(deprecated)]
                 expr.visit_scalar_expressions(depth + 1, &mut |e, depth| {
                     e.visit_recursively(depth, f)
                 })?;
@@ -2415,6 +2461,7 @@ impl HirScalarExpr {
         f(depth, self)
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Like `visit_recursively`, but permits mutating the scalar expressions.
     pub fn visit_recursively_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
@@ -2441,6 +2488,7 @@ impl HirScalarExpr {
                 els.visit_recursively_mut(depth, f)?;
             }
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+                #[allow(deprecated)]
                 expr.visit_scalar_expressions_mut(depth + 1, &mut |e, depth| {
                     e.visit_recursively_mut(depth, f)
                 })?;
