@@ -65,8 +65,9 @@ use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
+    BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::catalog::storage::BootstrapArgs;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
@@ -200,7 +201,8 @@ impl CatalogState {
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Secret(_) => (),
+            | CatalogItem::Secret(_)
+            | CatalogItem::StorageCollection(_) => (),
         }
     }
 
@@ -217,7 +219,8 @@ impl CatalogState {
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageCollection(_) => false,
         }
     }
 
@@ -684,6 +687,16 @@ impl CatalogState {
         self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
     }
 
+    /// Optimized lookup for a builtin storage collection
+    ///
+    /// Panics if the builtin storage collection doesn't exist in the catalog
+    pub fn resolve_builtin_storage_collection(
+        &self,
+        builtin: &'static BuiltinStorageCollection,
+    ) -> GlobalId {
+        self.resolve_builtin_object(&Builtin::<IdReference>::StorageCollection(builtin))
+    }
+
     /// Optimized lookup for a builtin object
     ///
     /// Panics if the builtin object doesn't exist in the catalog
@@ -986,6 +999,7 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+    StorageCollection(&'static BuiltinStorageCollection),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1104,6 +1118,7 @@ impl CatalogItem {
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
+            CatalogItem::StorageCollection(_) => mz_sql::catalog::CatalogItemType::Source,
         }
     }
 
@@ -1114,6 +1129,7 @@ impl CatalogItem {
             CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
             CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
             CatalogItem::RecordedView(rview) => Ok(Cow::Borrowed(&rview.desc)),
+            CatalogItem::StorageCollection(coll) => Ok(Cow::Borrowed(&coll.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1158,6 +1174,7 @@ impl CatalogItem {
             CatalogItem::RecordedView(rview) => &rview.depends_on,
             CatalogItem::Secret(_) => &[],
             CatalogItem::Connection(connection) => &connection.depends_on,
+            CatalogItem::StorageCollection(_) => &[],
         }
     }
 
@@ -1174,7 +1191,8 @@ impl CatalogItem {
             | CatalogItem::View(_)
             | CatalogItem::RecordedView(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageCollection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
                 SinkConnectionState::Pending(_) => true,
                 SinkConnectionState::Ready(_) => false,
@@ -1196,7 +1214,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageCollection(_) => None,
         }
     }
 
@@ -1269,6 +1288,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
+            CatalogItem::StorageCollection(i) => Ok(CatalogItem::StorageCollection(i)),
         }
     }
 }
@@ -1609,6 +1629,16 @@ impl<S: Append> Catalog<S> {
                         oid,
                         name.clone(),
                         CatalogItem::Func(Func { inner: func.inner }),
+                    );
+                }
+
+                Builtin::StorageCollection(coll) => {
+                    let oid = catalog.allocate_oid().await?;
+                    catalog.state.insert_item(
+                        id,
+                        oid,
+                        name.clone(),
+                        CatalogItem::StorageCollection(coll),
                     );
                 }
             }
@@ -2197,6 +2227,14 @@ impl<S: Append> Catalog<S> {
     /// Resolves a `BuiltinLog`.
     pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
         self.state.resolve_builtin_log(builtin)
+    }
+
+    /// Resolves a `BuiltinStorageCollection`.
+    pub fn resolve_builtin_storage_collection(
+        &self,
+        builtin: &'static BuiltinStorageCollection,
+    ) -> GlobalId {
+        self.state.resolve_builtin_storage_collection(builtin)
     }
 
     /// Resolves `name` to a function [`CatalogEntry`].
@@ -3389,6 +3427,9 @@ impl<S: Append> Catalog<S> {
                 eval_env: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::StorageCollection(_) => {
+                unreachable!("builtin storage collections cannot be serialized")
+            }
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
@@ -4160,6 +4201,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
+            CatalogItem::StorageCollection(_) => "<builtin>",
         }
     }
 

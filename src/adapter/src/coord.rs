@@ -856,9 +856,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         }
                     }
 
-                    let source_status_table_id = self
-                        .catalog
-                        .resolve_builtin_table(&crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+                    let source_status_collection_id =
+                        self.catalog.resolve_builtin_storage_collection(
+                            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                        );
 
                     self.controller
                         .storage_mut()
@@ -869,7 +870,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 ingestion: Some(ingestion),
                                 remote_addr: source.remote_addr.clone(),
                                 since: None,
-                                status_collection_id: Some(source_status_table_id),
+                                status_collection_id: Some(source_status_collection_id),
                             },
                         )])
                         .await
@@ -971,6 +972,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await?;
                     builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), 1));
+                }
+                CatalogItem::StorageCollection(coll) => {
+                    let collection_desc = coll.desc.clone().into();
+                    self.controller
+                        .storage_mut()
+                        .create_collections(vec![(entry.id(), collection_desc)])
+                        .await
+                        .unwrap();
+
+                    policies_to_set.storage_ids.insert(entry.id());
                 }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
@@ -1682,7 +1693,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     match entry.item() {
                         CatalogItem::Table(_)
                         | CatalogItem::Source(_)
-                        | CatalogItem::RecordedView(_) => {
+                        | CatalogItem::RecordedView(_)
+                        | CatalogItem::StorageCollection(_) => {
                             id_bundle.storage_ids.insert(entry.id());
                         }
                         CatalogItem::Index(index) => {
@@ -3136,9 +3148,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
 
-                let source_status_table_id = self
-                    .catalog
-                    .resolve_builtin_table(&crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+                let source_status_collection_id = self.catalog.resolve_builtin_storage_collection(
+                    &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                );
 
                 self.controller
                     .storage_mut()
@@ -3149,7 +3161,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             ingestion: Some(ingestion),
                             remote_addr: source.remote_addr,
                             since: None,
-                            status_collection_id: Some(source_status_table_id),
+                            status_collection_id: Some(source_status_collection_id),
                         },
                     )])
                     .await
@@ -6162,6 +6174,9 @@ impl<S: Append + 'static> Coordinator<S> {
                         timelines.insert(id, table.timeline());
                     }
                     CatalogItem::Log(_) => {
+                        timelines.insert(id, Timeline::EpochMilliseconds);
+                    }
+                    CatalogItem::StorageCollection(_) => {
                         timelines.insert(id, Timeline::EpochMilliseconds);
                     }
                     _ => {}
