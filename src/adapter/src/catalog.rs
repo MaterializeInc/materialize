@@ -500,7 +500,6 @@ impl CatalogState {
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) {
-        let mut log_collections_by_variant = HashMap::new();
         for (variant, source_id) in config.persisted_logs.get_logs() {
             let oid = self.allocate_oid().expect("cannot return error here");
             // TODO(lh): Once we get rid of legacy active logs, we should refactor the
@@ -518,8 +517,6 @@ impl CatalogState {
                 item: format!("{}_{}", log.name, replica_id),
             };
             self.insert_item(source_id, oid, source_name, CatalogItem::Log(log));
-
-            log_collections_by_variant.insert(variant, source_id);
         }
 
         let replica = ComputeInstanceReplica {
