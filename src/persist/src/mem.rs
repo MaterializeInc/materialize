@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::location::{
@@ -83,7 +84,7 @@ impl MemBlobCore {
 
             f(BlobMetadata {
                 key: &key,
-                size_in_bytes: value.len() as u64,
+                size_in_bytes: u64::cast_from(value.len()),
             });
         }
 
