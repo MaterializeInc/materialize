@@ -48,6 +48,7 @@ pub mod read;
 pub mod usage;
 pub mod write;
 
+pub use crate::r#impl::paths::BlobKeyPrefix;
 pub use crate::r#impl::state::{Since, Upper};
 
 /// An implementation of the public crate interface.

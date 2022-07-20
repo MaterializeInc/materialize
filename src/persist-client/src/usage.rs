@@ -11,10 +11,10 @@
 
 use std::sync::Arc;
 
+use crate::BlobKeyPrefix;
 use mz_persist::location::{Blob, ExternalError};
 
 use crate::cache::PersistClientCache;
-use crate::r#impl::paths::BlobKeyPrefix;
 
 /// Provides access to storage usage metrics for a specific Blob
 #[derive(Debug)]
@@ -32,8 +32,7 @@ impl StorageUsageClient {
         Ok(StorageUsageClient { blob })
     }
 
-    /// Returns the size (in bytes) of a subset of blobs
-    /// specified by [crate::r#impl::paths::BlobKeyPrefix]
+    /// Returns the size (in bytes) of a subset of blobs specified by [crate::BlobKeyPrefix]
     pub async fn size(&self, prefix: BlobKeyPrefix<'_>) -> Result<u64, ExternalError> {
         let mut total_size = 0;
         self.blob
