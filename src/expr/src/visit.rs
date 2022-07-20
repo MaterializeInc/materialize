@@ -54,14 +54,26 @@ pub trait VisitChildren<T> {
         F: FnMut(&mut T);
 
     /// Apply a fallible immutable function `f` to each direct child.
+    ///
+    /// For mutually recursive implementations (say consisting of two
+    /// types `A` and `B`), recursing through `B` in order to find all
+    /// `A`-children of a node of type `A` might cause lead to a
+    /// [`RecursionLimitError`], hence the bound on `E`.
     fn try_visit_children<F, E>(&self, f: F) -> Result<(), E>
     where
-        F: FnMut(&T) -> Result<(), E>;
+        F: FnMut(&T) -> Result<(), E>,
+        E: From<RecursionLimitError>;
 
     /// Apply a fallible mutable function `f` to each direct child.
+    ///
+    /// For mutually recursive implementations (say consisting of two
+    /// types `A` and `B`), recursing through `B` in order to find all
+    /// `A`-children of a node of type `A` might cause lead to a
+    /// [`RecursionLimitError`], hence the bound on `E`.
     fn try_visit_mut_children<F, E>(&mut self, f: F) -> Result<(), E>
     where
-        F: FnMut(&mut T) -> Result<(), E>;
+        F: FnMut(&mut T) -> Result<(), E>,
+        E: From<RecursionLimitError>;
 }
 
 /// A trait for types that can recursively visit their children of the

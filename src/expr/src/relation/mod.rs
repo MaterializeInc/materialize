@@ -1372,6 +1372,7 @@ impl VisitChildren<Self> for MirRelationExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         use MirRelationExpr::*;
         match self {
@@ -1409,6 +1410,7 @@ impl VisitChildren<Self> for MirRelationExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         use MirRelationExpr::*;
         match self {
