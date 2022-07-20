@@ -1479,6 +1479,26 @@ impl HirScalarExpr {
         Ok(HirScalarExpr::Literal(row, scalar_type))
     }
 
+    pub fn as_literal(&self) -> Option<Datum> {
+        if let HirScalarExpr::Literal(row, _column_type) = self {
+            Some(row.unpack_first())
+        } else {
+            None
+        }
+    }
+
+    pub fn is_literal_true(&self) -> bool {
+        Some(Datum::True) == self.as_literal()
+    }
+
+    pub fn is_literal_false(&self) -> bool {
+        Some(Datum::False) == self.as_literal()
+    }
+
+    pub fn is_literal_null(&self) -> bool {
+        Some(Datum::Null) == self.as_literal()
+    }
+
     pub fn call_unary(self, func: UnaryFunc) -> Self {
         HirScalarExpr::CallUnary {
             func,
