@@ -2338,8 +2338,9 @@ impl<'a> Parser<'a> {
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
-                let generator = match self.expect_one_of_keywords(&[COUNTER])? {
+                let generator = match self.expect_one_of_keywords(&[COUNTER, AUCTION])? {
                     COUNTER => LoadGenerator::Counter,
+                    AUCTION => LoadGenerator::Auction,
                     _ => unreachable!(),
                 };
                 let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
