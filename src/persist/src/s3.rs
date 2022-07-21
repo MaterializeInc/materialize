@@ -425,14 +425,18 @@ impl Blob for S3Blob {
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
         let mut continuation_token = None;
-        let prefix = self.get_path(key_prefix);
+        // we only want to return keys that match the specified blob key prefix
+        let blob_key_prefix = self.get_path(key_prefix);
+        // but we want to exclude the shared root prefix from our returned keys,
+        // so only the blob key itself is passed in to `f`
+        let strippable_root_prefix = format!("{}/", self.prefix);
 
         loop {
             let resp = self
                 .client
                 .list_objects_v2()
                 .bucket(&self.bucket)
-                .prefix(&self.prefix)
+                .prefix(&blob_key_prefix)
                 .max_keys(self.max_keys)
                 .set_continuation_token(continuation_token)
                 .send()
@@ -441,7 +445,7 @@ impl Blob for S3Blob {
             if let Some(contents) = resp.contents {
                 for object in contents.iter() {
                     if let Some(key) = object.key.as_ref() {
-                        if let Some(key) = key.strip_prefix(&prefix) {
+                        if let Some(key) = key.strip_prefix(&strippable_root_prefix) {
                             f(BlobMetadata {
                                 key,
                                 size_in_bytes: object
