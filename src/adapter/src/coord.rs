@@ -5507,7 +5507,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
         f: F,
     ) -> Result<R, AdapterError>
     where
@@ -5573,20 +5573,23 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        self.remove_global_read_holds_storage(
+        let mut empty_timelines = self.remove_global_read_holds_storage(
             sources_to_drop
                 .iter()
                 .chain(tables_to_drop.iter())
                 .chain(recorded_views_to_drop.iter().map(|(_, id)| id))
                 .cloned(),
         );
-        self.remove_global_read_holds_compute(
-            sinks_to_drop
-                .iter()
-                .chain(indexes_to_drop.iter())
-                .chain(recorded_views_to_drop.iter())
-                .cloned(),
+        empty_timelines.extend(
+            self.remove_global_read_holds_compute(
+                sinks_to_drop
+                    .iter()
+                    .chain(indexes_to_drop.iter())
+                    .chain(recorded_views_to_drop.iter())
+                    .cloned(),
+            ),
         );
+        ops.extend(empty_timelines.into_iter().map(catalog::Op::DropTimeline));
 
         let (builtin_table_updates, result) = self
             .catalog
@@ -5766,10 +5769,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
     }
 
-    fn remove_global_read_holds_storage<I>(&mut self, ids: I)
+    fn remove_global_read_holds_storage<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = GlobalId>,
     {
+        let mut empty_timelines = Vec::new();
         for id in ids {
             if let Some(timeline) = self.get_timeline(id) {
                 let TimelineState { read_holds, .. } = self
@@ -5779,15 +5783,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 read_holds.id_bundle.storage_ids.remove(&id);
                 if read_holds.id_bundle.is_empty() {
                     self.global_timelines.remove(&timeline);
+                    empty_timelines.push(timeline);
                 }
             }
         }
+        empty_timelines
     }
 
-    fn remove_global_read_holds_compute<I>(&mut self, ids: I)
+    fn remove_global_read_holds_compute<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
     {
+        let mut empty_timelines = Vec::new();
         for (compute_instance, id) in ids {
             if let Some(timeline) = self.get_timeline(id) {
                 let TimelineState { read_holds, .. } = self
@@ -5801,10 +5808,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     if read_holds.id_bundle.is_empty() {
                         self.global_timelines.remove(&timeline);
+                        empty_timelines.push(timeline);
                     }
                 }
             }
         }
+        empty_timelines
     }
 
     async fn set_index_options(
@@ -7057,13 +7066,15 @@ mod timeline {
             F: Fn() -> T + 'static,
             Fut: Future<Output = Result<(), crate::catalog::Error>>,
         {
-            let durable_timestamp = initially.step_forward_by(&persist_interval);
-            persist_fn(durable_timestamp.clone()).await.unwrap();
-            Self {
+            let mut oracle = Self {
                 timestamp_oracle: TimestampOracle::new(initially.clone(), next),
-                durable_timestamp,
+                durable_timestamp: initially.clone(),
                 persist_interval,
-            }
+            };
+            oracle
+                .maybe_allocate_new_timestamps(&initially, persist_fn)
+                .await;
+            oracle
         }
 
         /// Peek the current value of the timestamp.
@@ -7129,7 +7140,11 @@ mod timeline {
         ) where
             Fut: Future<Output = Result<(), crate::catalog::Error>>,
         {
-            if self.durable_timestamp.less_equal(ts) {
+            if self.durable_timestamp.less_equal(ts)
+                // Since the timestamp is at its max value, we know that no other Coord can
+                // allocate a higher value.
+                && self.durable_timestamp.less_than(&T::maximum())
+            {
                 self.durable_timestamp = ts.step_forward_by(&self.persist_interval);
                 persist_fn(self.durable_timestamp.clone())
                     .await
@@ -7156,6 +7171,9 @@ pub trait CoordTimestamp:
     /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
     /// which must only happen if the timestamp is `Timestamp::minimum()`.
     fn step_back(&self) -> Option<Self>;
+
+    /// Return the maximum value for this timestamp.
+    fn maximum() -> Self;
 }
 
 impl CoordTimestamp for mz_repr::Timestamp {
@@ -7169,11 +7187,15 @@ impl CoordTimestamp for mz_repr::Timestamp {
     fn step_forward_by(&self, amount: &Self) -> Self {
         match self.checked_add(*amount) {
             Some(ts) => ts,
-            None => panic!("could not step forward"),
+            None => panic!("could not step {self} forward by {amount}"),
         }
     }
 
     fn step_back(&self) -> Option<Self> {
         self.checked_sub(1)
+    }
+
+    fn maximum() -> Self {
+        Self::MAX
     }
 }
