@@ -112,7 +112,7 @@ impl Bindings {
 
                 _ => {
                     // All other expressions just need to apply the logic recursively.
-                    relation.try_visit_mut_children(&mut |expr| this.intern_expression(expr))?;
+                    relation.try_visit_mut_children(|expr| this.intern_expression(expr))?;
                 }
             };
 

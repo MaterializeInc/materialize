@@ -53,6 +53,7 @@ use crate::plan::expr::{
 /// subquery, especially when the original conjunction contains join keys.
 pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     fn walk_relation(expr: &mut HirRelationExpr) {
+        #[allow(deprecated)]
         expr.visit_mut(0, &mut |expr, _| match expr {
             HirRelationExpr::Map { scalars, .. } => {
                 for scalar in scalars {
@@ -84,6 +85,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     }
 
     fn walk_scalar(expr: &mut HirScalarExpr) {
+        #[allow(deprecated)]
         expr.visit_mut(&mut |expr| match expr {
             HirScalarExpr::Exists(input) | HirScalarExpr::Select(input) => walk_relation(input),
             _ => (),
@@ -191,6 +193,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                 walk_relation(right, &outers);
             }
             expr => {
+                #[allow(deprecated)]
                 let _ = expr.visit1_mut(0, &mut |expr, _| -> Result<(), ()> {
                     walk_relation(expr, outers);
                     Ok(())
@@ -200,6 +203,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
     }
 
     fn walk_scalar(expr: &mut HirScalarExpr, outers: &[RelationType], mut in_filter: bool) {
+        #[allow(deprecated)]
         expr.visit_mut_pre(&mut |e| match e {
             HirScalarExpr::Exists(input) => walk_relation(input, outers),
             HirScalarExpr::Select(input) => {

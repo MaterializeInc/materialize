@@ -157,6 +157,7 @@ impl FromHir {
                         .iter_mut()
                         .position(|s| {
                             let mut requires_nonexistent_column = false;
+                            #[allow(deprecated)]
                             s.visit_columns(0, &mut |depth, col| {
                                 if col.level == depth {
                                     requires_nonexistent_column |= (col.column + 1) > old_arity

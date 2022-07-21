@@ -713,6 +713,7 @@ fn handle_mutation_using_clause(
         // those to the right of `using_rel_expr`) to instead be correlated to
         // the outer relation, i.e. `get`.
         let using_rel_arity = qcx.relation_type(&using_rel_expr).arity();
+        #[allow(deprecated)]
         expr.visit_mut(&mut |e| {
             if let HirScalarExpr::Column(c) = e {
                 if c.column >= using_rel_arity {
@@ -3908,6 +3909,7 @@ fn plan_aggregate(
 
     let mut seen_outer = false;
     let mut seen_inner = false;
+    #[allow(deprecated)]
     expr.visit_columns(0, &mut |depth, col| {
         if depth == 0 && col.level == 0 {
             seen_inner = true;
