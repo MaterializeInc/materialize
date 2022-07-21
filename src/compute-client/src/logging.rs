@@ -9,7 +9,7 @@
 
 //! Compute layer logging configuration.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use mz_storage::controller::CollectionMetadata;
 use once_cell::sync::Lazy;
