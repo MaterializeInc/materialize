@@ -32,7 +32,7 @@
 
 use std::{collections::HashSet, fmt};
 
-use mz_ore::str::Indent;
+use mz_ore::{stack::RecursionLimitError, str::Indent};
 
 use crate::{ColumnType, GlobalId, ScalarType};
 
@@ -310,6 +310,7 @@ pub enum ExplainError {
     UnsupportedFormat(ExplainFormat),
     FormatError(fmt::Error),
     AnyhowError(anyhow::Error),
+    RecursionLimitError(RecursionLimitError),
     UnknownError(String),
 }
 
@@ -324,6 +325,9 @@ impl fmt::Display for ExplainError {
                 write!(f, "{}", error)
             }
             ExplainError::AnyhowError(error) => {
+                write!(f, "{}", error)
+            }
+            ExplainError::RecursionLimitError(error) => {
                 write!(f, "{}", error)
             }
             ExplainError::UnknownError(error) => {
@@ -342,6 +346,12 @@ impl From<fmt::Error> for ExplainError {
 impl From<anyhow::Error> for ExplainError {
     fn from(error: anyhow::Error) -> Self {
         ExplainError::AnyhowError(error)
+    }
+}
+
+impl From<RecursionLimitError> for ExplainError {
+    fn from(error: RecursionLimitError) -> Self {
+        ExplainError::RecursionLimitError(error)
     }
 }
 

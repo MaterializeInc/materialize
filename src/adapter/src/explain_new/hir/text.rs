@@ -13,9 +13,9 @@ use std::fmt;
 
 use mz_expr::explain::Indices;
 use mz_expr::Id;
-use mz_ore::str::{bracketed, separated, IndentLike};
+use mz_ore::str::{separated, IndentLike};
 use mz_repr::explain_new::{separated_text, DisplayText};
-use mz_sql::plan::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
+use mz_sql::plan::{AggregateExpr, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 
 use crate::explain_new::{Displayable, PlanRenderingContext};
 
@@ -115,8 +115,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
                 on,
                 kind,
             } => {
-                write!(f, "{}{}Join ", ctx.indent, kind)?;
-                Displayable::from(on).fmt_text(f, &mut ())?;
+                if on.is_literal_true() && kind == &JoinKind::Inner {
+                    write!(f, "{}CrossJoin", ctx.indent)?;
+                } else {
+                    write!(f, "{}{}Join ", ctx.indent, kind)?;
+                    Displayable::from(on).fmt_text(f, &mut ())?;
+                }
                 writeln!(f)?;
                 ctx.indented(|ctx| {
                     Displayable::from(left.as_ref()).fmt_text(f, ctx)?;
@@ -132,8 +136,8 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
             } => {
                 write!(f, "{}Reduce", ctx.indent)?;
                 if group_key.len() > 0 {
-                    let group_key = bracketed("[", "]", Indices(group_key));
-                    write!(f, " group_by={} ", group_key)?;
+                    let group_key = Indices(group_key);
+                    write!(f, " group_by=[{}]", group_key)?;
                 }
                 if aggregates.len() > 0 {
                     let aggregates = separated_text(", ", aggregates.iter().map(Displayable::from));
@@ -203,6 +207,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
 
 impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
+        use HirRelationExpr::Get;
         use HirScalarExpr::*;
 
         match self.0 {
@@ -307,8 +312,14 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                 }
                 Ok(())
             }
-            Exists(_expr) => write!(f, "???"), // TODO
-            Select(_expr) => write!(f, "???"), // TODO
+            Exists(expr) => match expr.as_ref() {
+                Get { id, .. } => write!(f, "Exists(Get {})", id), // TODO: optional humanizer
+                _ => write!(f, "Exists(???)"),
+            },
+            Select(expr) => match expr.as_ref() {
+                Get { id, .. } => write!(f, "Select(Get {})", id), // TODO: optional humanizer
+                _ => write!(f, "Select(???)"),
+            },
         }
     }
 }

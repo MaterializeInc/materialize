@@ -417,7 +417,10 @@ impl From<EvalError> for AdapterError {
 
 impl From<ExplainError> for AdapterError {
     fn from(e: ExplainError) -> AdapterError {
-        AdapterError::Explain(e)
+        match e {
+            ExplainError::RecursionLimitError(e) => AdapterError::RecursionLimit(e),
+            e => AdapterError::Explain(e),
+        }
     }
 }
 
