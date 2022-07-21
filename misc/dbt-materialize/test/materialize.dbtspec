@@ -93,6 +93,8 @@ sequences:
         relations: [test_materialized_view, test_view_index]
       - type: relations_equal
         relations: [actual_indexes, expected_indexes]
+      - type: relations_equal
+        relations: [actual_views, expected_views]
       # TODO(benesch): figure out how to test that the source/sink emit the
       # correct data. Ideally we'd just ingest the sink back into Materialize
       # with the source and then use `relations_equal` with
@@ -163,6 +165,29 @@ projects:
             CREATE SOURCE {{ mz_generate_name('test_source_index') }}
             FROM KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-source-index'
             FORMAT BYTES
+
+        models/test_source_views.sql: |
+            {{ config(
+                materialized='source',
+                post_hook=materialize__create_views({{ this }},['pg_t1','jaffle.pg_t2'])
+            ) }}
+
+            CREATE SOURCE {{ mz_generate_name('test_source_index') }}
+            FROM POSTGRES
+            CONNECTION 'host=postgres port=5432 user=materialize password=materialize dbname=postgres'
+            PUBLICATION 'mz_source'
+
+        models/actual_views.sql: |
+            SELECT
+                v.name AS view_name, s.name AS schema_name
+            FROM mz_views v
+            JOIN mz_schemas s ON v.schema_id = s.id
+            WHERE v.name LIKE 'pg%'
+
+        seeds/expected_views.csv: |
+            view_name,schema_name
+            pg_t1,public
+            pg_t2,jaffle
 
         models/test_sink.sql: |
             {{ config(materialized='sink') }}
