@@ -1,13 +1,14 @@
 disallowed-methods = [
-    # We have better wrappers for tokio task spawning
+    { path = "futures_executor::block_on", reason = "tokio::runtime::Handle::block_on instead" },
+    { path = "futures::executor::block_on", reason = "tokio::runtime::Handle::block_on instead" },
+
     { path = "tokio::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    # as well as an extention trait for inherent methods
     { path = "tokio::runtime::Handle::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::runtime::Handle::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::runtime::Runtime::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-    # Use the wrapper that sets the log level correctly
+
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
 ]
