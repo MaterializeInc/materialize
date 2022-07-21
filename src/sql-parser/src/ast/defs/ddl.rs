@@ -1112,6 +1112,10 @@ impl<T: AstInfo> AstDisplay for ColumnDef<T> {
         f.write_node(&self.name);
         f.write_str(" ");
         f.write_node(&self.data_type);
+        if let Some(collation) = &self.collation {
+            f.write_str(" COLLATE ");
+            f.write_node(collation);
+        }
         for option in &self.options {
             f.write_str(" ");
             f.write_node(option);
