@@ -15,7 +15,10 @@ statement ok
 CREATE TABLE t1 (f1 INTEGER, f2 INTEGER, f3 INTEGER);
 
 statement ok
-CREATE MATERIALIZED VIEW v1 AS SELECT DISTINCT f1, f2, f3 FROM t1;
+CREATE VIEW v1 AS SELECT DISTINCT f1, f2, f3 FROM t1;
+
+statement ok
+CREATE DEFAULT INDEX ON v1
 
 #
 # The optimization kicks in (no Distinct in final plan) since

@@ -30,7 +30,7 @@ statement ok
 ALTER VIEW unmat RENAME TO renamed
 
 statement ok
-CREATE OR REPLACE VIEW v2 AS SELECT 2
+CREATE OR REPLACE MATERIALIZED VIEW v2 AS SELECT 2
 
 statement ok
 CREATE DEFAULT INDEX ON renamed
@@ -48,15 +48,13 @@ SELECT id, event_type, object_type, event_details, user FROM mz_audit_events ORD
 ----
 1  create  cluster  {"name":"foo"}  materialize
 2  create  cluster-replica  {"cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
-3  create  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-4  create  index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
-5  create  view  {"database":"materialize","item":"unmat","schema":"public"}  materialize
-6  create  index  {"database":"materialize","item":"t_primary_idx","schema":"public"}  materialize
-7  alter  view  {"new_name":"renamed","previous_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
-8  drop  index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
-9  drop  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-10  create  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-11  create  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
-12  drop  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
-13  drop  view  {"database":"materialize","item":"renamed","schema":"public"}  materialize
-14  create  source  {"database":"materialize","item":"s","schema":"public"}  materialize
+3  create  materialized-view  {"database":"materialize","item":"v2","schema":"public"}  materialize
+4  create  view  {"database":"materialize","item":"unmat","schema":"public"}  materialize
+5  create  index  {"database":"materialize","item":"t_primary_idx","schema":"public"}  materialize
+6  alter  view  {"new_name":"renamed","previous_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
+7  drop  materialized-view  {"database":"materialize","item":"v2","schema":"public"}  materialize
+8  create  materialized-view  {"database":"materialize","item":"v2","schema":"public"}  materialize
+9  create  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
+10  drop  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
+11  drop  view  {"database":"materialize","item":"renamed","schema":"public"}  materialize
+12  create  source  {"database":"materialize","item":"s","schema":"public"}  materialize

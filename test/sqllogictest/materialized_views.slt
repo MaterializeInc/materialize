@@ -1,0 +1,375 @@
+# Copyright Materialize, Inc. and contributors. All rights resemved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Setup
+
+statement ok
+CREATE TABLE t (a int, b int)
+
+statement ok
+INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
+
+statement ok
+CREATE CLUSTER other REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'))
+
+
+# Test: Materialized view can be created.
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+
+# Test: Materialized view can be replaced.
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT 2
+
+query I
+SELECT * FROM mv
+----
+2
+
+
+# Test: Materialized view creation can be skipped if a materialized view already exists.
+
+statement error catalog item 'mv' already exists
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+statement ok
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv AS SELECT 1
+
+query I
+SELECT * FROM mv
+----
+2
+
+
+# Test: Materialized view can have explicit column names.
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv (name, age) AS SELECT 'jon', 12
+
+query TI colnames
+SELECT * FROM mv
+----
+name age
+jon  12
+
+
+# Test: Explicit column names must have the right cardinality.
+
+statement error materialized view .+ definition names 2 columns, but materialized view .+ has 1 column
+CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
+
+
+# Test: Materialized view can be created in another cluster.
+
+statement ok
+CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
+
+query TTT colnames,rowsort
+SHOW FULL MATERIALIZED VIEWS
+----
+cluster name     type
+default mv       user
+other   other_mv user
+
+statement ok
+DROP MATERIALIZED VIEW other_mv
+
+
+# Test: Materialized view can not be created in a non-existing cluster.
+
+statement error unknown cluster 'doesnotexist'
+CREATE MATERIALIZED VIEW error IN CLUSTER doesnotexist AS SELECT 1
+
+
+# Test: Materialized view data is accessible from the same cluster.
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT a + b FROM t
+
+query I rowsort
+SELECT * FROM mv
+----
+3
+7
+11
+
+
+# Test: Materialized view data is accessible from other clusters.
+
+statement ok
+SET cluster = other
+
+query I rowsort
+SELECT * FROM mv
+----
+3
+7
+11
+
+statement ok
+RESET cluster
+
+
+# Test: Materialized view reflects input data changes.
+
+statement ok
+INSERT INTO t VALUES (7, 8)
+
+query I rowsort
+SELECT * FROM mv
+----
+3
+7
+11
+15
+
+statement ok
+DELETE FROM t WHERE a = 1
+
+query I rowsort
+SELECT * FROM mv
+----
+7
+11
+15
+
+
+# Test: Query errors are propagated through materialized views.
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT 100 / a FROM t
+
+query I rowsort
+SELECT * FROM mv
+----
+14
+20
+33
+
+statement ok
+INSERT INTO t VALUES (0, 0)
+
+query error Evaluation error: division by zero
+SELECT * FROM mv
+
+statement ok
+DELETE FROM t WHERE a = 0
+
+query I rowsort
+SELECT * FROM mv
+----
+14
+20
+33
+
+
+# Test: Materialized views can be nested.
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv
+
+query I
+SELECT * FROM mv2
+----
+3
+
+statement ok
+DROP MATERIALIZED VIEW mv2
+
+
+# Test: Materialized views can have indexes on top.
+
+statement ok
+CREATE DEFAULT INDEX ON mv;
+
+
+# Test: Materialized views can be dropped.
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT 1
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+
+# Test: Materialized views can not be dropped if they have dependants.
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+statement ok
+CREATE VIEW v AS SELECT * FROM mv
+
+statement error cannot drop materialize.public.mv: still depended upon by catalog item 'materialize.public.v'
+DROP MATERIALIZED VIEW mv
+
+
+# Test: Materialized views with dependants can be dropped with CASCADE.
+
+statement ok
+DROP MATERIALIZED VIEW mv CASCADE
+
+query error unknown catalog item 'v'
+SELECT * FROM v
+
+
+# Test: Materialized view prevents dropping its cluster.
+
+statement ok
+CREATE CLUSTER to_drop REPLICAS ()
+
+statement ok
+CREATE MATERIALIZED VIEW to_drop_mv IN CLUSTER to_drop AS SELECT 1
+
+statement error cannot drop cluster with active indexes, sinks, materialized views, or replicas
+DROP CLUSTER to_drop
+
+
+# Test: Cluster with dependent materialized view can be dropped with CASCADE.
+
+statement ok
+DROP CLUSTER to_drop CASCADE
+
+query error unknown catalog item 'to_drop_mv'
+SELECT * FROM to_drop_mv
+
+
+# Test: SHOW CREATE MATERIALIZED VIEW
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+query TT colnames
+SHOW CREATE MATERIALIZED VIEW mv
+----
+Materialized␠View     Create␠Materialized␠View
+materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
+
+
+# Test: SHOW MATERIALIZED VIEWS
+
+statement ok
+CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
+
+query T colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name
+mv
+other_mv
+
+query TTT colnames,rowsort
+SHOW FULL MATERIALIZED VIEWS
+----
+cluster name     type
+default mv       user
+other   other_mv user
+
+query TTT colnames,rowsort
+SHOW FULL MATERIALIZED VIEWS IN CLUSTER other
+----
+cluster name     type
+other   other_mv user
+
+statement ok
+DROP MATERIALIZED VIEW other_mv
+
+
+# Test: Materialized view can be renamed.
+
+statement ok
+ALTER MATERIALIZED VIEW mv RENAME TO mv2
+
+query I
+SELECT * FROM mv2
+----
+1
+
+statement ok
+DROP MATERIALIZED VIEW mv2
+
+
+# Test: Materialized views show up in mz_materialized_views.
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+query TT colnames
+SELECT name, definition FROM mz_materialized_views
+----
+name definition
+mv   SELECT␠1;
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+query I
+SELECT count(*) FROM mz_materialized_views
+----
+0
+
+
+# Test: Materialized views show in `SHOW OBJECTS`.
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+query T colnames,rowsort
+SHOW OBJECTS
+----
+name
+mv
+t
+
+
+# Test: Indexes on materialized views show in `SHOW INDEXES`.
+
+statement ok
+CREATE DEFAULT INDEX ON mv
+
+query TTTITTT colnames
+SHOW INDEXES ON mv
+----
+cluster on_name key_name       seq_in_index column_name expression nullable
+default mv      mv_primary_idx 1            ?column?    NULL       false
+
+
+# Test: Creating materialized views that depend on log sources is forbidden.
+
+statement error materialized view objects cannot depend on log sources
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT * FROM mz_dataflow_operators;
+
+
+# Test: Attempting to use view commands on materialized views gives helpful errors.
+
+statement error materialize\.public\.mv is not a view\nHINT: Use DROP MATERIALIZED VIEW to remove a materialized view\.
+DROP VIEW mv
+
+statement error materialize\.public\.mv is not a view\nHINT: Use SHOW CREATE MATERIALIZED VIEW to show a materialized view\.
+SHOW CREATE VIEW mv
+
+statement error materialize\.public\.mv is not a view\nHINT: Use ALTER MATERIALIZED VIEW to rename a materialized view\.
+ALTER VIEW mv RENAME TO mv2
+
+statement error materialize\.public\.mv is not a view\nHINT: Use EXPLAIN \[\.\.\.\] MATERIALIZED VIEW to explain a materialized view\.
+EXPLAIN VIEW mv
+
+
+# Cleanup
+
+statement ok
+DROP TABLE t CASCADE
+
+statement ok
+DROP CLUSTER other CASCADE

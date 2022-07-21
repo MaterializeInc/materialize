@@ -2584,7 +2584,10 @@ statement ok
 CREATE TABLE t3(f1 int, f2 int, f3 int, f4 int, f5 int, f6 int, f7 int, f8 int, n int, m int, l int list)
 
 statement ok
-CREATE MATERIALIZED VIEW m3 AS SELECT * FROM t3
+CREATE VIEW m3 AS SELECT * FROM t3
+
+statement ok
+CREATE DEFAULT INDEX ON m3
 
 statement ok
 INSERT INTO t3 VALUES (1, 2, 3, 4, 5, 6, 7, 8, 1, 2, list[42, 43])

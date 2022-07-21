@@ -14,11 +14,14 @@ CREATE TABLE t (
 )
 
 statement ok
-CREATE MATERIALIZED VIEW v AS
+CREATE VIEW v AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 statement ok
-CREATE RECORDED VIEW rv AS
+CREATE DEFAULT INDEX ON v
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 mode cockroach
@@ -106,7 +109,7 @@ EOF
 
 query T multiline
 EXPLAIN QUERY GRAPH WITH (TYPES) AS DOT FOR
-RECORDED VIEW rv
+MATERIALIZED VIEW mv
 ----
 digraph G {
     compound = true

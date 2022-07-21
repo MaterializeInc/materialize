@@ -44,7 +44,7 @@ EOF
 
 # check that TopK elision is recursive
 statement ok
-CREATE MATERIALIZED VIEW plan_test1 AS
+CREATE VIEW plan_test1 AS
 SELECT avg(d), sumc, sumd FROM (
 SELECT a + b + c as sumc, a + b + d as sumd, d
 FROM test1
@@ -52,6 +52,9 @@ ORDER BY d
 )
 GROUP BY sumc, sumd
 ORDER BY sumc
+
+statement ok
+CREATE DEFAULT INDEX ON plan_test1
 
 query T multiline
 EXPLAIN PLAN FOR VIEW plan_test1
@@ -111,10 +114,13 @@ EOF
 
 statement ok
 create table t1(f1 int, f2 int);
+
+statement ok
+create view v1 as select * from (select * from t1 order by f1 limit 10 offset 2) order by f1 limit 3 offset 1;
 ----
 
 statement ok
-create materialized view v1 as select * from (select * from t1 order by f1 limit 10 offset 2) order by f1 limit 3 offset 1;
+create default index on v1
 ----
 
 query T multiline
