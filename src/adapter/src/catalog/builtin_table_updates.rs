@@ -398,7 +398,7 @@ impl CatalogState {
         };
 
         let mut query_string = query.to_ast_string_stable();
-        // PostgreSQL appends a semicolon in `pg_views.definition`, we
+        // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
         // do the same for compatibility's sake.
         query_string.push(';');
 

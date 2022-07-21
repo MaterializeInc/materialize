@@ -1936,6 +1936,20 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE d.name = pg_catalog.current_database()",
 };
 
+pub const PG_MATVIEWS: BuiltinView = BuiltinView {
+    name: "pg_matviews",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_matviews AS SELECT
+    s.name AS schemaname,
+    m.name AS matviewname,
+    NULL::pg_catalog.oid AS matviewowner,
+    m.definition AS definition
+FROM mz_catalog.mz_materialized_views m
+LEFT JOIN mz_catalog.mz_schemas s ON s.id = m.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE d.name = pg_catalog.current_database()",
+};
+
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     name: "columns",
     schema: INFORMATION_SCHEMA,
@@ -2193,6 +2207,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_ACCESS_METHODS),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),
+        Builtin::View(&PG_MATVIEWS),
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
