@@ -48,7 +48,7 @@ Materialize assumes untyped numeric literals are `numeric` if they:
 
 Materialize does not accept any numeric literals that exceed 39 digits of precision.
 
-### Ouput
+### Output
 
 Materialize trims all trailing zeroes off of `numeric` values, irrespective of
 their specified scale. This behavior lets us perform byte-level equality when

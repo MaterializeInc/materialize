@@ -138,7 +138,7 @@ they occur.
 
 For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the
 `AS OF` timestamp. For example, `TAIL ... AS OF 21` would present an insert that
-occured at time 15 as if it occurred at time 21.
+occurred at time 15 as if it occurred at time 21.
 
 To see only updates after the `AS OF` timestamp, specify `WITH (SNAPSHOT = false)`.
 

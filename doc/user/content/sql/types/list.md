@@ -157,7 +157,7 @@ SELECT LIST[['a', 'b'], ['c']][1][5] AS exceed_index;
 ```
 
 Lists have types based on their layers (unlike arrays' dimension), and error if
-you attmept to index a non-list element (i.e. indexing past the list’s last
+you attempt to index a non-list element (i.e. indexing past the list’s last
 layer):
 
 ```sql
@@ -343,7 +343,7 @@ Feature | Array term | List term
 **Accessing single element** | Subscripting | Indexing<sup>1</sup>
 **Accessing range of elements** | Subscripting | Slicing<sup>1</sup>
 
-<sup>1</sup>In places some placs, such as error messages, Materialize refers to
+<sup>1</sup>In places some places, such as error messages, Materialize refers to
 both list indexing and list slicing as subscripting.
 
 #### Type definitions

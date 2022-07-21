@@ -44,10 +44,10 @@ SELECT date_trunc('year', TIMESTAMP '2019-11-26 15:56:46.241150') AS year_trunc;
 ```
 
 ```sql
-SELECT date_trunc('millennium', INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS millenium_trunc;
+SELECT date_trunc('millennium', INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS millennium_trunc;
 ```
 ```nofmt
-          millenium_trunc
+          millennium_trunc
 -------------------------------
  1000 years
 ```

@@ -345,7 +345,7 @@ Field         | Type       | Meaning
 
 ### `mz_pseudo_types`
 
-The `mz_pseudo_types` table contains a row for each psuedo type in the system.
+The `mz_pseudo_types` table contains a row for each pseudo type in the system.
 
 Field          | Type       | Meaning
 ---------------|------------|----------
