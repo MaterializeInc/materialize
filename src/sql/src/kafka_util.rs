@@ -230,7 +230,8 @@ pub async fn create_consumer(
         std::collections::HashSet::new(),
         &mut config,
         secrets_reader,
-    );
+    )
+    .await;
 
     // We need this only for logging which broker we're connecting to; the
     // setting itself makes its way into `config`.
