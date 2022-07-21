@@ -240,7 +240,7 @@ async fn migrate<S: Append>(
         // shards.
         //
         //TODO(lh): CHECK VERSION
-        // Introduced in version <M2 TODO>
+        // Introduced in version: Platform Milestone 2, 21-07-2022
         //
         // The old content of ConcreteComputeInstanceReplicaConfig is now located
         // in ConcreteComputeInstanceReplicaConfig::location, thus we construct a new JSON
