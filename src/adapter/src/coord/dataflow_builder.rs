@@ -160,6 +160,9 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         let monotonic = self.monotonic_view(*id);
                         dataflow.import_source(*id, rview.desc.typ().clone(), monotonic);
                     }
+                    CatalogItem::Log(log) => {
+                        dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
+                    }
                     _ => unreachable!(),
                 }
             }

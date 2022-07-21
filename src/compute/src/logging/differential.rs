@@ -28,6 +28,8 @@ use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
+use crate::compute_state::ComputeState;
+use crate::logging::persist::persist_sink;
 use crate::logging::{ConsolidateBuffer, DifferentialLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -44,6 +46,7 @@ use crate::typedefs::{KeysValsHandle, RowSpine};
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
+    compute_state: &mut ComputeState,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
@@ -170,22 +173,28 @@ pub fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let trace = collection
-                    .map({
-                        let mut row_buf = Row::default();
-                        let mut datums = DatumVec::new();
-                        move |row| {
-                            let datums = datums.borrow_with(&row);
-                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
-                            let row_key = row_buf.clone();
-                            row_buf.packer().extend(value.iter().map(|c| datums[*c]));
-                            let row_val = row_buf.clone();
-                            (row_key, row_val)
-                        }
-                    })
+                let rows = collection.map({
+                    let mut row_buf = Row::default();
+                    let mut datums = DatumVec::new();
+                    move |row| {
+                        let datums = datums.borrow_with(&row);
+                        row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                        let row_key = row_buf.clone();
+                        row_buf.packer().extend(value.iter().map(|c| datums[*c]));
+                        let row_val = row_buf.clone();
+                        (row_key, row_val)
+                    }
+                });
+
+                let trace = rows
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant, (trace, Rc::clone(&token)));
+                result.insert(variant.clone(), (trace, Rc::clone(&token)));
+            }
+
+            if let Some((id, meta)) = config.sink_logs.get(&variant) {
+                tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
+                persist_sink(*id, meta, compute_state, &collection);
             }
         }
         result

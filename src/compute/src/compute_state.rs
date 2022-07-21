@@ -309,24 +309,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state,
                 Rc::clone(&t_linked),
                 t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state,
                 Rc::clone(&r_linked),
                 r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state,
                 Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
             c_traces.extend(logging::compute::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state,
                 Rc::clone(&c_linked),
                 c_activator.clone(),
             ));
@@ -446,24 +450,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state,
                 t_linked,
                 t_activator,
             ));
             r_traces.extend(logging::reachability::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state,
                 r_linked,
                 r_activator,
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state,
                 d_linked,
                 d_activator,
             ));
             c_traces.extend(logging::compute::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state,
                 c_linked,
                 c_activator,
             ));

@@ -29,6 +29,8 @@ use mz_repr::{Datum, DatumVec, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
+use crate::compute_state::ComputeState;
+use crate::logging::persist::persist_sink;
 use crate::logging::{ComputeLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -86,6 +88,7 @@ impl Peek {
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
+    compute_state: &mut ComputeState,
     compute: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
@@ -312,7 +315,12 @@ pub fn construct<A: Allocate>(
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant, (trace, Rc::clone(&token)));
+                result.insert(variant.clone(), (trace, Rc::clone(&token)));
+            }
+
+            if let Some((id, meta)) = config.sink_logs.get(&variant) {
+                tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
+                persist_sink(*id, meta, compute_state, &collection);
             }
         }
         result

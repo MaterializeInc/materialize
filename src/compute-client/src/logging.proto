@@ -11,6 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 import "repr/src/global_id.proto";
+import "storage/src/controller.proto";
 import "proto/src/proto.proto";
 
 package mz_compute_client.logging;
@@ -18,6 +19,12 @@ package mz_compute_client.logging;
 message ProtoActiveLog {
     ProtoLogVariant key = 1;
     mz_repr.global_id.ProtoGlobalId value = 2;
+}
+
+message ProtoSinkLog {
+    ProtoLogVariant key = 1;
+    mz_repr.global_id.ProtoGlobalId value_id = 2;
+    mz_storage.controller.ProtoCollectionMetadata value_meta = 3;
 }
 
 message ProtoTimelyLog {
@@ -63,4 +70,5 @@ message ProtoLoggingConfig {
     mz_proto.ProtoU128 granularity_ns = 1;
     repeated ProtoActiveLog active_logs = 2;
     bool log_logging = 3;
+    repeated ProtoSinkLog sink_logs = 4;
 }

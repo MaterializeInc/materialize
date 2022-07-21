@@ -2185,6 +2185,16 @@ pub mod BUILTINS {
         })
     }
 
+    // TODO(lh): Once we remove legacy logs, this function should not be needed anymore
+    pub fn variant_to_builtin(variant: LogVariant) -> Option<&'static BuiltinLog> {
+        for x in logs() {
+            if x.variant == variant {
+                return Some(x);
+            }
+        }
+        return None;
+    }
+
     pub fn types() -> impl Iterator<Item = &'static BuiltinType<NameReference>> {
         BUILTINS_STATIC.iter().filter_map(|b| match b {
             Builtin::Type(typ) => Some(*typ),
