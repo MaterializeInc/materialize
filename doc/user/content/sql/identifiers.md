@@ -13,7 +13,7 @@ like sources, views, and indexes.
 
 ## Naming restrictions
 
-- The first character of an identifer must be an ASCII letter
+- The first character of an identifier must be an ASCII letter
   (`a`-`z` and `A`-`Z`), an underscore (`_`), or any non-ASCII character.
 
 - The remaining characters of an identifier must be ASCII letters
