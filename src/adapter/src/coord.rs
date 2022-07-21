@@ -620,7 +620,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
     ///
-    /// NOTE: This can be removed once DDL is included in group commits.
+    /// NOTE: This can be removed if DDL is included in group commits.
     fn peek_local_ts(&self) -> Timestamp {
         self.get_local_timestamp_oracle().peek_ts()
     }
@@ -7020,8 +7020,10 @@ mod timeline {
     enum TimestampOracleState<T> {
         /// The timeline is producing collection updates timestamped with the argument.
         Writing(T),
-        /// The timeline is observing collections aot the time of the argument.
-        Reading(T),
+        /// The timeline is observing collections at the time of the argument. The first
+        /// timestamp is when reads will take place. The second timestamp is when writes
+        /// and table advancements will take place.
+        Reading(T, T),
     }
 
     /// A type that provides write and read timestamps, reads observe exactly their preceding writes..
@@ -7058,10 +7060,12 @@ mod timeline {
         /// Subsequent values of `self.read_ts()` and `self.write_ts()` will be greater or equal to
         /// this timestamp.
         ///
-        /// NOTE: This can be removed once DDL is included in group commits.
+        /// NOTE: This can be removed if DDL is included in group commits.
         pub fn peek_ts(&self) -> T {
             match &self.state {
-                TimestampOracleState::Writing(ts) | TimestampOracleState::Reading(ts) => ts.clone(),
+                TimestampOracleState::Writing(ts) | TimestampOracleState::Reading(_, ts) => {
+                    ts.clone()
+                }
             }
         }
 
@@ -7073,12 +7077,12 @@ mod timeline {
         pub fn write_ts(&mut self) -> T {
             match &self.state {
                 TimestampOracleState::Writing(ts) => ts.clone(),
-                TimestampOracleState::Reading(ts) => {
+                TimestampOracleState::Reading(_, write_ts) => {
                     let mut next = (self.next)();
-                    if next.less_equal(&ts) {
-                        next = ts.step_forward();
+                    if next.less_equal(write_ts) {
+                        next = write_ts.step_forward();
                     }
-                    assert!(ts.less_than(&next));
+                    assert!(write_ts.less_than(&next));
                     self.state = TimestampOracleState::Writing(next.clone());
                     self.advance_to = Some(next.clone());
                     next
@@ -7091,11 +7095,11 @@ mod timeline {
         /// and strictly less than all subsequent values of `self.write_ts()`.
         pub fn read_ts(&mut self) -> T {
             match &self.state {
-                TimestampOracleState::Reading(ts) => ts.clone(),
+                TimestampOracleState::Reading(read_ts, _) => read_ts.clone(),
                 TimestampOracleState::Writing(ts) => {
                     // Avoid rust borrow complaint.
                     let ts = ts.clone();
-                    self.state = TimestampOracleState::Reading(ts.clone());
+                    self.state = TimestampOracleState::Reading(ts.clone(), ts.clone());
                     self.advance_to = Some(ts.step_forward());
                     ts
                 }
@@ -7114,12 +7118,12 @@ mod timeline {
                         self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
-                TimestampOracleState::Reading(ts) => {
-                    if ts.less_than(&lower_bound) {
+                TimestampOracleState::Reading(read_ts, write_ts) => {
+                    if write_ts.less_than(&lower_bound) {
                         // This may result in repetition in the case `lower_bound == ts + 1`.
                         // This is documented as fine, and concerned users can protect themselves.
                         self.advance_to = Some(lower_bound.clone());
-                        self.state = TimestampOracleState::Writing(lower_bound);
+                        self.state = TimestampOracleState::Reading(read_ts.clone(), lower_bound);
                     }
                 }
             }
