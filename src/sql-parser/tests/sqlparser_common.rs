@@ -57,11 +57,19 @@ fn datadriven() {
         match parser::parse_statements(input) {
             Ok(s) => {
                 if s.len() != 1 {
-                    "expected exactly one statement".to_string()
-                } else if tc.args.get("roundtrip").is_some() {
-                    format!("{}\n", s.into_element())
+                    return "expected exactly one statement\n".to_string();
+                }
+                let stmt = s.into_element();
+                let parsed = match parser::parse_statements(&stmt.to_string()) {
+                    Ok(parsed) => parsed.into_element(),
+                    Err(err) => return format!("reparse failed: {}\n", err),
+                };
+                if parsed != stmt {
+                    return format!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);
+                }
+                if tc.args.get("roundtrip").is_some() {
+                    format!("{}\n", stmt)
                 } else {
-                    let stmt = s.into_element();
                     // TODO(justin): it would be nice to have a middle-ground between this
                     // all-on-one-line and {:#?}'s huge number of lines.
                     format!("{}\n=>\n{:?}\n", stmt, stmt)

@@ -506,7 +506,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
 
         match &self.envelope {
             None => (),
-            Some(Envelope::None) => (),
             Some(envelope) => {
                 f.write_str(" ENVELOPE ");
                 f.write_node(envelope);
@@ -1544,6 +1543,10 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         if let Some(from) = &self.from {
             f.write_str(" FROM ");
             f.write_node(from);
+        }
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
         }
         if let Some(filter) = &self.filter {
             f.write_str(" ");
