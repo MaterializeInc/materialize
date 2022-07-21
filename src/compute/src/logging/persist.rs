@@ -32,7 +32,6 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::compute_state::ComputeState;
 
-// TODO(teskje): remove code duplication with `PersistSinkConnection::render_continous_sink`
 pub(crate) fn persist_sink<G>(
     target_id: GlobalId,
     target: &CollectionMetadata,
@@ -189,41 +188,52 @@ where
                 let desired_frontier = &frontiers[0];
                 let persist_frontier = &frontiers[1];
 
-                // Advance all updates to `persist`'s frontier.
-                for (_, time, _) in correction.iter_mut() {
-                    use differential_dataflow::lattice::Lattice;
-                    time.advance_by(persist_frontier.borrow());
-                }
-                // Consolidate updates within.
-                differential_dataflow::consolidation::consolidate_updates(&mut correction);
+                // We should only attempt a commit to an interval at least our lower bound.
+                if PartialOrder::less_equal(&write_lower_bound, persist_frontier) {
 
-                if PartialOrder::less_equal(&write_lower_bound, persist_frontier) && PartialOrder::less_than(persist_frontier, desired_frontier) {
-                    let to_append =
-                    correction
-                        .iter()
-                        .filter(|(_, time, _)| persist_frontier.less_equal(time) && !desired_frontier.less_equal(time))
-                        .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff));
+                    // We may have the opportunity to commit updates.
+                    if PartialOrder::less_than(persist_frontier, desired_frontier) {
 
-                    let result =
-                    write
-                        .compare_and_append(to_append, persist_frontier.clone(), desired_frontier.clone())
-                        .await
-                        .expect("Indeterminate")    // TODO: What does this error mean?
-                        .expect("Invalid usage")    // TODO: What does this error mean?
-                        ;
-                    tracing::debug!("write done!");
-
-                    *shared_frontier.borrow_mut() = desired_frontier.clone();
-
-                    match result {
-                        Ok(()) => {
-                        },
-                        Err(mz_persist_client::Upper(frontier)) => {
-                            // The update bounced! We should advance our write lower bound to not spam `persist`.
-                            write_lower_bound = frontier;
+                        // Advance all updates to `persist`'s frontier.
+                        for (_, time, _) in correction.iter_mut() {
+                            use differential_dataflow::lattice::Lattice;
+                            time.advance_by(persist_frontier.borrow());
                         }
+                        // Consolidate updates within.
+                        differential_dataflow::consolidation::consolidate_updates(&mut correction);
+
+                        let to_append =
+                        correction
+                            .iter()
+                            .filter(|(_, time, _)| persist_frontier.less_equal(time) && !desired_frontier.less_equal(time))
+                            .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff));
+
+                        let result =
+                        write
+                            .compare_and_append(to_append, persist_frontier.clone(), desired_frontier.clone())
+                            .await
+                            .expect("Indeterminate")    // TODO: What does this error mean?
+                            .expect("Invalid usage")    // TODO: What does this error mean?
+                            ;
+
+                        // If the result is `Ok`, we will eventually see the appended data return through `persist_input`,
+                        // which will remove the results from `correction`; we should not do this directly ourselves.
+                        // In either case, we have new information about the next frontier we should attempt to commit from.
+                        match result {
+                            Ok(()) => {
+                                write_lower_bound.clone_from(desired_frontier);
+                            }
+                            Err(mz_persist_client::Upper(frontier)) => {
+                                write_lower_bound.clone_from(&frontier);
+                            }
+                        }
+                    } else {
+                        write_lower_bound.clone_from(&persist_frontier);
                     }
                 }
+
+                // Confirm that we only require updates from our lower bound onward.
+                shared_frontier.borrow_mut().clone_from(&write_lower_bound);
             }
         },
     );
