@@ -44,7 +44,7 @@ impl StorageUsageClient {
         .await
     }
 
-    /// Returns the size (in bytes) of a subset of blobs specified by [crate::r#impl::paths::BlobKeyPrefix]
+    /// Returns the size (in bytes) of a subset of blobs specified by [crate::impl::paths::BlobKeyPrefix]
     ///
     /// Can be safely called within retry_external to ensure it succeeds
     async fn size(&self, prefix: BlobKeyPrefix<'_>) -> Result<u64, ExternalError> {
