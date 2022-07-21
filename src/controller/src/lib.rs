@@ -46,7 +46,7 @@ use mz_compute_client::controller::{
     ComputeController, ComputeControllerMut, ComputeControllerResponse, ComputeControllerState,
     ComputeInstanceId,
 };
-use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_compute_client::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, TailResponse,
 };
@@ -102,9 +102,9 @@ pub struct ComputeInstanceReplicaAllocation {
     pub workers: NonZeroUsize,
 }
 
-/// Configuration for a replica of a compute instance.
+/// Size or location of a replica
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConcreteComputeInstanceReplicaConfig {
+pub enum ConcreteComputeInstanceReplicaLocation {
     /// Out-of-process replica
     Remote {
         /// The network addresses of the processes in the replica.
@@ -114,9 +114,43 @@ pub enum ConcreteComputeInstanceReplicaConfig {
     Managed {
         /// The resource allocation for the replica.
         allocation: ComputeInstanceReplicaAllocation,
+        /// SQL size parameter used for allocation
+        size: String,
         /// The replica's availability zone, if `Some`.
         availability_zone: Option<String>,
     },
+}
+
+/// Logging configuration of a replica
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ConcreteComputeInstanceReplicaLogging {
+    /// Instantiate default logging configuration upon system start.
+    /// To configure a replica without logging, Concrete(vec![]) should be used.
+    Default,
+    /// Logging collections have already been built for this replica.
+    Concrete(Vec<(LogVariant, GlobalId)>),
+}
+
+impl ConcreteComputeInstanceReplicaLogging {
+    /// Return all logs described
+    pub fn get_logs(&self) -> Vec<(LogVariant, GlobalId)> {
+        match self {
+            ConcreteComputeInstanceReplicaLogging::Default => vec![],
+            ConcreteComputeInstanceReplicaLogging::Concrete(logs) => logs.clone(),
+        }
+    }
+
+    /// Returns log ids described
+    pub fn get_log_ids(&self) -> Vec<GlobalId> {
+        self.get_logs().into_iter().map(|(_, id)| id).collect()
+    }
+}
+
+/// Replica configuration
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConcreteComputeInstanceReplicaConfig {
+    pub location: ConcreteComputeInstanceReplicaLocation,
+    pub persisted_logs: ConcreteComputeInstanceReplicaLogging,
 }
 
 /// Deterministically generates replica names based on inputs.
@@ -248,14 +282,19 @@ where
         );
 
         // Add replicas backing that instance.
-        match config {
-            ConcreteComputeInstanceReplicaConfig::Remote { addrs } => {
+        match config.location {
+            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
-                compute_instance.add_replica(replica_id, addrs.into_iter().collect());
+                compute_instance.add_replica(
+                    replica_id,
+                    addrs.into_iter().collect(),
+                    config.persisted_logs.get_logs().into_iter().collect(),
+                );
             }
-            ConcreteComputeInstanceReplicaConfig::Managed {
+            ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation,
                 availability_zone,
+                ..
             } => {
                 let service_name = generate_replica_service_name(instance_id, replica_id);
 
@@ -342,9 +381,11 @@ where
                         },
                     )
                     .await?;
-                self.compute_mut(instance_id)
-                    .unwrap()
-                    .add_replica(replica_id, service.addresses("controller"));
+                self.compute_mut(instance_id).unwrap().add_replica(
+                    replica_id,
+                    service.addresses("controller"),
+                    config.persisted_logs.get_logs().into_iter().collect(),
+                );
             }
         }
 
@@ -359,7 +400,7 @@ where
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        if let ConcreteComputeInstanceReplicaConfig::Managed { .. } = config {
+        if let ConcreteComputeInstanceReplicaLocation::Managed { .. } = config.location {
             let service_name = generate_replica_service_name(instance_id, replica_id);
             self.compute_orchestrator
                 .drop_service(&service_name)

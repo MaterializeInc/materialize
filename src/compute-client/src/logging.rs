@@ -11,11 +11,13 @@
 
 use std::collections::BTreeMap;
 
+use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_storage::controller::CollectionMetadata;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 
@@ -23,15 +25,20 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 #[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub granularity_ns: u128,
+    /// Logs to keep in an arrangement
     pub active_logs: BTreeMap<LogVariant, GlobalId>,
-    // Whether we should report logs for the log-processing dataflows
+    /// Whether we should report logs for the log-processing dataflows
     pub log_logging: bool,
+    /// Logs to be written to persist
+    pub sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
 impl LoggingConfig {
     /// Announce the identifiers the logging config will populate.
     pub fn log_identifiers<'a>(&'a self) -> impl Iterator<Item = GlobalId> + 'a {
-        self.active_logs.values().cloned()
+        let it1 = self.active_logs.values().cloned();
+        let it2 = self.sink_logs.values().map(|(id, _)| *id);
+        it1.chain(it2)
     }
 }
 
@@ -41,6 +48,7 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
             granularity_ns: Some(self.granularity_ns.into_proto()),
             active_logs: self.active_logs.into_proto(),
             log_logging: self.log_logging,
+            sink_logs: self.sink_logs.into_proto(),
         }
     }
 
@@ -51,7 +59,33 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
                 .into_rust_if_some("ProtoLoggingConfig::granularity_ns")?,
             active_logs: proto.active_logs.into_rust()?,
             log_logging: proto.log_logging,
+            sink_logs: proto.sink_logs.into_rust()?,
         })
+    }
+}
+
+impl ProtoMapEntry<LogVariant, (GlobalId, CollectionMetadata)> for ProtoSinkLog {
+    fn from_rust<'a>(
+        (variant, (id, meta)): (&'a LogVariant, &'a (GlobalId, CollectionMetadata)),
+    ) -> Self {
+        Self {
+            key: Some(variant.into_proto()),
+            value_id: Some(id.into_proto()),
+            value_meta: Some(meta.into_proto()),
+        }
+    }
+
+    fn into_rust(
+        self,
+    ) -> std::result::Result<(LogVariant, (GlobalId, CollectionMetadata)), TryFromProtoError> {
+        Ok((
+            self.key.into_rust_if_some("ProtoSinkLog::key")?,
+            (
+                self.value_id.into_rust_if_some("ProtoSinkLog::value_id")?,
+                self.value_meta
+                    .into_rust_if_some("ProtoSinkLog::value_meta")?,
+            ),
+        ))
     }
 }
 
@@ -101,7 +135,7 @@ impl RustType<ProtoLogVariant> for LogVariant {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum TimelyLog {
     Operates,
     Channels,
@@ -149,7 +183,7 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
 pub enum DifferentialLog {
     ArrangementBatches,
     ArrangementRecords,
@@ -216,6 +250,30 @@ impl RustType<ProtoComputeLog> for ComputeLog {
         }
     }
 }
+
+pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
+    let default_logs = vec![
+        LogVariant::Timely(TimelyLog::Operates),
+        LogVariant::Timely(TimelyLog::Channels),
+        LogVariant::Timely(TimelyLog::Elapsed),
+        LogVariant::Timely(TimelyLog::Histogram),
+        LogVariant::Timely(TimelyLog::Addresses),
+        LogVariant::Timely(TimelyLog::Parks),
+        LogVariant::Timely(TimelyLog::MessagesSent),
+        LogVariant::Timely(TimelyLog::MessagesReceived),
+        LogVariant::Timely(TimelyLog::Reachability),
+        LogVariant::Differential(DifferentialLog::ArrangementBatches),
+        LogVariant::Differential(DifferentialLog::ArrangementRecords),
+        LogVariant::Differential(DifferentialLog::Sharing),
+        LogVariant::Compute(ComputeLog::DataflowCurrent),
+        LogVariant::Compute(ComputeLog::DataflowDependency),
+        LogVariant::Compute(ComputeLog::FrontierCurrent),
+        LogVariant::Compute(ComputeLog::PeekCurrent),
+        LogVariant::Compute(ComputeLog::PeekDuration),
+    ];
+
+    default_logs
+});
 
 impl LogVariant {
     /// By which columns should the logs be indexed.

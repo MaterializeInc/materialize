@@ -22,7 +22,7 @@
 //! compacted frontiers, as the underlying resources to rebuild them any earlier may not
 //! exist any longer.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -41,8 +41,10 @@ use mz_ore::retry::Retry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
+use mz_storage::controller::CollectionMetadata;
 
 use crate::command::{ComputeCommand, Peek, ReplicaId};
+use crate::logging::LogVariant;
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -389,6 +391,39 @@ struct ReplicaState<T> {
     response_rx: UnboundedReceiver<ComputeResponse<T>>,
     /// The network addresses of the processes that make up the replica.
     addrs: Vec<String>,
+    /// Where to persist introspection sources
+    persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+}
+
+impl<T> ReplicaState<T> {
+    /// Specialize a command for the given `Replica` and `ReplicaId`.
+    ///
+    /// Most `ComputeCommand`s are independent of the target replica, but some
+    /// contain replica-specific fields that must be adjusted before sending.
+    fn specialize_command(&self, command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
+        // Set new replica ID and obtain set the sinked logs specific to this replica
+        if let ComputeCommand::CreateInstance(config) = command {
+            // Set sink_logs
+            if let Some(logging) = &mut config.logging {
+                logging.sink_logs = self.persisted_logs.clone();
+                tracing::debug!(
+                    "Enabling sink_logs at replica {:?}: {:?}",
+                    replica_id,
+                    &logging.sink_logs
+                );
+            };
+
+            // Set replica id
+            config.replica_id = replica_id;
+        }
+
+        // Replace dataflow identifiers with new unique ids.
+        if let ComputeCommand::CreateDataflows(dataflows) = command {
+            for dataflow in dataflows.iter_mut() {
+                dataflow.id = uuid::Uuid::new_v4();
+            }
+        }
+    }
 }
 
 impl<T> ActiveReplication<T>
@@ -399,7 +434,12 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub fn add_replica(&mut self, id: ReplicaId, addrs: Vec<String>) {
+    pub fn add_replica(
+        &mut self,
+        id: ReplicaId,
+        addrs: Vec<String>,
+        persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    ) {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
         // the replica.
@@ -419,11 +459,19 @@ where
         // Take this opportunity to clean up the history we should present.
         self.state.last_command_count = self.state.history.reduce(&self.state.peeks);
 
+        let replica_state = ReplicaState {
+            command_tx,
+            response_rx,
+            addrs,
+            persisted_logs,
+        };
+
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.state.history.iter() {
             let mut command = command.clone();
-            specialize_command(&mut command, id);
-            command_tx
+            replica_state.specialize_command(&mut command, id);
+            replica_state
+                .command_tx
                 .send(command)
                 .expect("Channel to client has gone away!")
         }
@@ -432,14 +480,7 @@ where
         for (_, frontiers) in self.state.uppers.values_mut() {
             frontiers.insert(id, MutableAntichain::new_bottom(T::minimum()));
         }
-        self.replicas.insert(
-            id,
-            ReplicaState {
-                command_tx,
-                response_rx,
-                addrs,
-            },
-        );
+        self.replicas.insert(id, replica_state);
     }
 
     /// Returns an iterator over the IDs of the replicas.
@@ -457,8 +498,9 @@ where
 
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let addrs = self.replicas[&id].addrs.clone();
+        let persisted_logs = self.replicas[&id].persisted_logs.clone();
         self.remove_replica(id);
-        self.add_replica(id, addrs);
+        self.add_replica(id, addrs, persisted_logs);
     }
 
     // We avoid implementing `GenericClient` here, because the protocol between
@@ -485,7 +527,7 @@ where
         let mut failed_replicas = vec![];
         for (id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
-            specialize_command(&mut command, *id);
+            replica.specialize_command(&mut command, *id);
             // If sending the command fails, the replica requires rehydration.
             if replica.command_tx.send(command).is_err() {
                 failed_replicas.push(*id);
@@ -718,24 +760,6 @@ impl<T> Default for ComputeCommandHistory<T> {
     fn default() -> Self {
         Self {
             commands: Vec::new(),
-        }
-    }
-}
-
-/// Specialize a command for the given `ReplicaId`.
-///
-/// Most `ComputeCommand`s are independent of the target replica, but some
-/// contain replica-specific fields that must be adjusted before sending.
-fn specialize_command<T>(command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
-    // Tell new instances their replica ID.
-    if let ComputeCommand::CreateInstance(config) = command {
-        config.replica_id = replica_id;
-    }
-
-    // Replace dataflow identifiers with new unique ids.
-    if let ComputeCommand::CreateDataflows(dataflows) = command {
-        for dataflow in dataflows.iter_mut() {
-            dataflow.id = uuid::Uuid::new_v4();
         }
     }
 }

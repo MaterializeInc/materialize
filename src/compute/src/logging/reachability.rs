@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::{collections::HashMap, time::Duration};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
+use differential_dataflow::AsCollection;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
@@ -26,6 +27,8 @@ use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
+use crate::compute_state::ComputeState;
+use crate::logging::persist::persist_sink;
 use crate::logging::{ConsolidateBuffer, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -42,6 +45,7 @@ use crate::typedefs::{KeysValsHandle, RowSpine};
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
+    compute_state: &mut ComputeState,
     linked: std::rc::Rc<
         EventLink<
             Timestamp,
@@ -61,8 +65,6 @@ pub fn construct<A: Allocate>(
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
-        use differential_dataflow::collection::AsCollection;
-
         let (logs, token) = Some(linked).mz_replay(
             scope,
             "reachability logs",
@@ -72,7 +74,23 @@ pub fn construct<A: Allocate>(
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-        let construct_reachability = |key: Vec<_>, value: Vec<_>| {
+        // Restrict results by those logs that are meant to be active.
+        let logs_active = vec![LogVariant::Timely(TimelyLog::Reachability)];
+
+        // Do we sink the common dataflow?
+        let sink_common = config
+            .sink_logs
+            .contains_key(&LogVariant::Timely(TimelyLog::Reachability));
+
+        // Do we need to construct the common reachability common dataflow?
+        let common_needed = logs_active
+            .iter()
+            .any(|variant| config.active_logs.contains_key(variant))
+            || sink_common;
+
+        let mut result = std::collections::HashMap::new();
+        if common_needed {
+            // Construct common dataflow. Common will feed into both, active and into sinked
             let mut flatten = OperatorBuilder::new(
                 "Timely Reachability Logging Flatten ".to_string(),
                 scope.clone(),
@@ -111,54 +129,87 @@ pub fn construct<A: Allocate>(
                 }
             });
 
-            let mut row_buf = Row::default();
-            updates
+            let common = updates
                 .as_collection()
                 .arrange_core::<_, RowSpine<_, _, _, _>>(
                     Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
                     "PreArrange Timely reachability",
-                )
-                .as_collection(move |(update_type, addr, source, port, worker, ts), _| {
-                    let row_arena = RowArena::default();
-                    let update_type = if *update_type { "source" } else { "target" };
-                    row_buf.packer().push_list(
-                        addr.iter()
-                            .chain_one(&source)
-                            .map(|id| Datum::Int64(*id as i64)),
-                    );
-                    let datums = &[
-                        row_arena.push_unary_row(row_buf.clone()),
-                        Datum::Int64(*port as i64),
-                        Datum::Int64(*worker as i64),
-                        Datum::String(&update_type),
-                        Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
-                    ];
-                    row_buf.packer().extend(key.iter().map(|k| datums[*k]));
-                    let key_row = row_buf.clone();
-                    row_buf.packer().extend(value.iter().map(|k| datums[*k]));
-                    let value_row = row_buf.clone();
-                    (key_row, value_row)
-                })
-        };
-
-        // Restrict results by those logs that are meant to be active.
-        let logs = vec![(LogVariant::Timely(TimelyLog::Reachability))];
-
-        let mut result = std::collections::HashMap::new();
-        for variant in logs {
-            if config.active_logs.contains_key(&variant) {
-                let key = variant.index_by();
-                let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
-                    &key.iter()
-                        .cloned()
-                        .map(MirScalarExpr::Column)
-                        .collect::<Vec<_>>(),
-                    variant.desc().arity(),
                 );
-                let trace = construct_reachability(key.clone(), value)
-                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
-                    .trace;
-                result.insert(variant, (trace, Rc::clone(&token)));
+
+            if sink_common {
+                // Use common to create sinked, a timely collection that ouptuts a single value row.
+                let (id, meta) = config
+                    .sink_logs
+                    .get(&LogVariant::Timely(TimelyLog::Reachability))
+                    .unwrap();
+                tracing::debug!("Persisting reachability to {:?}", meta);
+
+                let mut row_buf = Row::default();
+                let sinked = common.as_collection(
+                    move |(update_type, addr, source, port, worker, ts), _| {
+                        let row_arena = RowArena::default();
+                        let update_type = if *update_type { "source" } else { "target" };
+                        row_buf.packer().push_list(
+                            addr.iter()
+                                .chain_one(&source)
+                                .map(|id| Datum::Int64(*id as i64)),
+                        );
+                        let datums = &[
+                            row_arena.push_unary_row(row_buf.clone()),
+                            Datum::Int64(*port as i64),
+                            Datum::Int64(*worker as i64),
+                            Datum::String(&update_type),
+                            Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                        ];
+                        row_buf.packer().extend(datums);
+                        row_buf.clone()
+                    },
+                );
+                persist_sink(*id, meta, compute_state, &sinked);
+            }
+
+            for variant in logs_active {
+                if config.active_logs.contains_key(&variant) {
+                    let key = variant.index_by();
+                    let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
+                        &key.iter()
+                            .cloned()
+                            .map(MirScalarExpr::Column)
+                            .collect::<Vec<_>>(),
+                        variant.desc().arity(),
+                    );
+
+                    // Use common to create an arrangement.
+                    let mut row_buf = Row::default();
+                    let updates = common.as_collection(
+                        move |(update_type, addr, source, port, worker, ts), _| {
+                            let row_arena = RowArena::default();
+                            let update_type = if *update_type { "source" } else { "target" };
+                            row_buf.packer().push_list(
+                                addr.iter()
+                                    .chain_one(&source)
+                                    .map(|id| Datum::Int64(*id as i64)),
+                            );
+                            let datums = &[
+                                row_arena.push_unary_row(row_buf.clone()),
+                                Datum::Int64(*port as i64),
+                                Datum::Int64(*worker as i64),
+                                Datum::String(&update_type),
+                                Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                            ];
+                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                            let key_row = row_buf.clone();
+                            row_buf.packer().extend(value.iter().map(|k| datums[*k]));
+                            let value_row = row_buf.clone();
+                            (key_row, value_row)
+                        },
+                    );
+
+                    let trace = updates
+                        .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
+                        .trace;
+                    result.insert(variant.clone(), (trace, Rc::clone(&token)));
+                }
             }
         }
         result

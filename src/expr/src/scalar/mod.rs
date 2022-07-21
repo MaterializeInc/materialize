@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 
+use mz_ore::stack::RecursionLimitError;
 use mz_proto::IntoRustIfSome;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -1354,10 +1355,10 @@ impl fmt::Display for MirScalarExpr {
     }
 }
 
-impl VisitChildren for MirScalarExpr {
-    fn visit_children<'a, F>(&'a self, mut f: F)
+impl VisitChildren<Self> for MirScalarExpr {
+    fn visit_children<F>(&self, mut f: F)
     where
-        F: FnMut(&'a Self),
+        F: FnMut(&Self),
     {
         use MirScalarExpr::*;
         match self {
@@ -1382,9 +1383,9 @@ impl VisitChildren for MirScalarExpr {
         }
     }
 
-    fn visit_mut_children<'a, F>(&'a mut self, mut f: F)
+    fn visit_mut_children<F>(&mut self, mut f: F)
     where
-        F: FnMut(&'a mut Self),
+        F: FnMut(&mut Self),
     {
         use MirScalarExpr::*;
         match self {
@@ -1409,9 +1410,10 @@ impl VisitChildren for MirScalarExpr {
         }
     }
 
-    fn try_visit_children<'a, F, E>(&'a self, mut f: F) -> Result<(), E>
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(&'a Self) -> Result<(), E>,
+        F: FnMut(&Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         use MirScalarExpr::*;
         match self {
@@ -1437,9 +1439,10 @@ impl VisitChildren for MirScalarExpr {
         Ok(())
     }
 
-    fn try_visit_mut_children<'a, F, E>(&'a mut self, mut f: F) -> Result<(), E>
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(&'a mut Self) -> Result<(), E>,
+        F: FnMut(&mut Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         use MirScalarExpr::*;
         match self {

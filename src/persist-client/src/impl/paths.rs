@@ -129,6 +129,30 @@ impl BlobKey {
     }
 }
 
+/// Represents the prefix of a blob path. Used for selecting subsets of blobs
+#[derive(Debug)]
+pub enum BlobKeyPrefix<'a> {
+    /// For accessing all blobs
+    #[allow(dead_code)]
+    All,
+    /// Scoped to the blobs of an individual shard
+    Shard(&'a ShardId),
+    /// Scoped to the blobs of an individual writer
+    #[allow(dead_code)]
+    Writer(&'a ShardId, &'a WriterId),
+}
+
+impl std::fmt::Display for BlobKeyPrefix<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            BlobKeyPrefix::All => "".into(),
+            BlobKeyPrefix::Shard(shard) => format!("{}", shard),
+            BlobKeyPrefix::Writer(shard, writer) => format!("{}/{}", shard, writer),
+        };
+        f.write_str(&s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::r#impl::paths::BlobKey;

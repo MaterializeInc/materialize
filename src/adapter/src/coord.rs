@@ -102,7 +102,8 @@ use mz_compute_client::explain::{
 };
 use mz_compute_client::response::PeekResponse;
 use mz_controller::{
-    ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
+    ComputeInstanceEvent, ConcreteComputeInstanceReplicaConfig,
+    ConcreteComputeInstanceReplicaLogging, ControllerResponse,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
@@ -780,17 +781,39 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
+        let mut persisted_log_ids = vec![];
         for instance in self.catalog.compute_instances() {
             self.controller
                 .create_instance(instance.id, instance.logging.clone())
                 .await;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
+                let introspection_collections = replica
+                    .config
+                    .persisted_logs
+                    .get_logs()
+                    .iter()
+                    .map(|(variant, id)| (*id, variant.desc().into()))
+                    .collect();
+
+                // Create collections does not recreate existing collections, so it is safe to
+                // always call it.
                 self.controller
-                    .add_replica_to_instance(instance.id, replica_id, replica.concrete_config)
+                    .storage_mut()
+                    .create_collections(introspection_collections)
+                    .await
+                    .unwrap();
+
+                persisted_log_ids.extend(replica.config.persisted_logs.get_log_ids().iter());
+
+                self.controller
+                    .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
         }
+
+        self.initialize_storage_read_policies(persisted_log_ids, None)
+            .await;
 
         // Migrate builtin objects
         for (compute_id, sink_ids) in builtin_migration_metadata.previous_sink_ids {
@@ -2352,7 +2375,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         id: GlobalId,
         oid: u32,
-        connection: SinkConnection,
+        connection: SinkConnection<()>,
         compute_instance: ComputeInstanceId,
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
@@ -2825,30 +2848,67 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         CreateComputeInstancePlan {
             name,
-            config,
+            config: compute_instance_config,
             replicas,
         }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let introspection_sources = if config.is_some() {
+        tracing::debug!("sequence_create_compute_instance");
+        let introspection_sources = if compute_instance_config.is_some() {
             self.catalog.allocate_introspection_source_indexes().await
         } else {
             Vec::new()
         };
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
-            config: config.clone(),
+            config: compute_instance_config.clone(),
             introspection_sources,
         }];
 
-        for (replica_name, config) in replicas {
+        // This vector collects introspection sources of all replicas of this compute instance
+        let mut introspection_collections = Vec::new();
+
+        for (replica_name, replica_config) in replicas {
+            // These are the persisted, per replica persisted logs
+            let persisted_logs = if compute_instance_config.is_some() {
+                self.catalog
+                    .allocate_persisted_introspection_source_indexes()
+                    .await
+            } else {
+                ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
+            };
+
+            introspection_collections.extend(
+                persisted_logs
+                    .get_logs()
+                    .iter()
+                    .map(|(variant, id)| (*id, variant.desc().into())),
+            );
+
+            let config = self
+                .catalog
+                .concretize_replica_config(replica_config, persisted_logs)?;
+
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
-                config: config.into(),
+                config,
                 on_cluster_name: name.clone(),
             });
         }
+
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
+
+        let introspection_collection_ids: Vec<GlobalId> = introspection_collections
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+
+        self.controller
+            .storage_mut()
+            .create_collections(introspection_collections)
+            .await
+            .unwrap();
+
         let instance = self
             .catalog
             .resolve_compute_instance(&name)
@@ -2858,10 +2918,19 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
-                .add_replica_to_instance(instance.id, replica_id, replica.concrete_config)
+                .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
+
+        if !introspection_collection_ids.is_empty() {
+            self.initialize_storage_read_policies(
+                introspection_collection_ids,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
+        }
+
         Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
     }
 
@@ -2874,22 +2943,60 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+
+        let persisted_logs = if instance.logging.is_some() {
+            self.catalog
+                .allocate_persisted_introspection_source_indexes()
+                .await
+        } else {
+            ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
+        };
+
+        let persisted_log_ids = persisted_logs.get_log_ids();
+        let persisted_logs_collections = persisted_logs
+            .get_logs()
+            .iter()
+            .map(|(variant, id)| (*id, variant.desc().into()))
+            .collect();
+
+        let config = self
+            .catalog
+            .concretize_replica_config(config, persisted_logs)?;
+
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
-            config: config.into(),
+            config,
             on_cluster_name: of_cluster.clone(),
         };
 
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
 
-        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
-        let replica_id = instance.replica_id_by_name[&name];
-        let replica = &instance.replicas_by_id[&replica_id];
         self.controller
-            .add_replica_to_instance(instance.id, replica_id, replica.concrete_config.clone())
+            .storage_mut()
+            .create_collections(persisted_logs_collections)
             .await
             .unwrap();
+
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let instance_id = instance.id;
+        let replica_id = instance.replica_id_by_name[&name];
+        let replica = instance.replicas_by_id[&replica_id].clone();
+
+        if instance.logging.is_some() {
+            self.initialize_storage_read_policies(
+                persisted_log_ids,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
+        }
+
+        self.controller
+            .add_replica_to_instance(instance_id, replica_id, replica.config.clone())
+            .await
+            .unwrap();
+
         Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false })
     }
 
@@ -3663,7 +3770,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, replica) in replicas {
-                self.drop_replica(instance_id, replica_id, replica.concrete_config)
+                self.drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3702,7 +3809,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
 
         for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.drop_replica(compute_id, replica_id, replica.concrete_config)
+            self.drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -5540,7 +5647,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
         f: F,
     ) -> Result<R, AdapterError>
     where
@@ -5606,20 +5713,23 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        self.remove_global_read_holds_storage(
+        let mut empty_timelines = self.remove_global_read_holds_storage(
             sources_to_drop
                 .iter()
                 .chain(tables_to_drop.iter())
                 .chain(recorded_views_to_drop.iter().map(|(_, id)| id))
                 .cloned(),
         );
-        self.remove_global_read_holds_compute(
-            sinks_to_drop
-                .iter()
-                .chain(indexes_to_drop.iter())
-                .chain(recorded_views_to_drop.iter())
-                .cloned(),
+        empty_timelines.extend(
+            self.remove_global_read_holds_compute(
+                sinks_to_drop
+                    .iter()
+                    .chain(indexes_to_drop.iter())
+                    .chain(recorded_views_to_drop.iter())
+                    .cloned(),
+            ),
         );
+        ops.extend(empty_timelines.into_iter().map(catalog::Op::DropTimeline));
 
         let (builtin_table_updates, result) = self
             .catalog
@@ -5799,10 +5909,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
     }
 
-    fn remove_global_read_holds_storage<I>(&mut self, ids: I)
+    fn remove_global_read_holds_storage<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = GlobalId>,
     {
+        let mut empty_timelines = Vec::new();
         for id in ids {
             if let Some(timeline) = self.get_timeline(id) {
                 let TimelineState { read_holds, .. } = self
@@ -5812,15 +5923,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 read_holds.id_bundle.storage_ids.remove(&id);
                 if read_holds.id_bundle.is_empty() {
                     self.global_timelines.remove(&timeline);
+                    empty_timelines.push(timeline);
                 }
             }
         }
+        empty_timelines
     }
 
-    fn remove_global_read_holds_compute<I>(&mut self, ids: I)
+    fn remove_global_read_holds_compute<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
     {
+        let mut empty_timelines = Vec::new();
         for (compute_instance, id) in ids {
             if let Some(timeline) = self.get_timeline(id) {
                 let TimelineState { read_holds, .. } = self
@@ -5834,10 +5948,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     if read_holds.id_bundle.is_empty() {
                         self.global_timelines.remove(&timeline);
+                        empty_timelines.push(timeline);
                     }
                 }
             }
         }
+        empty_timelines
     }
 
     async fn set_index_options(
@@ -7092,13 +7208,15 @@ mod timeline {
             F: Fn() -> T + 'static,
             Fut: Future<Output = Result<(), crate::catalog::Error>>,
         {
-            let durable_timestamp = initially.step_forward_by(&persist_interval);
-            persist_fn(durable_timestamp.clone()).await.unwrap();
-            Self {
+            let mut oracle = Self {
                 timestamp_oracle: TimestampOracle::new(initially.clone(), next),
-                durable_timestamp,
+                durable_timestamp: initially.clone(),
                 persist_interval,
-            }
+            };
+            oracle
+                .maybe_allocate_new_timestamps(&initially, persist_fn)
+                .await;
+            oracle
         }
 
         /// Peek the current value of the timestamp.
@@ -7164,7 +7282,11 @@ mod timeline {
         ) where
             Fut: Future<Output = Result<(), crate::catalog::Error>>,
         {
-            if self.durable_timestamp.less_equal(ts) {
+            if self.durable_timestamp.less_equal(ts)
+                // Since the timestamp is at its max value, we know that no other Coord can
+                // allocate a higher value.
+                && self.durable_timestamp.less_than(&T::maximum())
+            {
                 self.durable_timestamp = ts.step_forward_by(&self.persist_interval);
                 persist_fn(self.durable_timestamp.clone())
                     .await
@@ -7191,6 +7313,9 @@ pub trait CoordTimestamp:
     /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
     /// which must only happen if the timestamp is `Timestamp::minimum()`.
     fn step_back(&self) -> Option<Self>;
+
+    /// Return the maximum value for this timestamp.
+    fn maximum() -> Self;
 }
 
 impl CoordTimestamp for mz_repr::Timestamp {
@@ -7204,11 +7329,15 @@ impl CoordTimestamp for mz_repr::Timestamp {
     fn step_forward_by(&self, amount: &Self) -> Self {
         match self.checked_add(*amount) {
             Some(ts) => ts,
-            None => panic!("could not step forward"),
+            None => panic!("could not step {self} forward by {amount}"),
         }
     }
 
     fn step_back(&self) -> Option<Self> {
         self.checked_sub(1)
+    }
+
+    fn maximum() -> Self {
+        Self::MAX
     }
 }

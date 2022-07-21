@@ -352,44 +352,78 @@ d2
 # Check default sources, tables, and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
-mz_arrangement_sharing_internal
 mz_arrangement_batches_internal
+mz_arrangement_batches_internal_1
 mz_arrangement_records_internal
+mz_arrangement_records_internal_1
+mz_arrangement_sharing_internal
+mz_arrangement_sharing_internal_1
 mz_dataflow_channels
+mz_dataflow_channels_1
 mz_dataflow_operator_addresses
+mz_dataflow_operator_addresses_1
 mz_dataflow_operator_reachability_internal
+mz_dataflow_operator_reachability_internal_1
 mz_dataflow_operators
+mz_dataflow_operators_1
 mz_materialization_dependencies
+mz_materialization_dependencies_1
 mz_materializations
+mz_materializations_1
 mz_message_counts_received_internal
+mz_message_counts_received_internal_1
 mz_message_counts_sent_internal
+mz_message_counts_sent_internal_1
 mz_peek_active
+mz_peek_active_1
 mz_peek_durations
+mz_peek_durations_1
 mz_scheduling_elapsed_internal
+mz_scheduling_elapsed_internal_1
 mz_scheduling_histogram_internal
+mz_scheduling_histogram_internal_1
 mz_scheduling_parks_internal
+mz_scheduling_parks_internal_1
 mz_worker_materialization_frontiers
+mz_worker_materialization_frontiers_1
 
 > SHOW FULL SOURCES FROM mz_catalog
 name                                          type   type
 ---------------------------------------------------------
-mz_arrangement_sharing_internal               system log
 mz_arrangement_batches_internal               system log
+mz_arrangement_batches_internal_1             system log
 mz_arrangement_records_internal               system log
+mz_arrangement_records_internal_1             system log
+mz_arrangement_sharing_internal               system log
+mz_arrangement_sharing_internal_1             system log
 mz_dataflow_channels                          system log
+mz_dataflow_channels_1                        system log
 mz_dataflow_operator_addresses                system log
+mz_dataflow_operator_addresses_1              system log
 mz_dataflow_operator_reachability_internal    system log
+mz_dataflow_operator_reachability_internal_1  system log
 mz_dataflow_operators                         system log
+mz_dataflow_operators_1                       system log
 mz_materialization_dependencies               system log
+mz_materialization_dependencies_1             system log
 mz_materializations                           system log
+mz_materializations_1                         system log
 mz_message_counts_received_internal           system log
+mz_message_counts_received_internal_1         system log
 mz_message_counts_sent_internal               system log
+mz_message_counts_sent_internal_1             system log
 mz_peek_active                                system log
+mz_peek_active_1                              system log
 mz_peek_durations                             system log
+mz_peek_durations_1                           system log
 mz_scheduling_elapsed_internal                system log
+mz_scheduling_elapsed_internal_1              system log
 mz_scheduling_histogram_internal              system log
+mz_scheduling_histogram_internal_1            system log
 mz_scheduling_parks_internal                  system log
+mz_scheduling_parks_internal_1                system log
 mz_worker_materialization_frontiers           system log
+mz_worker_materialization_frontiers_1         system log
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -585,7 +619,9 @@ mz_scheduling_parks               system false
 
 > SHOW SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active
+mz_peek_active_1
 mz_peek_durations
+mz_peek_durations_1
 
 > SHOW VIEWS FROM mz_catalog LIKE '%peek%';
 mz_perf_peek_durations_aggregates

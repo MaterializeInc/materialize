@@ -10,7 +10,9 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fmt::Debug;
+use std::fs::Permissions;
 use std::net::{IpAddr, Ipv4Addr};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -92,6 +94,9 @@ impl ProcessOrchestrator {
         fs::create_dir_all(&secrets_dir)
             .await
             .context("creating secrets directory")?;
+        fs::set_permissions(&secrets_dir, Permissions::from_mode(0o700))
+            .await
+            .context("setting secrets directory permissions")?;
         Ok(ProcessOrchestrator {
             image_dir: fs::canonicalize(image_dir).await?,
             port_allocator,

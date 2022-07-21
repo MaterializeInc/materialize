@@ -21,7 +21,7 @@ use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, ExternalError};
+use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
 
 /// Configuration for opening a [FileBlob].
 #[derive(Debug, Clone)]
@@ -87,9 +87,12 @@ impl Blob for FileBlob {
         Ok(Some(buf))
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
         let base_dir = self.base_dir.canonicalize()?;
-        let mut ret = vec![];
 
         let mut entries = fs::read_dir(&base_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
@@ -117,11 +120,18 @@ impl Blob for FileBlob {
             if let Some(name) = file_name {
                 let name = name.to_str();
                 if let Some(name) = name {
-                    ret.push(FileBlob::restore_forward_slashes(name));
+                    if !name.starts_with(key_prefix) {
+                        continue;
+                    }
+
+                    f(BlobMetadata {
+                        key: &FileBlob::restore_forward_slashes(&name),
+                        size_in_bytes: entry.metadata().await?.len(),
+                    });
                 }
             }
         }
-        Ok(ret)
+        Ok(())
     }
 
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {

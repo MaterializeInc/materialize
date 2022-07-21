@@ -23,6 +23,7 @@ mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
 mz-timely-util = { path = "../timely-util" }
+once_cell = "1.13.0"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
