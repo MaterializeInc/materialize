@@ -35,7 +35,7 @@ use uuid::Uuid;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, ExternalError};
+use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
 
 /// Configuration for opening an [S3Blob].
 #[derive(Clone, Debug)]
@@ -419,17 +419,24 @@ impl Blob for S3Blob {
         Ok(Some(val))
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        let mut ret = vec![];
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
         let mut continuation_token = None;
-        let prefix = self.get_path("");
+        // we only want to return keys that match the specified blob key prefix
+        let blob_key_prefix = self.get_path(key_prefix);
+        // but we want to exclude the shared root prefix from our returned keys,
+        // so only the blob key itself is passed in to `f`
+        let strippable_root_prefix = format!("{}/", self.prefix);
 
         loop {
             let resp = self
                 .client
                 .list_objects_v2()
                 .bucket(&self.bucket)
-                .prefix(&self.prefix)
+                .prefix(&blob_key_prefix)
                 .max_keys(self.max_keys)
                 .set_continuation_token(continuation_token)
                 .send()
@@ -438,8 +445,14 @@ impl Blob for S3Blob {
             if let Some(contents) = resp.contents {
                 for object in contents.iter() {
                     if let Some(key) = object.key.as_ref() {
-                        if let Some(key) = key.strip_prefix(&prefix) {
-                            ret.push(key.to_string());
+                        if let Some(key) = key.strip_prefix(&strippable_root_prefix) {
+                            f(BlobMetadata {
+                                key,
+                                size_in_bytes: object
+                                    .size
+                                    .try_into()
+                                    .expect("file in S3 cannot have negative size"),
+                            });
                         } else {
                             return Err(ExternalError::from(anyhow!(
                                 "found key with invalid prefix: {}",
@@ -457,7 +470,7 @@ impl Blob for S3Blob {
             }
         }
 
-        Ok(ret)
+        Ok(())
     }
 
     async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {

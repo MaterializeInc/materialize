@@ -668,15 +668,23 @@ mod tests {
         write.expect_append(&data[..2], vec![0], vec![upper]).await;
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
-        let blob_count_before = blob.list_keys().await.expect("list_keys failed").len();
+        let mut count_before = 0;
+        blob.list_keys_and_metadata("", &mut |_| {
+            count_before += 1;
+        })
+        .await
+        .expect("list_keys failed");
         for _ in 0..5 {
             let new_upper = upper + 1;
             write.expect_compare_and_append(&[], upper, new_upper).await;
             upper = new_upper;
         }
-        assert_eq!(
-            blob.list_keys().await.expect("list_keys failed").len(),
-            blob_count_before
-        );
+        let mut count_after = 0;
+        blob.list_keys_and_metadata("", &mut |_| {
+            count_after += 1;
+        })
+        .await
+        .expect("list_keys failed");
+        assert_eq!(count_after, count_before);
     }
 }
