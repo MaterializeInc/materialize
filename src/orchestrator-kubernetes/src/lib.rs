@@ -19,21 +19,23 @@ use clap::ArgEnum;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
-    Service as K8sService, ServicePort, ServiceSpec,
+    Affinity, Container, ContainerPort, Pod, PodAffinityTerm, PodAntiAffinity, PodSpec,
+    PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort, ServiceSpec,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
 use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
+use maplit::btreemap;
 use sha2::{Digest, Sha256};
 
+use mz_orchestrator::LabelSelector as MzLabelSelector;
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
-    ServiceStatus,
+    LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments,
+    ServiceConfig, ServiceEvent, ServiceStatus,
 };
 
 pub mod secrets;
@@ -140,6 +142,42 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
     }
 }
 
+fn label_selector_to_k8s(
+    MzLabelSelector { label_name, logic }: MzLabelSelector,
+    prefix: &str,
+) -> Result<LabelSelectorRequirement, anyhow::Error> {
+    let (operator, values) = match logic {
+        LabelSelectionLogic::Eq { value } => Ok(("In", vec![value])),
+        LabelSelectionLogic::NotEq { value } => Ok(("NotIn", vec![value])),
+        LabelSelectionLogic::Exists => Ok(("Exists", vec![])),
+        LabelSelectionLogic::NotExists => Ok(("DoesNotExist", vec![])),
+        LabelSelectionLogic::InSet { values } => {
+            if values.is_empty() {
+                Err(anyhow!(
+                    "Invalid selector logic for {label_name}: empty `in` set"
+                ))
+            } else {
+                Ok(("In", values))
+            }
+        }
+        LabelSelectionLogic::NotInSet { values } => {
+            if values.is_empty() {
+                Err(anyhow!(
+                    "Invalid selector logic for {label_name}: empty `notin` set"
+                ))
+            } else {
+                Ok(("NotIn", values))
+            }
+        }
+    }?;
+    let lsr = LabelSelectorRequirement {
+        key: format!("{prefix}/{label_name}"),
+        operator: operator.to_string(),
+        values: Some(values),
+    };
+    Ok(lsr)
+}
+
 impl NamespacedKubernetesOrchestrator {
     /// Return a `ListParams` instance that limits results to the namespace
     /// assigned to this orchestrator.
@@ -166,10 +204,20 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             scale,
             labels: labels_in,
             availability_zone,
+            anti_affinity,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let name = format!("{}-{id}", self.namespace);
-        let mut labels = BTreeMap::new();
+        // The match labels should be the minimal set of labels that uniquely
+        // identify the pods in the stateful set. Changing these after the
+        // `StatefulSet` is created is not permitted by Kubernetes, and we're
+        // not yet smart enough to handle deleting and recreating the
+        // `StatefulSet`.
+        let match_labels = btreemap! {
+            "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
+            "environmentd.materialize.cloud/service-id".into() => id.into(),
+        };
+        let mut labels = match_labels.clone();
         for (key, value) in labels_in {
             labels.insert(
                 format!("{}.environmentd.materialize.cloud/{}", self.namespace, key),
@@ -182,14 +230,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 "true".into(),
             );
         }
-        labels.insert(
-            "environmentd.materialize.cloud/namespace".into(),
-            self.namespace.clone(),
-        );
-        labels.insert(
-            "environmentd.materialize.cloud/service-id".into(),
-            id.into(),
-        );
         for (key, value) in &self.config.service_labels {
             labels.insert(key.clone(), value.clone());
         }
@@ -223,7 +263,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         .collect(),
                 ),
                 cluster_ip: None,
-                selector: Some(labels.clone()),
+                selector: Some(match_labels.clone()),
                 ..Default::default()
             }),
             status: None,
@@ -269,6 +309,28 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             "--secrets-reader-kubernetes-context={}",
             self.config.context
         ));
+
+        let anti_affinity = anti_affinity
+            .map(|label_selectors| -> Result<_, anyhow::Error> {
+                let label_selector_requirements = label_selectors
+                    .into_iter()
+                    .map(|ls| label_selector_to_k8s(ls, &self.namespace))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ls = LabelSelector {
+                    match_expressions: Some(label_selector_requirements),
+                    ..Default::default()
+                };
+                let pat = PodAffinityTerm {
+                    label_selector: Some(ls),
+                    topology_key: "kubernetes.io/hostname".to_string(),
+                    ..Default::default()
+                };
+                Ok(PodAntiAffinity {
+                    required_during_scheduling_ignored_during_execution: Some(vec![pat]),
+                    ..Default::default()
+                })
+            })
+            .transpose()?;
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -299,6 +361,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }],
                 node_selector: Some(node_selector),
                 service_account: self.config.service_account.clone(),
+                affinity: Some(Affinity {
+                    pod_anti_affinity: anti_affinity,
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
         };
@@ -326,7 +392,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             },
             spec: Some(StatefulSetSpec {
                 selector: LabelSelector {
-                    match_labels: Some(labels.clone()),
+                    match_labels: Some(match_labels),
                     ..Default::default()
                 },
                 service_name: name.clone(),

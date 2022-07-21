@@ -479,40 +479,6 @@ CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USIN
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(InlineSchema { schema: Inline("string"), with_options: [AvroSchemaOption { name: ConfluentWireFormat, value: Some(Value(Boolean(false))) }] })), envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-----
-error: Expected end of statement, found FORMAT
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-                                                                                                                     ^
-
-parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-----
-error: Expected end of statement, found FORMAT
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-                                                                                                                                         ^
-
-parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-----
-error: Expected end of statement, found FORMAT
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-                                                                                                                                          ^
-
-parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-----
-error: Expected end of statement, found FORMAT
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-                                                                                                                                           ^
-
-parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-----
-error: Expected end of statement, found FORMAT
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
-                                                                                                                                                     ^
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SEKRET)

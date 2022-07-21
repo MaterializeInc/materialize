@@ -63,6 +63,7 @@ where
             response_tx,
             ingestions: BTreeMap::new(),
             uppers: HashMap::new(),
+            initialized: false,
         };
         mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -98,6 +99,9 @@ struct RehydrationTask<T> {
     ingestions: BTreeMap<GlobalId, IngestSourceCommand<T>>,
     /// The upper frontier information received.
     uppers: HashMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>,
+    /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
+    /// observed.
+    initialized: bool,
 }
 
 enum RehydrationTaskState {
@@ -153,11 +157,13 @@ where
             .expect("retry retries forever");
 
         // Rehydrate all commands.
-        self.send_command(
-            client,
-            StorageCommand::IngestSources(self.ingestions.values().cloned().collect()),
-        )
-        .await
+        let mut commands = vec![StorageCommand::IngestSources(
+            self.ingestions.values().cloned().collect(),
+        )];
+        if self.initialized {
+            commands.push(StorageCommand::InitializationComplete)
+        }
+        self.send_commands(client, commands).await
     }
 
     async fn step_pump(&mut self, mut client: StorageGrpcClient) -> RehydrationTaskState {
@@ -167,7 +173,7 @@ where
                 None => RehydrationTaskState::Done,
                 Some(command) => {
                     self.absorb_command(&command);
-                    self.send_command(client, command).await
+                    self.send_commands(client, vec![command]).await
                 }
             },
             // Response from storage host to forward to controller.
@@ -188,15 +194,17 @@ where
         }
     }
 
-    async fn send_command(
+    async fn send_commands(
         &mut self,
         mut client: StorageGrpcClient,
-        command: StorageCommand<T>,
+        commands: impl IntoIterator<Item = StorageCommand<T>>,
     ) -> RehydrationTaskState {
-        match client.send(command).await {
-            Ok(()) => RehydrationTaskState::Pump { client },
-            Err(e) => self.send_response(client, Err(e)).await,
+        for command in commands {
+            if let Err(e) = client.send(command).await {
+                return self.send_response(client, Err(e)).await;
+            }
         }
+        RehydrationTaskState::Pump { client }
     }
 
     async fn send_response(
@@ -225,6 +233,7 @@ where
 
     fn absorb_command(&mut self, command: &StorageCommand<T>) {
         match command {
+            StorageCommand::InitializationComplete => self.initialized = true,
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
                     self.ingestions.insert(ingestion.id, ingestion.clone());

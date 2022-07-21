@@ -85,3 +85,31 @@ pub static SYSTEM_TIME: Lazy<NowFn> = Lazy::new(|| NowFn::from(system_time));
 ///
 /// For use in tests.
 pub static NOW_ZERO: Lazy<NowFn> = Lazy::new(|| NowFn::from(now_zero));
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+
+    use super::to_datetime;
+
+    #[test]
+    fn test_to_datetime() {
+        let test_cases = [
+            (0, NaiveDate::from_ymd(1970, 1, 1).and_hms_nano(0, 0, 0, 0)),
+            (
+                1600000000000,
+                NaiveDate::from_ymd(2020, 9, 13).and_hms_nano(12, 26, 40, 0),
+            ),
+            (
+                1658323270293,
+                NaiveDate::from_ymd(2022, 7, 20).and_hms_nano(13, 21, 10, 293_000_000),
+            ),
+        ];
+        // to_datetime works properly and roundtrips
+        for (millis, datetime) in test_cases.into_iter() {
+            let converted_datetime = to_datetime(millis).naive_utc();
+            assert_eq!(datetime, converted_datetime);
+            assert_eq!(millis, converted_datetime.timestamp_millis() as u64)
+        }
+    }
+}

@@ -20,7 +20,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use mz_expr::RowSetFinishing;
-use mz_repr::explain_new::{DisplayText, ExprHumanizer};
+use mz_ore::str::{Indent, IndentLike};
+use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer};
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
@@ -42,26 +43,42 @@ impl<'a, T> Explainable<'a, T> {
     }
 }
 
+/// Newtype struct for wrapping types that should implement one
+/// of the `Display$Format` traits.
+///
+/// While explainable wraps a mutable reference passed to the
+/// `explain*` methods in [`mz_repr::explain_new::Explain`],
+/// [`Displayable`] wraps a shared reference passed to the
+/// `fmt_$format` methods in `Display$Format`.
+pub(crate) struct Displayable<'a, T>(&'a T);
+
+impl<'a, T> From<&'a T> for Displayable<'a, T> {
+    fn from(t: &'a T) -> Self {
+        Displayable(t)
+    }
+}
+
 /// Explain context shared by all [`mz_repr::explain_new::Explain`]
 /// implementations in this crate.
 #[derive(Debug)]
 #[allow(dead_code)] // TODO (#13299)
 pub(crate) struct ExplainContext<'a> {
+    pub(crate) config: &'a ExplainConfig,
     pub(crate) humanizer: &'a dyn ExprHumanizer,
     pub(crate) used_indexes: UsedIndexes,
     pub(crate) finishing: Option<RowSetFinishing>,
     pub(crate) fast_path_plan: Option<fast_path_peek::Plan>,
 }
 
-pub struct Attributes;
+#[derive(Clone)]
+pub(crate) struct Attributes;
 
-/// A somewhat hacky way to annotate the nodes of a plan with
-/// arbitrary attributes based on the pre-order of the items
-/// in the associated plan.
+/// A somewhat ad-hoc way to keep carry a plan with a set
+/// of attributes derived for each node in that plan.
 #[allow(dead_code)] // TODO (#13299)
-pub struct AnnotatedPlan<'a, T> {
-    pub(crate) plan: &'a mut T,
-    pub(crate) annotations: HashMap<usize, Attributes>,
+pub(crate) struct AnnotatedPlan<'a, T> {
+    pub(crate) plan: &'a T,
+    pub(crate) annotations: HashMap<&'a T, Attributes>,
 }
 
 /// A set of indexes that are used in the physical plan
@@ -95,16 +112,27 @@ pub(crate) struct ExplainSinglePlan<'a, T> {
 
 impl<'a, T: 'a> DisplayText<()> for ExplainSinglePlan<'a, T>
 where
-    Explainable<'a, T>: DisplayText,
+    Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        let mut ctx = PlanRenderingContext::new(
+            Indent::default(),
+            self.context.humanizer,
+            self.plan.annotations.clone(),
+            self.context.config,
+        );
+
+        if let Some(finishing) = &self.context.finishing {
+            finishing.fmt_text(f, &mut ctx.indent)?;
+            ctx.indented(|ctx| Displayable::from(self.plan.plan).fmt_text(f, ctx))?;
+        } else {
+            Displayable::from(self.plan.plan).fmt_text(f, &mut ctx)?;
+        }
+        // writeln!(f, "")?;
+
         // TODO (#13472)
-        let mut context = Default::default();
-        self.context.finishing.fmt_text(f, &mut context)?;
-        // writeln!(f, "")?;
-        // self.plan.fmt_text(..., f)?;
-        // writeln!(f, "")?;
         // self.context.used_indexes.fmt_text(..., f)?;
+
         Ok(())
     }
 }
@@ -127,18 +155,51 @@ pub(crate) struct ExplainMultiPlan<'a, T> {
 
 impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
 where
-    Explainable<'a, T>: DisplayText,
+    Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
 {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         // TODO (#13472)
-        let mut context = Default::default();
-        self.context.finishing.fmt_text(f, &mut context)?;
+        // let mut context = RenderingContext::new(Indent::default(), self.context.humanizer);
+        // self.context.finishing.fmt_text(f, &mut context.indent)?;
         // writeln!(f, "")?;
         // self.plans.fmt_text(..., f)?;
         // writeln!(f, "")?;
         // self.sources.used_indexes.fmt_text(..., f)?;
         // writeln!(f, "")?;
         // self.context.used_indexes.fmt_text(..., f)?;
+
         Ok(())
+    }
+}
+
+#[allow(dead_code)] // TODO (#13299)
+#[allow(missing_debug_implementations)]
+pub(crate) struct PlanRenderingContext<'a, T> {
+    pub(crate) indent: Indent,
+    pub(crate) humanizer: &'a dyn ExprHumanizer,
+    pub(crate) annotations: HashMap<&'a T, Attributes>, // TODO: can this be a ref
+    pub(crate) config: &'a ExplainConfig,
+}
+
+impl<'a, T> PlanRenderingContext<'a, T> {
+    #[allow(dead_code)] // TODO (#13299)
+    pub fn new(
+        indent: Indent,
+        humanizer: &'a dyn ExprHumanizer,
+        annotations: HashMap<&'a T, Attributes>,
+        config: &'a ExplainConfig,
+    ) -> PlanRenderingContext<'a, T> {
+        PlanRenderingContext {
+            indent,
+            humanizer,
+            annotations,
+            config,
+        }
+    }
+}
+
+impl<'a, T> AsMut<Indent> for PlanRenderingContext<'a, T> {
+    fn as_mut(&mut self) -> &mut Indent {
+        &mut self.indent
     }
 }

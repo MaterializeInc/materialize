@@ -54,6 +54,9 @@ pub struct ReclockOperator {
     /// Write handle of the remap persist shard
     write_handle: WriteHandle<(), PartitionId, Timestamp, MzOffset>,
     /// Read handle of the remap persist shard
+    ///
+    /// NB: Until #13534 is addressed, this intentionally holds back the since
+    /// of the remap shard indefinitely.
     read_handle: ReadHandle<(), PartitionId, Timestamp, MzOffset>,
     /// A listener to tail the remap shard for new updates
     listener: Listen<(), PartitionId, Timestamp, MzOffset>,
@@ -97,6 +100,8 @@ impl ReclockOperator {
         );
 
         let listener = read_handle
+            .clone()
+            .await
             .listen(as_of.clone())
             .await
             .expect("since <= as_of asserted");
@@ -212,7 +217,7 @@ impl ReclockOperator {
             consolidation::consolidate(bindings);
         }
         self.since = new_since;
-        self.read_handle.downgrade_since(self.since.clone()).await;
+        self.read_handle.maybe_downgrade_since(&self.since).await;
     }
 
     /// Advances the upper of the reclock operator if appropriate

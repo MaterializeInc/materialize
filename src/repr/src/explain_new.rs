@@ -32,7 +32,7 @@
 
 use std::{collections::HashSet, fmt};
 
-use mz_ore::str::Indent;
+use mz_ore::{stack::RecursionLimitError, str::Indent};
 
 use crate::{ColumnType, GlobalId, ScalarType};
 
@@ -121,6 +121,15 @@ impl<T: DisplayText<C>, C, F: Fn() -> C> DisplayText<()> for DisplayWithContext<
     }
 }
 
+impl<A, C> DisplayText<C> for Box<A>
+where
+    A: DisplayText<C>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        self.as_ref().fmt_text(f, ctx)
+    }
+}
+
 impl<A, C> DisplayText<C> for Option<A>
 where
     A: DisplayText<C>,
@@ -131,6 +140,50 @@ where
         } else {
             fmt::Result::Ok(())
         }
+    }
+}
+
+/// Creates a type whose [`fmt::Display`] implementation outputs each item in
+/// `iter` separated by `separator`.
+///
+/// The difference between this and [`mz_ore::str::separated`] is that the latter
+/// requires the iterator items to implement [`fmt::Display`], whereas this version
+/// wants them to implement [`DisplayText<C>`] for some rendering context `C` which
+/// implements [`Default`].
+pub fn separated_text<'a, I, C>(separator: &'a str, iter: I) -> impl fmt::Display + 'a
+where
+    I: IntoIterator,
+    I::IntoIter: Clone + 'a,
+    I::Item: DisplayText<C> + 'a,
+    C: Default + 'a,
+{
+    struct Separated<'a, I, C> {
+        separator: &'a str,
+        iter: I,
+        phantom: std::marker::PhantomData<C>,
+    }
+
+    impl<'a, I, C> fmt::Display for Separated<'a, I, C>
+    where
+        C: Default,
+        I: Iterator + Clone,
+        I::Item: DisplayText<C>,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            for (i, item) in self.iter.clone().enumerate() {
+                if i != 0 {
+                    write!(f, "{}", self.separator)?;
+                }
+                item.fmt_text(f, &mut C::default())?;
+            }
+            Ok(())
+        }
+    }
+
+    Separated {
+        separator,
+        iter: iter.into_iter(),
+        phantom: std::marker::PhantomData::<C>,
     }
 }
 
@@ -158,13 +211,22 @@ impl<T: DisplayJson<C>, C, F: Fn() -> C> DisplayJson<()> for DisplayWithContext<
     }
 }
 
+impl<A, C> DisplayJson<C> for Box<A>
+where
+    A: DisplayJson<C>,
+{
+    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        self.as_ref().fmt_json(f, ctx)
+    }
+}
+
 impl<A, C> DisplayJson<C> for Option<A>
 where
-    A: DisplayText<C>,
+    A: DisplayJson<C>,
 {
     fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         if let Some(val) = self {
-            val.fmt_text(f, ctx)
+            val.fmt_json(f, ctx)
         } else {
             fmt::Result::Ok(())
         }
@@ -192,6 +254,15 @@ impl<T: DisplayDot<C>, C, F: Fn() -> C> DisplayDot<()> for DisplayWithContext<'_
     fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = (self.f)();
         self.t.fmt_dot(f, &mut ctx)
+    }
+}
+
+impl<A, C> DisplayDot<C> for Box<A>
+where
+    A: DisplayDot<C>,
+{
+    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        self.as_ref().fmt_dot(f, ctx)
     }
 }
 
@@ -239,6 +310,7 @@ pub enum ExplainError {
     UnsupportedFormat(ExplainFormat),
     FormatError(fmt::Error),
     AnyhowError(anyhow::Error),
+    RecursionLimitError(RecursionLimitError),
     UnknownError(String),
 }
 
@@ -253,6 +325,9 @@ impl fmt::Display for ExplainError {
                 write!(f, "{}", error)
             }
             ExplainError::AnyhowError(error) => {
+                write!(f, "{}", error)
+            }
+            ExplainError::RecursionLimitError(error) => {
                 write!(f, "{}", error)
             }
             ExplainError::UnknownError(error) => {
@@ -271,6 +346,12 @@ impl From<fmt::Error> for ExplainError {
 impl From<anyhow::Error> for ExplainError {
     fn from(error: anyhow::Error) -> Self {
         ExplainError::AnyhowError(error)
+    }
+}
+
+impl From<RecursionLimitError> for ExplainError {
+    fn from(error: RecursionLimitError) -> Self {
+        ExplainError::RecursionLimitError(error)
     }
 }
 
@@ -419,6 +500,12 @@ pub struct RenderingContext<'a> {
 impl<'a> RenderingContext<'a> {
     pub fn new(indent: Indent, humanizer: &'a dyn ExprHumanizer) -> RenderingContext {
         RenderingContext { indent, humanizer }
+    }
+}
+
+impl<'a> AsMut<Indent> for RenderingContext<'a> {
+    fn as_mut(&mut self) -> &mut Indent {
+        &mut self.indent
     }
 }
 

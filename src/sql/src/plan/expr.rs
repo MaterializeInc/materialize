@@ -17,6 +17,9 @@ use std::fmt;
 use std::mem;
 
 use itertools::Itertools;
+use mz_expr::visit::Visit;
+use mz_expr::visit::VisitChildren;
+use mz_ore::stack::RecursionLimitError;
 use serde::{Deserialize, Serialize};
 
 use mz_ore::collections::CollectionExt;
@@ -179,6 +182,7 @@ impl WindowExpr {
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.func.visit_expressions(f)?;
         for expr in self.partition.iter() {
             f(expr)?;
@@ -193,7 +197,66 @@ impl WindowExpr {
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.func.visit_expressions_mut(f)?;
+        for expr in self.partition.iter_mut() {
+            f(expr)?;
+        }
+        for expr in self.order_by.iter_mut() {
+            f(expr)?;
+        }
+        Ok(())
+    }
+}
+
+impl VisitChildren<HirScalarExpr> for WindowExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&HirScalarExpr),
+    {
+        self.func.visit_children(&mut f);
+        for expr in self.partition.iter() {
+            f(expr);
+        }
+        for expr in self.order_by.iter() {
+            f(expr);
+        }
+    }
+
+    fn visit_mut_children<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut HirScalarExpr),
+    {
+        self.func.visit_mut_children(&mut f);
+        for expr in self.partition.iter_mut() {
+            f(expr);
+        }
+        for expr in self.order_by.iter_mut() {
+            f(expr);
+        }
+    }
+
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        self.func.try_visit_children(&mut f)?;
+        for expr in self.partition.iter() {
+            f(expr)?;
+        }
+        for expr in self.order_by.iter() {
+            f(expr)?;
+        }
+        Ok(())
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        self.func.try_visit_mut_children(&mut f)?;
         for expr in self.partition.iter_mut() {
             f(expr)?;
         }
@@ -225,20 +288,24 @@ pub enum WindowExprType {
 }
 
 impl WindowExprType {
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
     pub fn visit_expressions<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         match self {
             Self::Scalar(expr) => expr.visit_expressions(f),
             Self::Value(expr) => expr.visit_expressions(f),
         }
     }
 
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_mut_children` instead."]
     pub fn visit_expressions_mut<'a, F, E>(&'a mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         match self {
             Self::Scalar(expr) => expr.visit_expressions_mut(f),
             Self::Value(expr) => expr.visit_expressions_mut(f),
@@ -258,6 +325,50 @@ impl WindowExprType {
     }
 }
 
+impl VisitChildren<HirScalarExpr> for WindowExprType {
+    fn visit_children<F>(&self, f: F)
+    where
+        F: FnMut(&HirScalarExpr),
+    {
+        match self {
+            Self::Scalar(_) => (),
+            Self::Value(expr) => expr.visit_children(f),
+        }
+    }
+
+    fn visit_mut_children<F>(&mut self, f: F)
+    where
+        F: FnMut(&mut HirScalarExpr),
+    {
+        match self {
+            Self::Scalar(_) => (),
+            Self::Value(expr) => expr.visit_mut_children(f),
+        }
+    }
+
+    fn try_visit_children<F, E>(&self, f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        match self {
+            Self::Scalar(_) => Ok(()),
+            Self::Value(expr) => expr.try_visit_children(f),
+        }
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        match self {
+            Self::Scalar(_) => Ok(()),
+            Self::Value(expr) => expr.try_visit_mut_children(f),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScalarWindowExpr {
     pub func: ScalarWindowFunc,
@@ -265,6 +376,7 @@ pub struct ScalarWindowExpr {
 }
 
 impl ScalarWindowExpr {
+    #[deprecated = "Implement `VisitChildren<HirScalarExpr>` if needed."]
     pub fn visit_expressions<'a, F, E>(&'a self, _f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
@@ -276,6 +388,7 @@ impl ScalarWindowExpr {
         Ok(())
     }
 
+    #[deprecated = "Implement `VisitChildren<HirScalarExpr>` if needed."]
     pub fn visit_expressions_mut<'a, F, E>(&'a mut self, _f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
@@ -333,6 +446,7 @@ pub struct ValueWindowExpr {
 }
 
 impl ValueWindowExpr {
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
     pub fn visit_expressions<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
@@ -340,6 +454,7 @@ impl ValueWindowExpr {
         f(&self.expr)
     }
 
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_mut_children` instead."]
     pub fn visit_expressions_mut<'a, F, E>(&'a mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
@@ -376,6 +491,38 @@ impl ValueWindowExpr {
                 window_frame: self.window_frame,
             },
         }
+    }
+}
+
+impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&HirScalarExpr),
+    {
+        f(&self.expr)
+    }
+
+    fn visit_mut_children<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut HirScalarExpr),
+    {
+        f(&mut self.expr)
+    }
+
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        f(&self.expr)
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        f(&mut self.expr)
     }
 }
 
@@ -910,6 +1057,7 @@ impl HirRelationExpr {
     /// direct parent scope.
     pub fn is_correlated(&self) -> bool {
         let mut correlated = false;
+        #[allow(deprecated)]
         self.visit_columns(0, &mut |depth, col| {
             if col.level > depth && col.level - depth == 1 {
                 correlated = true;
@@ -1039,6 +1187,7 @@ impl HirRelationExpr {
             // The join can be elided, but we need to adjust column references
             // on the right-hand side to account for the removal of the scope
             // introduced by the join.
+            #[allow(deprecated)]
             right.visit_columns_mut(0, &mut |depth, col| {
                 if col.level > depth {
                     col.level -= 1;
@@ -1067,10 +1216,12 @@ impl HirRelationExpr {
         )
     }
 
+    #[deprecated = "Use `Visit::visit_post`."]
     pub fn visit<'a, F>(&'a self, depth: usize, f: &mut F)
     where
         F: FnMut(&'a Self, usize),
     {
+        #[allow(deprecated)]
         let _ = self.visit_fallible(depth, &mut |e: &HirRelationExpr,
                                                  depth: usize|
          -> Result<(), ()> {
@@ -1079,16 +1230,19 @@ impl HirRelationExpr {
         });
     }
 
+    #[deprecated = "Use `Visit::try_visit_post`."]
     pub fn visit_fallible<'a, F, E>(&'a self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a Self, usize) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.visit1(depth, |e: &HirRelationExpr, depth: usize| {
             e.visit_fallible(depth, f)
         })?;
         f(self, depth)
     }
 
+    #[deprecated = "Use `VisitChildren<HirRelationExpr>::try_visit_children` instead."]
     pub fn visit1<'a, F, E>(&'a self, depth: usize, mut f: F) -> Result<(), E>
     where
         F: FnMut(&'a Self, usize) -> Result<(), E>,
@@ -1139,10 +1293,12 @@ impl HirRelationExpr {
         Ok(())
     }
 
+    #[deprecated = "Use `Visit::visit_mut_post` instead."]
     pub fn visit_mut<F>(&mut self, depth: usize, f: &mut F)
     where
         F: FnMut(&mut Self, usize),
     {
+        #[allow(deprecated)]
         let _ = self.visit_mut_fallible(depth, &mut |e: &mut HirRelationExpr,
                                                      depth: usize|
          -> Result<(), ()> {
@@ -1151,16 +1307,19 @@ impl HirRelationExpr {
         });
     }
 
+    #[deprecated = "Use `Visit::try_visit_mut_post` instead."]
     pub fn visit_mut_fallible<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut Self, usize) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.visit1_mut(depth, |e: &mut HirRelationExpr, depth: usize| {
             e.visit_mut_fallible(depth, f)
         })?;
         f(self, depth)
     }
 
+    #[deprecated = "Use `VisitChildren<HirRelationExpr>::try_visit_mut_children` instead."]
     pub fn visit1_mut<'a, F, E>(&'a mut self, depth: usize, mut f: F) -> Result<(), E>
     where
         F: FnMut(&'a mut Self, usize) -> Result<(), E>,
@@ -1211,6 +1370,7 @@ impl HirRelationExpr {
         Ok(())
     }
 
+    #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
     /// Visits all scalar expressions within the sub-tree of the given relation.
     ///
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
@@ -1220,6 +1380,7 @@ impl HirRelationExpr {
     where
         F: FnMut(&HirScalarExpr, usize) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.visit_fallible(depth, &mut |e: &HirRelationExpr,
                                          depth: usize|
          -> Result<(), E> {
@@ -1261,11 +1422,13 @@ impl HirRelationExpr {
         })
     }
 
+    #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
     /// Like `visit_scalar_expressions`, but permits mutating the expressions.
     pub fn visit_scalar_expressions_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr, usize) -> Result<(), E>,
     {
+        #[allow(deprecated)]
         self.visit_mut_fallible(depth, &mut |e: &mut HirRelationExpr,
                                              depth: usize|
          -> Result<(), E> {
@@ -1307,6 +1470,7 @@ impl HirRelationExpr {
         })
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Visits the column references in this relation expression.
     ///
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
@@ -1316,6 +1480,7 @@ impl HirRelationExpr {
     where
         F: FnMut(usize, &ColumnRef),
     {
+        #[allow(deprecated)]
         let _ = self.visit_scalar_expressions(depth, &mut |e: &HirScalarExpr,
                                                            depth: usize|
          -> Result<(), ()> {
@@ -1324,11 +1489,13 @@ impl HirRelationExpr {
         });
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Like `visit_columns`, but permits mutating the column references.
     pub fn visit_columns_mut<F>(&mut self, depth: usize, f: &mut F)
     where
         F: FnMut(usize, &mut ColumnRef),
     {
+        #[allow(deprecated)]
         let _ = self.visit_scalar_expressions_mut(depth, &mut |e: &mut HirScalarExpr,
                                                                depth: usize|
          -> Result<(), ()> {
@@ -1340,6 +1507,7 @@ impl HirRelationExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
+        #[allow(deprecated)]
         self.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _: usize| {
             e.bind_parameters(params)
         })
@@ -1347,6 +1515,7 @@ impl HirRelationExpr {
 
     /// See the documentation for [`HirScalarExpr::splice_parameters`].
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
+        #[allow(deprecated)]
         let _ = self.visit_scalar_expressions_mut(depth, &mut |e: &mut HirScalarExpr,
                                                                depth: usize|
          -> Result<(), ()> {
@@ -1386,10 +1555,589 @@ impl HirRelationExpr {
     }
 }
 
+impl VisitChildren<Self> for HirRelationExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&Self),
+    {
+        // subqueries of type HirRelationExpr might be wrapped in
+        // Exists or Select variants within HirScalarExpr trees
+        // attached at the current node, and we want to visit them as well
+        VisitChildren::visit_children(self, |expr: &HirScalarExpr| {
+            #[allow(deprecated)]
+            Visit::visit_post_nolimit(expr, &mut |expr| match expr {
+                HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => f(expr.as_ref()),
+                _ => (),
+            });
+        });
+
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Let {
+                name: _,
+                id: _,
+                value,
+                body,
+            } => {
+                f(value);
+                f(body);
+            }
+            Project { input, outputs: _ } => f(input),
+            Map { input, scalars: _ } => {
+                f(input);
+            }
+            CallTable { func: _, exprs: _ } => (),
+            Filter {
+                input,
+                predicates: _,
+            } => {
+                f(input);
+            }
+            Join {
+                left,
+                right,
+                on: _,
+                kind: _,
+            } => {
+                f(left);
+                f(right);
+            }
+            Reduce {
+                input,
+                group_key: _,
+                aggregates: _,
+                expected_group_size: _,
+            } => {
+                f(input);
+            }
+            Distinct { input }
+            | TopK {
+                input,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | Negate { input }
+            | Threshold { input } => {
+                f(input);
+            }
+            Union { base, inputs } => {
+                f(base);
+                for input in inputs {
+                    f(input);
+                }
+            }
+        }
+    }
+
+    fn visit_mut_children<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        // subqueries of type HirRelationExpr might be wrapped in
+        // Exists or Select variants within HirScalarExpr trees
+        // attached at the current node, and we want to visit them as well
+        VisitChildren::visit_mut_children(self, |expr: &mut HirScalarExpr| {
+            #[allow(deprecated)]
+            Visit::visit_mut_post_nolimit(expr, &mut |expr| match expr {
+                HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => f(expr.as_mut()),
+                _ => (),
+            });
+        });
+
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Let {
+                name: _,
+                id: _,
+                value,
+                body,
+            } => {
+                f(value);
+                f(body);
+            }
+            Project { input, outputs: _ } => f(input),
+            Map { input, scalars: _ } => {
+                f(input);
+            }
+            CallTable { func: _, exprs: _ } => (),
+            Filter {
+                input,
+                predicates: _,
+            } => {
+                f(input);
+            }
+            Join {
+                left,
+                right,
+                on: _,
+                kind: _,
+            } => {
+                f(left);
+                f(right);
+            }
+            Reduce {
+                input,
+                group_key: _,
+                aggregates: _,
+                expected_group_size: _,
+            } => {
+                f(input);
+            }
+            Distinct { input }
+            | TopK {
+                input,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | Negate { input }
+            | Threshold { input } => {
+                f(input);
+            }
+            Union { base, inputs } => {
+                f(base);
+                for input in inputs {
+                    f(input);
+                }
+            }
+        }
+    }
+
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        // subqueries of type HirRelationExpr might be wrapped in
+        // Exists or Select variants within HirScalarExpr trees
+        // attached at the current node, and we want to visit them as well
+        VisitChildren::try_visit_children(self, |expr: &HirScalarExpr| {
+            Visit::try_visit_post(expr, &mut |expr| match expr {
+                HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => f(expr.as_ref()),
+                _ => Ok(()),
+            })
+        })?;
+
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Let {
+                name: _,
+                id: _,
+                value,
+                body,
+            } => {
+                f(value)?;
+                f(body)?;
+            }
+            Project { input, outputs: _ } => f(input)?,
+            Map { input, scalars: _ } => {
+                f(input)?;
+            }
+            CallTable { func: _, exprs: _ } => (),
+            Filter {
+                input,
+                predicates: _,
+            } => {
+                f(input)?;
+            }
+            Join {
+                left,
+                right,
+                on: _,
+                kind: _,
+            } => {
+                f(left)?;
+                f(right)?;
+            }
+            Reduce {
+                input,
+                group_key: _,
+                aggregates: _,
+                expected_group_size: _,
+            } => {
+                f(input)?;
+            }
+            Distinct { input }
+            | TopK {
+                input,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | Negate { input }
+            | Threshold { input } => {
+                f(input)?;
+            }
+            Union { base, inputs } => {
+                f(base)?;
+                for input in inputs {
+                    f(input)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        // subqueries of type HirRelationExpr might be wrapped in
+        // Exists or Select variants within HirScalarExpr trees
+        // attached at the current node, and we want to visit them as well
+        VisitChildren::try_visit_mut_children(self, |expr: &mut HirScalarExpr| {
+            Visit::try_visit_mut_post(expr, &mut |expr| match expr {
+                HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => f(expr.as_mut()),
+                _ => Ok(()),
+            })
+        })?;
+
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Let {
+                name: _,
+                id: _,
+                value,
+                body,
+            } => {
+                f(value)?;
+                f(body)?;
+            }
+            Project { input, outputs: _ } => f(input)?,
+            Map { input, scalars: _ } => {
+                f(input)?;
+            }
+            CallTable { func: _, exprs: _ } => (),
+            Filter {
+                input,
+                predicates: _,
+            } => {
+                f(input)?;
+            }
+            Join {
+                left,
+                right,
+                on: _,
+                kind: _,
+            } => {
+                f(left)?;
+                f(right)?;
+            }
+            Reduce {
+                input,
+                group_key: _,
+                aggregates: _,
+                expected_group_size: _,
+            } => {
+                f(input)?;
+            }
+            Distinct { input }
+            | TopK {
+                input,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | Negate { input }
+            | Threshold { input } => {
+                f(input)?;
+            }
+            Union { base, inputs } => {
+                f(base)?;
+                for input in inputs {
+                    f(input)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl VisitChildren<HirScalarExpr> for HirRelationExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&HirScalarExpr),
+    {
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ }
+            | Get { id: _, typ: _ }
+            | Let {
+                name: _,
+                id: _,
+                value: _,
+                body: _,
+            }
+            | Project {
+                input: _,
+                outputs: _,
+            } => (),
+            Map { input: _, scalars } => {
+                for scalar in scalars {
+                    f(scalar);
+                }
+            }
+            CallTable { func: _, exprs } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            Filter {
+                input: _,
+                predicates,
+            } => {
+                for predicate in predicates {
+                    f(predicate);
+                }
+            }
+            Join {
+                left: _,
+                right: _,
+                on,
+                kind: _,
+            } => f(on),
+            Reduce {
+                input: _,
+                group_key: _,
+                aggregates,
+                expected_group_size: _,
+            } => {
+                for aggregate in aggregates {
+                    f(aggregate.expr.as_ref());
+                }
+            }
+            Distinct { input: _ }
+            | TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | Negate { input: _ }
+            | Threshold { input: _ }
+            | Union { base: _, inputs: _ } => (),
+        }
+    }
+
+    fn visit_mut_children<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut HirScalarExpr),
+    {
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ }
+            | Get { id: _, typ: _ }
+            | Let {
+                name: _,
+                id: _,
+                value: _,
+                body: _,
+            }
+            | Project {
+                input: _,
+                outputs: _,
+            } => (),
+            Map { input: _, scalars } => {
+                for scalar in scalars {
+                    f(scalar);
+                }
+            }
+            CallTable { func: _, exprs } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            Filter {
+                input: _,
+                predicates,
+            } => {
+                for predicate in predicates {
+                    f(predicate);
+                }
+            }
+            Join {
+                left: _,
+                right: _,
+                on,
+                kind: _,
+            } => f(on),
+            Reduce {
+                input: _,
+                group_key: _,
+                aggregates,
+                expected_group_size: _,
+            } => {
+                for aggregate in aggregates {
+                    f(aggregate.expr.as_mut());
+                }
+            }
+            Distinct { input: _ }
+            | TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | Negate { input: _ }
+            | Threshold { input: _ }
+            | Union { base: _, inputs: _ } => (),
+        }
+    }
+
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ }
+            | Get { id: _, typ: _ }
+            | Let {
+                name: _,
+                id: _,
+                value: _,
+                body: _,
+            }
+            | Project {
+                input: _,
+                outputs: _,
+            } => (),
+            Map { input: _, scalars } => {
+                for scalar in scalars {
+                    f(scalar)?;
+                }
+            }
+            CallTable { func: _, exprs } => {
+                for expr in exprs {
+                    f(expr)?;
+                }
+            }
+            Filter {
+                input: _,
+                predicates,
+            } => {
+                for predicate in predicates {
+                    f(predicate)?;
+                }
+            }
+            Join {
+                left: _,
+                right: _,
+                on,
+                kind: _,
+            } => f(on)?,
+            Reduce {
+                input: _,
+                group_key: _,
+                aggregates,
+                expected_group_size: _,
+            } => {
+                for aggregate in aggregates {
+                    f(aggregate.expr.as_ref())?;
+                }
+            }
+            Distinct { input: _ }
+            | TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | Negate { input: _ }
+            | Threshold { input: _ }
+            | Union { base: _, inputs: _ } => (),
+        }
+        Ok(())
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ }
+            | Get { id: _, typ: _ }
+            | Let {
+                name: _,
+                id: _,
+                value: _,
+                body: _,
+            }
+            | Project {
+                input: _,
+                outputs: _,
+            } => (),
+            Map { input: _, scalars } => {
+                for scalar in scalars {
+                    f(scalar)?;
+                }
+            }
+            CallTable { func: _, exprs } => {
+                for expr in exprs {
+                    f(expr)?;
+                }
+            }
+            Filter {
+                input: _,
+                predicates,
+            } => {
+                for predicate in predicates {
+                    f(predicate)?;
+                }
+            }
+            Join {
+                left: _,
+                right: _,
+                on,
+                kind: _,
+            } => f(on)?,
+            Reduce {
+                input: _,
+                group_key: _,
+                aggregates,
+                expected_group_size: _,
+            } => {
+                for aggregate in aggregates {
+                    f(aggregate.expr.as_mut())?;
+                }
+            }
+            Distinct { input: _ }
+            | TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | Negate { input: _ }
+            | Threshold { input: _ }
+            | Union { base: _, inputs: _ } => (),
+        }
+        Ok(())
+    }
+}
+
 impl HirScalarExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
+        #[allow(deprecated)]
         self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
             if let HirScalarExpr::Parameter(n) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
@@ -1416,6 +2164,7 @@ impl HirScalarExpr {
     /// Column references in parameters will be corrected to account for the
     /// depth at which they are spliced.
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
+        #[allow(deprecated)]
         let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
                                                         e: &mut HirScalarExpr|
          -> Result<(), ()> {
@@ -1479,6 +2228,26 @@ impl HirScalarExpr {
         Ok(HirScalarExpr::Literal(row, scalar_type))
     }
 
+    pub fn as_literal(&self) -> Option<Datum> {
+        if let HirScalarExpr::Literal(row, _column_type) = self {
+            Some(row.unpack_first())
+        } else {
+            None
+        }
+    }
+
+    pub fn is_literal_true(&self) -> bool {
+        Some(Datum::True) == self.as_literal()
+    }
+
+    pub fn is_literal_false(&self) -> bool {
+        Some(Datum::False) == self.as_literal()
+    }
+
+    pub fn is_literal_null(&self) -> bool {
+        Some(Datum::Null) == self.as_literal()
+    }
+
     pub fn call_unary(self, func: UnaryFunc) -> Self {
         HirScalarExpr::CallUnary {
             func,
@@ -1538,22 +2307,27 @@ impl HirScalarExpr {
         }
     }
 
+    #[deprecated = "Use `Visit::visit_post` instead."]
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
+        #[allow(deprecated)]
         self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
         f(self);
     }
 
+    #[deprecated = "Use `Visit::visit_mut_pre` instead."]
     pub fn visit_mut_pre<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
         f(self);
+        #[allow(deprecated)]
         self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
     }
 
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
     pub fn visit1_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut Self),
@@ -1586,6 +2360,7 @@ impl HirScalarExpr {
         }
     }
 
+    #[deprecated = "Use `Visit::visit_pre_post` instead."]
     /// A generalization of `visit`. The function `pre` runs on a
     /// `HirScalarExpr` before it runs on any of the child `HirScalarExpr`s.
     /// The function `post` runs on child `HirScalarExpr`s first before the
@@ -1607,6 +2382,7 @@ impl HirScalarExpr {
         post(self);
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Visits the column references in this scalar expression.
     ///
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
@@ -1616,6 +2392,7 @@ impl HirScalarExpr {
     where
         F: FnMut(usize, &ColumnRef),
     {
+        #[allow(deprecated)]
         let _ = self.visit_recursively(depth, &mut |depth: usize,
                                                     e: &HirScalarExpr|
          -> Result<(), ()> {
@@ -1626,11 +2403,13 @@ impl HirScalarExpr {
         });
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Like `visit_columns`, but permits mutating the column references.
     pub fn visit_columns_mut<F>(&mut self, depth: usize, f: &mut F)
     where
         F: FnMut(usize, &mut ColumnRef),
     {
+        #[allow(deprecated)]
         let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
                                                         e: &mut HirScalarExpr|
          -> Result<(), ()> {
@@ -1641,6 +2420,7 @@ impl HirScalarExpr {
         });
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Like `visit` but it enters the subqueries visiting the scalar expressions contained
     /// in them. It takes the current depth of the expression and increases it when
     /// entering a subquery.
@@ -1669,6 +2449,7 @@ impl HirScalarExpr {
                 els.visit_recursively(depth, f)?;
             }
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+                #[allow(deprecated)]
                 expr.visit_scalar_expressions(depth + 1, &mut |e, depth| {
                     e.visit_recursively(depth, f)
                 })?;
@@ -1680,6 +2461,7 @@ impl HirScalarExpr {
         f(depth, self)
     }
 
+    #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Like `visit_recursively`, but permits mutating the scalar expressions.
     pub fn visit_recursively_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
@@ -1706,6 +2488,7 @@ impl HirScalarExpr {
                 els.visit_recursively_mut(depth, f)?;
             }
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+                #[allow(deprecated)]
                 expr.visit_scalar_expressions_mut(depth + 1, &mut |e, depth| {
                     e.visit_recursively_mut(depth, f)
                 })?;
@@ -1762,6 +2545,120 @@ impl HirScalarExpr {
                 Some(datum.unwrap_str().to_owned())
             }
         })
+    }
+}
+
+impl VisitChildren<Self> for HirScalarExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&Self),
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+            Exists(..) | Select(..) => (),
+            Windowing(expr) => expr.visit_children(f),
+        }
+    }
+
+    fn visit_mut_children<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+            Exists(..) | Select(..) => (),
+            Windowing(expr) => expr.visit_mut_children(f),
+        }
+    }
+
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
+            CallUnary { expr, .. } => f(expr)?,
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1)?;
+                f(expr2)?;
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr)?;
+                }
+            }
+            If { cond, then, els } => {
+                f(cond)?;
+                f(then)?;
+                f(els)?;
+            }
+            Exists(..) | Select(..) => (),
+            Windowing(expr) => expr.try_visit_children(f)?,
+        }
+        Ok(())
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
+            CallUnary { expr, .. } => f(expr)?,
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1)?;
+                f(expr2)?;
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr)?;
+                }
+            }
+            If { cond, then, els } => {
+                f(cond)?;
+                f(then)?;
+                f(els)?;
+            }
+            Exists(..) | Select(..) => (),
+            Windowing(expr) => expr.try_visit_mut_children(f)?,
+        }
+        Ok(())
     }
 }
 

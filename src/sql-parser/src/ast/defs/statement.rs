@@ -2085,6 +2085,7 @@ pub enum TransactionIsolationLevel {
     ReadCommitted,
     RepeatableRead,
     Serializable,
+    StrictSerializable,
 }
 
 impl AstDisplay for TransactionIsolationLevel {
@@ -2095,6 +2096,7 @@ impl AstDisplay for TransactionIsolationLevel {
             ReadCommitted => "READ COMMITTED",
             RepeatableRead => "REPEATABLE READ",
             Serializable => "SERIALIZABLE",
+            StrictSerializable => "STRICT SERIALIZABLE",
         })
     }
 }

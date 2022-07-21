@@ -186,10 +186,6 @@ impl GarbageCollector {
             }
         }
 
-        // TODO: Until we do the TODO in State::seqno_since, it's not safe to
-        // actually delete these blobs.
-        deleteable_blobs.clear();
-
         // There's also a bulk delete API in s3 if the performance of this
         // becomes an issue. Maybe make Blob::delete take a list of keys?
         //

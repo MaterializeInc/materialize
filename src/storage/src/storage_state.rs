@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -95,12 +95,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
     /// Draws commands from a single client until disconnected.
     fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
-        // A new client has connected. Reset state about what we have reported.
-        //
-        // TODO(benesch,mcsherry): introduce a `InitializationComplete` command
-        // and only clear the state that is missing after initialization
-        // completes.
-        self.storage_state.reported_frontiers.clear();
+        self.reconcile(&command_rx);
 
         let mut disconnected = false;
         while !disconnected {
@@ -134,23 +129,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
+            StorageCommand::InitializationComplete => (),
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
-                    if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
-                        // If we've been asked to create an ingestion that is
-                        // already installed, the descriptions must match
-                        // exactly.
-                        assert_eq!(
-                            *existing, ingestion.description,
-                            "New ingestion with same ID {:?}",
-                            ingestion.id,
-                        );
-                        self.storage_state.reported_frontiers.insert(
-                            ingestion.id,
-                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                        );
-                        continue;
-                    }
+                    // Remember the ingestion description to facilitate possible
+                    // reconciliation later.
+                    self.storage_state
+                        .ingestions
+                        .insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier tracking.
                     self.storage_state.source_uppers.insert(
@@ -203,17 +189,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         // Check if any observed frontier should advance the reported frontiers.
         for (id, frontier) in self.storage_state.source_uppers.iter() {
-            let reported_frontier = match self.storage_state.reported_frontiers.get_mut(&id) {
-                None => {
-                    // The current client has not expressed interest in this
-                    // collection. Move on.
-                    //
-                    // TODO(benesch): reconciliation should prevent
-                    // this situation.
-                    continue;
-                }
-                Some(reported_frontier) => reported_frontier,
-            };
+            let reported_frontier = self
+                .storage_state
+                .reported_frontiers
+                .get_mut(&id)
+                .expect("Reported frontier missing!");
 
             let observed_frontier = frontier.borrow();
 
@@ -244,5 +224,88 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = response_tx.send(response);
+    }
+
+    /// Extract commands until `InitializationComplete`, and make the worker
+    /// reflect those commands. If the worker can not be made to reflect the
+    /// commands, exit the process.
+    ///
+    /// This method is meant to be a function of the commands received thus far
+    /// (as recorded in the compute state command history) and the new commands
+    /// from `command_rx`. It should not be a function of other characteristics,
+    /// like whether the worker has managed to respond to a peek or not. Some
+    /// effort goes in to narrowing our view to only the existing commands we
+    /// can be sure are live at all other workers.
+    ///
+    /// The methodology here is to drain `command_rx` until an
+    /// `InitializationComplete`, at which point the prior commands are
+    /// "reconciled" in. Reconciliation takes each goal dataflow and looks for
+    /// an existing "compatible" dataflow (per `compatible()`) it can repurpose,
+    /// with some additional tests to be sure that we can cut over from one to
+    /// the other (no additional compaction, no tails/sinks). With any
+    /// connections established, old orphaned dataflows are allow to compact
+    /// away, and any new dataflows are created from scratch. "Kept" dataflows
+    /// are allowed to compact up to any new `as_of`.
+    ///
+    /// Some additional tidying happens, e.g. cleaning up reported frontiers.
+    /// tail response buffer. We will need to be vigilant with future
+    /// modifications to `StorageState` to line up changes there with clean
+    /// resets here.
+    fn reconcile(&mut self, command_rx: &CommandReceiver) {
+        // To initialize the connection, we want to drain all commands until we
+        // receive a `StorageCommand::InitializationComplete` command to form a
+        // target command state.
+        let mut commands = vec![];
+        while let Ok(command) = command_rx.recv() {
+            match command {
+                StorageCommand::InitializationComplete => break,
+                _ => commands.push(command),
+            }
+        }
+
+        // Elide any ingestions we're already aware of while determining what
+        // ingestions no longer exist.
+        let mut stale_ingestions = self.storage_state.ingestions.keys().collect::<HashSet<_>>();
+        for command in &mut commands {
+            match command {
+                StorageCommand::IngestSources(ingestions) => {
+                    ingestions.retain_mut(|ingestion| {
+                        if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
+                            stale_ingestions.remove(&ingestion.id);
+                            // If we've been asked to create an ingestion that is
+                            // already installed, the descriptions must match
+                            // exactly.
+                            assert_eq!(
+                                *existing, ingestion.description,
+                                "New ingestion with same ID {:?}",
+                                ingestion.id,
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    })
+                }
+                _ => (),
+            }
+        }
+
+        // Synthesize a drop command to remove stale ingestions.
+        commands.push(StorageCommand::AllowCompaction(
+            stale_ingestions
+                .into_iter()
+                .map(|id| (*id, Antichain::new()))
+                .collect(),
+        ));
+
+        // Reset the reported frontiers.
+        for (_, frontier) in &mut self.storage_state.reported_frontiers {
+            *frontier = Antichain::from_elem(<_>::minimum());
+        }
+
+        // Execute the modified commands.
+        for command in commands {
+            self.handle_storage_command(command);
+        }
     }
 }

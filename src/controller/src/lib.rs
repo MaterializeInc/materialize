@@ -52,8 +52,8 @@ use mz_compute_client::response::{
 };
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
-    CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
-    ServicePort,
+    CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, NamespacedOrchestrator,
+    Orchestrator, ServiceConfig, ServiceEvent, ServicePort,
 };
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
@@ -238,6 +238,8 @@ pub struct Controller<T = mz_repr::Timestamp> {
     computed_image: String,
     compute: BTreeMap<ComputeInstanceId, ComputeControllerState<T>>,
     readiness: Readiness,
+    /// Set to `true` once `initialization_complete` has been called.
+    initialized: bool,
 }
 
 impl<T> Controller<T>
@@ -256,6 +258,11 @@ where
             instance,
             ComputeControllerState::new(self.build_info, &logging).await,
         );
+        if self.initialized {
+            self.compute_mut(instance)
+                .expect("Instance just initialized")
+                .initialization_complete();
+        }
     }
 
     /// Adds replicas of an instance.
@@ -343,10 +350,34 @@ where
                             memory_limit: allocation.memory_limit,
                             scale: allocation.scale,
                             labels: hashmap! {
+                                "replica-id".into() => replica_id.to_string(),
                                 "cluster-id".into() => instance_id.to_string(),
                                 "type".into() => "cluster".into(),
                             },
                             availability_zone,
+                            // This constrains the orchestrator
+                            // (for those orchestrators that support anti-affinity, today just k8s)
+                            // to never schedule pods for different replicas of the same cluster
+                            // on the same node. Pods from the _same_ replica are fine;
+                            // pods from different clusters are also fine.
+                            //
+                            // The point is that if pods of two replicas are on the same node,
+                            // that node going down would kill both replicas, and so the replication
+                            // factor of the cluster in question is illusory.
+                            anti_affinity: Some(vec![
+                                LabelSelector {
+                                    label_name: "cluster-id".to_string(),
+                                    logic: LabelSelectionLogic::Eq {
+                                        value: instance_id.to_string(),
+                                    },
+                                },
+                                LabelSelector {
+                                    label_name: "replica-id".into(),
+                                    logic: LabelSelectionLogic::NotEq {
+                                        value: replica_id.to_string(),
+                                    },
+                                },
+                            ]),
                         },
                     )
                     .await?;
@@ -473,6 +504,24 @@ where
     T: Timestamp + Lattice + Codec64 + Copy,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    /// Marks the end of any initialization commands.
+    ///
+    /// The implementor may wait for this method to be called before implementing prior commands,
+    /// and so it is important for a user to invoke this method as soon as it is comfortable.
+    /// This method can be invoked immediately, at the potential expense of performance.
+    pub fn initialization_complete(&mut self) {
+        self.initialized = true;
+        for (instance, compute) in self.compute.iter_mut() {
+            ComputeControllerMut {
+                instance: *instance,
+                compute,
+                storage_controller: &mut *self.storage_controller,
+            }
+            .initialization_complete();
+        }
+        self.storage_mut().initialization_complete();
+    }
+
     /// Waits until the controller is ready to process a response.
     ///
     /// This method may block for an arbitrarily long time.
@@ -560,6 +609,7 @@ where
             computed_image: config.computed_image,
             compute: BTreeMap::default(),
             readiness: Readiness::NotReady,
+            initialized: false,
         }
     }
 }

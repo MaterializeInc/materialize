@@ -59,6 +59,7 @@ message ProtoStorageCommand {
     oneof kind {
         ProtoIngestSources ingest_sources = 1;
         ProtoAllowCompaction allow_compaction = 2;
+        google.protobuf.Empty initialization_complete = 3;
     }
 }
 

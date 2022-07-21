@@ -623,6 +623,7 @@ impl<S: Append> Connection<S> {
         Ok(GlobalId::User(id))
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
         let key = IdAllocKey {
             name: id_type.to_string(),
@@ -1085,6 +1086,13 @@ impl<'a, S: Append> Transaction<'a, S> {
         Ok(())
     }
 
+    pub fn remove_timestamp(&mut self, timeline: Timeline) {
+        let timeline_str = timeline.to_string();
+        let n = self.timestamps.delete(|k, _v| k.id == timeline_str).len();
+        assert_eq!(n, 1);
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
         let mut batches = Vec::new();
         async fn add_batch<K, V, S, I>(

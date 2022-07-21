@@ -66,14 +66,17 @@ class CreateTopic(Action):
         return {MzIsRunning, KafkaRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
-        this_topic = TopicExists(name="topic" + str(random.randint(1, 10)))
+        this_topic = TopicExists(
+            name="topic" + str(random.randint(1, 10)),
+            envelope=random.choice([Envelope.NONE, Envelope.UPSERT]),
+            partitions=random.randint(1, 10),
+        )
         existing_topics = [
             t for t in capabilities.get(TopicExists) if t.name == this_topic.name
         ]
 
         if len(existing_topics) == 0:
             self.new_topic = True
-            this_topic.envelope = random.choice([Envelope.NONE, Envelope.UPSERT])
             self.topic = this_topic
         elif len(existing_topics) == 1:
             self.new_topic = False
@@ -88,7 +91,7 @@ class CreateTopic(Action):
         if self.new_topic:
             c.testdrive(
                 f"""
-$ kafka-create-topic topic={self.topic.name}
+$ kafka-create-topic topic={self.topic.name} partitions={self.topic.partitions}
 
 {SCHEMA}
 

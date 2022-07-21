@@ -319,6 +319,7 @@ impl HirRelationExpr {
                             .iter_mut()
                             .position(|s| {
                                 let mut requires_nonexistent_column = false;
+                                #[allow(deprecated)]
                                 s.visit_columns(0, &mut |depth, col| {
                                     if col.level == depth {
                                         requires_nonexistent_column |= (col.column + 1) > old_arity
@@ -1284,6 +1285,7 @@ impl HirScalarExpr {
             let mut subqueries = Vec::new();
             let distinct_inner = get_inner.clone().distinct();
             for expr in exprs.iter() {
+                #[allow(deprecated)]
                 expr.visit_pre_post(
                     &mut |e| match e {
                         // For simplicity, subqueries within a conditional statement will be
@@ -1484,6 +1486,7 @@ where
     // detecting the moment of decorrelation in the optimizer right now is too
     // hard.
     let mut is_simple = true;
+    #[allow(deprecated)]
     inner.visit(0, &mut |expr, _| match expr {
         HirRelationExpr::Constant { .. }
         | HirRelationExpr::Project { .. }
@@ -1508,6 +1511,7 @@ where
     // each outer column, according to the passed-in `col_map`, and
     // `new_col_map` maps each outer column to its new ordinal position in key.
     let mut outer_cols = BTreeSet::new();
+    #[allow(deprecated)]
     inner.visit_columns(0, &mut |depth, col| {
         // Test if the column reference escapes the subquery.
         if col.level > depth {
@@ -1519,6 +1523,7 @@ where
     });
     // Collect all the outer columns referenced by any CTE referenced by
     // the inner relation.
+    #[allow(deprecated)]
     inner.visit(0, &mut |e, _| match e {
         HirRelationExpr::Get {
             id: mz_expr::Id::Local(id),

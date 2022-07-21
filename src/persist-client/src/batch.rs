@@ -28,12 +28,12 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, trace_span, warn, Instrument};
-use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::retry_external;
 use crate::r#impl::metrics::{BatchWriteMetrics, Metrics};
-use crate::{PersistConfig, ShardId};
+use crate::r#impl::paths::{PartId, PartialBlobKey};
+use crate::{PersistConfig, ShardId, WriterId};
 
 /// A handle to a batch of updates that has been written to blob storage but
 /// which has not yet been appended to a shard.
@@ -51,7 +51,7 @@ where
     shard_id: ShardId,
 
     /// Keys to blobs that make up this batch of updates.
-    pub(crate) blob_keys: Vec<String>,
+    pub(crate) blob_keys: Vec<PartialBlobKey>,
 
     /// The number of updates in this batch.
     pub(crate) num_updates: usize,
@@ -90,7 +90,7 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
         desc: Description<T>,
-        blob_keys: Vec<String>,
+        blob_keys: Vec<PartialBlobKey>,
         num_updates: usize,
     ) -> Self {
         Self {
@@ -198,11 +198,13 @@ where
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
+        writer_id: WriterId,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.batch_builder_max_outstanding_parts,
             Arc::clone(&metrics),
             shard_id,
+            writer_id,
             lower.clone(),
             Arc::clone(&blob),
             &metrics.user,
@@ -333,10 +335,11 @@ pub(crate) struct BatchParts<T> {
     max_outstanding: usize,
     metrics: Arc<Metrics>,
     shard_id: ShardId,
+    writer_id: WriterId,
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
-    writing_parts: VecDeque<(String, JoinHandle<()>)>,
-    finished_parts: Vec<String>,
+    writing_parts: VecDeque<(PartialBlobKey, JoinHandle<()>)>,
+    finished_parts: Vec<PartialBlobKey>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -345,6 +348,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         max_outstanding: usize,
         metrics: Arc<Metrics>,
         shard_id: ShardId,
+        writer_id: WriterId,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         batch_metrics: &BatchWriteMetrics,
@@ -353,6 +357,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             max_outstanding,
             metrics,
             shard_id,
+            writer_id,
             lower,
             blob,
             writing_parts: VecDeque::new(),
@@ -371,8 +376,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let metrics = Arc::clone(&self.metrics);
         let blob = Arc::clone(&self.blob);
         let batch_metrics = self.batch_metrics.clone();
-        let key = Uuid::new_v4().to_string();
-        let blob_key = key.clone();
+        let partial_key = PartialBlobKey::new(&self.writer_id, &PartId::new());
+        let key = partial_key.complete(&self.shard_id);
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
@@ -436,7 +441,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                 let payload_len = buf.len();
                 let () = retry_external(&metrics.retries.external.batch_set, || async {
-                    blob.set(&blob_key, Bytes::clone(&buf), Atomicity::RequireAtomic)
+                    blob.set(&key, Bytes::clone(&buf), Atomicity::RequireAtomic)
                         .await
                 })
                 .instrument(trace_span!("batch::set", payload_len))
@@ -446,7 +451,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             .instrument(write_span),
         );
-        self.writing_parts.push_back((key, handle));
+        self.writing_parts.push_back((partial_key, handle));
 
         while self.writing_parts.len() > self.max_outstanding {
             let (key, handle) = self
@@ -466,7 +471,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", skip_all, fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<String> {
+    pub(crate) async fn finish(self) -> Vec<PartialBlobKey> {
         let mut keys = self.finished_parts;
         for (key, handle) in self.writing_parts {
             let () = match handle.await {
@@ -500,6 +505,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 #[cfg(test)]
 mod tests {
     use crate::cache::PersistClientCache;
+    use crate::r#impl::paths::BlobKey;
     use crate::tests::all_ok;
     use crate::PersistLocation;
 
@@ -579,5 +585,48 @@ mod tests {
             read.expect_snapshot(3).await.read_all().await,
             all_ok(&data, 3)
         );
+    }
+
+    #[tokio::test]
+    async fn batch_builder_keys() {
+        mz_ore::test::init_logging();
+
+        let mut cache = PersistClientCache::new_no_metrics();
+        // Set blob_target_size to 0 so that each row gets forced into its own batch part
+        cache.cfg.blob_target_size = 0;
+        let client = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let batch = write
+            .expect_batch(
+                &[
+                    (("1".into(), "one".into()), 1, 1),
+                    (("2".into(), "two".into()), 2, 1),
+                    (("3".into(), "three".into()), 3, 1),
+                ],
+                0,
+                4,
+            )
+            .await;
+
+        assert_eq!(batch.blob_keys.len(), 3);
+        for key in &batch.blob_keys {
+            match BlobKey::parse_ids(&key.complete(&shard_id)) {
+                Ok((Some((shard, writer)), _)) => {
+                    assert_eq!(shard.to_string(), shard_id.to_string());
+                    assert_eq!(writer.to_string(), write.writer_id.to_string());
+                }
+                _ => panic!("unparseable blob key"),
+            }
+        }
     }
 }

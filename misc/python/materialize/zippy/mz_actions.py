@@ -12,6 +12,7 @@ from typing import List, Set, Type
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
+from materialize.zippy.view_capabilities import ViewExists
 
 
 class MzStart(Action):
@@ -49,3 +50,15 @@ class KillStoraged(Action):
     def run(self, c: Composition) -> None:
         # Depending on the workload, storaged may not be running, hence the || true
         c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged` || true")
+
+
+class KillComputed(Action):
+    """Kills the computed processes in the environmentd container. The process orchestrator will restart them."""
+
+    @classmethod
+    def requires(self) -> Set[Type[Capability]]:
+        return {MzIsRunning, ViewExists}
+
+    def run(self, c: Composition) -> None:
+        # Depending on the workload, computed may not be running, hence the || true
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof computed` || true")

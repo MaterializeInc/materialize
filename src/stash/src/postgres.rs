@@ -178,6 +178,7 @@ impl Postgres {
     ///     .await
     //  }
     /// ```
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn transact<F, T>(&mut self, f: F) -> Result<T, StashError>
     where
         F: for<'a> Fn(&'a mut Transaction) -> BoxFuture<'a, Result<T, StashError>>,
@@ -714,6 +715,7 @@ impl From<tokio_postgres::Error> for StashError {
 
 #[async_trait]
 impl Append for Postgres {
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
     where
         I: IntoIterator<Item = AppendBatch> + Send + 'static,

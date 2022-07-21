@@ -54,12 +54,29 @@ impl FileBlob {
     fn blob_path(&self, key: &str) -> PathBuf {
         self.base_dir.join(key)
     }
+
+    /// For simplicity, FileBlob maintains a single flat directory of blobs. Because files
+    /// can never use forward slashes in their names on Linux, even if escaped, we replace
+    /// forward slashes with a Unicode character that looks substantially similar, so the
+    /// file name is not interpreted as part of a directory structure. This is helpful for
+    /// compatibility with clients who are expecting an S3-like interface that both use a
+    /// flat hierarchy and allow forward slashes in file names.
+    ///
+    /// (And apologies to the callers who really did want to use U+2215 code points in their
+    /// filenames.)
+    fn replace_forward_slashes(key: &str) -> String {
+        key.replace('/', "∕")
+    }
+
+    fn restore_forward_slashes(key: &str) -> String {
+        key.replace('∕', "/")
+    }
 }
 
 #[async_trait]
 impl Blob for FileBlob {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        let file_path = self.blob_path(key);
+        let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
         let mut file = match File::open(file_path).await {
             Ok(file) => file,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
@@ -100,7 +117,7 @@ impl Blob for FileBlob {
             if let Some(name) = file_name {
                 let name = name.to_str();
                 if let Some(name) = name {
-                    ret.push(name.to_owned());
+                    ret.push(FileBlob::restore_forward_slashes(name));
                 }
             }
         }
@@ -108,7 +125,7 @@ impl Blob for FileBlob {
     }
 
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
-        let file_path = self.blob_path(key);
+        let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
         match atomic {
             Atomicity::RequireAtomic => {
                 // To implement require_atomic, write to a temp file and rename
@@ -157,7 +174,7 @@ impl Blob for FileBlob {
     }
 
     async fn delete(&self, key: &str) -> Result<(), ExternalError> {
-        let file_path = self.blob_path(key);
+        let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.
 

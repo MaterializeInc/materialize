@@ -93,6 +93,42 @@ pub trait Service: fmt::Debug + Send + Sync {
     fn addresses(&self, port: &str) -> Vec<String>;
 }
 
+/// A simple language for describing assertions about a label's existence and value.
+///
+/// Used by [`LabelSelector`].
+#[derive(Clone, Debug)]
+pub enum LabelSelectionLogic {
+    /// The label exists and its value equals the given value.
+    /// Equivalent to `InSet { values: vec![value] }`
+    Eq { value: String },
+    /// Either the label does not exist, or it exists
+    /// but its value does not equal the given value.
+    /// Equivalent to `NotInSet { values: vec![value] }`
+    NotEq { value: String },
+    /// The label exists.
+    Exists,
+    /// The label does not exist.
+    NotExists,
+    /// The label exists and its value is one of the given values.
+    InSet { values: Vec<String> },
+    /// Either the label does not exist, or it exists
+    /// but its value is not one of the given values.
+    NotInSet { values: Vec<String> },
+}
+
+/// A simple language for describing whether a label
+/// exists and whether the value corresponding to it is in some set.
+/// Intended to correspond to the capabilities offered by Kubernetes label selectors,
+/// but without directly exposing Kubernetes API code to consumers of this module.
+#[derive(Clone, Debug)]
+pub struct LabelSelector {
+    /// The name of the label
+    pub label_name: String,
+    /// An assertion about the existence and value of a label
+    /// named `label_name`
+    pub logic: LabelSelectionLogic,
+}
+
 /// Describes the desired state of a service.
 #[derive(Derivative, Clone)]
 #[derivative(Debug)]
@@ -121,6 +157,12 @@ pub struct ServiceConfig<'a> {
     /// The availability zone the service should be run in. If no availability
     /// zone is specified, the orchestrator is free to choose one.
     pub availability_zone: Option<String>,
+    /// A set of label selectors declaring anti-affinity. If _all_ such selectors
+    /// match for a given service, this service should not be co-scheduled on
+    /// a machine with that service.
+    ///
+    /// The orchestrator backend may or may not actually implement anti-affinity functionality.
+    pub anti_affinity: Option<Vec<LabelSelector>>,
 }
 
 /// A named port associated with a service.

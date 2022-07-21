@@ -38,31 +38,51 @@ use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimit
 
 use crate::RECURSION_LIMIT;
 
-/// A trait for types that can visit their direct children of the same
-/// type.
+/// A trait for types that can visit their direct children of type `T`.
 ///
-/// Implementing this trait for a type automatically also implements
+/// Implementing [`VisitChildren<Self>`] automatically also implements
 /// the [`Visit`] trait, which enables recursive traversal.
-pub trait VisitChildren {
+///
+/// Note that care needs to be taken when implementing this trait for
+/// mutually recursive types (such as a type A where A has children
+/// of type B and vice versa). More specifically, at the moment it is
+/// not possible to implement versions of `VisitChildren<A> for A` such
+/// that A considers as its children all A-nodes occurring at leaf
+/// positions of B-children and vice versa for `VisitChildren<B> for B`.
+/// Doing this will result in recusion limit violations as indicated
+/// in the accompanying `test_recursive_types_b` test.
+pub trait VisitChildren<T> {
     /// Apply an infallible immutable function `f` to each direct child.
-    fn visit_children<'a, F>(&'a self, f: F)
+    fn visit_children<F>(&self, f: F)
     where
-        F: FnMut(&'a Self);
+        F: FnMut(&T);
 
     /// Apply an infallible mutable function `f` to each direct child.
-    fn visit_mut_children<'a, F>(&'a mut self, f: F)
+    fn visit_mut_children<F>(&mut self, f: F)
     where
-        F: FnMut(&'a mut Self);
+        F: FnMut(&mut T);
 
     /// Apply a fallible immutable function `f` to each direct child.
-    fn try_visit_children<'a, F, E>(&'a self, f: F) -> Result<(), E>
+    ///
+    /// For mutually recursive implementations (say consisting of two
+    /// types `A` and `B`), recursing through `B` in order to find all
+    /// `A`-children of a node of type `A` might cause lead to a
+    /// [`RecursionLimitError`], hence the bound on `E`.
+    fn try_visit_children<F, E>(&self, f: F) -> Result<(), E>
     where
-        F: FnMut(&'a Self) -> Result<(), E>;
+        F: FnMut(&T) -> Result<(), E>,
+        E: From<RecursionLimitError>;
 
     /// Apply a fallible mutable function `f` to each direct child.
-    fn try_visit_mut_children<'a, F, E>(&'a mut self, f: F) -> Result<(), E>
+    ///
+    /// For mutually recursive implementations (say consisting of two
+    /// types `A` and `B`), recursing through `B` in order to find all
+    /// `A`-children of a node of type `A` might cause lead to a
+    /// [`RecursionLimitError`], hence the bound on `E`.
+    fn try_visit_mut_children<F, E>(&mut self, f: F) -> Result<(), E>
     where
-        F: FnMut(&'a mut Self) -> Result<(), E>;
+        F: FnMut(&mut T) -> Result<(), E>,
+        E: From<RecursionLimitError>;
 }
 
 /// A trait for types that can recursively visit their children of the
@@ -213,7 +233,7 @@ pub trait Visit {
         F2: FnMut(&mut Self);
 }
 
-impl<T: VisitChildren> Visit for T {
+impl<T: VisitChildren<T>> Visit for T {
     fn visit_post<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
     where
         F: FnMut(&Self),
@@ -350,7 +370,7 @@ impl<T> CheckedRecursion for Visitor<T> {
     }
 }
 
-impl<T: VisitChildren> Visitor<T> {
+impl<T: VisitChildren<T>> Visitor<T> {
     fn new() -> Self {
         Self {
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
@@ -562,5 +582,415 @@ impl<T: VisitChildren> Visitor<T> {
             }
             post(value);
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum A {
+        Add(Box<A>, Box<A>),
+        Lit(u64),
+        FrB(Box<B>),
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum B {
+        Mul(Box<B>, Box<B>),
+        Lit(u64),
+        FrA(Box<A>),
+    }
+
+    impl VisitChildren<A> for A {
+        fn visit_children<F>(&self, mut f: F)
+        where
+            F: FnMut(&A),
+        {
+            VisitChildren::visit_children(self, |expr: &B| {
+                #[allow(deprecated)]
+                Visit::visit_post_nolimit(expr, &mut |expr| match expr {
+                    B::FrA(expr) => f(expr.as_ref()),
+                    _ => (),
+                });
+            });
+
+            match self {
+                A::Add(lhs, rhs) => {
+                    f(lhs);
+                    f(rhs);
+                }
+                A::Lit(_) => (),
+                A::FrB(_) => (),
+            }
+        }
+
+        fn visit_mut_children<F>(&mut self, mut f: F)
+        where
+            F: FnMut(&mut A),
+        {
+            VisitChildren::visit_mut_children(self, |expr: &mut B| {
+                #[allow(deprecated)]
+                Visit::visit_mut_post_nolimit(expr, &mut |expr| match expr {
+                    B::FrA(expr) => f(expr.as_mut()),
+                    _ => (),
+                });
+            });
+
+            match self {
+                A::Add(lhs, rhs) => {
+                    f(lhs);
+                    f(rhs);
+                }
+                A::Lit(_) => (),
+                A::FrB(_) => (),
+            }
+        }
+
+        fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+        where
+            F: FnMut(&A) -> Result<(), E>,
+            E: From<RecursionLimitError>,
+        {
+            VisitChildren::try_visit_children(self, |expr: &B| {
+                Visit::try_visit_post(expr, &mut |expr| match expr {
+                    B::FrA(expr) => f(expr.as_ref()),
+                    _ => Ok(()),
+                })
+            })?;
+
+            match self {
+                A::Add(lhs, rhs) => {
+                    f(lhs)?;
+                    f(rhs)?;
+                }
+                A::Lit(_) => (),
+                A::FrB(_) => (),
+            }
+            Ok(())
+        }
+
+        fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+        where
+            F: FnMut(&mut A) -> Result<(), E>,
+            E: From<RecursionLimitError>,
+        {
+            VisitChildren::try_visit_mut_children(self, |expr: &mut B| {
+                Visit::try_visit_mut_post(expr, &mut |expr| match expr {
+                    B::FrA(expr) => f(expr.as_mut()),
+                    _ => Ok(()),
+                })
+            })?;
+
+            match self {
+                A::Add(lhs, rhs) => {
+                    f(lhs)?;
+                    f(rhs)?;
+                }
+                A::Lit(_) => (),
+                A::FrB(_) => (),
+            }
+            Ok(())
+        }
+    }
+
+    impl VisitChildren<B> for A {
+        fn visit_children<F>(&self, mut f: F)
+        where
+            F: FnMut(&B),
+        {
+            match self {
+                A::Add(_, _) => (),
+                A::Lit(_) => (),
+                A::FrB(expr) => f(expr),
+            }
+        }
+
+        fn visit_mut_children<F>(&mut self, mut f: F)
+        where
+            F: FnMut(&mut B),
+        {
+            match self {
+                A::Add(_, _) => (),
+                A::Lit(_) => (),
+                A::FrB(expr) => f(expr),
+            }
+        }
+
+        fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+        where
+            F: FnMut(&B) -> Result<(), E>,
+            E: From<RecursionLimitError>,
+        {
+            match self {
+                A::Add(_, _) => Ok(()),
+                A::Lit(_) => Ok(()),
+                A::FrB(expr) => f(expr),
+            }
+        }
+
+        fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+        where
+            F: FnMut(&mut B) -> Result<(), E>,
+            E: From<RecursionLimitError>,
+        {
+            match self {
+                A::Add(_, _) => Ok(()),
+                A::Lit(_) => Ok(()),
+                A::FrB(expr) => f(expr),
+            }
+        }
+    }
+
+    impl VisitChildren<B> for B {
+        fn visit_children<F>(&self, mut f: F)
+        where
+            F: FnMut(&B),
+        {
+            // VisitChildren::visit_children(self, |expr: &A| {
+            //     #[allow(deprecated)]
+            //     Visit::visit_post_nolimit(expr, &mut |expr| match expr {
+            //         A::FrB(expr) => f(expr.as_ref()),
+            //         _ => (),
+            //     });
+            // });
+
+            match self {
+                B::Mul(lhs, rhs) => {
+                    f(lhs);
+                    f(rhs);
+                }
+                B::Lit(_) => (),
+                B::FrA(_) => (),
+            }
+        }
+
+        fn visit_mut_children<F>(&mut self, mut f: F)
+        where
+            F: FnMut(&mut B),
+        {
+            // VisitChildren::visit_mut_children(self, |expr: &mut A| {
+            //     #[allow(deprecated)]
+            //     Visit::visit_mut_post_nolimit(expr, &mut |expr| match expr {
+            //         A::FrB(expr) => f(expr.as_mut()),
+            //         _ => (),
+            //     });
+            // });
+
+            match self {
+                B::Mul(lhs, rhs) => {
+                    f(lhs);
+                    f(rhs);
+                }
+                B::Lit(_) => (),
+                B::FrA(_) => (),
+            }
+        }
+
+        fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+        where
+            F: FnMut(&B) -> Result<(), E>,
+            E: From<RecursionLimitError>,
+        {
+            // VisitChildren::try_visit_children(self, |expr: &A| {
+            //     Visit::try_visit_post(expr, &mut |expr| match expr {
+            //         A::FrB(expr) => f(expr.as_ref()),
+            //         _ => Ok(()),
+            //     })
+            // })?;
+
+            match self {
+                B::Mul(lhs, rhs) => {
+                    f(lhs)?;
+                    f(rhs)?;
+                }
+                B::Lit(_) => (),
+                B::FrA(_) => (),
+            }
+            Ok(())
+        }
+
+        fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+        where
+            F: FnMut(&mut B) -> Result<(), E>,
+            E: From<RecursionLimitError>,
+        {
+            // VisitChildren::try_visit_mut_children(self, |expr: &mut A| {
+            //     Visit::try_visit_mut_post(expr, &mut |expr| match expr {
+            //         A::FrB(expr) => f(expr.as_mut()),
+            //         _ => Ok(()),
+            //     })
+            // })?;
+
+            match self {
+                B::Mul(lhs, rhs) => {
+                    f(lhs)?;
+                    f(rhs)?;
+                }
+                B::Lit(_) => (),
+                B::FrA(_) => (),
+            }
+            Ok(())
+        }
+    }
+
+    impl VisitChildren<A> for B {
+        fn visit_children<F>(&self, mut f: F)
+        where
+            F: FnMut(&A),
+        {
+            match self {
+                B::Mul(_, _) => (),
+                B::Lit(_) => (),
+                B::FrA(expr) => f(expr),
+            }
+        }
+
+        fn visit_mut_children<F>(&mut self, mut f: F)
+        where
+            F: FnMut(&mut A),
+        {
+            match self {
+                B::Mul(_, _) => (),
+                B::Lit(_) => (),
+                B::FrA(expr) => f(expr),
+            }
+        }
+
+        fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+        where
+            F: FnMut(&A) -> Result<(), E>,
+            E: From<RecursionLimitError>,
+        {
+            match self {
+                B::Mul(_, _) => Ok(()),
+                B::Lit(_) => Ok(()),
+                B::FrA(expr) => f(expr),
+            }
+        }
+
+        fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+        where
+            F: FnMut(&mut A) -> Result<(), E>,
+            E: From<RecursionLimitError>,
+        {
+            match self {
+                B::Mul(_, _) => Ok(()),
+                B::Lit(_) => Ok(()),
+                B::FrA(expr) => f(expr),
+            }
+        }
+    }
+
+    /// x + (y + z)
+    fn test_term_a(x: A, y: A, z: A) -> A {
+        let x = Box::new(x);
+        let y = Box::new(y);
+        let z = Box::new(z);
+        A::Add(x, Box::new(A::Add(y, z)))
+    }
+
+    /// u + (v + w)
+    fn test_term_b(u: B, v: B, w: B) -> B {
+        let u = Box::new(u);
+        let v = Box::new(v);
+        let w = Box::new(w);
+        B::Mul(u, Box::new(B::Mul(v, w)))
+    }
+
+    fn a_to_b(x: A) -> B {
+        B::FrA(Box::new(x))
+    }
+
+    fn b_to_a(x: B) -> A {
+        A::FrB(Box::new(x))
+    }
+
+    fn test_term_rec_b(b: u64) -> B {
+        test_term_b(
+            a_to_b(test_term_a(
+                b_to_a(test_term_b(B::Lit(b + 11), B::Lit(b + 12), B::Lit(b + 13))),
+                b_to_a(test_term_b(B::Lit(b + 14), B::Lit(b + 15), B::Lit(b + 16))),
+                b_to_a(test_term_b(B::Lit(b + 17), B::Lit(b + 18), B::Lit(b + 19))),
+            )),
+            a_to_b(test_term_a(
+                b_to_a(test_term_b(B::Lit(b + 21), B::Lit(b + 22), B::Lit(b + 23))),
+                b_to_a(test_term_b(B::Lit(b + 24), B::Lit(b + 25), B::Lit(b + 26))),
+                b_to_a(test_term_b(B::Lit(b + 27), B::Lit(b + 28), B::Lit(b + 29))),
+            )),
+            a_to_b(test_term_a(
+                b_to_a(test_term_b(B::Lit(b + 31), B::Lit(b + 32), B::Lit(b + 33))),
+                b_to_a(test_term_b(B::Lit(b + 34), B::Lit(b + 35), B::Lit(b + 36))),
+                b_to_a(test_term_b(B::Lit(b + 37), B::Lit(b + 38), B::Lit(b + 39))),
+            )),
+        )
+    }
+
+    fn test_term_rec_a(b: u64) -> A {
+        test_term_a(
+            b_to_a(test_term_b(
+                a_to_b(test_term_a(A::Lit(b + 11), A::Lit(b + 12), A::Lit(b + 13))),
+                a_to_b(test_term_a(A::Lit(b + 14), A::Lit(b + 15), A::Lit(b + 16))),
+                a_to_b(test_term_a(A::Lit(b + 17), A::Lit(b + 18), A::Lit(b + 19))),
+            )),
+            b_to_a(test_term_b(
+                a_to_b(test_term_a(A::Lit(b + 21), A::Lit(b + 22), A::Lit(b + 23))),
+                a_to_b(test_term_a(A::Lit(b + 24), A::Lit(b + 25), A::Lit(b + 26))),
+                a_to_b(test_term_a(A::Lit(b + 27), A::Lit(b + 28), A::Lit(b + 29))),
+            )),
+            b_to_a(test_term_b(
+                a_to_b(test_term_a(A::Lit(b + 31), A::Lit(b + 32), A::Lit(b + 33))),
+                a_to_b(test_term_a(A::Lit(b + 34), A::Lit(b + 35), A::Lit(b + 36))),
+                a_to_b(test_term_a(A::Lit(b + 37), A::Lit(b + 38), A::Lit(b + 39))),
+            )),
+        )
+    }
+
+    #[test]
+    fn test_recursive_types_a() {
+        let mut act = test_term_rec_a(0);
+        let exp = test_term_rec_a(20);
+
+        let res = act.visit_mut_pre(&mut |expr| match expr {
+            A::Lit(x) => *x = *x + 20,
+            _ => (),
+        });
+
+        assert!(res.is_ok());
+        assert_eq!(act, exp);
+    }
+
+    /// This test currently fails with the following error:
+    ///
+    ///   reached the recursion limit while instantiating
+    ///   `<visit::Visitor<B> as CheckedRec...ore::stack::RecursionLimitError>`
+    ///
+    /// The problem (I think) is in the fact that the lambdas passed in the
+    /// VisitChildren<A> for A and the VisitChildren<B> for B definitions end
+    /// up in an infinite loop.
+    ///
+    /// More specifically, we run into the following cycle:
+    ///
+    /// - `<A as VisitChildren<A>>::visit_children`
+    ///   - <A as VisitChildren<B>>::visit_children`
+    ///     - <B as Visit>::visit_post_nolimit`
+    ///       - <B as VisitChildren<B>>::visit_children`
+    ///         - <B as VisitChildren<A>>::visit_children`
+    ///           - <A as Visit>::visit_post_nolimit`
+    ///             - <A as VisitChildren<A>>::visit_children`
+    #[test]
+    #[ignore = "making the VisitChildren definitions symmetric breaks the compiler"]
+    fn test_recursive_types_b() {
+        let mut act = test_term_rec_b(0);
+        let exp = test_term_rec_b(30);
+
+        let res = act.visit_mut_pre(&mut |expr| match expr {
+            B::Lit(x) => *x = *x + 30,
+            _ => (),
+        });
+
+        assert!(res.is_ok());
+        assert_eq!(act, exp);
     }
 }

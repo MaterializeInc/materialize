@@ -99,6 +99,12 @@ impl LocalId {
     }
 }
 
+impl From<&LocalId> for u64 {
+    fn from(id: &LocalId) -> Self {
+        id.0
+    }
+}
+
 impl fmt::Display for LocalId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "l{}", self.0)

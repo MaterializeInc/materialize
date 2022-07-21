@@ -382,8 +382,7 @@ CREATE MATERIALIZED VIEW jsonified_kafka_source AS
 CREATE SOURCE proto_source
   FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
   WITH (cache = true)
-  FORMAT PROTOBUF MESSAGE '.billing.Batch'
-  USING SCHEMA FILE '[path to schema]';
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry:8081';
 ```
 
 {{< /tab >}}
@@ -393,7 +392,6 @@ CREATE SOURCE proto_source
 CREATE SOURCE text_source
   FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
   FORMAT TEXT
-  USING SCHEMA FILE '/scratch/data.json'
   ENVELOPE UPSERT;
 ```
 

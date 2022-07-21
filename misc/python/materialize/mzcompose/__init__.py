@@ -956,7 +956,7 @@ def _wait_for_pg(
                     f"host={host} port={port} did not return rows matching {expected} got: {result}"
                 )
         except Exception as e:
-            ui.progress(" " + str(int(remaining)))
+            ui.progress(f"{e} " + str(int(remaining)))
             error = e
     ui.progress(finish=True)
     raise UIError(f"never got correct result for {args}: {error}")

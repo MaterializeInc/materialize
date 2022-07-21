@@ -25,12 +25,14 @@ use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
+use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::client::ConnectionId;
 use crate::coord::{CoordTimestamp, PeekResponseUnary};
 use crate::error::AdapterError;
+use crate::session::vars::IsolationLevel;
 
-mod vars;
+pub(crate) mod vars;
 
 pub use self::vars::{
     ClientSeverity, Var, Vars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
@@ -97,6 +99,7 @@ impl<T: CoordTimestamp> Session<T> {
         mut self,
         wall_time: DateTime<Utc>,
         access: Option<TransactionAccessMode>,
+        isolation_level: Option<TransactionIsolationLevel>,
     ) -> Self {
         match self.transaction {
             TransactionStatus::Default | TransactionStatus::Started(_) => {
@@ -113,6 +116,11 @@ impl<T: CoordTimestamp> Session<T> {
             TransactionStatus::InTransaction(_) => {}
             TransactionStatus::Failed(_) => unreachable!(),
         };
+        if let Some(isolation_level) = isolation_level {
+            self.vars
+                .set("transaction_isolation", IsolationLevel::from(isolation_level).as_str(), true)
+                .expect("transaction_isolation should be a valid var and isolation level is a valid value");
+        }
         self
     }
 

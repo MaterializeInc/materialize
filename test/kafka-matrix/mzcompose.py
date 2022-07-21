@@ -54,10 +54,18 @@ def workflow_default(c: Composition) -> None:
             )
             c.wait_for_materialized()
             c.run("testdrive", "kafka-matrix.td", "testdrive/kafka-*.td")
+            c.kill(
+                "zookeeper",
+                "kafka",
+                "schema-registry",
+                "materialized",
+            )
             c.rm(
                 "zookeeper",
                 "kafka",
                 "schema-registry",
                 "materialized",
+                "testdrive",
                 destroy_volumes=True,
             )
+            c.rm_volumes("mzdata", "pgdata", force=True)

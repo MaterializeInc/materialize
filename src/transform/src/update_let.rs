@@ -87,7 +87,7 @@ impl UpdateLet {
                     }
                     Ok(())
                 }
-                _ => relation.try_visit_mut_children(&mut |e| self.action(e, remap, id_gen)),
+                _ => relation.try_visit_mut_children(|e| self.action(e, remap, id_gen)),
             }
         })
     }

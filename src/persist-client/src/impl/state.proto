@@ -37,13 +37,14 @@ message ProtoTrace {
     repeated ProtoHollowBatch spine = 2;
 }
 
-message ProtoReader {
+message ProtoReaderState {
     string reader_id = 1;
     ProtoU64Antichain since = 2;
     uint64 seqno = 3;
+    uint64 last_heartbeat_timestamp_ms = 4;
 }
 
-message ProtoWriter {
+message ProtoWriterState {
     string writer_id = 1;
     uint64 last_heartbeat_timestamp_ms = 2;
 }
@@ -56,11 +57,12 @@ message ProtoStateRollup {
     string diff_codec = 5;
     uint64 seqno = 6;
     ProtoTrace trace = 7;
-    repeated ProtoReader readers = 8;
-    repeated ProtoWriter writers = 9;
+    repeated ProtoReaderState readers = 8;
+    repeated ProtoWriterState writers = 9;
 }
 
 message ProtoSnapshotSplit {
+    string reader_id = 4;
     string shard_id = 1;
     ProtoU64Antichain as_of = 2;
     repeated ProtoHollowBatchPart batches = 3;

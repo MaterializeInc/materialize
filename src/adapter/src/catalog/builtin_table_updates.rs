@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_compute_client::command::{ProcessId, ReplicaId};
@@ -702,10 +702,7 @@ impl CatalogState {
             })?
             .into_row();
         let event_details = event_details.iter().next().unwrap();
-        let dt = NaiveDateTime::from_timestamp(
-            (occurred_at / 1_000).try_into().expect("must fit"),
-            (occurred_at % 1_000).try_into().expect("must fit"),
-        );
+        let dt = mz_ore::now::to_datetime(occurred_at).naive_utc();
         let id = i64::try_from(event.sortable_id()).map_err(|e| {
             Error::new(ErrorKind::Unstructured(format!(
                 "exceeded event id space: {}",

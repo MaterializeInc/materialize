@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import Optional
 
 from materialize.zippy.framework import Capability
 from materialize.zippy.watermarks import Watermarks
@@ -33,7 +32,8 @@ class Envelope(Enum):
 class TopicExists(Capability):
     """A Topic exists on the Kafka instance."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, partitions: int, envelope: Envelope) -> None:
         self.name = name
-        self.envelope: Optional[Envelope] = None
+        self.partitions = partitions
+        self.envelope = envelope
         self.watermarks = Watermarks()

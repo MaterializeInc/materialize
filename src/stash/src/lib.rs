@@ -679,6 +679,7 @@ where
     /// Sets the given k,v pair.
     ///
     /// Returns the old value if one existed.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn upsert_key<S>(
         &self,
         stash: &mut S,
@@ -712,6 +713,7 @@ where
     }
 
     /// Sets the given key value pairs, removing existing entries match any key.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn upsert<S, I>(&self, stash: &mut S, entries: I) -> Result<(), StashError>
     where
         S: Append,

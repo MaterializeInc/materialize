@@ -15,7 +15,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use itertools::Itertools;
-use mz_ore::str::{bracketed, separated, Indent};
+use mz_ore::str::{separated, Indent};
 use mz_repr::explain_new::DisplayText;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
-use crate::explain::ViewExplanation;
+use crate::explain::{Indices, ViewExplanation};
 use crate::visit::{Visit, VisitChildren};
 use crate::{func as scalar_func, EvalError, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc};
 
@@ -1296,10 +1296,10 @@ impl CollectionPlan for MirRelationExpr {
     }
 }
 
-impl VisitChildren for MirRelationExpr {
-    fn visit_children<'a, F>(&'a self, mut f: F)
+impl VisitChildren<Self> for MirRelationExpr {
+    fn visit_children<F>(&self, mut f: F)
     where
-        F: FnMut(&'a Self),
+        F: FnMut(&Self),
     {
         use MirRelationExpr::*;
         match self {
@@ -1333,9 +1333,9 @@ impl VisitChildren for MirRelationExpr {
         }
     }
 
-    fn visit_mut_children<'a, F>(&'a mut self, mut f: F)
+    fn visit_mut_children<F>(&mut self, mut f: F)
     where
-        F: FnMut(&'a mut Self),
+        F: FnMut(&mut Self),
     {
         use MirRelationExpr::*;
         match self {
@@ -1369,9 +1369,10 @@ impl VisitChildren for MirRelationExpr {
         }
     }
 
-    fn try_visit_children<'a, F, E>(&'a self, mut f: F) -> Result<(), E>
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(&'a Self) -> Result<(), E>,
+        F: FnMut(&Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         use MirRelationExpr::*;
         match self {
@@ -1406,9 +1407,10 @@ impl VisitChildren for MirRelationExpr {
         Ok(())
     }
 
-    fn try_visit_mut_children<'a, F, E>(&'a mut self, mut f: F) -> Result<(), E>
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(&'a mut Self) -> Result<(), E>,
+        F: FnMut(&mut Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         use MirRelationExpr::*;
         match self {
@@ -1964,29 +1966,26 @@ pub struct RowSetFinishing {
 
 impl DisplayText<Indent> for RowSetFinishing {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut Indent) -> fmt::Result {
-        writeln!(f, "{}row_set_finishing:", ctx)?;
-        *ctx += 1;
+        write!(f, "{}Finish", ctx)?;
         // order by
         if !self.order_by.is_empty() {
-            let order_by = bracketed("[", "]", separated(",", &self.order_by));
-            writeln!(f, "{}order_by: {}", ctx, order_by)?;
+            let order_by = separated(", ", &self.order_by);
+            write!(f, " order_by=[{}]", order_by)?;
         }
         // limit
         if let Some(limit) = self.limit {
-            writeln!(f, "{}limit: {}", ctx, limit)?;
+            write!(f, " limit={}", limit)?;
         }
         // offset
         if self.offset > 0 {
-            writeln!(f, "{}offset: {}", ctx, self.offset)?;
+            write!(f, " offset={}", self.offset)?;
         }
         // project
         {
-            // TODO: add an option for column ranges?
-            let project = bracketed("[", "]", separated(",", &self.project));
-            writeln!(f, "{}output: {}", ctx, project)?;
+            let project = Indices(&self.project);
+            write!(f, " output=[{}]", project)?;
         }
-        *ctx -= 1;
-        Ok(())
+        writeln!(f, "")
     }
 }
 
@@ -2407,7 +2406,7 @@ mod tests {
             }],
             limit: Some(7),
             offset: Default::default(),
-            project: vec![1, 3, 5],
+            project: vec![1, 3, 4, 5],
         };
 
         let act = text_string_at(&finishing, Indent::default);
@@ -2415,10 +2414,11 @@ mod tests {
         let exp = {
             use mz_ore::fmt::FormatBuffer;
             let mut s = String::new();
-            writeln!(&mut s, "row_set_finishing:");
-            writeln!(&mut s, "  order_by: [#4 desc nulls_last]");
-            writeln!(&mut s, "  limit: 7");
-            writeln!(&mut s, "  output: [1,3,5]");
+            write!(&mut s, "Finish");
+            write!(&mut s, " order_by=[#4 desc nulls_last]");
+            write!(&mut s, " limit=7");
+            write!(&mut s, " output=[#1, #3..=#5]");
+            writeln!(&mut s, "");
             s
         };
 
