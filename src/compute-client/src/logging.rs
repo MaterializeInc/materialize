@@ -30,7 +30,7 @@ pub struct LoggingConfig {
     /// Whether we should report logs for the log-processing dataflows
     pub log_logging: bool,
     /// Logs to be written to persist
-    pub sink_logs: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    pub sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
 impl LoggingConfig {

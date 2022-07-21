@@ -474,7 +474,7 @@ impl CatalogState {
                     granularity_ns: introspection.granularity.as_nanos(),
                     log_logging: introspection.debugging,
                     active_logs,
-                    sink_logs: HashMap::new(),
+                    sink_logs: BTreeMap::new(),
                 })
             }
         };

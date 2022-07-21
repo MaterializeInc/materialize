@@ -22,7 +22,7 @@
 //! compacted frontiers, as the underlying resources to rebuild them any earlier may not
 //! exist any longer.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -392,7 +392,7 @@ struct ReplicaState<T> {
     /// The network addresses of the processes that make up the replica.
     addrs: Vec<String>,
     /// Where to persist introspection sources
-    persisted_logs: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
 impl<T> ReplicaState<T> {
@@ -438,7 +438,7 @@ where
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
-        persisted_logs: HashMap<LogVariant, (GlobalId, CollectionMetadata)>,
+        persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
     ) {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
