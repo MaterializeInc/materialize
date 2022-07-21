@@ -16,11 +16,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
-use futures::executor::block_on;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Exchange, Map, OkErr};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
+use tokio::runtime::Handle as TokioHandle;
 
 use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
@@ -231,10 +231,12 @@ where
             let csr_client = match csr_connection {
                 None => None,
                 Some(csr_connection) => Some(
-                    block_on(
-                        csr_connection.connect(&*storage_state.connection_context.secrets_reader),
-                    )
-                    .expect("CSR connection unexpectedly missing secrets"),
+                    TokioHandle::current()
+                        .block_on(
+                            csr_connection
+                                .connect(&*storage_state.connection_context.secrets_reader),
+                        )
+                        .expect("CSR connection unexpectedly missing secrets"),
                 ),
             };
             // TODO(petrosagg): this should move to the envelope section below and

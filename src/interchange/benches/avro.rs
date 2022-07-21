@@ -9,13 +9,14 @@
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::{Duration, NaiveDate};
 use criterion::{black_box, Criterion, Throughput};
-use futures::executor::block_on;
-use mz_avro::types::Value as AvroValue;
 
+use mz_avro::types::Value as AvroValue;
 use mz_interchange::avro::{parse_schema, Decoder};
-use std::ops::Add;
+use tokio::runtime::Runtime;
 
 pub fn bench_avro(c: &mut Criterion) {
+    let runtime = Runtime::new().unwrap();
+
     let schema_str = r#"
 {
   "type": "record",
@@ -244,7 +245,7 @@ pub fn bench_avro(c: &mut Criterion) {
     let schema = parse_schema(schema_str).unwrap();
 
     fn since_epoch(days: i64) -> NaiveDate {
-        NaiveDate::from_ymd(1970, 1, 1).add(Duration::days(days))
+        NaiveDate::from_ymd(1970, 1, 1) + Duration::days(days)
     }
     let record = AvroValue::Record(vec![
         (
@@ -394,7 +395,13 @@ pub fn bench_avro(c: &mut Criterion) {
     let mut bg = c.benchmark_group("avro");
     bg.throughput(Throughput::Bytes(len));
     bg.bench_function("decode", move |b| {
-        b.iter(|| black_box(block_on(decoder.decode(&mut buf.as_slice())).unwrap()))
+        b.iter(|| {
+            black_box(
+                runtime
+                    .block_on(decoder.decode(&mut buf.as_slice()))
+                    .unwrap(),
+            )
+        })
     });
     bg.finish();
 }

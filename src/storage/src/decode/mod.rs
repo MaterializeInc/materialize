@@ -27,13 +27,13 @@ use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use mz_expr::PartitionId;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
+use tokio::runtime::Handle as TokioHandle;
 
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_repr::Datum;
@@ -80,6 +80,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
         {
             let channel = Rc::clone(&channel);
             let activator = Rc::clone(&activator);
+            let tokio_handle = TokioHandle::current();
             move |input| {
                 input.for_each(|_time, data| {
                     data.swap(&mut vector);
@@ -88,13 +89,14 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
                             Some(value) => value,
                             None => continue,
                         };
-                        let (mut data, schema, _) = match block_on(resolver.resolve(&*value)) {
-                            Ok(ok) => ok,
-                            Err(e) => {
-                                error!("Failed to get schema info for CDCv2 record: {}", e);
-                                continue;
-                            }
-                        };
+                        let (mut data, schema, _) =
+                            match tokio_handle.block_on(resolver.resolve(&*value)) {
+                                Ok(ok) => ok,
+                                Err(e) => {
+                                    error!("Failed to get schema info for CDCv2 record: {}", e);
+                                    continue;
+                                }
+                            };
                         let d = GeneralDeserializer {
                             schema: schema.top_node(),
                         };
@@ -266,7 +268,8 @@ fn get_decoder(
             let csr_client = match csr_connection {
                 None => None,
                 Some(csr_connection) => Some(
-                    block_on(csr_connection.connect(&*connection_context.secrets_reader))
+                    TokioHandle::current()
+                        .block_on(csr_connection.connect(&*connection_context.secrets_reader))
                         .expect("CSR connection unexpectedly missing secrets"),
                 ),
             };
