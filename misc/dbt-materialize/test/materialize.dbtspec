@@ -109,14 +109,14 @@ projects:
       # Since tables in Materialize are ephemeral, "table" and "seed"
       # materializations use views for now.
       expected_types_table:
-        base: view
+        base: materializedview
         view_model: view
-        table_model: view
-        swappable: view
+        table_model: materializedview
+        swappable: materializedview
       expected_types_view:
-        base: view
+        base: materializedview
         view_model: view
-        table_model: view
+        table_model: materializedview
         swappable: view
   - name: custom_materializations
     paths:
@@ -182,12 +182,6 @@ projects:
 
         seeds/expected_indexes.csv: |
             name,index_position,on_position,on_expression
-            expected_indexes,1,1,
-            expected_indexes,2,2,
-            expected_indexes,3,3,
-            expected_indexes,4,4,
-            test_materialized_view,1,1,
-            test_materialized_view_index,1,1,
             test_materialized_view_index,1,1,
             test_source,1,1,
             test_source_index,1,1,
