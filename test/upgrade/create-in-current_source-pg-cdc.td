@@ -29,7 +29,7 @@ INSERT INTO upgrade_pg_cdc_table VALUES (1),(2),(3),(4),(5);
   CONNECTION pgconn
   PUBLICATION 'upgrade_pg_cdc_publication'
 
-> CREATE MATERIALIZED VIEWS FROM SOURCE upgrade_pg_cdc_source;
+> CREATE VIEWS FROM SOURCE upgrade_pg_cdc_source;
 
 > SELECT * FROM upgrade_pg_cdc_table;
 1

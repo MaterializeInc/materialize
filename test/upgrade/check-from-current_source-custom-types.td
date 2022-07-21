@@ -17,7 +17,7 @@
 > SELECT custom_list::text FROM int4_list_view_after;
 {1,2}
 
-> DROP VIEW int4_list_view_after;
+> DROP MATERIALIZED VIEW int4_list_view_after;
 
 # Nested list
 
@@ -29,7 +29,7 @@
 > SELECT custom_nested_list::text FROM int4_list_list_view_after;
 {{1,2}}
 
-> DROP VIEW int4_list_list_view_after;
+> DROP MATERIALIZED VIEW int4_list_list_view_after;
 
 # Map
 
@@ -41,7 +41,7 @@
 > SELECT custom_map::text FROM int4_map_view_after;
 {a=>1}
 
-> DROP VIEW int4_map_view_after;
+> DROP MATERIALIZED VIEW int4_map_view_after;
 
 # Nested map
 
@@ -53,4 +53,4 @@
 > SELECT custom_nested_map::text FROM int4_map_map_view_after;
 "{a=>{\"a a\"=>1}}"
 
-> DROP VIEW int4_map_map_view_after;
+> DROP MATERIALIZED VIEW int4_map_map_view_after;
