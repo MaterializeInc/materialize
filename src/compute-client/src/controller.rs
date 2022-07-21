@@ -43,9 +43,6 @@ use mz_storage::types::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 use crate::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
 };
-
-// NOTE(benesch): this should be a private implementation detail of the compute
-// controller. It is unfortunate that it leaks out.
 use crate::controller::replicated::{ActiveReplication, ActiveReplicationResponse};
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
