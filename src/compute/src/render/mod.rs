@@ -106,9 +106,10 @@ use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
+use timely::dataflow::operators::{InspectCore};
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 
@@ -116,13 +117,15 @@ use mz_compute_client::command::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::plan::Plan;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
-use mz_repr::{GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::source::persist_source;
 use mz_storage::types::errors::DataflowError;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
+use crate::logging::compute::ComputeEvent;
+use crate::logging::compute::Logger;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
@@ -144,6 +147,31 @@ pub fn build_compute_dataflow<A: Allocate>(
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<Plan, CollectionMetadata>,
 ) {
+    fn intercept_source_instantiation_frontiers<G>(
+        source_instantiation: &Stream<G, (Row, mz_repr::Timestamp, Diff)>,
+        logger: &Logger,
+        source_id: &GlobalId,
+        index_ids: &Vec<GlobalId>
+    ) -> 
+        Stream<G, (Row, mz_repr::Timestamp, Diff)> 
+    where
+        G: Scope<Timestamp = mz_repr::Timestamp>,
+    {
+        let logger = logger.clone();
+        let source_id = source_id.clone();
+        let index_ids = index_ids.clone();
+        source_instantiation.inspect_container(move |event| {
+            if let Err(frontier) = event {
+                for time in frontier.iter() {
+                    for idx_id in index_ids.iter() {
+                        // log (source_id, index_id, frontier time) advancement
+                        logger.log(ComputeEvent::SourceFrontier(source_id, *idx_id, *time));
+                    }
+                }
+            }
+        })
+    }
+    
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
 
@@ -163,12 +191,20 @@ pub fn build_compute_dataflow<A: Allocate>(
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
                 // Note: For correctness, we require that sources only emit times advanced by
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                let (ok_stream, err_stream, token) = persist_source::persist_source(
+                let (mut ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
                 );
+
+                // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
+                // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
+                // time of the frontier advancement for each dataflow as early as possible.
+                if let Some(logger) = compute_state.compute_logger.as_mut() {
+                    let index_ids = dataflow.index_exports.keys().cloned().collect::<Vec<_>>();
+                    ok_stream = intercept_source_instantiation_frontiers(&ok_stream, logger, source_id, &index_ids);
+                }
 
                 // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
                 // type checker happy. We should decide what we want our tokens to look like

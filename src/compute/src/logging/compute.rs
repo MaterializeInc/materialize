@@ -53,6 +53,8 @@ pub enum ComputeEvent {
     Peek(Peek, bool),
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
+    // Available frontier information for source instantiations.
+    SourceFrontier(GlobalId, GlobalId, Timestamp)
 }
 
 /// A logged peek event.
@@ -192,6 +194,10 @@ pub fn construct<A: Allocate>(
                                     time_ms,
                                     delta,
                                 ));
+                            }
+                            ComputeEvent::SourceFrontier(source_id, index_id, logical) => {
+                                // TODO: do something with these events
+                                println!("source frontier logged as:({}, {}, {})", source_id, index_id, logical);
                             }
                             ComputeEvent::Peek(peek, is_install) => {
                                 let key = (worker, peek.uuid);
