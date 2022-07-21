@@ -133,10 +133,12 @@ impl BlobKey {
 #[derive(Debug)]
 pub enum BlobKeyPrefix<'a> {
     /// For accessing all blobs
+    #[allow(dead_code)]
     All,
     /// Scoped to the blobs of an individual shard
     Shard(&'a ShardId),
     /// Scoped to the blobs of an individual writer
+    #[allow(dead_code)]
     Writer(&'a ShardId, &'a WriterId),
 }
 

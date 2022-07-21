@@ -248,6 +248,7 @@ impl MetricsVecs {
                 gc_scan: self.retry_metrics("gc::scan"),
                 gc_delete: self.retry_metrics("gc::delete"),
                 gc_truncate: self.retry_metrics("gc::truncate"),
+                storage_usage_shard_size: self.retry_metrics("storage_usage::shard_size"),
             },
             append_batch: self.retry_metrics("append_batch"),
             fetch_batch_part: self.retry_metrics("fetch_batch_part"),
@@ -390,6 +391,7 @@ pub struct RetryExternal {
     pub(crate) gc_scan: RetryMetrics,
     pub(crate) gc_delete: RetryMetrics,
     pub(crate) gc_truncate: RetryMetrics,
+    pub(crate) storage_usage_shard_size: RetryMetrics,
 }
 
 #[derive(Debug)]

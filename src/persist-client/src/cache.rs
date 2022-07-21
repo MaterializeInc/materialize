@@ -33,7 +33,7 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 #[derive(Debug, Clone)]
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
-    metrics: Arc<Metrics>,
+    pub(crate) metrics: Arc<Metrics>,
     blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
 }

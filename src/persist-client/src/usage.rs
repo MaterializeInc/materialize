@@ -11,15 +11,17 @@
 
 use std::sync::Arc;
 
-use crate::BlobKeyPrefix;
+use crate::{retry_external, Metrics, ShardId};
 use mz_persist::location::{Blob, ExternalError};
 
 use crate::cache::PersistClientCache;
+use crate::r#impl::paths::BlobKeyPrefix;
 
 /// Provides access to storage usage metrics for a specific Blob
 #[derive(Debug)]
 pub struct StorageUsageClient {
     blob: Arc<dyn Blob + Send + Sync>,
+    metrics: Arc<Metrics>,
 }
 
 impl StorageUsageClient {
@@ -29,11 +31,23 @@ impl StorageUsageClient {
         client_cache: &mut PersistClientCache,
     ) -> Result<StorageUsageClient, ExternalError> {
         let blob = client_cache.open_blob(blob_uri).await?;
-        Ok(StorageUsageClient { blob })
+        let metrics = Arc::clone(&client_cache.metrics);
+        Ok(StorageUsageClient { blob, metrics })
     }
 
-    /// Returns the size (in bytes) of a subset of blobs specified by [crate::BlobKeyPrefix]
-    pub async fn size(&self, prefix: BlobKeyPrefix<'_>) -> Result<u64, ExternalError> {
+    /// Returns the size (in bytes) of all blobs owned by a given [crate::ShardId]
+    pub async fn shard_size(&self, shard_id: &ShardId) -> u64 {
+        retry_external(
+            &self.metrics.retries.external.storage_usage_shard_size,
+            || self.size(BlobKeyPrefix::Shard(shard_id)),
+        )
+        .await
+    }
+
+    /// Returns the size (in bytes) of a subset of blobs specified by [crate::r#impl::paths::BlobKeyPrefix]
+    ///
+    /// Can be safely called within retry_external to ensure it succeeds
+    async fn size(&self, prefix: BlobKeyPrefix<'_>) -> Result<u64, ExternalError> {
         let mut total_size = 0;
         self.blob
             .list_keys_and_metadata(&prefix.to_string(), &mut |metadata| {
@@ -45,8 +59,10 @@ impl StorageUsageClient {
 
     #[cfg(test)]
     fn open_from_blob(blob: Arc<dyn Blob + Send + Sync>) -> StorageUsageClient {
+        use mz_ore::metrics::MetricsRegistry;
         StorageUsageClient {
             blob: Arc::clone(&blob),
+            metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
         }
     }
 }
@@ -121,5 +137,8 @@ mod tests {
         assert!(shard_one_size < shard_two_size);
         assert_eq!(shard_two_size, writer_one_size + writer_two_size);
         assert_eq!(all_size, shard_one_size + shard_two_size);
+
+        assert_eq!(usage.shard_size(&shard_id_one).await, shard_one_size);
+        assert_eq!(usage.shard_size(&shard_id_two).await, shard_two_size);
     }
 }
