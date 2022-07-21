@@ -76,70 +76,110 @@ pub fn construct<A: Allocate>(
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
         // Restrict results by those logs that are meant to be active.
-        let logs_active = vec![(LogVariant::Timely(TimelyLog::Reachability))];
+        let logs_active = vec![LogVariant::Timely(TimelyLog::Reachability)];
+
+        // Do we sink the common dataflow?
+        let sink_common = config
+            .sink_logs
+            .contains_key(&LogVariant::Timely(TimelyLog::Reachability));
+
+        // Do we need to construct the common reachability common dataflow?
+        let common_needed = logs_active
+            .iter()
+            .any(|variant| config.active_logs.contains_key(variant))
+            || sink_common;
 
         let mut result = std::collections::HashMap::new();
-        for variant in logs_active {
-            let is_active = config.active_logs.contains_key(&variant);
-            let is_sinked = config.sink_logs.contains_key(&variant);
-            if is_active || is_sinked {
-                let key = variant.index_by();
-                let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
-                    &key.iter()
-                        .cloned()
-                        .map(MirScalarExpr::Column)
-                        .collect::<Vec<_>>(),
-                    variant.desc().arity(),
-                );
+        if common_needed {
+            // Construct common dataflow. Common will feed into both, active and into sinked
+            let mut flatten = OperatorBuilder::new(
+                "Timely Reachability Logging Flatten ".to_string(),
+                scope.clone(),
+            );
 
-                // Construct common dataflow. Common will feed into both, active and into sinked
-                let mut flatten = OperatorBuilder::new(
-                    "Timely Reachability Logging Flatten ".to_string(),
-                    scope.clone(),
-                );
+            use timely::dataflow::channels::pact::Pipeline;
+            let mut input = flatten.new_input(&logs, Pipeline);
 
-                use timely::dataflow::channels::pact::Pipeline;
-                let mut input = flatten.new_input(&logs, Pipeline);
+            let (mut updates_out, updates) = flatten.new_output();
 
-                let (mut updates_out, updates) = flatten.new_output();
+            let mut buffer = Vec::new();
+            flatten.build(move |_capability| {
+                move |_frontiers| {
+                    let updates = updates_out.activate();
+                    let mut updates_session = ConsolidateBuffer::new(updates, 0);
 
-                let mut buffer = Vec::new();
-                flatten.build(move |_capability| {
-                    move |_frontiers| {
-                        let updates = updates_out.activate();
-                        let mut updates_session = ConsolidateBuffer::new(updates, 0);
+                    input.for_each(|cap, data| {
+                        data.swap(&mut buffer);
 
-                        input.for_each(|cap, data| {
-                            data.swap(&mut buffer);
-
-                            for (time, worker, (addr, massaged)) in buffer.drain(..) {
-                                let time_ms = (((time.as_millis() as Timestamp / granularity_ms)
-                                    + 1)
-                                    * granularity_ms)
-                                    as Timestamp;
-                                for (source, port, update_type, ts, diff) in massaged {
-                                    updates_session.give(
-                                        &cap,
-                                        (
-                                            (update_type, addr.clone(), source, port, worker, ts),
-                                            time_ms,
-                                            diff,
-                                        ),
-                                    );
-                                }
+                        for (time, worker, (addr, massaged)) in buffer.drain(..) {
+                            let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
+                                * granularity_ms)
+                                as Timestamp;
+                            for (source, port, update_type, ts, diff) in massaged {
+                                updates_session.give(
+                                    &cap,
+                                    (
+                                        (update_type, addr.clone(), source, port, worker, ts),
+                                        time_ms,
+                                        diff,
+                                    ),
+                                );
                             }
-                        });
-                    }
-                });
+                        }
+                    });
+                }
+            });
 
-                let common = updates
-                    .as_collection()
-                    .arrange_core::<_, RowSpine<_, _, _, _>>(
-                        Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
-                        "PreArrange Timely reachability",
+            let common = updates
+                .as_collection()
+                .arrange_core::<_, RowSpine<_, _, _, _>>(
+                    Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
+                    "PreArrange Timely reachability",
+                );
+
+            if sink_common {
+                // Use common to create sinked, a timely collection that ouptuts a single value row.
+                let (id, meta) = config
+                    .sink_logs
+                    .get(&LogVariant::Timely(TimelyLog::Reachability))
+                    .unwrap();
+                tracing::debug!("Persisting reachability to {:?}", meta);
+
+                let mut row_buf = Row::default();
+                let sinked = common.as_collection(
+                    move |(update_type, addr, source, port, worker, ts), _| {
+                        let row_arena = RowArena::default();
+                        let update_type = if *update_type { "source" } else { "target" };
+                        row_buf.packer().push_list(
+                            addr.iter()
+                                .chain_one(&source)
+                                .map(|id| Datum::Int64(*id as i64)),
+                        );
+                        let datums = &[
+                            row_arena.push_unary_row(row_buf.clone()),
+                            Datum::Int64(*port as i64),
+                            Datum::Int64(*worker as i64),
+                            Datum::String(&update_type),
+                            Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                        ];
+                        row_buf.packer().extend(datums);
+                        row_buf.clone()
+                    },
+                );
+                persist_sink(*id, meta, compute_state, &sinked);
+            }
+
+            for variant in logs_active {
+                if config.active_logs.contains_key(&variant) {
+                    let key = variant.index_by();
+                    let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
+                        &key.iter()
+                            .cloned()
+                            .map(MirScalarExpr::Column)
+                            .collect::<Vec<_>>(),
+                        variant.desc().arity(),
                     );
 
-                if is_active {
                     // Use common to create an arrangement.
                     let mut row_buf = Row::default();
                     let updates = common.as_collection(
@@ -170,35 +210,6 @@ pub fn construct<A: Allocate>(
                         .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                         .trace;
                     result.insert(variant.clone(), (trace, Rc::clone(&token)));
-                }
-
-                if is_sinked {
-                    // Use common to create sinked, a timely collection that ouptuts a single value row.
-                    let (id, meta) = config.sink_logs.get(&variant).unwrap();
-                    tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
-
-                    let mut row_buf = Row::default();
-                    let sinked = common.as_collection(
-                        move |(update_type, addr, source, port, worker, ts), _| {
-                            let row_arena = RowArena::default();
-                            let update_type = if *update_type { "source" } else { "target" };
-                            row_buf.packer().push_list(
-                                addr.iter()
-                                    .chain_one(&source)
-                                    .map(|id| Datum::Int64(*id as i64)),
-                            );
-                            let datums = &[
-                                row_arena.push_unary_row(row_buf.clone()),
-                                Datum::Int64(*port as i64),
-                                Datum::Int64(*worker as i64),
-                                Datum::String(&update_type),
-                                Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
-                            ];
-                            row_buf.packer().extend(datums);
-                            row_buf.clone()
-                        },
-                    );
-                    persist_sink(*id, meta, compute_state, &sinked);
                 }
             }
         }
