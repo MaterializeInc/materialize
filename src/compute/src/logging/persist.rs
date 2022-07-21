@@ -114,7 +114,8 @@ where
 
     // TODO(mcsherry): this is shardable, eventually. But for now use a single writer.
     let hashed_id = sink_id.hashed();
-    let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    // TODO(lh): Figure out why this is necessary for introspection sources.
+    let active_write_worker = scope.index() == 0;
     let mut desired_input =
         persist_op.new_input(&desired_collection.inner, Exchange::new(move |_| hashed_id));
     let mut persist_input =
