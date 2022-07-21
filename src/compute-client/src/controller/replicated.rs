@@ -401,7 +401,7 @@ impl<T> ReplicaState<T> {
     /// Most `ComputeCommand`s are independent of the target replica, but some
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
-        // Tell new instances their replica ID.
+        // Set new replica ID and obtain set the sinked logs specific to this replica
         if let ComputeCommand::CreateInstance(config) = command {
             // Set sink_logs
             if let Some(logging) = &mut config.logging {

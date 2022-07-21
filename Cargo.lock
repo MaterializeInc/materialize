@@ -2940,8 +2940,6 @@ dependencies = [
  "mz-expr",
  "mz-kafka-util",
  "mz-ore",
- "mz-persist",
- "mz-persist-client",
  "mz-persist-types",
  "mz-pgcopy",
  "mz-pgrepr",

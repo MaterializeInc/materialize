@@ -13,7 +13,6 @@ use std::iter::once;
 
 use bytes::BufMut;
 use itertools::max;
-use mz_controller::ConcreteComputeInstanceReplicaConfig;
 use prost::{self, Message};
 use serde_json::json;
 use timely::progress::Timestamp;
@@ -23,6 +22,7 @@ use crate::catalog;
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::ComputeInstanceId;
+use mz_controller::ConcreteComputeInstanceReplicaConfig;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::Codec;

@@ -32,13 +32,13 @@
 ###           "mz_dataflow_operator_addresses" : "id,worker",
 ###           "mz_dataflow_operator_reachability_internal" : "port,worker,update_type",
 ###   }
-###   
+###
 ###   def query_empty(q):
 ###       return "query T\n{q};\n----\n\n".format(q=q)
-###   
+###
 ###   def stmt_ok(q):
 ###       return "statement ok\n{q};\n\n".format(q=q)
-###   
+###
 ###   def equal(postfix):
 ###       res = ""
 ###       for x in SRC:
@@ -48,7 +48,7 @@
 ###               p = p.replace("*", STAR_OVERRIDE[x])
 ###           res += p
 ###       return res
-###   
+###
 ###   print("""
 ###   # Check that no log source has been created initially
 ###   query T
@@ -56,7 +56,7 @@
 ###   ----
 ###   1
 ###   """)
-###   
+###
 ###   print(stmt_ok("CREATE CLUSTER c1 REPLICAS (r (SIZE '1'))"))
 ###   print("""
 ###   query T
@@ -68,11 +68,11 @@
 ###   print(stmt_ok("INSERT INTO t1 VALUES (1,1),(2,3),(4,5)"))
 ###   print(stmt_ok("CREATE MATERIALIZED VIEW ma1 AS SELECT COUNT(*) FROM t1"))
 ###   print(equal("1"))
-###   
+###
 ###   print(stmt_ok("SET CLUSTER TO c1"))
 ###   print(stmt_ok("CREATE MATERIALIZED VIEW ma2 AS SELECT COUNT(*) FROM t1"))
 ###   print(equal("2"))
-###   
+###
 ###   print(stmt_ok("CREATE CLUSTER c2 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))"))
 ###   print("""
 ###   query T
@@ -80,7 +80,7 @@
 ###   ----
 ###   4
 ###   """)
-###   
+###
 ###   print(stmt_ok("set cluster = c2"))
 ###   print(stmt_ok("set cluster_replica = r1"))
 ###   print(equal("3"))
@@ -553,5 +553,3 @@ SELECT * FROM ((SELECT * FROM mz_worker_materialization_frontiers) EXCEPT (SELEC
 query T
 SELECT * FROM ((SELECT * FROM mz_worker_materialization_frontiers_3) EXCEPT (SELECT * FROM mz_worker_materialization_frontiers));
 ----
-
-

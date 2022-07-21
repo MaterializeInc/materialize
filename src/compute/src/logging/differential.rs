@@ -23,13 +23,13 @@ use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
 
-use crate::compute_state::ComputeState;
-use crate::logging::persist::persist_sink;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
+use crate::compute_state::ComputeState;
+use crate::logging::persist::persist_sink;
 use crate::logging::{ConsolidateBuffer, DifferentialLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 

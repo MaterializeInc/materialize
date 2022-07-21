@@ -16,14 +16,13 @@ use std::{collections::HashMap, time::Duration};
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::AsCollection;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_ore::iter::IteratorExt;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
-
 use timely::logging::WorkerIdentifier;
 
 use mz_compute_client::logging::LoggingConfig;
+use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
