@@ -93,7 +93,7 @@ You can [cast](../../functions/cast) `interval` to:
 You can [cast](../../functions/cast) from the following types to `interval`:
 
 - [`text`](../text) (explicitly)
-- [`time`](../time)  (explicity)
+- [`time`](../time)  (explicitly)
 
 ### Valid operations
 
