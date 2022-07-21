@@ -71,7 +71,7 @@ contains:invalid input syntax for type double precision
 5 6 xy
 
 ! UPDATE v SET a = 1
-contains:cannot mutate view
+contains:cannot mutate materialized view
 
 ! UPDATE mz_tables SET a = 1
 contains:cannot mutate system table
