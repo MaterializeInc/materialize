@@ -150,6 +150,9 @@ pub trait StorageController: Debug + Send {
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
+    /// Drops the read capability for the sinks and allows their resources to be reclaimed.
+    async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
     async fn append(
@@ -672,6 +675,17 @@ where
     }
 
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        self.validate_ids(identifiers.iter().cloned())?;
+        let policies = identifiers
+            .into_iter()
+            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
+            .collect();
+        self.set_read_policy(policies).await?;
+        Ok(())
+    }
+
+    /// Drops the read capability for the sinks and allows their resources to be reclaimed.
+    async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_ids(identifiers.iter().cloned())?;
         let policies = identifiers
             .into_iter()

@@ -187,12 +187,12 @@ impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> 
     }
 }
 
-/// A command that starts ingesting the given ingestion description
+/// A command that starts exporting the given sink description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ExportSinkCommand<T> {
     pub id: GlobalId,
     pub description: SinkDesc<CollectionMetadata, T>,
-    /// The upper frontier that this ingestion should resume at
+    /// The upper frontier at which this export should resume.
     pub resume_upper: Antichain<T>,
 }
 
