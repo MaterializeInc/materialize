@@ -152,21 +152,21 @@ pub fn build_compute_dataflow<A: Allocate>(
         logger: &Logger,
         source_id: &GlobalId,
         index_ids: &Vec<GlobalId>,
-        sink_ids: &Vec<GlobalId>
+        sink_ids: &Vec<GlobalId>,
     ) -> Stream<G, (Row, mz_repr::Timestamp, Diff)>
     where
         G: Scope<Timestamp = mz_repr::Timestamp>,
     {
         let logger = logger.clone();
         let source_id = source_id.clone();
-        let mut object_ids = index_ids.clone();
-        object_ids.append(&mut (sink_ids.clone()));
+        let mut dataflow_ids = index_ids.clone();
+        dataflow_ids.append(&mut (sink_ids.clone()));
         source_instantiation.inspect_container(move |event| {
             if let Err(frontier) = event {
                 for time in frontier.iter() {
-                    for obj_id in object_ids.iter() {
+                    for dataflow_id in dataflow_ids.iter() {
                         // log (source_id, index_id, frontier time) advancement
-                        logger.log(ComputeEvent::SourceFrontier(*obj_id, source_id, *time));
+                        logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, *time));
                     }
                 }
             }
@@ -206,7 +206,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     let index_ids = dataflow.index_exports.keys().cloned().collect::<Vec<_>>();
                     let sink_ids = dataflow.sink_exports.keys().cloned().collect::<Vec<_>>();
                     ok_stream = intercept_source_instantiation_frontiers(
-                        &ok_stream, logger, source_id, &index_ids, &sink_ids 
+                        &ok_stream, logger, source_id, &index_ids, &sink_ids,
                     );
                 }
 
