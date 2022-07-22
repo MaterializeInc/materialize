@@ -52,12 +52,21 @@ from materialize.checks.upsert import *  # noqa: F401 F403
 from materialize.checks.users import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Redpanda
+from materialize.mzcompose.services import Materialized, Postgres, Redpanda
 from materialize.mzcompose.services import Testdrive as TestdriveService
 
 SERVICES = [
+    Postgres(name="postgres-stash"),
     Redpanda(),
-    Materialized(),
+    Materialized(
+        options=" ".join(
+            [
+                "--persist-consensus-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=consensus",
+                "--storage-stash-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=storage",
+                "--adapter-stash-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=adapter",
+            ]
+        )
+    ),
     TestdriveService(default_timeout="300s", no_reset=True, seed=1),
 ]
 
@@ -75,7 +84,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("testdrive", persistent=True)
 
-    c.start_and_wait_for_tcp(services=["redpanda"])
+    c.start_and_wait_for_tcp(services=["redpanda", "postgres-stash"])
+    c.wait_for_postgres(service="postgres-stash")
+    c.sql(
+        sql=f"""
+       CREATE SCHEMA IF NOT EXISTS consensus;
+       CREATE SCHEMA IF NOT EXISTS storage;
+       CREATE SCHEMA IF NOT EXISTS adapter;
+    """,
+        service="postgres-stash",
+        user="postgres",
+        password="postgres",
+    )
 
     scenarios = (
         [globals()[args.scenario]] if args.scenario else Scenario.__subclasses__()

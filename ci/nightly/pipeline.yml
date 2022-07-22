@@ -37,6 +37,7 @@ steps:
           - { value: checks-drop-create-default-replica }
           - { value: checks-restart-computed }
           - { value: checks-restart-entire-mz }
+          - { value: checks-restart-environmentd-storaged }
           - { value: checks-kill-storaged }
           - { value: secrets }
           - { value: unused-deps }
@@ -286,6 +287,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartEntireMz]
+
+  - id: checks-restart-environmentd-storaged
+    label: "Checks + restart of environmentd & storaged"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEnvironmentdStoraged]
 
   - id: checks-kill-storaged
     label: "Checks + kill storaged"

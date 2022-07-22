@@ -390,23 +390,40 @@ class Composition:
         elapsed = time.time() - start_time
         self.test_results[name] = Composition.TestResult(elapsed, error)
 
-    def sql_cursor(self) -> Cursor:
+    def sql_cursor(
+        self,
+        service: str = "materialized",
+        user: str = "materialize",
+        password: Optional[str] = None,
+    ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        port = self.default_port("materialized")
-        conn = pg8000.connect(host="localhost", user="materialize", port=port)
+        port = self.default_port(service)
+        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
         conn.autocommit = True
         return conn.cursor()
 
-    def sql(self, sql: str) -> None:
+    def sql(
+        self,
+        sql: str,
+        service: str = "materialized",
+        user: str = "materialize",
+        password: Optional[str] = None,
+    ) -> None:
         """Run a batch of SQL statements against the materialized service."""
-        with self.sql_cursor() as cursor:
+        with self.sql_cursor(service=service, user=user, password=password) as cursor:
             for statement in sqlparse.split(sql):
                 print(f"> {statement}")
                 cursor.execute(statement)
 
-    def sql_query(self, sql: str) -> Any:
+    def sql_query(
+        self,
+        sql: str,
+        service: str = "materialized",
+        user: str = "materialize",
+        password: Optional[str] = None,
+    ) -> Any:
         """Execute and return results of a SQL query."""
-        with self.sql_cursor() as cursor:
+        with self.sql_cursor(service=service, user=user, password=password) as cursor:
             cursor.execute(sql)
             return cursor.fetchall()
 
