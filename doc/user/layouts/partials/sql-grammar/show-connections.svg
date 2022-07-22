@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="487" height="199">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="64" height="32" rx="10"/>
+   <rect x="31"
+         y="1"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="41" y="21">SHOW</text>
+   <rect x="137" y="35" width="54" height="32" rx="10"/>
+   <rect x="135"
+         y="33"
+         width="54"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="53">FULL</text>
+   <rect x="231" y="3" width="124" height="32" rx="10"/>
+   <rect x="229"
+         y="1"
+         width="124"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="239" y="21">CONNECTIONS</text>
+   <rect x="45" y="121" width="60" height="32" rx="10"/>
+   <rect x="43"
+         y="119"
+         width="60"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="53" y="139">FROM</text>
+   <rect x="125" y="121" width="114" height="32"/>
+   <rect x="123" y="119" width="114" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="133" y="139">schema_name</text>
+   <rect x="299" y="121" width="50" height="32" rx="10"/>
+   <rect x="297"
+         y="119"
+         width="50"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="307" y="139">LIKE</text>
+   <rect x="369" y="121" width="70" height="32" rx="10"/>
+   <rect x="367"
+         y="119"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="377" y="139">pattern</text>
+   <rect x="299" y="165" width="70" height="32" rx="10"/>
+   <rect x="297"
+         y="163"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="307" y="183">WHERE</text>
+   <rect x="389" y="165" width="48" height="32"/>
+   <rect x="387" y="163" width="48" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="397" y="183">expr</text>
+   <path class="line"
+         d="m19 17 h2 m0 0 h10 m64 0 h10 m20 0 h10 m0 0 h64 m-94 0 h20 m74 0 h20 m-114 0 q10 0 10 10 m94 0 q0 -10 10 -10 m-104 10 v12 m94 0 v-12 m-94 12 q0 10 10 10 m74 0 q10 0 10 -10 m-84 10 h10 m54 0 h10 m20 -32 h10 m124 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-374 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h204 m-234 0 h20 m214 0 h20 m-254 0 q10 0 10 10 m234 0 q0 -10 10 -10 m-244 10 v12 m234 0 v-12 m-234 12 q0 10 10 10 m214 0 q10 0 10 -10 m-224 10 h10 m60 0 h10 m0 0 h10 m114 0 h10 m40 -32 h10 m0 0 h150 m-180 0 h20 m160 0 h20 m-200 0 q10 0 10 10 m180 0 q0 -10 10 -10 m-190 10 v12 m180 0 v-12 m-180 12 q0 10 10 10 m160 0 q10 0 10 -10 m-170 10 h10 m50 0 h10 m0 0 h10 m70 0 h10 m-170 -10 v20 m180 0 v-20 m-180 20 v24 m180 0 v-24 m-180 24 q0 10 10 10 m160 0 q10 0 10 -10 m-170 10 h10 m70 0 h10 m0 0 h10 m48 0 h10 m0 0 h2 m23 -76 h-3"/>
+   <polygon points="477 103 485 99 485 107"/>
+   <polygon points="477 103 469 99 469 107"/>
+</svg>
