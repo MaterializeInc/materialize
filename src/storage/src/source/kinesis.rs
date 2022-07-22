@@ -297,6 +297,7 @@ async fn create_state(
         .aws
         .load(aws_external_id_prefix, Some(&source_id), secrets_reader)
         .await;
+
     let kinesis_client = aws_sdk_kinesis::Client::new(&config);
 
     let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;

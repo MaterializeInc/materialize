@@ -81,7 +81,7 @@ async fn run() -> Result<(), anyhow::Error> {
         let records_per_second = args.records_per_second;
         async move {
             kinesis::generate_and_put_records(
-                &kinesis_client_clone,
+                kinesis_client_clone,
                 &stream_name_clone,
                 total_records,
                 records_per_second,
@@ -96,7 +96,7 @@ async fn run() -> Result<(), anyhow::Error> {
         .context("creating postgres client")?;
 
     // Create Kinesis source and materialized view.
-    mz::create_source_and_views(&client, stream_arn).await?;
+    mz::create_source_and_views(&client, &config, stream_arn).await?;
     info!("Created source and materialized views");
 
     // Query materialized view for all pushed Kinesis records.
