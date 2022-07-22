@@ -1151,8 +1151,7 @@ mod persist_write_handles {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
             mz_ore::task::spawn(|| "PersistWriteHandles", async move {
-                let mut write_handles: BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>> =
-                    BTreeMap::new();
+                let mut write_handles = BTreeMap::new();
 
                 while let Some(cmd) = rx.recv().await {
                     // Peel off all available commands.
@@ -1173,7 +1172,8 @@ mod persist_write_handles {
                     for command in commands {
                         match command {
                             PersistWorkerCmd::Register(id, write_handle) => {
-                                let previous = write_handles.insert(id, write_handle);
+                                let previous = write_handles
+                                    .insert(id, (write_handle, Antichain::from_elem(T::minimum())));
                                 if previous.is_some() {
                                     panic!(
                                         "already registered a ReadHandle for collection {:?}",
@@ -1205,7 +1205,7 @@ mod persist_write_handles {
                         >,
                         write_handles: &mut BTreeMap<
                             GlobalId,
-                            WriteHandle<SourceData, (), T2, Diff>,
+                            (WriteHandle<SourceData, (), T2, Diff>, Antichain<T2>),
                         >,
                         mut commands: BTreeMap<GlobalId, (Vec<Update<T2>>, Antichain<T2>)>,
                     ) -> Result<(), GlobalId> {
@@ -1218,20 +1218,18 @@ mod persist_write_handles {
                         // Instead, we first group the update by ID above and then iterate
                         // through all available write handles and see if there are any updates
                         // for it. If yes, we send them all in one go.
-                        for (id, write) in write_handles.iter_mut() {
+                        for (id, (write, old_upper)) in write_handles.iter_mut() {
                             if let Some((updates, new_upper)) = commands.remove(id) {
-                                let old_upper = write.upper().clone();
+                                let persist_upper = write.upper().clone();
                                 let updates = updates
                                     .into_iter()
                                     .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
-
-                                // println!("Hoping to go from {:?} to {:?}", old_upper, new_upper);
 
                                 futs.push(async move {
                                     write
                                         .compare_and_append(
                                             updates,
-                                            old_upper.clone(),
+                                            persist_upper.clone(),
                                             new_upper.clone(),
                                         )
                                         .await
@@ -1240,6 +1238,7 @@ mod persist_write_handles {
                                         .or(Err(*id))?;
 
                                     let mut change_batch = timely::progress::ChangeBatch::new();
+                                    let old_upper = old_upper.clone();
                                     change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
                                     change_batch.extend(old_upper.iter().cloned().map(|t| (t, -1)));
 
