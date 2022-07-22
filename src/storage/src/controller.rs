@@ -305,6 +305,16 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     }
 
     fn from_proto(value: ProtoCollectionMetadata) -> Result<Self, TryFromProtoError> {
+        // This field was introduced in #13753, and Protobuf helpfully
+        // fills it in with an empty string when migrating, which is unparseable.
+        let status_shard = if value.status_shard.is_empty() {
+            ShardId::new()
+        } else {
+            value
+                .status_shard
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?
+        };
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
                 blob_uri: value.blob_uri,
@@ -318,10 +328,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .data_shard
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
-            status_shard: value
-                .status_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
+            status_shard,
         })
     }
 }
