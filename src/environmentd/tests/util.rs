@@ -160,7 +160,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         }))?,
     );
     let persist_clients = PersistClientCache::new(
-        PersistConfig::new_for_tests(config.now.clone()),
+        PersistConfig::new_for_test(config.now.clone()),
         &metrics_registry,
     );
     let persist_clients = Arc::new(Mutex::new(persist_clients));

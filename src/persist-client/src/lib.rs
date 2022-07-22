@@ -45,6 +45,7 @@ pub mod batch;
 pub mod cache;
 pub mod error;
 pub mod read;
+pub mod usage;
 pub mod write;
 
 pub use crate::r#impl::state::{Since, Upper};
