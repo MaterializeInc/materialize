@@ -18,10 +18,6 @@ creds=$(aws sts assume-role --role-arn "$AWS_SCRATCH_ROLE_ARN" --role-session-na
 AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' <<< "$creds")
 AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' <<< "$creds")
 AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' <<< "$creds")
-# This is a hack to get around https://github.com/buildkite/elastic-ci-stack-for-aws/pull/406
-# -- we can't set the environment variable in the pipeline.yml, because it would be overwritten
-# by that elastic-ci-stack-for-aws script.
-AWS_DEFAULT_REGION=us-east-2
 
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_DEFAULT_REGION
 
@@ -29,4 +25,3 @@ echo "Role ARN: $AWS_SCRATCH_ROLE_ARN"
 echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
 echo "AWS_SECRET_ACCESS_KEY=(${#AWS_SECRET_ACCESS_KEY} chars)"
 echo "AWS_SESSION_TOKEN=(${#AWS_SESSION_TOKEN} chars)"
-echo "AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION"
