@@ -45,7 +45,6 @@ pub mod batch;
 pub mod cache;
 pub mod error;
 pub mod read;
-pub mod usage;
 pub mod write;
 
 pub use crate::r#impl::state::{Since, Upper};
@@ -87,6 +86,7 @@ impl PersistLocation {
     /// [crate::cache::PersistClientCache::open].
     pub async fn open_locations(
         &self,
+        config: &PersistConfig,
         metrics: &Metrics,
     ) -> Result<
         (
@@ -102,7 +102,11 @@ impl PersistLocation {
         let blob = BlobConfig::try_from(&self.blob_uri).await?;
         let blob =
             retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
-        let consensus = ConsensusConfig::try_from(&self.consensus_uri, 1).await?;
+        let consensus = ConsensusConfig::try_from(
+            &self.consensus_uri,
+            config.consensus_connection_pool_max_size,
+        )
+        .await?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
             consensus.clone().open()
         })
@@ -235,6 +239,13 @@ impl PersistConfig {
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 8,
         }
+    }
+
+    /// Returns a new instance of [PersistConfig] with default tunings for unit tests
+    pub fn new_for_test(now: NowFn) -> Self {
+        let mut defaults = Self::new(now);
+        defaults.consensus_connection_pool_max_size = 2;
+        defaults
     }
 }
 

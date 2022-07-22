@@ -110,7 +110,7 @@ impl PostgresConsensusConfig {
             }
         };
 
-        let config = PostgresConsensusConfig::new(&url, 1).await?;
+        let config = PostgresConsensusConfig::new(&url, 2).await?;
         Ok(Some(config))
     }
 }
