@@ -146,6 +146,8 @@ delete_stmt ::=
   'WHERE' condition
 discard ::=
   'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
+drop_connection ::=
+    'DROP' 'CONNECTION' ('IF EXISTS')? connection_name ('CASCADE' | 'RESTRICT')?
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
