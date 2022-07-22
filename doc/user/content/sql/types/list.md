@@ -343,7 +343,7 @@ Feature | Array term | List term
 **Accessing single element** | Subscripting | Indexing<sup>1</sup>
 **Accessing range of elements** | Subscripting | Slicing<sup>1</sup>
 
-<sup>1</sup>In places some places, such as error messages, Materialize refers to
+<sup>1</sup>In some places, such as error messages, Materialize refers to
 both list indexing and list slicing as subscripting.
 
 #### Type definitions

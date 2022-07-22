@@ -159,7 +159,7 @@ quickly.
 
 Creating additional indexes on materialized views lets you store some subset of a query's data in memory using a different structure, which can be useful if you want to perform a join over a view's data using non-primary keys (e.g. foreign keys).
 
-For a deeper dive into arrangments, see [Arrangements](/overview/arrangements/).
+For a deeper dive into arrangements, see [Arrangements](/overview/arrangements/).
 
 ## Clusters
 
