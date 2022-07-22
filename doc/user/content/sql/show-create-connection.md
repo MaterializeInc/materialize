@@ -19,13 +19,13 @@ _connection&lowbar;name_ | The connection you want to get the `CREATE` statement
 ## Examples
 
 ```sql
-SHOW CREATE CONNECTION my_connection;
+SHOW CREATE CONNECTION kafka_connection;
 ```
 
 ```nofmt
     Connection   |        Create Connection
 -----------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- my_connection   | CREATE CONNECTION "materialize"."public"."my_connection" FOR KAFKA BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092', SASL MECHANISMS = 'PLAIN', SASL USERNAME = SECRET sasl_username, SASL PASSWORD = SECRET sasl_password
+ kafka_connection   | CREATE CONNECTION "materialize"."public"."kafka_connection" FOR KAFKA BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092', SASL MECHANISMS = 'PLAIN', SASL USERNAME = SECRET sasl_username, SASL PASSWORD = SECRET sasl_password
 ```
 
 ## Related pages

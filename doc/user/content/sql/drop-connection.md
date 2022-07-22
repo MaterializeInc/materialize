@@ -27,13 +27,13 @@ _connection&lowbar;name_ | The connection you want to drop. For available connec
 To drop an existing connection, run:
 
 ```sql
-DROP CONNECTION my_connection;
+DROP CONNECTION kafka_connection;
 ```
 
 To avoid issuing an error if the specified connection does not exist, use the `IF NOT EXISTS` option:
 
 ```sql
-DROP CONNECTION IF EXISTS my_connection;
+DROP CONNECTION IF EXISTS kafka_connection;
 ```
 
 ### Dropping a connection with dependencies
@@ -41,18 +41,18 @@ DROP CONNECTION IF EXISTS my_connection;
 If the connection has dependencies, Materialize will throw an error similar to:
 
 ```sql
-DROP CONNECTION my_connection;
+DROP CONNECTION kafka_connection;
 ```
 
 ```nofmt
-ERROR:  cannot drop materialize.public.my_connection: still depended upon by catalog item
-'materialize.public.my_source'
+ERROR:  cannot drop materialize.public.kafka_connection: still depended upon by catalog item
+'materialize.public.kafka_source'
 ```
 
 , and you'll have to explicitly ask to also remove any dependent objects using the `CASCADE` option:
 
 ```sql
-DROP CONNECTION my_connection CASCADE;
+DROP CONNECTION kafka_connection CASCADE;
 ```
 
 ## Related pages

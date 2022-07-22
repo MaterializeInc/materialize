@@ -56,4 +56,4 @@ SHOW CONNECTIONS LIKE 'kafka%';
 ## Related pages
 
 - [`CREATE CONNECTION`](../create-connection)
-- [`DROP CONNECTION`](../drop-connection-.)
+- [`DROP CONNECTION`](../drop-connection)
