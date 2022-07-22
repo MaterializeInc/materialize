@@ -384,6 +384,7 @@ mz_scheduling_histogram_internal
 mz_scheduling_histogram_internal_1
 mz_scheduling_parks_internal
 mz_scheduling_parks_internal_1
+mz_source_status_history
 mz_worker_materialization_frontiers
 mz_worker_materialization_frontiers_1
 
@@ -422,6 +423,7 @@ mz_scheduling_histogram_internal              system log
 mz_scheduling_histogram_internal_1            system log
 mz_scheduling_parks_internal                  system log
 mz_scheduling_parks_internal_1                system log
+mz_source_status_history                      system "storage collection"
 mz_worker_materialization_frontiers           system log
 mz_worker_materialization_frontiers_1         system log
 

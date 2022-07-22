@@ -212,6 +212,9 @@ impl CatalogState {
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
+            CatalogItem::StorageCollection(_) => {
+                self.pack_source_update(id, oid, schema_id, name, "storage collection", diff)
+            }
         };
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {

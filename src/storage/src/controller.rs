@@ -83,6 +83,9 @@ pub struct CollectionDescription<T> {
     pub remote_addr: Option<String>,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
+    /// A GlobalId to use for this collection to use for the status collection.
+    /// Used to keep track of source status/error information.
+    pub status_collection_id: Option<GlobalId>,
 }
 
 impl<T> From<RelationDesc> for CollectionDescription<T> {
@@ -92,6 +95,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
             ingestion: None,
             remote_addr: None,
             since: None,
+            status_collection_id: None,
         }
     }
 }
@@ -265,6 +269,8 @@ pub struct CollectionMetadata {
     pub remap_shard: ShardId,
     /// The persist shard containing the contents of this storage collection
     pub data_shard: ShardId,
+    /// The persist shard containing the status updates for this storage collection
+    pub status_shard: ShardId,
 }
 
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
@@ -274,6 +280,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             consensus_uri: self.persist_location.consensus_uri.clone(),
             data_shard: self.data_shard.to_string(),
             remap_shard: self.remap_shard.to_string(),
+            status_shard: self.status_shard.to_string(),
         }
     }
 
@@ -289,6 +296,10 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .map_err(TryFromProtoError::InvalidShardId)?,
             data_shard: value
                 .data_shard
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?,
+            status_shard: value
+                .status_shard
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
         })
@@ -514,11 +525,23 @@ where
 
         // Install collection state for each bound description.
         for (id, description) in collections {
-            let metadata = CollectionMetadata {
+            let mut metadata = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
                 data_shard: ShardId::new(),
                 remap_shard: ShardId::new(),
+                status_shard: ShardId::new(),
             };
+
+            // Use the status shard if passed in
+            if let Some(status_collection_id) = description.status_collection_id {
+                if let Some(status_metadata) = METADATA_COLLECTION
+                    .peek_key_one(&mut self.state.stash, &status_collection_id)
+                    .await?
+                {
+                    metadata.status_shard = status_metadata.data_shard;
+                }
+            }
+
             let metadata = METADATA_COLLECTION
                 .insert_without_overwrite(&mut self.state.stash, &id, metadata)
                 .await?;
