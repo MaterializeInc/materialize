@@ -483,36 +483,30 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
-            self.compute_state
-                .reported_frontiers
-                .insert(id, Antichain::from_elem(0));
-            logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
         for (log, (trace, token)) in r_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
-            self.compute_state
-                .reported_frontiers
-                .insert(id, Antichain::from_elem(0));
-            logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
         for (log, (trace, token)) in d_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
-            self.compute_state
-                .reported_frontiers
-                .insert(id, Antichain::from_elem(0));
-            logger.log(ComputeEvent::Frontier(id, 0, 1));
         }
         for (log, (trace, token)) in c_traces {
             let id = logging.active_logs[&log];
             self.compute_state
                 .traces
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
+        }
+
+        // Initialize frontier reporting for all logging indexes and sinks.
+        let index_ids = logging.active_logs.values().copied();
+        let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
+        for id in index_ids.chain(sink_ids) {
             self.compute_state
                 .reported_frontiers
                 .insert(id, Antichain::from_elem(0));
@@ -576,15 +570,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             }
         }
 
-        // Log index frontier changes
-        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            for (id, changes) in &mut progress {
-                for (time, diff) in changes.iter() {
-                    logger.log(ComputeEvent::Frontier(*id, *time, *diff));
-                }
-            }
-        }
-
         for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
@@ -598,6 +583,15 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 }
             } else {
                 panic!("Frontier update for untracked identifier: {:?}", id);
+            }
+        }
+
+        // Log index and sink frontier changes
+        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+            for (id, changes) in &mut progress {
+                for (time, diff) in changes.iter() {
+                    logger.log(ComputeEvent::Frontier(*id, *time, *diff));
+                }
             }
         }
 
