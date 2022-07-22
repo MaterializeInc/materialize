@@ -1406,20 +1406,20 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // than queries that involve the user table. However, we prevent this when in strict
     // serializable mode.
 
-    mz_client.batch_execute(&"SET transaction_isolation = SERIALIZABLE")?;
+    mz_client.batch_execute(&"SET transaction_isolation = serializable")?;
     let view_ts = get_explain_timestamp(view_name, &mut mz_client);
     let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // In serializable transaction isolation, read timestamps can go backwards.
     assert!(join_ts < view_ts);
 
-    mz_client.batch_execute(&"SET transaction_isolation = STRICT_SERIALIZABLE")?;
+    mz_client.batch_execute(&"SET transaction_isolation = 'strict serializable'")?;
     let view_ts = get_explain_timestamp(view_name, &mut mz_client);
     let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // Since the query on the join was done after the query on the view, it should have a higher or
     // equal timestamp in strict serializable mode.
     assert!(join_ts >= view_ts);
 
-    mz_client.batch_execute(&"SET transaction_isolation = SERIALIZABLE")?;
+    mz_client.batch_execute(&"SET transaction_isolation = serializable")?;
     let view_ts = get_explain_timestamp(view_name, &mut mz_client);
     let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // If we go back to serializable, then timestamps can revert again.
@@ -1596,7 +1596,7 @@ fn wait_for_view_population(
         })
         .unwrap();
     let _ = mz_client.query_one(
-        &format!("SET transaction_isolation = STRICT_SERIALIZABLE"),
+        &format!("SET transaction_isolation = 'strict serializable'"),
         &[],
     );
     Ok(())

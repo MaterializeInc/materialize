@@ -10,25 +10,25 @@
 $ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
 
 > SHOW ALL
-application_name            ""              "Sets the application name to be reported in statistics and logs (PostgreSQL)."
-client_encoding             UTF8            "Sets the client's character set encoding (PostgreSQL)."
-client_min_messages         notice          "Sets the message levels that are sent to the client (PostgreSQL)."
-cluster                     <CLUSTER_NAME>  "Sets the current cluster (Materialize)."
-cluster_replica             ""              "Sets a target cluster replica for SELECT queries (Materialize)."
-database                    materialize     "Sets the current database (CockroachDB)."
-extra_float_digits          3               "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
-failpoints                  ""              "Allows failpoints to be dynamically activated."
-integer_datetimes           on              "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
-IntervalStyle               postgres        "Sets the display format for interval values (PostgreSQL)."
-DateStyle                   "ISO, MDY"      "Sets the display format for date and time values (PostgreSQL)."
-search_path                 "public"        "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
-server_version              9.5.0           "Shows the server version (PostgreSQL)."
-server_version_num          90500           "Shows the server version as an integer (PostgreSQL)."
-sql_safe_updates            off             "Prohibits SQL statements that may be overly destructive (CockroachDB)."
-standard_conforming_strings on              "Causes '...' strings to treat backslashes literally (PostgreSQL)."
-statement_timeout           "10 s"          "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations."
-TimeZone                    UTC             "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
-transaction_isolation       STRICT_SERIALIZABLE    "Sets the current transaction's isolation level (PostgreSQL)."
+application_name            ""                     "Sets the application name to be reported in statistics and logs (PostgreSQL)."
+client_encoding             UTF8                   "Sets the client's character set encoding (PostgreSQL)."
+client_min_messages         notice                 "Sets the message levels that are sent to the client (PostgreSQL)."
+cluster                     <CLUSTER_NAME>         "Sets the current cluster (Materialize)."
+cluster_replica             ""                     "Sets a target cluster replica for SELECT queries (Materialize)."
+database                    materialize            "Sets the current database (CockroachDB)."
+extra_float_digits          3                      "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
+failpoints                  ""                     "Allows failpoints to be dynamically activated."
+integer_datetimes           on                     "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
+IntervalStyle               postgres               "Sets the display format for interval values (PostgreSQL)."
+DateStyle                   "ISO, MDY"             "Sets the display format for date and time values (PostgreSQL)."
+search_path                 "public"               "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
+server_version              9.5.0                  "Shows the server version (PostgreSQL)."
+server_version_num          90500                  "Shows the server version as an integer (PostgreSQL)."
+sql_safe_updates            off                    "Prohibits SQL statements that may be overly destructive (CockroachDB)."
+standard_conforming_strings on                     "Causes '...' strings to treat backslashes literally (PostgreSQL)."
+statement_timeout           "10 s"                 "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations."
+TimeZone                    UTC                    "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
+transaction_isolation       "strict serializable"  "Sets the current transaction's isolation level (PostgreSQL)."
 
 > SET application_name = 'foo'
 
@@ -99,10 +99,10 @@ contains:invalid value for parameter "TimeZone": "nope"
 # The `transaction_isolation` variable has dedicated syntax as mandated by the
 # SQL standard.
 > SHOW TRANSACTION ISOLATION LEVEL
-STRICT_SERIALIZABLE
+"strict serializable"
 
-! SET transaction_isolation = 'read committed'
-contains:invalid value for parameter "transaction_isolation": "read committed"
+! SET transaction_isolation = 'read draft'
+contains:invalid value for parameter "transaction_isolation": "read draft"
 
 ! SET integer_datetimes = false
 contains:parameter "integer_datetimes" cannot be changed
