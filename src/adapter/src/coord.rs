@@ -1049,6 +1049,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .storage_mut()
             .append(appends)
+            .expect("invalid updates")
             .await
             .expect("One-shot shouldn't fail")
             .unwrap();
@@ -1275,7 +1276,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect::<Vec<_>>();
         let num_updates = appends.len();
         // Note: Do not await the result; let it drop (as we don't need to block on completion)
-        self.controller.storage_mut().append(appends);
+        // The error that could be return
+        self.controller
+            .storage_mut()
+            .append(appends)
+            .expect("Empty updates cannot be invalid");
         let elapsed = start.elapsed();
         if elapsed > (MAX_WAIT + WINDOW) {
             self.advance_tables.decrease_batch();
@@ -1400,6 +1405,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .storage_mut()
             .append(appends)
+            .expect("invalid updates")
             .await
             .expect("One-shot shouldn't fail")
             .unwrap();
@@ -5813,6 +5819,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .storage_mut()
             .append(appends)
+            .expect("invalid updates")
             .await
             .expect("One-shot shouldn't fail")
             .unwrap();

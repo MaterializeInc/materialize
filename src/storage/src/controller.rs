@@ -132,11 +132,15 @@ pub trait StorageController: Debug + Send {
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
+    ///
+    /// The method returns a oneshot that can be awaited to indicate completion of the write.
+    /// The method may return an error, indicating an immediately visible error, and also the
+    /// oneshot may return an error if one is encountered during the write.
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
     fn append(
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
-    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>>;
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
@@ -628,8 +632,17 @@ where
     fn append(
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
-    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
-        self.state.persist_write_handles.append(commands)
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
+        // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
+        for (id, updates, batch_upper) in commands.iter() {
+            for update in updates.iter() {
+                if !update.timestamp.less_than(&batch_upper) {
+                    return Err(StorageError::UpdateBeyondUpper(*id));
+                }
+            }
+        }
+
+        Ok(self.state.persist_write_handles.append(commands))
     }
 
     async fn snapshot(
@@ -1144,11 +1157,16 @@ mod persist_write_handles {
                 while let Some(cmd) = rx.recv().await {
                     // Peel off all available commands.
                     // We do this in case we can consolidate commands.
-                    // It would be surprising to receive multiple concurrent `Append` commands, but let's write it.
+                    // It would be surprising to receive multiple concurrent `Append` commands,
+                    // but we might receive multiple *empty* `Append` commands.
                     let mut commands = vec![cmd];
                     while let Ok(cmd) = rx.try_recv() {
                         commands.push(cmd);
                     }
+
+                    // Accumulated updates and upper frontier.
+                    let mut all_updates = BTreeMap::default();
+                    let mut all_responses = Vec::default();
 
                     let mut shutdown = false;
 
@@ -1164,111 +1182,89 @@ mod persist_write_handles {
                                 }
                             }
                             PersistWorkerCmd::Append(updates, response) => {
-                                async fn append_work<T2: Timestamp + Lattice + Codec64>(
-                                    frontier_responses: &mut tokio::sync::mpsc::UnboundedSender<
-                                        StorageResponse<T2>,
-                                    >,
-                                    write_handles: &mut BTreeMap<
-                                        GlobalId,
-                                        WriteHandle<SourceData, (), T2, Diff>,
-                                    >,
-                                    commands: Vec<(GlobalId, Vec<Update<T2>>, T2)>,
-                                ) -> Result<(), StorageError> {
-                                    // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
-                                    let mut updates_by_id = BTreeMap::new();
-
-                                    for (id, updates, batch_upper) in commands {
-                                        for update in &updates {
-                                            if !update.timestamp.less_than(&batch_upper) {
-                                                return Err(StorageError::UpdateBeyondUpper(id));
-                                            }
-                                        }
-
-                                        let (total_updates, new_upper) = updates_by_id
-                                            .entry(id)
-                                            .or_insert_with(|| (Vec::new(), T2::minimum()));
-                                        total_updates.push(updates);
-                                        new_upper.join_assign(&batch_upper);
-                                    }
-
-                                    let mut appends_by_id = BTreeMap::new();
-                                    for (id, (updates, upper)) in updates_by_id {
-                                        let current_upper = write_handles[&id].upper().clone();
-                                        appends_by_id.insert(
-                                            id,
-                                            (updates.into_iter().flatten(), current_upper, upper),
-                                        );
-                                    }
-
-                                    let futs = FuturesUnordered::new();
-
-                                    // We cannot iterate through the updates and then set off a persist call
-                                    // on the write handle because we cannot mutably borrow the write handle
-                                    // multiple times.
-                                    //
-                                    // Instead, we first group the update by ID above and then iterate
-                                    // through all available write handles and see if there are any updates
-                                    // for it. If yes, we send them all in one go.
-                                    for (id, write) in write_handles.iter_mut() {
-                                        let (updates, upper, new_upper) =
-                                            match appends_by_id.remove(id) {
-                                                Some(updates) => updates,
-                                                None => continue,
-                                            };
-
-                                        let new_upper = Antichain::from_elem(new_upper);
-
-                                        let updates = updates.into_iter().map(|u| {
-                                            ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff)
+                                for (id, update, upper) in updates {
+                                    let (updates, old_upper) =
+                                        all_updates.entry(id).or_insert_with(|| {
+                                            (Vec::default(), Antichain::from_elem(T::minimum()))
                                         });
 
-                                        futs.push(async move {
-                                            write
-                                                .compare_and_append(
-                                                    updates,
-                                                    upper.clone(),
-                                                    new_upper.clone(),
-                                                )
-                                                .await
-                                                .expect("cannot append updates")
-                                                .expect("cannot append updates")
-                                                .or(Err(StorageError::InvalidUpper(*id)))?;
-
-                                            let mut change_batch =
-                                                timely::progress::ChangeBatch::new();
-                                            change_batch
-                                                .extend(new_upper.iter().cloned().map(|t| (t, 1)));
-                                            change_batch
-                                                .extend(upper.iter().cloned().map(|t| (t, -1)));
-
-                                            Ok::<_, StorageError>((*id, change_batch))
-                                        })
-                                    }
-
-                                    use futures_util::TryStreamExt;
-                                    let change_batches = futs.try_collect::<Vec<_>>().await?;
-
-                                    frontier_responses
-                                        .send(StorageResponse::FrontierUppers(change_batches))
-                                        .expect("In-memory queues should not fail");
-
-                                    Ok(())
+                                    updates.extend(update);
+                                    old_upper.join_assign(&Antichain::from_elem(upper));
                                 }
-
-                                let result = append_work(
-                                    &mut frontier_responses,
-                                    &mut write_handles,
-                                    updates,
-                                )
-                                .await;
-
-                                // It is not an error for the other end to hang up.
-                                let _ = response.send(result);
+                                all_responses.push(response);
                             }
                             PersistWorkerCmd::Shutdown => {
                                 shutdown = true;
                             }
                         }
+                    }
+
+                    async fn append_work<T2: Timestamp + Lattice + Codec64>(
+                        frontier_responses: &mut tokio::sync::mpsc::UnboundedSender<
+                            StorageResponse<T2>,
+                        >,
+                        write_handles: &mut BTreeMap<
+                            GlobalId,
+                            WriteHandle<SourceData, (), T2, Diff>,
+                        >,
+                        mut commands: BTreeMap<GlobalId, (Vec<Update<T2>>, Antichain<T2>)>,
+                    ) -> Result<(), GlobalId> {
+                        let futs = FuturesUnordered::new();
+
+                        // We cannot iterate through the updates and then set off a persist call
+                        // on the write handle because we cannot mutably borrow the write handle
+                        // multiple times.
+                        //
+                        // Instead, we first group the update by ID above and then iterate
+                        // through all available write handles and see if there are any updates
+                        // for it. If yes, we send them all in one go.
+                        for (id, write) in write_handles.iter_mut() {
+                            if let Some((updates, new_upper)) = commands.remove(id) {
+                                let old_upper = write.upper().clone();
+                                let updates = updates
+                                    .into_iter()
+                                    .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
+
+                                // println!("Hoping to go from {:?} to {:?}", old_upper, new_upper);
+
+                                futs.push(async move {
+                                    write
+                                        .compare_and_append(
+                                            updates,
+                                            old_upper.clone(),
+                                            new_upper.clone(),
+                                        )
+                                        .await
+                                        .expect("cannot append updates")
+                                        .expect("cannot append updates")
+                                        .or(Err(*id))?;
+
+                                    let mut change_batch = timely::progress::ChangeBatch::new();
+                                    change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
+                                    change_batch.extend(old_upper.iter().cloned().map(|t| (t, -1)));
+
+                                    Ok::<_, GlobalId>((*id, change_batch))
+                                })
+                            }
+                        }
+
+                        use futures_util::TryStreamExt;
+                        let change_batches = futs.try_collect::<Vec<_>>().await?;
+
+                        // It is not strictly an error for the controller to hang up.
+                        let _ = frontier_responses
+                            .send(StorageResponse::FrontierUppers(change_batches));
+
+                        Ok(())
+                    }
+
+                    let result =
+                        append_work(&mut frontier_responses, &mut write_handles, all_updates).await;
+
+                    // It is not an error for the other end to hang up.
+                    for response in all_responses {
+                        let _ =
+                            response.send(result.clone().map_err(StorageError::IdentifierMissing));
                     }
 
                     if shutdown {
