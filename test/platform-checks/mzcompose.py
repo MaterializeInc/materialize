@@ -43,6 +43,7 @@ from materialize.checks.roles import *  # noqa: F401 F403
 from materialize.checks.rollback import *  # noqa: F401 F403
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
+from materialize.checks.sink import *  # noqa: F401 F403
 from materialize.checks.temporal_types import *  # noqa: F401 F403
 from materialize.checks.text_bytea_types import *  # noqa: F401 F403
 from materialize.checks.threshold import *  # noqa: F401 F403
