@@ -41,13 +41,12 @@ pub struct Decoder {
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
-
-    use crate::avro::Decoder;
     use mz_repr::{Datum, Row};
 
-    #[test]
-    fn test_error_followed_by_success() {
+    use crate::avro::Decoder;
+
+    #[tokio::test]
+    async fn test_error_followed_by_success() {
         let schema = r#"{
 "type": "record",
 "name": "test",
@@ -56,12 +55,12 @@ mod tests {
         let mut decoder = Decoder::new(&schema, None, "Test".to_string(), false).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
-        assert!(block_on(decoder.decode(&mut bad_bytes)).is_err());
+        assert!(decoder.decode(&mut bad_bytes).await.is_err());
         // This is the blob that will make both ints in the value zero.
         let mut good_bytes: &[u8] = &[0, 0];
         // The decode should succeed with the correct value.
         assert_eq!(
-            block_on(decoder.decode(&mut good_bytes)).unwrap(),
+            decoder.decode(&mut good_bytes).await.unwrap(),
             Row::pack([Datum::Int32(0), Datum::Int32(0)])
         );
     }

@@ -19,7 +19,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use futures::executor::block_on;
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use prometheus::core::AtomicU64;
@@ -40,6 +39,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
+use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
@@ -501,7 +501,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        block_on(
+        TokioHandle::current().block_on(
             connection.populate_client_config(&mut config, &*connection_context.secrets_reader),
         );
 
@@ -544,7 +544,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        block_on(
+        TokioHandle::current().block_on(
             connection.populate_client_config(&mut config, &*connection_context.secrets_reader),
         );
 

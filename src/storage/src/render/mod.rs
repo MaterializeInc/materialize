@@ -111,6 +111,7 @@ use mz_repr::GlobalId;
 
 use crate::controller::CollectionMetadata;
 use crate::storage_state::StorageState;
+use crate::types::sinks::SinkDesc;
 use crate::types::sources::IngestionDescription;
 
 mod debezium;
@@ -118,11 +119,11 @@ mod persist_sink;
 pub mod sources;
 mod upsert;
 
-/// Assemble the "storage" side of a dataflow, i.e. the sources.
+/// Assemble the "ingestion" side of a dataflow, i.e. the sources.
 ///
 /// This method creates a new dataflow to host the implementations of sources for the `dataflow`
 /// argument, and returns assets for each source that can import the results into a new dataflow.
-pub fn build_storage_dataflow<A: Allocate>(
+pub fn build_ingestion_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     id: GlobalId,
@@ -163,6 +164,32 @@ pub fn build_storage_dataflow<A: Allocate>(
             );
 
             storage_state.source_tokens.insert(id, token);
+        })
+    });
+}
+
+/// do the export dataflow thing
+pub fn build_export_dataflow<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    _storage_state: &mut StorageState,
+    id: GlobalId,
+    _description: SinkDesc<CollectionMetadata, mz_repr::Timestamp>,
+    _resume_upper: Antichain<mz_repr::Timestamp>,
+) {
+    let worker_logging = timely_worker.log_register().get("timely");
+    let debug_name = id.to_string();
+    let name = format!("Source dataflow: {debug_name}");
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // The scope.clone() occurs to allow import in the region.
+        // We build a region here to establish a pattern of a scope inside the dataflow,
+        // so that other similar uses (e.g. with iterative scopes) do not require weird
+        // alternate type signatures.
+        scope.clone().region_named(&name, |region| {
+            let _debug_name = format!("{debug_name}-sinks");
+            let _: &mut timely::dataflow::scopes::Child<
+                timely::dataflow::scopes::Child<TimelyWorker<A>, _>,
+                mz_repr::Timestamp,
+            > = region;
         })
     });
 }

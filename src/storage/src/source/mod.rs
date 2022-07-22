@@ -68,6 +68,7 @@ use crate::types::sources::{MzOffset, SourceConnection};
 
 mod kafka;
 mod kinesis;
+mod load_generator;
 pub mod metrics;
 pub mod persist_source;
 mod postgres;
@@ -78,6 +79,7 @@ pub mod util;
 
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
+pub use load_generator::LoadGeneratorSourceReader;
 pub use postgres::PostgresSourceReader;
 pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;

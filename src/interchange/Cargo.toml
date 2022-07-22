@@ -34,7 +34,8 @@ tracing = "0.1.35"
 uuid = { version = "1.1.2", features = ["serde"] }
 
 [dev-dependencies]
-criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["async_tokio"] }
+tokio = { version = "1.19.2", features = ["macros"] }
 
 [build-dependencies]
 prost-build = { version = "0.10.3", features = ["vendored"] }

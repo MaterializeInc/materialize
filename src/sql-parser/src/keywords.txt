@@ -74,6 +74,7 @@ Connections
 Consistency
 Constraint
 Copy
+Counter
 Create
 Cross
 Csv
@@ -128,6 +129,7 @@ Format
 Forward
 From
 Full
+Generator
 Granularity
 Graph
 Greatest
@@ -177,6 +179,7 @@ Level
 Like
 Limit
 List
+Load
 Local
 Log
 Logical
@@ -304,6 +307,7 @@ Temp
 Temporary
 Text
 Then
+Tick
 Ties
 Time
 Timeout

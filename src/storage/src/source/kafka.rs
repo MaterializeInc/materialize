@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use futures::executor::block_on;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -21,6 +20,7 @@ use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
+use tokio::runtime::Handle as TokioHandle;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -105,7 +105,7 @@ impl SourceReader for KafkaSourceReader {
             cluster_id,
             ..
         } = kc;
-        let kafka_config = block_on(create_kafka_config(
+        let kafka_config = TokioHandle::current().block_on(create_kafka_config(
             &source_name,
             group_id_prefix,
             cluster_id,

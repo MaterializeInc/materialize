@@ -807,6 +807,10 @@ pub enum CreateSourceConnection<T: AstInfo> {
         /// The PubNub channel to subscribe to
         channel: String,
     },
+    LoadGenerator {
+        generator: LoadGenerator,
+        options: Vec<LoadGeneratorOption<T>>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
@@ -874,10 +878,66 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 f.write_str(&display::escape_single_quote_string(channel));
                 f.write_str("'");
             }
+            CreateSourceConnection::LoadGenerator { generator, options } => {
+                f.write_str("LOAD GENERATOR ");
+                f.write_node(generator);
+                if !options.is_empty() {
+                    f.write_str(" ");
+                    f.write_node(&display::comma_separated(&options));
+                }
+            }
         }
     }
 }
 impl_display_t!(CreateSourceConnection);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LoadGenerator {
+    Counter,
+}
+
+impl AstDisplay for LoadGenerator {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Counter => {
+                f.write_str("COUNTER");
+            }
+        }
+    }
+}
+impl_display!(LoadGenerator);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LoadGeneratorOptionName {
+    TickInterval,
+}
+
+impl AstDisplay for LoadGeneratorOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            LoadGeneratorOptionName::TickInterval => "TICK INTERVAL",
+        })
+    }
+}
+impl_display!(LoadGeneratorOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CONNECTION...SSH`.
+pub struct LoadGeneratorOption<T: AstInfo> {
+    pub name: LoadGeneratorOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for LoadGeneratorOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(LoadGeneratorOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSinkConnection<T: AstInfo> {

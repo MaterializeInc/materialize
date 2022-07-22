@@ -37,6 +37,7 @@ use mz_timely_util::progress::any_change_batch;
 use crate::controller::CollectionMetadata;
 use crate::protocol::client::proto_storage_client::ProtoStorageClient;
 use crate::protocol::client::proto_storage_server::ProtoStorage;
+use crate::types::sinks::SinkDesc;
 use crate::types::sources::IngestionDescription;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.protocol.client.rs"));
@@ -108,6 +109,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+    ExportSinks(Vec<ExportSinkCommand<T>>),
 }
 
 /// A command that starts ingesting the given ingestion description
@@ -156,12 +158,42 @@ impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand<mz_repr::Timesta
             description: proto
                 .description
                 .into_rust_if_some("ProtoIngestSourceCommand::description")?,
-            resume_upper: proto
-                .resume_upper
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoCompaction::resume_upper"))?,
+            resume_upper: proto.resume_upper.map(Into::into).ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoIngestSourceCommand::resume_upper")
+            })?,
         })
     }
+}
+
+impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoExportSinkCommand {
+        ProtoExportSinkCommand {
+            id: Some(self.id.into_proto()),
+            description: Some(self.description.into_proto()),
+            resume_upper: Some((&self.resume_upper).into()),
+        }
+    }
+
+    fn from_proto(proto: ProtoExportSinkCommand) -> Result<Self, TryFromProtoError> {
+        Ok(ExportSinkCommand {
+            id: proto.id.into_rust_if_some("ProtoExportSinkCommand::id")?,
+            description: proto
+                .description
+                .into_rust_if_some("ProtoExportSinkCommand::description")?,
+            resume_upper: proto.resume_upper.map(Into::into).ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoExportSinkCommand::resume_upper")
+            })?,
+        })
+    }
+}
+
+/// A command that starts exporting the given sink description
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ExportSinkCommand<T> {
+    pub id: GlobalId,
+    pub description: SinkDesc<CollectionMetadata, T>,
+    /// The upper frontier at which this export should resume.
+    pub resume_upper: Antichain<T>,
 }
 
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
@@ -178,6 +210,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                         collections: collections.into_proto(),
                     })
                 }
+                StorageCommand::ExportSinks(exports) => ExportSinks(ProtoExportSinks {
+                    exports: exports.into_proto(),
+                }),
             }),
         }
     }
@@ -192,6 +227,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
             Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
+            Some(ExportSinks(ProtoExportSinks { exports })) => {
+                Ok(StorageCommand::ExportSinks(exports.into_rust()?))
+            }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
             )),

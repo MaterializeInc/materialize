@@ -55,10 +55,11 @@ use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::protocol::client::{
-    IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse, StorageCommand,
-    StorageResponse, Update,
+    ExportSinkCommand, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
+    StorageCommand, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
+use crate::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
 use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
 
 mod hosts;
@@ -100,6 +101,16 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportDescription {
+    pub sink: SinkDesc,
+    /// The address of a `storaged` process on which to install the source.
+    ///
+    /// If `None`, the controller manages the lifetime of the `storaged`
+    /// process.
+    pub remote_addr: Option<String>,
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug + Send {
     type Timestamp;
@@ -134,8 +145,17 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
+    /// Create the sinks described by the `ExportDescription`.
+    async fn create_exports(
+        &mut self,
+        exports: Vec<(GlobalId, ExportDescription)>,
+    ) -> Result<(), StorageError>;
+
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+
+    /// Drops the read capability for the sinks and allows their resources to be reclaimed.
+    async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
@@ -634,7 +654,61 @@ where
         Ok(())
     }
 
+    async fn create_exports(
+        &mut self,
+        exports: Vec<(GlobalId, ExportDescription)>,
+    ) -> Result<(), StorageError> {
+        for (id, description) in exports {
+            let augmented_sink_desc = SinkDesc {
+                from: description.sink.from,
+                from_desc: description.sink.from_desc,
+                connection: match description.sink.connection {
+                    SinkConnection::Kafka(k) => SinkConnection::Kafka(k),
+                    SinkConnection::Tail(t) => SinkConnection::Tail(t),
+                    SinkConnection::Persist(PersistSinkConnection {
+                        value_desc,
+                        storage_metadata: (),
+                    }) => SinkConnection::Persist(PersistSinkConnection {
+                        value_desc,
+                        storage_metadata: self.collection(id)?.collection_metadata.clone(),
+                    }),
+                },
+                envelope: description.sink.envelope,
+                // TODO(chae): derive this (sink_description.as_of is hardcoded to u64 instead of general timestamp T)
+                as_of: SinkAsOf {
+                    frontier: Antichain::from_elem(T::minimum()),
+                    strict: description.sink.as_of.strict,
+                },
+            };
+            let cmd = ExportSinkCommand {
+                id,
+                description: augmented_sink_desc,
+                // TODO(chae): derive this
+                resume_upper: Antichain::from_elem(T::minimum()),
+            };
+            // Provision a storage host for the ingestion.
+            let client = self
+                .hosts
+                .provision(id, description.remote_addr.clone())
+                .await?;
+
+            client.send(StorageCommand::ExportSinks(vec![cmd]));
+        }
+        Ok(())
+    }
+
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        self.validate_ids(identifiers.iter().cloned())?;
+        let policies = identifiers
+            .into_iter()
+            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
+            .collect();
+        self.set_read_policy(policies).await?;
+        Ok(())
+    }
+
+    /// Drops the read capability for the sinks and allows their resources to be reclaimed.
+    async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_ids(identifiers.iter().cloned())?;
         let policies = identifiers
             .into_iter()

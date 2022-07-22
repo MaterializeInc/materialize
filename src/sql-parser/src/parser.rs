@@ -2229,7 +2229,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, PUBNUB])? {
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, PUBNUB, LOAD])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
@@ -2337,8 +2337,37 @@ impl<'a> Parser<'a> {
                     compression,
                 })
             }
+            LOAD => {
+                self.expect_keyword(GENERATOR)?;
+                let generator = match self.expect_one_of_keywords(&[COUNTER])? {
+                    COUNTER => LoadGenerator::Counter,
+                    _ => unreachable!(),
+                };
+                let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
+                    vec![]
+                } else {
+                    self.parse_comma_separated(Parser::parse_load_generator_options)?
+                };
+                Ok(CreateSourceConnection::LoadGenerator { generator, options })
+            }
             _ => unreachable!(),
         }
+    }
+
+    fn parse_load_generator_options(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[TICK])? {
+            TICK => {
+                self.expect_keyword(INTERVAL)?;
+                LoadGeneratorOptionName::TickInterval
+            }
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(LoadGeneratorOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
