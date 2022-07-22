@@ -17,7 +17,6 @@ aliases:
 Field                | Use
 ---------------------|-----
 _schema&lowbar;name_ | The schema to show connections from. If omitted, connections from all schemas are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-**EXTENDED**         | Returns all connections.
 **FULL**             | Returns all connections, including information about the connection type.
 
 ## Examples
