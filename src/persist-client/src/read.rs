@@ -659,14 +659,13 @@ where
                 handle_shard: self.machine.shard_id(),
             });
         }
-        // WIP I think we need to fetch the latest state on machine right here
-        // because this one may have an old copy that doesn't know about the
-        // registration of split.reader_id.
+        let mut machine = self.machine.clone();
+        machine.fetch_and_update_state().await;
         let handle = ReadHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             reader_id: split.reader_id.clone(),
-            machine: self.machine.clone(),
+            machine,
             blob: Arc::clone(&self.blob),
             since: self.since.clone(),
             // This isn't quite right since we did the heartbeat before sending
