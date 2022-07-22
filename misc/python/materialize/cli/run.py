@@ -114,20 +114,7 @@ def main() -> int:
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
-            for proc in psutil.process_iter():
-                try:
-                    if proc.name() in ["storaged", "computed"]:
-                        if args.reset:
-                            print(
-                                f"Killing orphaned {proc.name()} process (PID {proc.pid})"
-                            )
-                            proc.kill()
-                        else:
-                            ui.warn(
-                                f"Existing {proc.name()} process (PID {proc.pid}) will be reused"
-                            )
-                except psutil.NoSuchProcess:
-                    continue
+            _handle_lingering_services(kill=args.reset)
             if args.reset:
                 print("Removing mzdata directory...")
                 shutil.rmtree(ROOT / "mzdata", ignore_errors=True)
@@ -142,6 +129,7 @@ def main() -> int:
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
             ]
         elif args.program == "sqllogictest":
+            _handle_lingering_services(kill=True)
             command += [f"--postgres-url={args.postgres}"]
     elif args.program == "test":
         build_retcode = _build(args)
@@ -197,6 +185,21 @@ def _run_sql(url: str, sql: str) -> None:
             f"unable to execute postgres statement: {e}",
             hint="Have you installed and configured PostgreSQL for passwordless authentication?",
         )
+
+
+def _handle_lingering_services(kill: bool = False) -> None:
+    for proc in psutil.process_iter():
+        try:
+            if proc.name() in REQUIRED_SERVICES:
+                if kill:
+                    print(f"Killing orphaned {proc.name()} process (PID {proc.pid})")
+                    proc.kill()
+                else:
+                    ui.warn(
+                        f"Existing {proc.name()} process (PID {proc.pid}) will be reused"
+                    )
+        except psutil.NoSuchProcess:
+            continue
 
 
 if __name__ == "__main__":
