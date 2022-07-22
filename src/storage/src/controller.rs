@@ -742,8 +742,14 @@ where
 
         let mut appends_by_id = HashMap::new();
         for (id, (updates, upper)) in updates_by_id {
-            let current_upper = self.state.persist_write_handles[&id].upper().clone();
-            appends_by_id.insert(id, (updates.into_iter().flatten(), current_upper, upper));
+            let p_upper = self.state.persist_write_handles[&id].upper().clone();
+            let c_upper = self
+                .collection(id)
+                .unwrap()
+                .write_frontier
+                .frontier()
+                .to_owned();
+            appends_by_id.insert(id, (updates.into_iter().flatten(), p_upper, c_upper, upper));
         }
 
         let futs = FuturesUnordered::new();
@@ -756,7 +762,7 @@ where
         // through all available write handles and see if there are any updates
         // for it. If yes, we send them all in one go.
         for (id, write) in self.state.persist_write_handles.iter_mut() {
-            let (updates, upper, new_upper) = match appends_by_id.remove(id) {
+            let (updates, upper, old_upper, new_upper) = match appends_by_id.remove(id) {
                 Some(updates) => updates,
                 None => continue,
             };
@@ -777,7 +783,7 @@ where
 
                 let mut change_batch = ChangeBatch::new();
                 change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
-                change_batch.extend(upper.iter().cloned().map(|t| (t, -1)));
+                change_batch.extend(old_upper.iter().cloned().map(|t| (t, -1)));
 
                 Ok::<_, StorageError>((*id, change_batch))
             })
