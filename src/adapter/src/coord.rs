@@ -157,7 +157,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ClusterReplicaSizeMap,
-    ComputeInstance, Connection, SinkConnectionState, Sink,
+    ComputeInstance, Connection, Sink, SinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{
@@ -2399,13 +2399,18 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         // TODO(chae): This is where we'll create the export/sink in storaged
-        let _ = self.controller.storage_mut().create_exports(vec![(
-            id,
-            ExportDescription {
-                sink: storage_sink_desc,
-                remote_addr: None,
-            },
-        )]).await.unwrap();
+        let _ = self
+            .controller
+            .storage_mut()
+            .create_exports(vec![(
+                id,
+                ExportDescription {
+                    sink: storage_sink_desc,
+                    remote_addr: None,
+                },
+            )])
+            .await
+            .unwrap();
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
