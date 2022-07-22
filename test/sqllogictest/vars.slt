@@ -137,29 +137,29 @@ RESET does_not_exist
 query T
 SHOW transaction_isolation
 ----
-STRICT_SERIALIZABLE
+strict serializable
 
 statement ok
-SET transaction_isolation = SERIALIZABLE
+SET transaction_isolation = serializable
 
 query T
 SHOW transaction_isolation
 ----
-SERIALIZABLE
+serializable
 
 statement ok
-SET transaction_isolation = READ_COMMITTED
+SET transaction_isolation = 'read committed'
 
 query T
 SHOW transaction_isolation
 ----
-SERIALIZABLE
+serializable
 
-statement error invalid value for parameter "transaction_isolation": "snapshot_isolation"
-SET transaction_isolation = SNAPSHOT_ISOLATION
+statement error invalid value for parameter "transaction_isolation": "snapshot isolation"
+SET transaction_isolation = 'snapshot isolation'
 
 statement ok
-SET transaction_isolation = STRICT_SERIALIZABLE
+SET transaction_isolation = 'strict serializable'
 
 # Test that a failed transaction will not commit var changes.
 
