@@ -31,8 +31,8 @@ use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited}
 use crate::source::persist_source;
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
-    PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
-    SourceOutput,
+    LoadGeneratorSourceReader, PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig,
+    S3SourceReader, SourceOutput,
 };
 use crate::types::errors::{DataflowError, DecodeError};
 use crate::types::sources::{encoding::*, *};
@@ -189,6 +189,14 @@ where
         }
         SourceConnection::Postgres(_) => {
             let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader>(
+                base_source_config,
+                &connection,
+                storage_state.connection_context.clone(),
+            );
+            ((SourceType::Row(ok), err), cap)
+        }
+        SourceConnection::LoadGenerator(_) => {
+            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),

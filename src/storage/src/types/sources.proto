@@ -170,6 +170,7 @@ message ProtoSourceConnection {
         ProtoS3SourceConnection s3 = 3;
         ProtoPostgresSourceConnection postgres = 4;
         ProtoPubNubSourceConnection pubnub = 5;
+        ProtoLoadGeneratorSourceConnection loadgen = 6;
     }
 }
 
@@ -199,6 +200,13 @@ message ProtoPostgresSourceDetails {
 message ProtoPubNubSourceConnection {
     string subscribe_key = 1;
     string channel = 2;
+}
+
+message ProtoLoadGeneratorSourceConnection {
+    oneof generator {
+        google.protobuf.Empty counter = 1;
+    }
+    optional uint64 tick_micros = 2;
 }
 
 message ProtoS3SourceConnection {
