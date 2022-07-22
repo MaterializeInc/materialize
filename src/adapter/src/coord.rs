@@ -1061,7 +1061,13 @@ impl<S: Append + 'static> Coordinator<S> {
             .filter(|entry| entry.is_table())
             .map(|entry| (entry.id(), Vec::new(), advance_to))
             .collect();
-        self.controller.storage_mut().append(appends).await.unwrap();
+        self.controller
+            .storage_mut()
+            .append(appends)
+            .expect("invalid updates")
+            .await
+            .expect("One-shot shouldn't fail")
+            .unwrap();
 
         // Add builtin table updates the clear the contents of all system tables
         let read_ts = self.get_local_read_ts();
@@ -1284,7 +1290,12 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .collect::<Vec<_>>();
         let num_updates = appends.len();
-        self.controller.storage_mut().append(appends).await.unwrap();
+        // Note: Do not await the result; let it drop (as we don't need to block on completion)
+        // The error that could be return
+        self.controller
+            .storage_mut()
+            .append(appends)
+            .expect("Empty updates cannot be invalid");
         let elapsed = start.elapsed();
         if elapsed > (MAX_WAIT + WINDOW) {
             self.advance_tables.decrease_batch();
@@ -1406,7 +1417,13 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_iter()
             .map(|(id, updates)| (id, updates, advance_to))
             .collect();
-        self.controller.storage_mut().append(appends).await.unwrap();
+        self.controller
+            .storage_mut()
+            .append(appends)
+            .expect("invalid updates")
+            .await
+            .expect("One-shot shouldn't fail")
+            .unwrap();
         for (client_transmitter, response, mut session, action) in responses {
             session.vars_mut().end_transaction(action);
             client_transmitter.send(response, session);
@@ -5857,7 +5874,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 (id, updates, advance_to)
             })
             .collect();
-        self.controller.storage_mut().append(appends).await.unwrap();
+        self.controller
+            .storage_mut()
+            .append(appends)
+            .expect("invalid updates")
+            .await
+            .expect("One-shot shouldn't fail")
+            .unwrap();
     }
 
     async fn drop_sources(&mut self, sources: Vec<GlobalId>) {

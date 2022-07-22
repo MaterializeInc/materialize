@@ -31,9 +31,7 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::future;
-use futures::stream::TryStreamExt as _;
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::StreamExt;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -47,7 +45,7 @@ use mz_build_info::BuildInfo;
 use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{write::WriteHandle, PersistClient, PersistLocation, ShardId};
+use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -158,11 +156,15 @@ pub trait StorageController: Debug + Send {
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
+    ///
+    /// The method returns a oneshot that can be awaited to indicate completion of the write.
+    /// The method may return an error, indicating an immediately visible error, and also the
+    /// oneshot may return an error if one is encountered during the write.
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
-    async fn append(
+    fn append(
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
-    ) -> Result<(), StorageError>;
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
@@ -356,12 +358,12 @@ pub struct StorageControllerState<
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) stash: S,
     /// Write handle for persist shards.
-    pub(super) persist_write_handles: BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>>,
+    pub(super) persist_write_handles: persist_write_handles::PersistWorker<T>,
     /// Read handles for persist shards.
     ///
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocknig the storage controller.
-    persist_read_handles: persist_read_downgrade::PersistWorker<T>,
+    persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
 }
 
@@ -371,6 +373,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + Unpin> {
     state: StorageControllerState<T>,
     /// Storage host provisioning and storage object assignment.
     hosts: StorageHosts<T>,
+    /// Mechanism for returning frontier advancement for tables.
+    internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
@@ -465,7 +469,10 @@ impl From<DataflowError> for StorageError {
 }
 
 impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
-    pub(super) async fn new(postgres_url: String) -> Self {
+    pub(super) async fn new(
+        postgres_url: String,
+        tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+    ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
                 .expect("invalid postgres url for storage stash"),
@@ -478,8 +485,8 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
         Self {
             collections: BTreeMap::default(),
             stash,
-            persist_write_handles: BTreeMap::default(),
-            persist_read_handles: persist_read_downgrade::PersistWorker::new(),
+            persist_write_handles: persist_write_handles::PersistWorker::new(tx),
+            persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
         }
     }
@@ -580,7 +587,7 @@ where
             let collection_state =
                 CollectionState::new(description.clone(), read.since().clone(), metadata);
 
-            self.state.persist_write_handles.insert(id, write);
+            self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, read);
 
             self.state.collections.insert(id, collection_state);
@@ -719,75 +726,20 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn append(
+    fn append(
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
-        let mut updates_by_id = HashMap::new();
-
-        for (id, updates, batch_upper) in commands {
-            for update in &updates {
+        for (id, updates, batch_upper) in commands.iter() {
+            for update in updates.iter() {
                 if !update.timestamp.less_than(&batch_upper) {
-                    return Err(StorageError::UpdateBeyondUpper(id));
+                    return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }
-
-            let (total_updates, new_upper) = updates_by_id
-                .entry(id)
-                .or_insert_with(|| (Vec::new(), T::minimum()));
-            total_updates.push(updates);
-            new_upper.join_assign(&batch_upper);
         }
 
-        let mut appends_by_id = HashMap::new();
-        for (id, (updates, upper)) in updates_by_id {
-            let current_upper = self.state.persist_write_handles[&id].upper().clone();
-            appends_by_id.insert(id, (updates.into_iter().flatten(), current_upper, upper));
-        }
-
-        let futs = FuturesUnordered::new();
-
-        // We cannot iterate through the updates and then set off a persist call
-        // on the write handle because we cannot mutably borrow the write handle
-        // multiple times.
-        //
-        // Instead, we first group the update by ID above and then iterate
-        // through all available write handles and see if there are any updates
-        // for it. If yes, we send them all in one go.
-        for (id, write) in self.state.persist_write_handles.iter_mut() {
-            let (updates, upper, new_upper) = match appends_by_id.remove(id) {
-                Some(updates) => updates,
-                None => continue,
-            };
-
-            let new_upper = Antichain::from_elem(new_upper);
-
-            let updates = updates
-                .into_iter()
-                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
-
-            futs.push(async move {
-                write
-                    .compare_and_append(updates, upper.clone(), new_upper.clone())
-                    .await
-                    .expect("cannot append updates")
-                    .expect("cannot append updates")
-                    .or(Err(StorageError::InvalidUpper(*id)))?;
-
-                let mut change_batch = ChangeBatch::new();
-                change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
-                change_batch.extend(upper.iter().cloned().map(|t| (t, -1)));
-
-                Ok::<_, StorageError>((*id, change_batch))
-            })
-        }
-
-        let change_batches = futs.try_collect::<Vec<_>>().await?;
-
-        self.update_write_frontiers(&change_batches).await?;
-
-        Ok(())
+        Ok(self.state.persist_write_handles.append(commands))
     }
 
     async fn snapshot(
@@ -903,16 +855,11 @@ where
         // downgrade persist sinces. The actual downgrades are performed by a Tokio
         // task asynchorously.
         let mut compaction_commands = BTreeMap::default();
-        for (id, _) in self.state.persist_write_handles.iter_mut() {
-            let (mut changes, frontier) = match storage_net.remove(id) {
-                Some(changes) => changes,
-                None => continue,
-            };
+        for (key, (mut changes, frontier)) in storage_net {
             if !changes.is_empty() {
-                compaction_commands.insert(*id, frontier);
+                compaction_commands.insert(key, frontier);
             }
         }
-
         self.state
             .persist_read_handles
             .downgrade(compaction_commands.clone());
@@ -940,15 +887,17 @@ where
             .map(|client| client.response_stream())
             .enumerate()
             .collect::<StreamMap<_, _>>();
-        if clients.is_empty() {
-            // If there are no clients, block forever. This signals that there
-            // may be more work to do (e.g., if this future is dropped and
-            // `create_collections` is called). Awaiting the stream map would
-            // return `None`, which would incorrectly indicate the completion
-            // of the stream.
-            return future::pending().await;
-        }
-        self.state.stashed_response = clients.next().await.map(|(_id, res)| res)
+
+        let msg = tokio::select! {
+            // Order matters here. We want to process internal commands
+            // before processing external commands.
+            biased;
+
+            Some(m) = self.internal_response_queue.recv() => m,
+            Some((_id, m)) = clients.next() => m,
+        };
+
+        self.state.stashed_response = Some(msg);
     }
 
     async fn process(&mut self) -> Result<(), anyhow::Error> {
@@ -988,13 +937,16 @@ where
             .await
             .unwrap();
 
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
         Self {
-            state: StorageControllerState::new(postgres_url).await,
+            state: StorageControllerState::new(postgres_url, tx).await,
             hosts: StorageHosts::new(StorageHostsConfig {
                 build_info,
                 orchestrator,
                 storaged_image,
             }),
+            internal_response_queue: rx,
             persist_location,
             persist_client,
             initialized: false,
@@ -1056,7 +1008,7 @@ impl<T: Timestamp> CollectionState<T> {
     }
 }
 
-mod persist_read_downgrade {
+mod persist_read_handles {
 
     use std::collections::BTreeMap;
 
@@ -1115,7 +1067,7 @@ mod persist_read_downgrade {
         pub(crate) fn new() -> Self {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-            mz_ore::task::spawn(|| "PersistReadDowngrade", async move {
+            mz_ore::task::spawn(|| "PersistReadHandles", async move {
                 let mut read_handles: BTreeMap<GlobalId, ReadHandle<SourceData, (), T, Diff>> =
                     BTreeMap::new();
 
@@ -1231,6 +1183,210 @@ mod persist_read_downgrade {
         ) -> tokio::sync::oneshot::Receiver<Result<Vec<(Row, Diff)>, StorageError>> {
             let (tx, rx) = tokio::sync::oneshot::channel();
             self.send(PersistWorkerCmd::Snapshot(id, since, tx));
+            rx
+        }
+
+        fn send(&self, cmd: PersistWorkerCmd<T>) {
+            match self.tx.send(cmd) {
+                Ok(()) => (), // All good!
+                Err(e) => {
+                    tracing::error!("could not forward command: {:?}", e);
+                }
+            }
+        }
+    }
+}
+
+mod persist_write_handles {
+
+    use std::collections::BTreeMap;
+
+    use differential_dataflow::lattice::Lattice;
+    use futures::stream::FuturesUnordered;
+    use timely::progress::{Antichain, Timestamp};
+    use tokio::sync::mpsc::UnboundedSender;
+
+    use mz_persist_client::write::WriteHandle;
+    use mz_persist_types::Codec64;
+    use mz_repr::{Diff, GlobalId};
+
+    use crate::controller::StorageError;
+    use crate::protocol::client::StorageResponse;
+    use crate::protocol::client::Update;
+    use crate::types::sources::SourceData;
+
+    #[derive(Debug)]
+    pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
+        tx: UnboundedSender<PersistWorkerCmd<T>>,
+    }
+
+    impl<T> Drop for PersistWorker<T>
+    where
+        T: Timestamp + Lattice + Codec64,
+    {
+        fn drop(&mut self) {
+            self.send(PersistWorkerCmd::Shutdown);
+            // TODO: Can't easily block on shutdown occurring.
+        }
+    }
+
+    /// Commands for [PersistWorker].
+    #[derive(Debug)]
+    enum PersistWorkerCmd<T: Timestamp + Lattice + Codec64> {
+        Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
+        Append(
+            Vec<(GlobalId, Vec<Update<T>>, T)>,
+            tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+        ),
+        Shutdown,
+    }
+
+    impl<T: Timestamp + Lattice + Codec64> PersistWorker<T> {
+        pub(crate) fn new(
+            mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+        ) -> Self {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+            mz_ore::task::spawn(|| "PersistWriteHandles", async move {
+                let mut write_handles = BTreeMap::new();
+
+                while let Some(cmd) = rx.recv().await {
+                    // Peel off all available commands.
+                    // We do this in case we can consolidate commands.
+                    // It would be surprising to receive multiple concurrent `Append` commands,
+                    // but we might receive multiple *empty* `Append` commands.
+                    let mut commands = vec![cmd];
+                    while let Ok(cmd) = rx.try_recv() {
+                        commands.push(cmd);
+                    }
+
+                    // Accumulated updates and upper frontier.
+                    let mut all_updates = BTreeMap::default();
+                    let mut all_responses = Vec::default();
+
+                    let mut shutdown = false;
+
+                    for command in commands {
+                        match command {
+                            PersistWorkerCmd::Register(id, write_handle) => {
+                                let previous = write_handles
+                                    .insert(id, (write_handle, Antichain::from_elem(T::minimum())));
+                                if previous.is_some() {
+                                    panic!(
+                                        "already registered a ReadHandle for collection {:?}",
+                                        id
+                                    );
+                                }
+                            }
+                            PersistWorkerCmd::Append(updates, response) => {
+                                for (id, update, upper) in updates {
+                                    let (updates, old_upper) =
+                                        all_updates.entry(id).or_insert_with(|| {
+                                            (Vec::default(), Antichain::from_elem(T::minimum()))
+                                        });
+
+                                    updates.extend(update);
+                                    old_upper.join_assign(&Antichain::from_elem(upper));
+                                }
+                                all_responses.push(response);
+                            }
+                            PersistWorkerCmd::Shutdown => {
+                                shutdown = true;
+                            }
+                        }
+                    }
+
+                    async fn append_work<T2: Timestamp + Lattice + Codec64>(
+                        frontier_responses: &mut tokio::sync::mpsc::UnboundedSender<
+                            StorageResponse<T2>,
+                        >,
+                        write_handles: &mut BTreeMap<
+                            GlobalId,
+                            (WriteHandle<SourceData, (), T2, Diff>, Antichain<T2>),
+                        >,
+                        mut commands: BTreeMap<GlobalId, (Vec<Update<T2>>, Antichain<T2>)>,
+                    ) -> Result<(), GlobalId> {
+                        let futs = FuturesUnordered::new();
+
+                        // We cannot iterate through the updates and then set off a persist call
+                        // on the write handle because we cannot mutably borrow the write handle
+                        // multiple times.
+                        //
+                        // Instead, we first group the update by ID above and then iterate
+                        // through all available write handles and see if there are any updates
+                        // for it. If yes, we send them all in one go.
+                        for (id, (write, old_upper)) in write_handles.iter_mut() {
+                            if let Some((updates, new_upper)) = commands.remove(id) {
+                                let persist_upper = write.upper().clone();
+                                let updates = updates
+                                    .into_iter()
+                                    .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
+
+                                futs.push(async move {
+                                    write
+                                        .compare_and_append(
+                                            updates,
+                                            persist_upper.clone(),
+                                            new_upper.clone(),
+                                        )
+                                        .await
+                                        .expect("cannot append updates")
+                                        .expect("cannot append updates")
+                                        .or(Err(*id))?;
+
+                                    let mut change_batch = timely::progress::ChangeBatch::new();
+                                    let old_upper = old_upper.clone();
+                                    change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
+                                    change_batch.extend(old_upper.iter().cloned().map(|t| (t, -1)));
+
+                                    Ok::<_, GlobalId>((*id, change_batch))
+                                })
+                            }
+                        }
+
+                        use futures_util::TryStreamExt;
+                        let change_batches = futs.try_collect::<Vec<_>>().await?;
+
+                        // It is not strictly an error for the controller to hang up.
+                        let _ = frontier_responses
+                            .send(StorageResponse::FrontierUppers(change_batches));
+
+                        Ok(())
+                    }
+
+                    let result =
+                        append_work(&mut frontier_responses, &mut write_handles, all_updates).await;
+
+                    // It is not an error for the other end to hang up.
+                    for response in all_responses {
+                        let _ =
+                            response.send(result.clone().map_err(StorageError::IdentifierMissing));
+                    }
+
+                    if shutdown {
+                        tracing::trace!("shutting down persist write append task");
+                        break;
+                    }
+                }
+            });
+
+            Self { tx }
+        }
+
+        pub(crate) fn register(
+            &self,
+            id: GlobalId,
+            write_handle: WriteHandle<SourceData, (), T, Diff>,
+        ) {
+            self.send(PersistWorkerCmd::Register(id, write_handle))
+        }
+
+        pub(crate) fn append(
+            &self,
+            updates: Vec<(GlobalId, Vec<Update<T>>, T)>,
+        ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.send(PersistWorkerCmd::Append(updates, tx));
             rx
         }
 
