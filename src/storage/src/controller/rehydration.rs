@@ -34,7 +34,8 @@ use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 
 use crate::protocol::client::{
-    IngestSourceCommand, StorageClient, StorageCommand, StorageGrpcClient, StorageResponse,
+    ExportSinkCommand, IngestSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
+    StorageResponse,
 };
 
 /// A storage client that replays the command stream on failure.
@@ -62,6 +63,7 @@ where
             command_rx,
             response_tx,
             ingestions: BTreeMap::new(),
+            exports: BTreeMap::new(),
             uppers: HashMap::new(),
             initialized: false,
         };
@@ -97,6 +99,8 @@ struct RehydrationTask<T> {
     response_tx: UnboundedSender<StorageResponse<T>>,
     /// The ingestions that have been observed.
     ingestions: BTreeMap<GlobalId, IngestSourceCommand<T>>,
+    /// The exports that have been observed.
+    exports: BTreeMap<GlobalId, ExportSinkCommand<T>>,
     /// The upper frontier information received.
     uppers: HashMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>,
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
@@ -157,9 +161,10 @@ where
             .expect("retry retries forever");
 
         // Rehydrate all commands.
-        let mut commands = vec![StorageCommand::IngestSources(
-            self.ingestions.values().cloned().collect(),
-        )];
+        let mut commands = vec![
+            StorageCommand::IngestSources(self.ingestions.values().cloned().collect()),
+            StorageCommand::ExportSinks(self.exports.values().cloned().collect()),
+        ];
         if self.initialized {
             commands.push(StorageCommand::InitializationComplete)
         }
@@ -240,6 +245,19 @@ where
                     // Initialize the uppers we are tracking
                     self.uppers.insert(
                         ingestion.id,
+                        (
+                            Antichain::from_elem(T::minimum()),
+                            MutableAntichain::new_bottom(T::minimum()),
+                        ),
+                    );
+                }
+            }
+            StorageCommand::ExportSinks(sinks) => {
+                for sink in sinks {
+                    self.exports.insert(sink.id, sink.clone());
+                    // Initialize the uppers we are tracking
+                    self.uppers.insert(
+                        sink.id,
                         (
                             Antichain::from_elem(T::minimum()),
                             MutableAntichain::new_bottom(T::minimum()),

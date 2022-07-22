@@ -146,7 +146,7 @@ use mz_sql::plan::{
     StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ReadPolicy};
+use mz_storage::controller::{CollectionDescription, ExportDescription, ReadPolicy};
 use mz_storage::protocol::client::Update;
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
@@ -158,7 +158,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ClusterReplicaSizeMap,
-    ComputeInstance, Connection, SinkConnectionState,
+    ComputeInstance, Connection, Sink, SinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{
@@ -2417,6 +2417,41 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(self.ship_dataflow(df, compute_instance).await)
     }
 
+    #[allow(dead_code)]
+    async fn create_storage_export(&mut self, id: GlobalId, sink: &Sink) {
+        let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
+        let storage_sink_desc = mz_storage::types::sinks::SinkDesc {
+            from: sink.from,
+            from_desc: storage_sink_from_entry
+                .desc(&self.catalog.resolve_full_name(
+                    storage_sink_from_entry.name(),
+                    storage_sink_from_entry.conn_id(),
+                ))
+                .unwrap()
+                .into_owned(),
+            connection: SinkConnection::Tail(TailSinkConnection {}),
+            envelope: Some(sink.envelope),
+            as_of: SinkAsOf {
+                frontier: Antichain::new(),
+                strict: false,
+            },
+        };
+
+        // TODO(chae): This is where we'll create the export/sink in storaged
+        let _ = self
+            .controller
+            .storage_mut()
+            .create_exports(vec![(
+                id,
+                ExportDescription {
+                    sink: storage_sink_desc,
+                    remote_addr: None,
+                },
+            )])
+            .await
+            .unwrap();
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_plan(
         &mut self,
@@ -3266,6 +3301,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 },
             )
             .await;
+
         match transact_result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
@@ -5836,6 +5872,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
+        // TODO(chae): Drop storage sinks when they're moved over
         let by_compute_instance = sinks.into_iter().into_group_map();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
@@ -5883,6 +5920,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Drop compute sinks.
+        // TODO(chae): Drop storage sinks when they're moved over
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
             if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
