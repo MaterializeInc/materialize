@@ -288,7 +288,9 @@ select_stmt ::=
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
 show_connections ::=
-  'SHOW' 'EXTENDED'? 'FULL'? 'CONNECTIONS' ('FROM' schema_name)?
+  'SHOW' 'EXTENDED'? 'FULL'? 'CONNECTIONS'
+  ('FROM' schema_name)?
+  ('LIKE' 'pattern' | 'WHERE' expr)?
 show_create_connection ::=
   'SHOW' 'CREATE' 'CONNECTION' connection_name
 show_create_index ::=
