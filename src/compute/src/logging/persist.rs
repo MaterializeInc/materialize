@@ -57,11 +57,6 @@ pub(crate) fn persist_sink<G>(
         compute_state,
     );
 
-    // Report frontier of collection back to coord
-    compute_state
-        .reported_frontiers
-        .insert(target_id, Antichain::from_elem(0));
-
     // We don't allow these dataflows to be dropped, so the tokens could
     // be stored anywhere.
     compute_state.sink_tokens.insert(
