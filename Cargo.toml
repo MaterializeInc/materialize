@@ -101,3 +101,5 @@ prost = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" 
 prost-build = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-derive = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-types = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }

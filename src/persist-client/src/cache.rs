@@ -77,7 +77,9 @@ impl PersistClientCache {
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
-                let consensus = ConsensusConfig::try_from(x.key()).await?;
+                let consensus =
+                    ConsensusConfig::try_from(x.key(), self.cfg.consensus_connection_pool_max_size)
+                        .await?;
                 let consensus =
                     retry_external(&self.metrics.retries.external.consensus_open, || {
                         consensus.clone().open()

@@ -442,7 +442,7 @@ impl Service for TransactorService {
         // Construct requested Consensus.
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
-                ConsensusConfig::try_from(consensus_uri)
+                ConsensusConfig::try_from(consensus_uri, 1)
                     .await?
                     .open()
                     .await?

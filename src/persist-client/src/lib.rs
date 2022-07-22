@@ -102,7 +102,7 @@ impl PersistLocation {
         let blob = BlobConfig::try_from(&self.blob_uri).await?;
         let blob =
             retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
-        let consensus = ConsensusConfig::try_from(&self.consensus_uri).await?;
+        let consensus = ConsensusConfig::try_from(&self.consensus_uri, 1).await?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
             consensus.clone().open()
         })
@@ -173,6 +173,9 @@ pub struct PersistConfig {
     /// if the number of updates is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
     pub compaction_heuristic_min_updates: usize,
+    /// The maximum size of the connection pool to Postgres/CRDB when performing
+    /// consensus reads and writes.
+    pub consensus_connection_pool_max_size: usize,
 }
 
 // Tuning inputs:
@@ -230,6 +233,7 @@ impl PersistConfig {
             compaction_enabled: !compaction_disabled,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
+            consensus_connection_pool_max_size: 8,
         }
     }
 }
