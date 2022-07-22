@@ -163,6 +163,9 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
                     }
+                    CatalogItem::StorageCollection(coll) => {
+                        dataflow.import_source(*id, coll.desc.typ().clone(), false);
+                    }
                     _ => unreachable!(),
                 }
             }

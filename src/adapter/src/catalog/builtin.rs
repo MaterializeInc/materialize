@@ -44,6 +44,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     View(&'static BuiltinView),
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
+    StorageCollection(&'static BuiltinStorageCollection),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -54,6 +55,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.name,
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
+            Builtin::StorageCollection(coll) => coll.name,
         }
     }
 
@@ -64,6 +66,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.schema,
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
+            Builtin::StorageCollection(coll) => coll.schema,
         }
     }
 }
@@ -77,6 +80,13 @@ pub struct BuiltinLog {
 
 #[derive(Hash)]
 pub struct BuiltinTable {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub desc: RelationDesc,
+}
+
+#[derive(Clone, Debug, Hash, Serialize)]
+pub struct BuiltinStorageCollection {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
@@ -137,6 +147,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::View(view) => view.fingerprint(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
+            Builtin::StorageCollection(coll) => coll.fingerprint(),
         }
     }
 }
@@ -1192,6 +1203,23 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
 
+pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
+    Lazy::new(|| BuiltinStorageCollection {
+        name: "mz_source_status_history",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("timestamp", ScalarType::Timestamp.nullable(false))
+            .with_column("source_name", ScalarType::String.nullable(false))
+            .with_column("source_id", ScalarType::String.nullable(false))
+            .with_column("source_type", ScalarType::String.nullable(false))
+            .with_column("upstream_name", ScalarType::String.nullable(true))
+            .with_column("worker_id", ScalarType::Int64.nullable(false))
+            .with_column("worker_count", ScalarType::Int64.nullable(false))
+            .with_column("status", ScalarType::String.nullable(false))
+            .with_column("error", ScalarType::String.nullable(true))
+            .with_column("metadata", ScalarType::Jsonb.nullable(true)),
+    });
+
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
@@ -2169,6 +2197,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_INHERITS),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
     ]);
 
     builtins
