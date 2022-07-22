@@ -31,7 +31,7 @@ operator, rather than part of a database- or schema-qualified table name.
 ### Catalog name
 
 `record` is a named type in PostgreSQL (`pg_catalog.record`), but is
-currently an [unnameable](../#catalog-name) type in Materalize.
+currently an [unnameable](../#catalog-name) type in Materialize.
 
 ### Valid casts
 

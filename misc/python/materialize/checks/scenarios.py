@@ -80,6 +80,8 @@ class DropCreateDefaultReplica(Scenario):
 
 
 class RestartComputed(Scenario):
+    """Restart computed by having it run in a separate container that is then killed and restarted."""
+
     def actions(self) -> List[Action]:
         return [
             StartMz(),
@@ -94,6 +96,24 @@ class RestartComputed(Scenario):
             Manipulate(self.checks, phase=2),
             KillComputed(),
             StartComputed(),
+            Validate(self.checks),
+        ]
+
+
+class RestartEnvironmentdStoraged(Scenario):
+    """Restart environmentd and storaged (as spawned from it), while keeping computed running by placing it in a separate container."""
+
+    def actions(self) -> List[Action]:
+        return [
+            StartMz(),
+            StartComputed(),
+            UseComputed(),
+            Initialize(self.checks),
+            RestartMzAction(),
+            Manipulate(self.checks, phase=1),
+            RestartMzAction(),
+            Manipulate(self.checks, phase=2),
+            RestartMzAction(),
             Validate(self.checks),
         ]
 

@@ -412,49 +412,49 @@ CreateRecordedView(CreateRecordedViewStatement { if_exists: Error, name: Unresol
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS crobat ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS crobat
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS crobat ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: Some(Ident("crobat")) }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [SourceIncludeMetadata { ty: Timestamp, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE PARTITION ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE PARTITION
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE PARTITION ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [SourceIncludeMetadata { ty: Partition, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TOPIC ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TOPIC
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TOPIC ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [SourceIncludeMetadata { ty: Topic, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS mykey, TIMESTAMP, PARTITION, TOPIC as kafka_topic ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS mykey, TIMESTAMP, PARTITION, TOPIC AS kafka_topic
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS mykey, TIMESTAMP, PARTITION, TOPIC AS kafka_topic ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: Some(Ident("mykey")) }, SourceIncludeMetadata { ty: Timestamp, alias: None }, SourceIncludeMetadata { ty: Partition, alias: None }, SourceIncludeMetadata { ty: Topic, alias: Some(Ident("kafka_topic")) }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } }), value: Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } }) }, envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
@@ -475,7 +475,7 @@ CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USIN
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false)
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(InlineSchema { schema: Inline("string"), with_options: [AvroSchemaOption { name: ConfluentWireFormat, value: Some(Value(Boolean(false))) }] })), envelope: Some(None), if_not_exists: false, key_constraint: None, remote: None })
 
@@ -988,7 +988,7 @@ CREATE TABLE public.customer (
         active integer NOT NULL
 ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
 ----
-CREATE TABLE public.customer (customer_id int4 DEFAULT nextval(public.customer_customer_id_seq), store_id int2 NOT NULL, first_name varchar(45) NOT NULL, last_name varchar(45) NOT NULL, email varchar(50), address_id int2 NOT NULL, activebool bool DEFAULT true NOT NULL, create_date date DEFAULT now()::text NOT NULL, last_update timestamp DEFAULT now() NOT NULL, last_update_tz timestamptz, active int4 NOT NULL) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
+CREATE TABLE public.customer (customer_id int4 DEFAULT nextval(public.customer_customer_id_seq), store_id int2 NOT NULL, first_name varchar(45) NOT NULL, last_name varchar(45) COLLATE "es_ES" NOT NULL, email varchar(50), address_id int2 NOT NULL, activebool bool DEFAULT true NOT NULL, create_date date DEFAULT now()::text NOT NULL, last_update timestamp DEFAULT now() NOT NULL, last_update_tz timestamptz, active int4 NOT NULL) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
 =>
 CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("public"), Ident("customer")]), columns: [ColumnDef { name: Ident("customer_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: UnresolvedObjectName([Ident("nextval")]), args: Args { args: [Identifier([Ident("public"), Ident("customer_customer_id_seq")])], order_by: [] }, filter: None, over: None, distinct: false })) }] }, ColumnDef { name: Ident("store_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int2")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("first_name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [45] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [45] }, collation: Some(UnresolvedObjectName([Ident("es_ES")])), options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("email"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [50] }, collation: None, options: [] }, ColumnDef { name: Ident("address_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int2")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("activebool"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Value(Boolean(true))) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("create_date"), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Cast { expr: Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] } }) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }, ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("last_update_tz"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("active"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }], constraints: [], with_options: [WithOption { key: Ident("fillfactor"), value: Some(Value(Number("20"))) }, WithOption { key: Ident("user_catalog_table"), value: Some(Value(Boolean(true))) }, WithOption { key: Ident("autovacuum_vacuum_threshold"), value: Some(Value(Number("100"))) }], if_not_exists: false, temporary: false })
 

@@ -88,7 +88,7 @@ Values in custom types are _never_ considered equal to:
 ### Polymorphism
 
 When using custom types as values for [polymorphic
-functions](list/#polymorphism), the following additional constraints appply:
+functions](list/#polymorphism), the following additional constraints apply:
 
 - If any value passed to a polymorphic parameter is a custom type, the resultant
   type must use the custom type in the appropriate location.
@@ -108,9 +108,9 @@ functions](list/#polymorphism), the following additional constraints appply:
 #### Examples
 
 This is a little easier to understand if we make it concrete, so we'll focus on
-concatenting two lists and appending an element to list.
+concatenating two lists and appending an element to list.
 
-For these operations, Materialize uses the following polymorphc parameters:
+For these operations, Materialize uses the following polymorphic parameters:
 
 - `listany`, which accepts any `list`, and constrains all lists to being of the
   same structurally equivalent type.
@@ -142,7 +142,7 @@ SELECT pg_typeof(
 When appending an element to a list, we'll use `list_append` whose signature is
 `list_append(l: listany, e: listelementany)`.
 
-If we append a structurally appropriate elment (`int4`) to a custom `list`
+If we append a structurally appropriate element (`int4`) to a custom `list`
 (`custom_list`), the result is of the same type as the custom `list`
 (`custom_list`).
 
@@ -174,7 +174,7 @@ SELECT pg_typeof(
 ```
 
 This is the "least custom type" we could support for these values––i.e.
-Materialize will not create or disocver a custom type whose elements are
+Materialize will not create or discover a custom type whose elements are
 `custom_list`, nor will it coerce `custom_list` into an anonymous built-in
 list.
 

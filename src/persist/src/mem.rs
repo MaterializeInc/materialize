@@ -15,9 +15,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
+use crate::location::{
+    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+};
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
 /// across dataflows
@@ -69,8 +72,23 @@ impl MemBlobCore {
         Ok(())
     }
 
-    fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        Ok(self.dataz.keys().cloned().collect())
+    fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        for (key, value) in &self.dataz {
+            if !key.starts_with(key_prefix) {
+                continue;
+            }
+
+            f(BlobMetadata {
+                key: &key,
+                size_in_bytes: u64::cast_from(value.len()),
+            });
+        }
+
+        Ok(())
     }
 
     fn delete(&mut self, key: &str) -> Result<(), ExternalError> {
@@ -104,8 +122,12 @@ impl Blob for MemBlob {
         self.core.lock().await.get(key)
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        self.core.lock().await.list_keys()
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        self.core.lock().await.list_keys_and_metadata(key_prefix, f)
     }
 
     async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {

@@ -112,14 +112,14 @@ ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: Some(Unresol
 parse-statement
 SHOW RECORDED VIEWS FROM foo.bar IN CLUSTER baz
 ----
-SHOW RECORDED VIEWS FROM foo.bar
+SHOW RECORDED VIEWS FROM foo.bar IN CLUSTER baz
 =>
 ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW RECORDED VIEWS IN CLUSTER baz
 ----
-SHOW RECORDED VIEWS
+SHOW RECORDED VIEWS IN CLUSTER baz
 =>
 ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
 
@@ -154,14 +154,14 @@ ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchem
 parse-statement
 SHOW SINKS FROM foo.bar IN CLUSTER baz
 ----
-SHOW SINKS FROM foo.bar
+SHOW SINKS FROM foo.bar IN CLUSTER baz
 =>
 ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
 
 parse-statement
 SHOW SINKS IN CLUSTER baz
 ----
-SHOW SINKS
+SHOW SINKS IN CLUSTER baz
 =>
 ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
 

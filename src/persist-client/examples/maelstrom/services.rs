@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use mz_persist::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::location::{
+    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+};
 
 use crate::maelstrom::api::{ErrorCode, MaelstromError};
 use crate::maelstrom::node::Handle;
@@ -192,7 +194,11 @@ impl Blob for MaelstromBlob {
         Ok(Some(value))
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys_and_metadata(
+        &self,
+        _key_prefix: &str,
+        _f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
         unimplemented!("not yet used")
     }
 
@@ -262,8 +268,12 @@ impl Blob for CachingBlob {
         Ok(value)
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        self.blob.list_keys().await
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        self.blob.list_keys_and_metadata(key_prefix, f).await
     }
 
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {

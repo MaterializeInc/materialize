@@ -21,7 +21,7 @@ use rand::{Rng, SeedableRng};
 use tracing::trace;
 
 use crate::location::{
-    Atomicity, Blob, Consensus, Determinate, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, Consensus, Determinate, ExternalError, SeqNo, VersionedData,
 };
 
 #[derive(Debug)]
@@ -143,9 +143,15 @@ impl Blob for UnreliableBlob {
         self.handle.run_op("get", || self.blob.get(key)).await
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
         self.handle
-            .run_op("list_keys", || self.blob.list_keys())
+            .run_op("list_keys", || {
+                self.blob.list_keys_and_metadata(key_prefix, f)
+            })
             .await
     }
 

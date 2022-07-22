@@ -337,6 +337,15 @@ pub trait Consensus: std::fmt::Debug {
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError>;
 }
 
+/// Metadata about a particular blob stored by persist
+#[derive(Debug)]
+pub struct BlobMetadata<'a> {
+    /// The key for the blob
+    pub key: &'a str,
+    /// Size of the blob
+    pub size_in_bytes: u64,
+}
+
 /// An abstraction over read-write access to a `bytes key`->`bytes value` store.
 ///
 /// Implementations are required to be _linearizable_.
@@ -353,8 +362,15 @@ pub trait Blob: std::fmt::Debug {
     /// Returns a reference to the value corresponding to the key.
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError>;
 
-    /// List all of the keys in the map.
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError>;
+    /// List all of the keys in the map with metadata about the entry.
+    ///
+    /// Can be optionally restricted to only list keys starting with a
+    /// given prefix.
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError>;
 
     /// Inserts a key-value pair into the map.
     ///
@@ -376,6 +392,7 @@ pub mod tests {
     use uuid::Uuid;
 
     use crate::location::Atomicity::{AllowNonAtomic, RequireAtomic};
+    use crate::location::Blob;
 
     use super::*;
 
@@ -384,6 +401,23 @@ pub mod tests {
         ret.extend(new.iter().map(|x| x.to_string()));
         ret.sort();
         ret
+    }
+
+    async fn get_keys(b: &impl Blob) -> Result<Vec<String>, ExternalError> {
+        let mut keys = vec![];
+        b.list_keys_and_metadata("", &mut |entry| keys.push(entry.key.to_string()))
+            .await?;
+        Ok(keys)
+    }
+
+    async fn get_keys_with_prefix(
+        b: &impl Blob,
+        prefix: &str,
+    ) -> Result<Vec<String>, ExternalError> {
+        let mut keys = vec![];
+        b.list_keys_and_metadata(prefix, &mut |entry| keys.push(entry.key.to_string()))
+            .await?;
+        Ok(keys)
     }
 
     pub async fn blob_impl_test<
@@ -410,9 +444,9 @@ pub mod tests {
         assert_eq!(blob1.get(&k0).await?, None);
 
         // Empty list keys is empty.
-        let empty_keys = blob0.list_keys().await?;
+        let empty_keys = get_keys(&blob0).await?;
         assert_eq!(empty_keys, Vec::<String>::new());
-        let empty_keys = blob1.list_keys().await?;
+        let empty_keys = get_keys(&blob1).await?;
         assert_eq!(empty_keys, Vec::<String>::new());
 
         // Set a key with AllowNonAtomic and get it back.
@@ -430,10 +464,10 @@ pub mod tests {
         assert_eq!(blob1.get("k0a").await?, Some(values[0].clone()));
 
         // Blob contains the key we just inserted.
-        let mut blob_keys = blob0.list_keys().await?;
+        let mut blob_keys = get_keys(&blob0).await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&empty_keys, &[&k0, "k0a"]));
-        let mut blob_keys = blob1.list_keys().await?;
+        let mut blob_keys = get_keys(&blob1).await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&empty_keys, &[&k0, "k0a"]));
 
@@ -462,10 +496,10 @@ pub mod tests {
 
         // Empty blob contains no keys.
         blob0.delete("k0a").await?;
-        let mut blob_keys = blob0.list_keys().await?;
+        let mut blob_keys = get_keys(&blob0).await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
-        let mut blob_keys = blob1.list_keys().await?;
+        let mut blob_keys = get_keys(&blob1).await?;
         blob_keys.sort();
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
@@ -487,12 +521,31 @@ pub mod tests {
         }
 
         // Blob contains the key we just inserted.
-        let mut blob_keys = blob0.list_keys().await?;
+        let mut blob_keys = get_keys(&blob0).await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&expected_keys, &[&k0]));
-        let mut blob_keys = blob1.list_keys().await?;
+        let mut blob_keys = get_keys(&blob1).await?;
         blob_keys.sort();
         assert_eq!(blob_keys, keys(&expected_keys, &[&k0]));
+
+        // Insert multiple keys with a different prefix and validate that we can
+        // list out keys by their prefix
+        let mut expected_prefix_keys = vec![];
+        for i in 1..=3 {
+            let key = format!("k-prefix-{}", i);
+            blob0
+                .set(&key, values[0].clone().into(), AllowNonAtomic)
+                .await?;
+            expected_prefix_keys.push(key);
+        }
+        let mut blob_keys = get_keys_with_prefix(&blob0, "k-prefix").await?;
+        blob_keys.sort();
+        assert_eq!(blob_keys, expected_prefix_keys);
+        let mut blob_keys = get_keys_with_prefix(&blob0, "k").await?;
+        blob_keys.sort();
+        expected_keys.extend(expected_prefix_keys);
+        expected_keys.sort();
+        assert_eq!(blob_keys, expected_keys);
 
         // We can open a new blob to the same path and use it.
         let blob3 = new_fn("path0").await?;

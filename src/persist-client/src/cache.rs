@@ -33,7 +33,7 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 #[derive(Debug, Clone)]
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
-    metrics: Arc<Metrics>,
+    pub(crate) metrics: Arc<Metrics>,
     blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
 }
@@ -71,21 +71,7 @@ impl PersistClientCache {
             "PersistClientCache::open blob={} consensus={}",
             location.blob_uri, location.consensus_uri,
         );
-        let blob = match self.blob_by_uri.entry(location.blob_uri) {
-            Entry::Occupied(x) => Arc::clone(x.get()),
-            Entry::Vacant(x) => {
-                // Intentionally hold the lock, so we don't double connect under
-                // concurrency.
-                let blob = BlobConfig::try_from(x.key()).await?;
-                let blob = retry_external(&self.metrics.retries.external.blob_open, || {
-                    blob.clone().open()
-                })
-                .await;
-                Arc::clone(x.insert(blob))
-            }
-        };
-        let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)))
-            as Arc<dyn Blob + Send + Sync>;
+        let blob = self.open_blob(location.blob_uri).await?;
         let consensus = match self.consensus_by_uri.entry(location.consensus_uri) {
             Entry::Occupied(x) => Arc::clone(x.get()),
             Entry::Vacant(x) => {
@@ -103,6 +89,27 @@ impl PersistClientCache {
         let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)))
             as Arc<dyn Consensus + Send + Sync>;
         PersistClient::new(self.cfg.clone(), blob, consensus, Arc::clone(&self.metrics)).await
+    }
+
+    pub(crate) async fn open_blob(
+        &mut self,
+        blob_uri: String,
+    ) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
+        let blob = match self.blob_by_uri.entry(blob_uri) {
+            Entry::Occupied(x) => Arc::clone(x.get()),
+            Entry::Vacant(x) => {
+                // Intentionally hold the lock, so we don't double connect under
+                // concurrency.
+                let blob = BlobConfig::try_from(x.key()).await?;
+                let blob = retry_external(&self.metrics.retries.external.blob_open, || {
+                    blob.clone().open()
+                })
+                .await;
+                Arc::clone(x.insert(blob))
+            }
+        };
+        Ok(Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)))
+            as Arc<dyn Blob + Send + Sync>)
     }
 }
 
