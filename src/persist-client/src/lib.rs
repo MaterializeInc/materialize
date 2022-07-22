@@ -245,7 +245,7 @@ impl PersistConfig {
     /// Returns a new instance of [PersistConfig] with default tunings for unit tests
     pub fn new_for_test(now: NowFn) -> Self {
         let mut defaults = Self::new(now);
-        defaults.consensus_connection_pool_max_size = 2;
+        defaults.consensus_connection_pool_max_size = 1;
         defaults
     }
 }
