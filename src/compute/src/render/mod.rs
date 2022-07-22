@@ -106,8 +106,8 @@ use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
-use timely::dataflow::operators::{InspectCore};
 use timely::dataflow::operators::to_stream::ToStream;
+use timely::dataflow::operators::InspectCore;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
@@ -151,27 +151,28 @@ pub fn build_compute_dataflow<A: Allocate>(
         source_instantiation: &Stream<G, (Row, mz_repr::Timestamp, Diff)>,
         logger: &Logger,
         source_id: &GlobalId,
-        index_ids: &Vec<GlobalId>
-    ) -> 
-        Stream<G, (Row, mz_repr::Timestamp, Diff)> 
+        index_ids: &Vec<GlobalId>,
+        sink_ids: &Vec<GlobalId>
+    ) -> Stream<G, (Row, mz_repr::Timestamp, Diff)>
     where
         G: Scope<Timestamp = mz_repr::Timestamp>,
     {
         let logger = logger.clone();
         let source_id = source_id.clone();
-        let index_ids = index_ids.clone();
+        let mut object_ids = index_ids.clone();
+        object_ids.append(&mut (sink_ids.clone()));
         source_instantiation.inspect_container(move |event| {
             if let Err(frontier) = event {
                 for time in frontier.iter() {
-                    for idx_id in index_ids.iter() {
+                    for obj_id in object_ids.iter() {
                         // log (source_id, index_id, frontier time) advancement
-                        logger.log(ComputeEvent::SourceFrontier(source_id, *idx_id, *time));
+                        logger.log(ComputeEvent::SourceFrontier(*obj_id, source_id, *time));
                     }
                 }
             }
         })
     }
-    
+
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
 
@@ -203,7 +204,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // time of the frontier advancement for each dataflow as early as possible.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
                     let index_ids = dataflow.index_exports.keys().cloned().collect::<Vec<_>>();
-                    ok_stream = intercept_source_instantiation_frontiers(&ok_stream, logger, source_id, &index_ids);
+                    let sink_ids = dataflow.sink_exports.keys().cloned().collect::<Vec<_>>();
+                    ok_stream = intercept_source_instantiation_frontiers(
+                        &ok_stream, logger, source_id, &index_ids, &sink_ids 
+                    );
                 }
 
                 // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the

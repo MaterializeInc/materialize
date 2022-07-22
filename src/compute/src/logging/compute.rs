@@ -54,7 +54,7 @@ pub enum ComputeEvent {
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
     // Available frontier information for source instantiations.
-    SourceFrontier(GlobalId, GlobalId, Timestamp)
+    SourceFrontier(GlobalId, GlobalId, Timestamp),
 }
 
 /// A logged peek event.
@@ -110,6 +110,7 @@ pub fn construct<A: Allocate>(
         let (mut dataflow_out, dataflow) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
+//        let (mut source_frontier_delay_out, source_frontier_delay) = demux.new_output::<(GlobalId, GlobalId, usize, u128)>();
         let (mut peek_out, peek) = demux.new_output();
         let (mut peek_duration_out, peek_duration) = demux.new_output();
 
@@ -117,10 +118,12 @@ pub fn construct<A: Allocate>(
         demux.build(move |_capability| {
             let mut active_dataflows = std::collections::HashMap::new();
             let mut peek_stash = std::collections::HashMap::new();
+            let mut storage_sources = std::collections::HashMap::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
+//                let mut source_frontier_delay = source_frontier_delay_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
 
@@ -130,6 +133,7 @@ pub fn construct<A: Allocate>(
                     let mut dataflow_session = dataflow.session(&time);
                     let mut dependency_session = dependency.session(&time);
                     let mut frontier_session = frontier.session(&time);
+//                    let mut source_frontier_delay_session = source_frontier_delay.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut peek_duration_session = peek_duration.session(&time);
 
@@ -168,6 +172,22 @@ pub fn construct<A: Allocate>(
                                             key.0, worker
                                         ),
                                     }
+                                    // dataflow may or may not be associated to a storage
+                                    // source instantiation. Report removal if so.
+                                    //::<std::collections::HashMap<GlobalId, (_,_)>>
+                                    // TODO
+                                    // if let Some(source_map) = storage_sources.remove::<std::collections::HashMap<(GlobalId, usize), (_,_)>>(key) {
+                                    //     for (source_id, time_entry) in source_map {
+                                    //         let delay_set = time_entry.1;
+                                    //         for delay_ns in delay_set {
+                                    //             source_frontier_delay_session.give((
+                                    //                 (id, source_id, worker, delay_ns),
+                                    //                 time_ms,
+                                    //                 -1,
+                                    //             ));
+                                    //         }
+                                    //     }
+                                    // }
                                 }
                             }
                             ComputeEvent::DataflowDependency { dataflow, source } => {
@@ -185,6 +205,7 @@ pub fn construct<A: Allocate>(
                                 }
                             }
                             ComputeEvent::Frontier(name, logical, delta) => {
+                                // report dataflow frontier advancement
                                 frontier_session.give((
                                     Row::pack_slice(&[
                                         Datum::String(&name.to_string()),
@@ -194,10 +215,39 @@ pub fn construct<A: Allocate>(
                                     time_ms,
                                     delta,
                                 ));
+                                // check if we have a storage source associated to this dataflow
+                                // and report frontier advancement delays
+                                let dataflow_key = (name, worker);
+                                if let Some(source_map) = storage_sources.get_mut(&dataflow_key) {
+                                    for (_source_key, _time_entry) in source_map  {
+                                        // TODO report delay!
+                                        //let time_deque = *(source_entry.1).1;
+                                        //let mut delay_map = *(source_entry.1).1;
+                                        println!(
+                                            "delay reported as:({}, {}, {})",
+                                            name, logical, time_ms
+                                        );   
+                                    }
+                                }
                             }
-                            ComputeEvent::SourceFrontier(source_id, index_id, logical) => {
-                                // TODO: do something with these events
-                                println!("source frontier logged as:({}, {}, {})", source_id, index_id, logical);
+                            ComputeEvent::SourceFrontier(dataflow, source_id, logical) => {
+                                let dataflow_key = (dataflow, worker);
+                                debug_assert_ne!(active_dataflows.get(&dataflow_key), None);
+                                let source_map = storage_sources
+                                    .entry(dataflow_key)
+                                    .or_insert(std::collections::HashMap::new());
+                                let time_entry = source_map
+                                    .entry((source_id, worker))
+                                    .or_insert((
+                                        std::collections::VecDeque::<(u64, u128)>::new(),
+                                        std::collections::HashSet::<u128>::new()
+                                    ));
+                                let time_deque = &mut time_entry.0;
+                                time_deque.push_back((logical, time.as_nanos()));
+                                println!(
+                                    "source frontier logged as:({}, {}, {}, {})",
+                                    dataflow, source_id, logical, time.as_nanos()
+                                );
                             }
                             ComputeEvent::Peek(peek, is_install) => {
                                 let key = (worker, peek.uuid);
