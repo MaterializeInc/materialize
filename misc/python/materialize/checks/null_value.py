@@ -70,8 +70,8 @@ class NullValue(Check):
                 <null> <null> <null>
                 <null> <null> <null>
 
-                > SHOW CREATE VIEW null_value_view2;
-                materialize.public.null_value_view2 "CREATE VIEW \\"materialize\\".\\"public\\".\\"null_value_view2\\" AS SELECT \\"f1\\", \\"f2\\", NULL FROM \\"materialize\\".\\"public\\".\\"null_value_table\\" WHERE \\"f1\\" IS NULL OR \\"f1\\" IS NOT NULL OR \\"f1\\" = NULL"
+                > SHOW CREATE MATERIALIZED VIEW null_value_view2;
+                materialize.public.null_value_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"null_value_view2\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"f2\\", NULL FROM \\"materialize\\".\\"public\\".\\"null_value_table\\" WHERE \\"f1\\" IS NULL OR \\"f1\\" IS NOT NULL OR \\"f1\\" = NULL"
 
                 > SELECT * FROM null_value_view2;
                 <null> <null> <null>

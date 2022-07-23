@@ -326,7 +326,7 @@ true
         # Explicit LIMIT is needed for the ORDER BY to not be optimized away
         return Td(
             f"""
-> DROP VIEW IF EXISTS v2
+> DROP MATERIALIZED VIEW IF EXISTS v2
   /* A */
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT * FROM v1 ORDER BY f1 LIMIT 999999999999
@@ -429,7 +429,7 @@ class CrossJoin(Dataflow):
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
-> DROP VIEW IF EXISTS v1;
+> DROP MATERIALIZED VIEW IF EXISTS v1;
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} FROM {self.join()}
   /* A */
@@ -578,9 +578,9 @@ class FullOuterJoin(Dataflow):
         return [
             Td(
                 f"""
-> DROP VIEW IF EXISTS v2 CASCADE;
+> DROP MATERIALIZED VIEW IF EXISTS v2 CASCADE;
 
-> DROP VIEW IF EXISTS v1 CASCADE;
+> DROP MATERIALIZED VIEW IF EXISTS v1 CASCADE;
 
 > DROP TABLE IF EXISTS ten;
 
