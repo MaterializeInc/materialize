@@ -82,7 +82,7 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)
                     | CatalogItem::Log(_)
-                    | CatalogItem::RecordedView(_)
+                    | CatalogItem::MaterializedView(_)
                     | CatalogItem::StorageCollection(_) => {
                         // Record that we are missing at least one index.
                         id_bundle.storage_ids.insert(id);

@@ -11,7 +11,10 @@ statement ok
 CREATE TABLE t1(f1 INT, f2 INT);
 
 statement ok
-CREATE MATERIALIZED VIEW v1 AS SELECT t1 from t1;
+CREATE VIEW v1 AS SELECT t1 from t1;
+
+statement ok
+CREATE DEFAULT INDEX ON v1
 
 query T multiline
 EXPLAIN

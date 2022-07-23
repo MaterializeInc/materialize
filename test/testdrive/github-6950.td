@@ -11,5 +11,5 @@
 
 > CREATE SCHEMA some_schema
 
-! CREATE TEMPORARY MATERIALIZED VIEW IF NOT EXISTS some_schema.v1 AS SELECT 1;
+! CREATE TEMPORARY VIEW IF NOT EXISTS some_schema.v1 AS SELECT 1;
 contains:cannot create temporary item in non-temporary schema

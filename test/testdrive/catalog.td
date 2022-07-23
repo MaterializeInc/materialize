@@ -177,7 +177,7 @@ public
 public
 
 # New views in the database should work.
-> CREATE MATERIALIZED VIEW d.public.v1 AS SELECT 1
+> CREATE VIEW d.public.v1 AS SELECT 1
 > SHOW VIEWS FROM d.public
 name
 ----
@@ -190,7 +190,7 @@ d
 > SHOW SCHEMAS
 public
 s
-> CREATE MATERIALIZED VIEW v2 AS SELECT 2
+> CREATE VIEW v2 AS SELECT 2
 > SHOW VIEWS
 v1
 v2
@@ -202,9 +202,7 @@ v2
 name
 ----
 v1
-v1_primary_idx
 v2
-v2_primary_idx
 
 # Test minimizing name qualification
 
@@ -237,15 +235,13 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or RECORDED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
+contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or MATERIALIZED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
 
 > SHOW FULL OBJECTS
 name            type
 --------------------------
 v1              user
-v1_primary_idx  user
 v2              user
-v2_primary_idx  user
 
 # DROP DATABASE does not support both RESTRICT and CASCADE.
 ! DROP DATABASE d RESTRICT CASCADE
@@ -444,8 +440,8 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_materialized_views
 mz_pseudo_types
-mz_recorded_views
 mz_roles
 mz_schemas
 mz_secrets
@@ -477,8 +473,8 @@ mz_indexes                    system
 mz_kafka_sinks                system
 mz_list_types                 system
 mz_map_types                  system
+mz_materialized_views         system
 mz_pseudo_types               system
-mz_recorded_views             system
 mz_roles                      system
 mz_schemas                    system
 mz_secrets                    system
@@ -512,8 +508,8 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_materialized_views
 mz_pseudo_types
-mz_recorded_views
 mz_roles
 mz_schemas
 mz_secrets
@@ -548,8 +544,8 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_materialized_views
 mz_pseudo_types
-mz_recorded_views
 mz_roles
 mz_schemas
 mz_secrets
@@ -595,29 +591,29 @@ mz_scheduling_histogram
 mz_scheduling_parks
 
 > SHOW FULL VIEWS FROM mz_catalog
-name                              type   materialized
------------------------------------------------------
-mz_arrangement_sharing            system false
-mz_arrangement_sizes              system false
-mz_dataflow_names                 system false
-mz_dataflow_operator_dataflows    system false
-mz_dataflow_operator_reachability system false
-mz_materialization_frontiers      system false
-mz_message_counts                 system false
-mz_objects                        system false
-mz_perf_arrangement_records       system false
-mz_perf_peek_durations_aggregates system false
-mz_perf_peek_durations_bucket     system false
-mz_perf_peek_durations_core       system false
-mz_records_per_dataflow           system false
-mz_records_per_dataflow_global    system false
-mz_records_per_dataflow_operator  system false
-mz_relations                      system false
-mz_catalog_names                  system false
-mz_cluster_replicas               system false
-mz_scheduling_elapsed             system false
-mz_scheduling_histogram           system false
-mz_scheduling_parks               system false
+name                              type
+----------------------------------------
+mz_arrangement_sharing            system
+mz_arrangement_sizes              system
+mz_dataflow_names                 system
+mz_dataflow_operator_dataflows    system
+mz_dataflow_operator_reachability system
+mz_materialization_frontiers      system
+mz_message_counts                 system
+mz_objects                        system
+mz_perf_arrangement_records       system
+mz_perf_peek_durations_aggregates system
+mz_perf_peek_durations_bucket     system
+mz_perf_peek_durations_core       system
+mz_records_per_dataflow           system
+mz_records_per_dataflow_global    system
+mz_records_per_dataflow_operator  system
+mz_relations                      system
+mz_catalog_names                  system
+mz_cluster_replicas               system
+mz_scheduling_elapsed             system
+mz_scheduling_histogram           system
+mz_scheduling_parks               system
 
 > SHOW SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active

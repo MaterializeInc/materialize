@@ -35,18 +35,17 @@ $ kafka-create-topic topic=data
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW FULL VIEWS
-name        type     materialized
----------------------------------
-data_view   user     false
-test1       user     true
+name        type
+----------------
+data_view   user
 
 > SHOW MATERIALIZED VIEWS
 test1
 
 > SHOW FULL MATERIALIZED VIEWS
-name     type
--------------
-test1    user
+cluster   name     type
+-----------------------
+default   test1    user
 
 > SELECT * FROM test1
 b  sum
@@ -73,10 +72,10 @@ sum   false   numeric
 > SHOW VIEWS LIKE '%data%'
 data_view
 
-> SHOW CREATE VIEW test1
-View                      "Create View"
+> SHOW CREATE MATERIALIZED VIEW test1
+"Materialized View"       "Create Materialized View"
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
+materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"default\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
 # Materialized view can be built on a not-materialized view.
 > CREATE MATERIALIZED VIEW test2 AS
@@ -145,9 +144,15 @@ a  b
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-# Can create materialized view from unmaterialized view.
-> CREATE MATERIALIZED VIEW test5 AS
+# Can create indexed view from unmaterialized view.
+> CREATE VIEW test5 AS
   SELECT b, max(a) AS c FROM data_view GROUP BY b
+> CREATE DEFAULT INDEX ON test5
+
+$ set-regex match=(\s\(u\d+\)|\n) replacement=
+
+> EXPLAIN SELECT * FROM test5
+"%0 =| Get materialize.public.test5"
 
 > SELECT * FROM test5
 b  c
@@ -168,10 +173,8 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 # unmaterialize the view.
 > DROP INDEX test5_primary_idx
 
-> SHOW FULL VIEWS LIKE 'test5'
-name        type     materialized
----------------------------------
-test5       user     true
+> EXPLAIN SELECT * FROM test5
+"%0 =| Get materialize.public.test5"
 
 > SELECT * from test5
 b  c
@@ -192,11 +195,6 @@ b  c
 ------
 1  3
 2  1
-
-> SHOW FULL VIEWS LIKE 'test5'
-name        type     materialized
----------------------------------
-test5       user     false
 
 # Test that materialized views can be even if it requires multiple layers of
 # recursing through the AST to find a source.

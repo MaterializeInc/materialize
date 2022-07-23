@@ -1,6 +1,6 @@
 # Introduction
 
-Zippy is meant as a general longevity/stress testing framework that will cause data to be ingested from topics or tables, be processed by materialized or recorded views and validated for correctness. All of this may happen in the face of process restarts and other events in the environment.
+Zippy is meant as a general longevity/stress testing framework that will cause data to be ingested from topics or tables, be processed by materialized views and validated for correctness. All of this may happen in the face of process restarts and other events in the environment.
 
 The framework pseudo-randomly decides what data will be ingested, what database objects will be created and what events will happen.
 

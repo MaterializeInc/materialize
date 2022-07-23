@@ -37,21 +37,21 @@ SHOW ROLES
 ----
 SHOW ROLES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Role, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Role, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW CLUSTERS
 ----
 SHOW CLUSTERS
 =>
-ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW USERS
 ----
 SHOW ROLES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Role, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Role, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW SCHEMAS
@@ -72,126 +72,126 @@ SHOW SOURCES
 ----
 SHOW SOURCES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW SOURCES FROM foo.bar
 ----
 SHOW SOURCES FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW VIEWS
 ----
 SHOW VIEWS
 =>
-ShowObjects(ShowObjectsStatement { object_type: View, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: View, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW VIEWS FROM foo.bar
 ----
 SHOW VIEWS FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
-SHOW RECORDED VIEWS
+SHOW MATERIALIZED VIEWS
 ----
-SHOW RECORDED VIEWS
+SHOW MATERIALIZED VIEWS
 =>
-ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
-SHOW RECORDED VIEWS FROM foo.bar
+SHOW MATERIALIZED VIEWS FROM foo.bar
 ----
-SHOW RECORDED VIEWS FROM foo.bar
+SHOW MATERIALIZED VIEWS FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
-SHOW RECORDED VIEWS FROM foo.bar IN CLUSTER baz
+SHOW MATERIALIZED VIEWS FROM foo.bar IN CLUSTER baz
 ----
-SHOW RECORDED VIEWS FROM foo.bar IN CLUSTER baz
+SHOW MATERIALIZED VIEWS FROM foo.bar IN CLUSTER baz
 =>
-ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
 
 parse-statement
-SHOW RECORDED VIEWS IN CLUSTER baz
+SHOW MATERIALIZED VIEWS IN CLUSTER baz
 ----
-SHOW RECORDED VIEWS IN CLUSTER baz
+SHOW MATERIALIZED VIEWS IN CLUSTER baz
 =>
-ShowObjects(ShowObjectsStatement { object_type: RecordedView, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: MaterializedView, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
 
 parse-statement
 SHOW TABLES
 ----
 SHOW TABLES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW TABLES FROM foo.bar
 ----
 SHOW TABLES FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: Table, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Table, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW SINKS
 ----
 SHOW SINKS
 =>
-ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW SINKS FROM foo.bar
 ----
 SHOW SINKS FROM foo.bar
 =>
-ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 SHOW SINKS FROM foo.bar IN CLUSTER baz
 ----
 SHOW SINKS FROM foo.bar IN CLUSTER baz
 =>
-ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
 
 parse-statement
 SHOW SINKS IN CLUSTER baz
 ----
 SHOW SINKS IN CLUSTER baz
 =>
-ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
 
 parse-statement
 SHOW TABLES LIKE '%foo%'
 ----
 SHOW TABLES LIKE '%foo%'
 =>
-ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: Some(Like("%foo%")) })
+ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, extended: false, full: false, filter: Some(Like("%foo%")) })
 
 parse-statement
 SHOW FULL VIEWS
 ----
 SHOW FULL VIEWS
 =>
-ShowObjects(ShowObjectsStatement { object_type: View, from: None, in_cluster: None, extended: false, full: true, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: View, from: None, in_cluster: None, extended: false, full: true, filter: None })
 
 parse-statement
 SHOW SOURCES
 ----
 SHOW SOURCES
 =>
-ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Source, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
-SHOW MATERIALIZED VIEWS FROM foo LIKE '%foo%'
+SHOW VIEWS FROM foo LIKE '%foo%'
 ----
-SHOW MATERIALIZED VIEWS FROM foo LIKE '%foo%'
+SHOW VIEWS FROM foo LIKE '%foo%'
 =>
-ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo")])), in_cluster: None, extended: false, full: false, materialized: true, filter: Some(Like("%foo%")) })
+ShowObjects(ShowObjectsStatement { object_type: View, from: Some(UnresolvedSchemaName([Ident("foo")])), in_cluster: None, extended: false, full: false, filter: Some(Like("%foo%")) })
 
 parse-statement
 SHOW INDEXES FROM foo
@@ -250,11 +250,11 @@ SHOW CREATE VIEW foo
 ShowCreateView(ShowCreateViewStatement { view_name: Name(UnresolvedObjectName([Ident("foo")])) })
 
 parse-statement
-SHOW CREATE RECORDED VIEW foo
+SHOW CREATE MATERIALIZED VIEW foo
 ----
-SHOW CREATE RECORDED VIEW foo
+SHOW CREATE MATERIALIZED VIEW foo
 =>
-ShowCreateRecordedView(ShowCreateRecordedViewStatement { recorded_view_name: Name(UnresolvedObjectName([Ident("foo")])) })
+ShowCreateMaterializedView(ShowCreateMaterializedViewStatement { materialized_view_name: Name(UnresolvedObjectName([Ident("foo")])) })
 
 parse-statement
 SHOW CREATE SINK foo
@@ -352,7 +352,7 @@ SHOW CLUSTERS
 ----
 SHOW CLUSTERS
 =>
-ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 # TODO(justin): "all" here should be its own token so that it doesn't get
 # downcased.

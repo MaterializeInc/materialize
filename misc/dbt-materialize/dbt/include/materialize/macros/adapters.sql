@@ -38,7 +38,11 @@
 {% macro materialize__rename_relation(from_relation, to_relation) -%}
   {% set target_name = adapter.quote_as_configured(to_relation.identifier, 'identifier') %}
   {% call statement('rename_relation') -%}
-    alter view {{ from_relation }} rename to {{ target_name }}
+    {% if relation.type == 'view' %}
+      alter view {{ from_relation }} rename to {{ target_name }}
+    {% else %}
+      alter materialized view {{ from_relation }} rename to {{ target_name }}
+    {% endif %}
   {%- endcall %}
 {% endmacro %}
 
@@ -62,7 +66,11 @@
 
 {% macro materialize__drop_relation(relation) -%}
   {% call statement('drop_relation') -%}
-    drop view if exists {{ relation }} cascade
+    {% if relation.type == 'view' %}
+      drop view if exists {{ relation }} cascade
+    {% else %}
+      drop materialized view if exists {{ relation }} cascade
+    {% endif %}
   {%- endcall %}
 {% endmacro %}
 

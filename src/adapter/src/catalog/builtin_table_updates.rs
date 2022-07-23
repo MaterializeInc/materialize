@@ -28,11 +28,11 @@ use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_RECORDED_VIEWS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS,
-    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS,
+    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, RecordedView, Sink,
+    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
     SinkConnection, SinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::coord::ReplicaMetadata;
@@ -202,8 +202,8 @@ impl CatalogState {
                 self.pack_source_update(id, oid, schema_id, name, source.source_desc.name(), diff)
             }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
-            CatalogItem::RecordedView(rview) => {
-                self.pack_recorded_view_update(id, oid, schema_id, name, rview, diff)
+            CatalogItem::MaterializedView(mview) => {
+                self.pack_materialized_view_update(id, oid, schema_id, name, mview, diff)
             }
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
             CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
@@ -380,30 +380,30 @@ impl CatalogState {
         }]
     }
 
-    fn pack_recorded_view_update(
+    fn pack_materialized_view_update(
         &self,
         id: GlobalId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
-        rview: &RecordedView,
+        mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let create_sql = mz_sql::parse::parse(&rview.create_sql)
+        let create_sql = mz_sql::parse::parse(&mview.create_sql)
             .expect("create_sql cannot be invalid")
             .into_element();
         let query = match create_sql {
-            Statement::CreateRecordedView(stmt) => stmt.query,
+            Statement::CreateMaterializedView(stmt) => stmt.query,
             _ => unreachable!(),
         };
 
         let mut query_string = query.to_ast_string_stable();
-        // PostgreSQL appends a semicolon in `pg_views.definition`, we
+        // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
         // do the same for compatibility's sake.
         query_string.push(';');
 
         vec![BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_RECORDED_VIEWS),
+            id: self.resolve_builtin_table(&MZ_MATERIALIZED_VIEWS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
@@ -411,7 +411,7 @@ impl CatalogState {
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(rview.compute_instance as i64),
+                Datum::Int64(mview.compute_instance as i64),
                 Datum::String(&query_string),
             ]),
             diff,

@@ -1552,7 +1552,7 @@ fn create_postgres_source_with_table(
             PUBLICATION '{source_name}';"
     ))?;
     mz_client.batch_execute(&format!(
-        "CREATE MATERIALIZED VIEWS FROM SOURCE {source_name} ({table_name});"
+        "CREATE VIEWS FROM SOURCE {source_name} ({table_name});"
     ))?;
 
     let table_name = table_name.to_string();

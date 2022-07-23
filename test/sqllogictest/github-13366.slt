@@ -12,7 +12,7 @@
 statement ok
 CREATE CLUSTER c REPLICAS (r (SIZE '1'))
 
-statement error cannot drop cluster with active indexes, sinks, recorded views, or replicas
+statement error cannot drop cluster with active indexes, sinks, materialized views, or replicas
 DROP CLUSTER c
 
 statement ok
@@ -24,7 +24,7 @@ CREATE TABLE t (a int)
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER c ON t
 
-statement error cannot drop cluster with active indexes, sinks, recorded views, or replicas
+statement error cannot drop cluster with active indexes, sinks, materialized views, or replicas
 DROP CLUSTER c
 
 statement ok

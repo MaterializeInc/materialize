@@ -501,7 +501,7 @@ pub fn construct<A: Allocate>(
 
             if let Some((id, meta)) = config.sink_logs.get(&variant) {
                 tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
-                persist_sink(*id, meta, compute_state, &collection);
+                persist_sink(*id, meta, compute_state, collection);
             }
         }
         result

@@ -25,7 +25,7 @@ use mz_repr::{RelationDesc, ScalarType};
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateRecordedViewStatement, CreateViewStatement, DeleteStatement, ExplainStageNew,
+    CreateMaterializedViewStatement, CreateViewStatement, DeleteStatement, ExplainStageNew,
     ExplainStageOld, ExplainStatement, ExplainStatementNew, ExplainStatementOld, Explainee, Ident,
     InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
     TailStatement, UpdateStatement, ViewDefinition,
@@ -284,9 +284,11 @@ pub fn plan_explain_old(
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
             let item_type = view.item_type();
-            // Return a more helpful error on `EXPLAIN [...] VIEW <recorded-view>`.
-            if item_type == CatalogItemType::RecordedView {
-                return Err(PlanError::ExplainViewOnRecordedView(name.full_name_str()));
+            // Return a more helpful error on `EXPLAIN [...] VIEW <materialized-view>`.
+            if item_type == CatalogItemType::MaterializedView {
+                return Err(PlanError::ExplainViewOnMaterializedView(
+                    name.full_name_str(),
+                ));
             } else if item_type != CatalogItemType::View {
                 sql_bail!(
                     "Expected {} to be a view, not a {}",
@@ -306,21 +308,26 @@ pub fn plan_explain_old(
             let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             names::resolve(qcx.scx.catalog, query)?.0
         }
-        Explainee::RecordedView(name) => {
-            let rview = scx.get_item_by_resolved_name(&name)?;
-            let item_type = rview.item_type();
-            if item_type != CatalogItemType::RecordedView {
+        Explainee::MaterializedView(name) => {
+            let mview = scx.get_item_by_resolved_name(&name)?;
+            let item_type = mview.item_type();
+            if item_type != CatalogItemType::MaterializedView {
                 sql_bail!(
-                    "Expected {} to be a recorded view, not a {}",
+                    "Expected {} to be a materialized view, not a {}",
                     name,
                     item_type
                 );
             }
-            let parsed = crate::parse::parse(rview.create_sql())
-                .expect("Sql for existing recorded view should be valid sql");
+            let parsed = crate::parse::parse(mview.create_sql())
+                .expect("Sql for existing materialized view should be valid sql");
             let query = match parsed.into_last() {
-                Statement::CreateRecordedView(CreateRecordedViewStatement { query, .. }) => query,
-                _ => panic!("Sql for existing recorded view should parse as a recorded view"),
+                Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+                    query,
+                    ..
+                }) => query,
+                _ => {
+                    panic!("Sql for existing materialized view should parse as a materialized view")
+                }
             };
             let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             names::resolve(qcx.scx.catalog, query)?.0
@@ -367,9 +374,11 @@ pub fn plan_explain_new(
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
             let item_type = view.item_type();
-            // Return a more helpful error on `EXPLAIN [...] VIEW <recorded-view>`.
-            if item_type == CatalogItemType::RecordedView {
-                return Err(PlanError::ExplainViewOnRecordedView(name.full_name_str()));
+            // Return a more helpful error on `EXPLAIN [...] VIEW <materialized-view>`.
+            if item_type == CatalogItemType::MaterializedView {
+                return Err(PlanError::ExplainViewOnMaterializedView(
+                    name.full_name_str(),
+                ));
             } else if item_type != CatalogItemType::View {
                 sql_bail!(
                     "Expected {} to be a view, not a {}",
@@ -389,21 +398,26 @@ pub fn plan_explain_new(
             let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             names::resolve(qcx.scx.catalog, query)?.0
         }
-        Explainee::RecordedView(name) => {
-            let rview = scx.get_item_by_resolved_name(&name)?;
-            let item_type = rview.item_type();
-            if item_type != CatalogItemType::RecordedView {
+        Explainee::MaterializedView(name) => {
+            let mview = scx.get_item_by_resolved_name(&name)?;
+            let item_type = mview.item_type();
+            if item_type != CatalogItemType::MaterializedView {
                 sql_bail!(
-                    "Expected {} to be a recorded view, not a {}",
+                    "Expected {} to be a materialized view, not a {}",
                     name,
                     item_type
                 );
             }
-            let parsed = crate::parse::parse(rview.create_sql())
-                .expect("Sql for existing recorded view should be valid sql");
+            let parsed = crate::parse::parse(mview.create_sql())
+                .expect("Sql for existing materialized view should be valid sql");
             let query = match parsed.into_last() {
-                Statement::CreateRecordedView(CreateRecordedViewStatement { query, .. }) => query,
-                _ => panic!("Sql for existing recorded view should parse as a recorded view"),
+                Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+                    query,
+                    ..
+                }) => query,
+                _ => {
+                    panic!("Sql for existing materialized view should parse as a materialized view")
+                }
             };
             let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             names::resolve(qcx.scx.catalog, query)?.0
@@ -526,7 +540,7 @@ pub fn plan_tail(
                 CatalogItemType::Table
                 | CatalogItemType::Source
                 | CatalogItemType::View
-                | CatalogItemType::RecordedView => TailFrom::Id(entry.id()),
+                | CatalogItemType::MaterializedView => TailFrom::Id(entry.id()),
                 CatalogItemType::Func
                 | CatalogItemType::Index
                 | CatalogItemType::Sink

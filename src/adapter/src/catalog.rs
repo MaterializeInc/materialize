@@ -54,8 +54,9 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig, CreateConnectionPlan,
-    CreateIndexPlan, CreateRecordedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
+    StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
@@ -189,7 +190,7 @@ impl CatalogState {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
-            | CatalogItem::RecordedView(_)
+            | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
                 for id in item.uses() {
                     self.log_dependencies_inner(*id, out);
@@ -209,7 +210,7 @@ impl CatalogState {
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         match self.get_entry(&id).item() {
             CatalogItem::Table(_) => true,
-            item @ (CatalogItem::View(_) | CatalogItem::RecordedView(_)) => {
+            item @ (CatalogItem::View(_) | CatalogItem::MaterializedView(_)) => {
                 item.uses().iter().any(|id| self.uses_tables(*id))
             }
             CatalogItem::Index(idx) => self.uses_tables(idx.on),
@@ -362,7 +363,7 @@ impl CatalogState {
             | CatalogItem::Sink(Sink {
                 compute_instance, ..
             })
-            | CatalogItem::RecordedView(RecordedView {
+            | CatalogItem::MaterializedView(MaterializedView {
                 compute_instance, ..
             }) = item
             {
@@ -964,7 +965,7 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub logging: Option<DataflowLoggingConfig>,
-    /// Indexes, sinks, and recorded views exported by this compute instance.
+    /// Indexes, sinks, and materialized views exported by this compute instance.
     /// Does not include introspection source indexes.
     pub exports: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
@@ -992,7 +993,7 @@ pub enum CatalogItem {
     Source(Source),
     Log(&'static BuiltinLog),
     View(View),
-    RecordedView(RecordedView),
+    MaterializedView(MaterializedView),
     Sink(Sink),
     Index(Index),
     Type(Type),
@@ -1057,7 +1058,7 @@ pub struct View {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RecordedView {
+pub struct MaterializedView {
     pub create_sql: String,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
@@ -1110,7 +1111,7 @@ impl CatalogItem {
             CatalogItem::Log(_) => mz_sql::catalog::CatalogItemType::Source,
             CatalogItem::Sink(_) => mz_sql::catalog::CatalogItemType::Sink,
             CatalogItem::View(_) => mz_sql::catalog::CatalogItemType::View,
-            CatalogItem::RecordedView(_) => mz_sql::catalog::CatalogItemType::RecordedView,
+            CatalogItem::MaterializedView(_) => mz_sql::catalog::CatalogItemType::MaterializedView,
             CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
             CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
@@ -1126,7 +1127,7 @@ impl CatalogItem {
             CatalogItem::Log(log) => Ok(Cow::Owned(log.variant.desc())),
             CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
             CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
-            CatalogItem::RecordedView(rview) => Ok(Cow::Borrowed(&rview.desc)),
+            CatalogItem::MaterializedView(mview) => Ok(Cow::Borrowed(&mview.desc)),
             CatalogItem::StorageCollection(coll) => Ok(Cow::Borrowed(&coll.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
@@ -1169,7 +1170,7 @@ impl CatalogItem {
             CatalogItem::Table(table) => &table.depends_on,
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
-            CatalogItem::RecordedView(rview) => &rview.depends_on,
+            CatalogItem::MaterializedView(mview) => &mview.depends_on,
             CatalogItem::Secret(_) => &[],
             CatalogItem::Connection(connection) => &connection.depends_on,
             CatalogItem::StorageCollection(_) => &[],
@@ -1187,7 +1188,7 @@ impl CatalogItem {
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
             | CatalogItem::View(_)
-            | CatalogItem::RecordedView(_)
+            | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
             | CatalogItem::StorageCollection(_) => false,
@@ -1208,7 +1209,7 @@ impl CatalogItem {
             CatalogItem::Log(_)
             | CatalogItem::Source(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::RecordedView(_)
+            | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
@@ -1263,10 +1264,10 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::View(i))
             }
-            CatalogItem::RecordedView(i) => {
+            CatalogItem::MaterializedView(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::RecordedView(i))
+                Ok(CatalogItem::MaterializedView(i))
             }
             CatalogItem::Index(i) => {
                 let mut i = i.clone();
@@ -2480,7 +2481,7 @@ impl<S: Append> Catalog<S> {
             && matches!(
                 item.typ(),
                 SqlCatalogItemType::View
-                    | SqlCatalogItemType::RecordedView
+                    | SqlCatalogItemType::MaterializedView
                     | SqlCatalogItemType::Source
                     | SqlCatalogItemType::Sink
                     | SqlCatalogItemType::Index
@@ -2663,7 +2664,7 @@ impl<S: Append> Catalog<S> {
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
                 SqlCatalogItemType::View => ObjectType::View,
-                SqlCatalogItemType::RecordedView => ObjectType::RecordedView,
+                SqlCatalogItemType::MaterializedView => ObjectType::MaterializedView,
                 SqlCatalogItemType::Source => ObjectType::Source,
                 SqlCatalogItemType::Sink => ObjectType::Sink,
                 SqlCatalogItemType::Index => ObjectType::Index,
@@ -3299,8 +3300,9 @@ impl<S: Append> Catalog<S> {
                     | CatalogItem::Sink(Sink {
                         compute_instance, ..
                     })
-                    | CatalogItem::RecordedView(RecordedView {
-                        compute_instance, ..
+                    | CatalogItem::MaterializedView(MaterializedView {
+                        compute_instance,
+                        ..
                     }) = metadata.item
                     {
                         assert!(
@@ -3389,8 +3391,8 @@ impl<S: Append> Catalog<S> {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
             },
-            CatalogItem::RecordedView(rview) => SerializedCatalogItem::V1 {
-                create_sql: rview.create_sql.clone(),
+            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
+                create_sql: mview.create_sql.clone(),
                 eval_env: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
@@ -3473,16 +3475,18 @@ impl<S: Append> Catalog<S> {
                     depends_on,
                 })
             }
-            Plan::CreateRecordedView(CreateRecordedViewPlan { recorded_view, .. }) => {
+            Plan::CreateMaterializedView(CreateMaterializedViewPlan {
+                materialized_view, ..
+            }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
-                let optimized_expr = optimizer.optimize(recorded_view.expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), recorded_view.column_names);
-                CatalogItem::RecordedView(RecordedView {
-                    create_sql: recorded_view.create_sql,
+                let optimized_expr = optimizer.optimize(materialized_view.expr)?;
+                let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
+                CatalogItem::MaterializedView(MaterializedView {
+                    create_sql: materialized_view.create_sql,
                     optimized_expr,
                     desc,
                     depends_on,
-                    compute_instance: recorded_view.compute_instance,
+                    compute_instance: materialized_view.compute_instance,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
@@ -4180,7 +4184,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Source(Source { create_sql, .. }) => create_sql,
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
             CatalogItem::View(View { create_sql, .. }) => create_sql,
-            CatalogItem::RecordedView(RecordedView { create_sql, .. }) => create_sql,
+            CatalogItem::MaterializedView(MaterializedView { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,

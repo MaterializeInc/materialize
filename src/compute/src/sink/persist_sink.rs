@@ -28,6 +28,7 @@ use mz_storage::types::sinks::{PersistSinkConnection, SinkDesc};
 use mz_storage::types::sources::SourceData;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
+use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 
 impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
@@ -48,7 +49,7 @@ where
 
     fn render_continuous_sink(
         &self,
-        compute_state: &mut crate::compute_state::ComputeState,
+        compute_state: &mut ComputeState,
         _sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
@@ -57,136 +58,155 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let scope = sinked_collection.scope();
+        let ok_collection = sinked_collection.map(|(key, value)| {
+            assert!(key.is_none(), "persist_source does not support keys");
+            value.expect("persist_source must have values")
+        });
 
-        let persist_clients = Arc::clone(&compute_state.persist_clients);
-        let persist_location = self.storage_metadata.persist_location.clone();
-        let shard_id = self.storage_metadata.data_shard;
-
-        let operator_name = format!("persist_sink({})", shard_id);
-        let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
-
-        // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
-        // if other workers from replicated clusters write the same data, though. In the real
-        // implementation, we would use a storage client that transparently handles writing to
-        // multiple shards. One shard would then only be written to by one worker but we get
-        // parallelism from the sharding.
-        // TODO(aljoscha): Storage must learn to keep track of collections, which consist of
-        // multiple persist shards. Then we should set it up such that each worker can write to one
-        // shard.
-        let hashed_id = sink_id.hashed();
-        let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
-
-        let mut input =
-            persist_op.new_input(&sinked_collection.inner, Exchange::new(move |_| hashed_id));
-        let mut err_input =
-            persist_op.new_input(&err_collection.inner, Exchange::new(move |_| hashed_id));
-
-        let token = Rc::new(());
-        let token_weak = Rc::downgrade(&token);
-
-        // Only the active_write_worker will ever produce data so all other workers have
-        // an empty frontier. It's necessary to insert all of these into `compute_state.
-        // sink_write_frontier` below so we properly clear out default frontiers of
-        // non-active workers.
-        let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
-            Antichain::from_elem(TimelyTimestamp::minimum())
-        } else {
-            Antichain::new()
-        }));
-
-        compute_state
-            .sink_write_frontiers
-            .insert(sink_id, Rc::clone(&shared_frontier));
-
-        // NOTE(aljoscha): It might be better to roll our own async operator that deals with
-        // handling multiple in-flight write futures, similar to how the persist operators in
-        // `operators/stream.rs` do it. That would allow us to have multiple write requests in
-        // flight concurrently.
-        persist_op.build_async(
-            scope,
-            move |_capabilities, frontiers, scheduler| async move {
-                let mut buffer = Vec::new();
-                let mut err_buffer = Vec::new();
-                let mut stash: HashMap<_, Vec<_>> = HashMap::new();
-
-                // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-                let mut write = persist_clients
-                    .lock()
-                    .await
-                    .open(persist_location)
-                    .await
-                    .expect("could not open persist client")
-                    .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
-                    .await
-                    .expect("could not open persist shard");
-
-                while scheduler.notified().await {
-                    let mut input_frontier = Antichain::new();
-                    for frontier in frontiers.borrow().clone() {
-                        input_frontier.extend(frontier);
-                    }
-
-                    if !active_write_worker
-                        || token_weak.upgrade().is_none()
-                        || shared_frontier.borrow().is_empty()
-                    {
-                        return;
-                    }
-
-                    input.for_each(|_cap, data| {
-                        data.swap(&mut buffer);
-
-                        for ((key, value), ts, diff) in buffer.drain(..) {
-                            assert!(key.is_none(), "persist_source does not support keys");
-                            let row = value.expect("persist_source must have values");
-                            stash.entry(ts).or_default().push((
-                                (SourceData(Ok(row)), ()),
-                                ts,
-                                diff,
-                            ));
-                        }
-                    });
-
-                    err_input.for_each(|_cap, data| {
-                        data.swap(&mut err_buffer);
-
-                        for (error, ts, diff) in err_buffer.drain(..) {
-                            stash.entry(ts).or_default().push((
-                                (SourceData(Err(error)), ()),
-                                ts,
-                                diff,
-                            ));
-                        }
-                    });
-
-                    let mut updates = stash
-                        .iter()
-                        .filter(|(ts, _updates)| !input_frontier.less_equal(ts))
-                        .flat_map(|(_ts, updates)| updates.iter());
-
-                    if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
-                        // We always append, even in case we don't have any updates, because appending
-                        // also advances the frontier.
-                        let lower = shared_frontier.borrow().clone();
-                        // TODO(aljoscha): Figure out how errors from this should be reported.
-                        write
-                            .append(updates, lower, input_frontier.clone())
-                            .await
-                            .expect("cannot append updates")
-                            .expect("invalid/outdated upper");
-
-                        *shared_frontier.borrow_mut() = input_frontier.clone();
-                    } else {
-                        // We cannot have updates without the frontier advancing.
-                        assert!(updates.next().is_none());
-                    }
-
-                    stash.retain(|ts, _updates| input_frontier.less_equal(ts));
-                }
-            },
-        );
-
-        Some(token)
+        persist_sink(
+            sink_id,
+            &self.storage_metadata,
+            ok_collection,
+            err_collection,
+            compute_state,
+        )
     }
+}
+
+pub(crate) fn persist_sink<G>(
+    sink_id: GlobalId,
+    target: &CollectionMetadata,
+    ok_collection: Collection<G, Row, Diff>,
+    err_collection: Collection<G, DataflowError, Diff>,
+    compute_state: &mut ComputeState,
+) -> Option<Rc<dyn Any>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let scope = ok_collection.scope();
+
+    let persist_clients = Arc::clone(&compute_state.persist_clients);
+    let persist_location = target.persist_location.clone();
+    let shard_id = target.data_shard;
+
+    let operator_name = format!("persist_sink({})", shard_id);
+    let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
+
+    // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
+    // if other workers from replicated clusters write the same data, though. In the real
+    // implementation, we would use a storage client that transparently handles writing to
+    // multiple shards. One shard would then only be written to by one worker but we get
+    // parallelism from the sharding.
+    // TODO(aljoscha): Storage must learn to keep track of collections, which consist of
+    // multiple persist shards. Then we should set it up such that each worker can write to one
+    // shard.
+    let hashed_id = sink_id.hashed();
+    let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+
+    let mut input = persist_op.new_input(&ok_collection.inner, Exchange::new(move |_| hashed_id));
+    let mut err_input =
+        persist_op.new_input(&err_collection.inner, Exchange::new(move |_| hashed_id));
+
+    let token = Rc::new(());
+    let token_weak = Rc::downgrade(&token);
+
+    // Only the active_write_worker will ever produce data so all other workers have
+    // an empty frontier. It's necessary to insert all of these into `compute_state.
+    // sink_write_frontier` below so we properly clear out default frontiers of
+    // non-active workers.
+    let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
+        Antichain::from_elem(TimelyTimestamp::minimum())
+    } else {
+        Antichain::new()
+    }));
+
+    compute_state
+        .sink_write_frontiers
+        .insert(sink_id, Rc::clone(&shared_frontier));
+
+    // NOTE(aljoscha): It might be better to roll our own async operator that deals with
+    // handling multiple in-flight write futures, similar to how the persist operators in
+    // `operators/stream.rs` do it. That would allow us to have multiple write requests in
+    // flight concurrently.
+    persist_op.build_async(
+        scope,
+        move |_capabilities, frontiers, scheduler| async move {
+            let mut buffer = Vec::new();
+            let mut err_buffer = Vec::new();
+            let mut stash: HashMap<_, Vec<_>> = HashMap::new();
+
+            // TODO(aljoscha): We need to figure out what to do with error results from these calls.
+            let mut write = persist_clients
+                .lock()
+                .await
+                .open(persist_location)
+                .await
+                .expect("could not open persist client")
+                .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
+                .await
+                .expect("could not open persist shard");
+
+            while scheduler.notified().await {
+                let mut input_frontier = Antichain::new();
+                for frontier in frontiers.borrow().clone() {
+                    input_frontier.extend(frontier);
+                }
+
+                if !active_write_worker
+                    || token_weak.upgrade().is_none()
+                    || shared_frontier.borrow().is_empty()
+                {
+                    return;
+                }
+
+                input.for_each(|_cap, data| {
+                    data.swap(&mut buffer);
+
+                    for (row, ts, diff) in buffer.drain(..) {
+                        stash
+                            .entry(ts)
+                            .or_default()
+                            .push(((SourceData(Ok(row)), ()), ts, diff));
+                    }
+                });
+
+                err_input.for_each(|_cap, data| {
+                    data.swap(&mut err_buffer);
+
+                    for (error, ts, diff) in err_buffer.drain(..) {
+                        stash
+                            .entry(ts)
+                            .or_default()
+                            .push(((SourceData(Err(error)), ()), ts, diff));
+                    }
+                });
+
+                let mut updates = stash
+                    .iter()
+                    .filter(|(ts, _updates)| !input_frontier.less_equal(ts))
+                    .flat_map(|(_ts, updates)| updates.iter());
+
+                if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
+                    // We always append, even in case we don't have any updates, because appending
+                    // also advances the frontier.
+                    let lower = shared_frontier.borrow().clone();
+                    // TODO(aljoscha): Figure out how errors from this should be reported.
+                    write
+                        .append(updates, lower, input_frontier.clone())
+                        .await
+                        .expect("cannot append updates")
+                        .expect("invalid/outdated upper");
+
+                    *shared_frontier.borrow_mut() = input_frontier.clone();
+                } else {
+                    // We cannot have updates without the frontier advancing.
+                    assert!(updates.next().is_none());
+                }
+
+                stash.retain(|ts, _updates| input_frontier.less_equal(ts));
+            }
+        },
+    );
+
+    Some(token)
 }

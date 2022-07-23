@@ -23,7 +23,7 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateRecordedViewStatement,
+    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
     IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
@@ -224,7 +224,7 @@ pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, P
 /// Normalizes a `CREATE` statement.
 ///
 /// The resulting statement will not depend upon any session parameters, nor
-/// specify any non-default options (like `MATERIALIZED`, `IF NOT EXISTS`, etc).
+/// specify any non-default options (like `TEMPORARY`, `IF NOT EXISTS`, etc).
 ///
 /// The goal is to construct a backwards-compatible description of the object.
 /// SQL is the most stable part of Materialize, so SQL is used to describe the
@@ -404,7 +404,6 @@ pub fn create_statement(
 
         Statement::CreateView(CreateViewStatement {
             temporary,
-            materialized,
             if_exists,
             definition:
                 ViewDefinition {
@@ -425,11 +424,10 @@ pub fn create_statement(
                     return Err(err);
                 }
             }
-            *materialized = false;
             *if_exists = IfExistsBehavior::Error;
         }
 
-        Statement::CreateRecordedView(CreateRecordedViewStatement {
+        Statement::CreateMaterializedView(CreateMaterializedViewStatement {
             if_exists,
             name,
             columns: _,
@@ -717,10 +715,8 @@ mod tests {
     fn normalized_create() -> Result<(), Box<dyn Error>> {
         let scx = &mut StatementContext::new(None, &DummyCatalog);
 
-        let parsed = mz_sql_parser::parser::parse_statements(
-            "create materialized view foo as select 1 as bar",
-        )?
-        .into_element();
+        let parsed = mz_sql_parser::parser::parse_statements("create view foo as select 1 as bar")?
+            .into_element();
 
         let (stmt, _) = names::resolve(scx.catalog, parsed)?;
 
