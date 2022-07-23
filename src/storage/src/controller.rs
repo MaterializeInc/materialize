@@ -65,7 +65,7 @@ mod rehydration;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.controller.rs"));
 
-static METADATA_COLLECTION: TypedCollection<GlobalId, CollectionMetadata> =
+static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
 
 /// Describes a request to create a source.
@@ -345,6 +345,53 @@ impl Codec for CollectionMetadata {
     }
 }
 
+/// The subset of [`CollectionMetadata`] that must be durable stored.
+#[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
+pub struct DurableCollectionMetadata {
+    // See the comments on [`CollectionMetadata`].
+    pub remap_shard: ShardId,
+    pub data_shard: ShardId,
+}
+
+impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
+    fn into_proto(&self) -> ProtoDurableCollectionMetadata {
+        ProtoDurableCollectionMetadata {
+            remap_shard: self.remap_shard.to_string(),
+            data_shard: self.data_shard.to_string(),
+        }
+    }
+
+    fn from_proto(value: ProtoDurableCollectionMetadata) -> Result<Self, TryFromProtoError> {
+        Ok(DurableCollectionMetadata {
+            remap_shard: value
+                .remap_shard
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?,
+            data_shard: value
+                .data_shard
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?,
+        })
+    }
+}
+
+impl Codec for DurableCollectionMetadata {
+    fn codec_name() -> String {
+        "protobuf[DurableCollectionMetadata]".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        self.into_proto()
+            .encode(buf)
+            .expect("no required fields means no initialization errors");
+    }
+
+    fn decode(buf: &[u8]) -> Result<Self, String> {
+        let proto = ProtoDurableCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
+        proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<
@@ -552,26 +599,34 @@ where
 
         // Install collection state for each bound description.
         for (id, description) in collections {
-            let mut metadata = CollectionMetadata {
-                persist_location: self.persist_location.clone(),
-                data_shard: ShardId::new(),
-                remap_shard: ShardId::new(),
-                status_shard: ShardId::new(),
-            };
+            let durable_metadata = METADATA_COLLECTION
+                .insert_without_overwrite(
+                    &mut self.state.stash,
+                    &id,
+                    DurableCollectionMetadata {
+                        remap_shard: ShardId::new(),
+                        data_shard: ShardId::new(),
+                    },
+                )
+                .await?;
 
-            // Use the status shard if passed in
-            if let Some(status_collection_id) = description.status_collection_id {
-                if let Some(status_metadata) = METADATA_COLLECTION
+            let status_shard = if let Some(status_collection_id) = description.status_collection_id
+            {
+                METADATA_COLLECTION
                     .peek_key_one(&mut self.state.stash, &status_collection_id)
                     .await?
-                {
-                    metadata.status_shard = status_metadata.data_shard;
-                }
-            }
+                    .ok_or_else(|| StorageError::IdentifierMissing(status_collection_id))?
+                    .data_shard
+            } else {
+                ShardId::new()
+            };
 
-            let metadata = METADATA_COLLECTION
-                .insert_without_overwrite(&mut self.state.stash, &id, metadata)
-                .await?;
+            let metadata = CollectionMetadata {
+                persist_location: self.persist_location.clone(),
+                remap_shard: durable_metadata.remap_shard,
+                data_shard: durable_metadata.data_shard,
+                status_shard,
+            };
 
             let (write, mut read) = self
                 .persist_client
