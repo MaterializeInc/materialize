@@ -615,7 +615,7 @@ where
                 METADATA_COLLECTION
                     .peek_key_one(&mut self.state.stash, &status_collection_id)
                     .await?
-                    .ok_or_else(|| StorageError::IdentifierMissing(status_collection_id))?
+                    .ok_or(StorageError::IdentifierMissing(status_collection_id))?
                     .data_shard
             } else {
                 ShardId::new()
