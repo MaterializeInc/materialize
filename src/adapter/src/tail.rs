@@ -15,7 +15,7 @@ use mz_compute_client::response::{TailBatch, TailResponse};
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row};
 
-use crate::coord::PeekResponseUnary;
+use crate::coord::peek::PeekResponseUnary;
 
 /// A description of a pending tail from coord's perspective
 pub(crate) struct PendingTail {

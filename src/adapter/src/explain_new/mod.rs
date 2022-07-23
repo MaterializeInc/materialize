@@ -25,7 +25,7 @@ use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer};
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
-use crate::coord::fast_path_peek;
+use crate::coord::peek;
 
 pub(crate) mod common;
 pub(crate) mod hir;
@@ -67,7 +67,7 @@ pub(crate) struct ExplainContext<'a> {
     pub(crate) humanizer: &'a dyn ExprHumanizer,
     pub(crate) used_indexes: UsedIndexes,
     pub(crate) finishing: Option<RowSetFinishing>,
-    pub(crate) fast_path_plan: Option<fast_path_peek::Plan>,
+    pub(crate) fast_path_plan: Option<peek::Plan>,
 }
 
 #[derive(Clone)]
