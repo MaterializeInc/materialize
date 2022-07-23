@@ -142,42 +142,6 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
     }
 }
 
-fn label_selector_to_k8s(
-    MzLabelSelector { label_name, logic }: MzLabelSelector,
-    prefix: &str,
-) -> Result<LabelSelectorRequirement, anyhow::Error> {
-    let (operator, values) = match logic {
-        LabelSelectionLogic::Eq { value } => Ok(("In", vec![value])),
-        LabelSelectionLogic::NotEq { value } => Ok(("NotIn", vec![value])),
-        LabelSelectionLogic::Exists => Ok(("Exists", vec![])),
-        LabelSelectionLogic::NotExists => Ok(("DoesNotExist", vec![])),
-        LabelSelectionLogic::InSet { values } => {
-            if values.is_empty() {
-                Err(anyhow!(
-                    "Invalid selector logic for {label_name}: empty `in` set"
-                ))
-            } else {
-                Ok(("In", values))
-            }
-        }
-        LabelSelectionLogic::NotInSet { values } => {
-            if values.is_empty() {
-                Err(anyhow!(
-                    "Invalid selector logic for {label_name}: empty `notin` set"
-                ))
-            } else {
-                Ok(("NotIn", values))
-            }
-        }
-    }?;
-    let lsr = LabelSelectorRequirement {
-        key: format!("{prefix}/{label_name}"),
-        operator: operator.to_string(),
-        values: Some(values),
-    };
-    Ok(lsr)
-}
-
 impl NamespacedKubernetesOrchestrator {
     /// Return a `ListParams` instance that limits results to the namespace
     /// assigned to this orchestrator.
@@ -187,6 +151,46 @@ impl NamespacedKubernetesOrchestrator {
             self.namespace
         );
         ListParams::default().labels(&ns_selector)
+    }
+    /// Convert a higher-level label key to the actual one we
+    /// will give to Kubernetes
+    fn make_label_key(&self, key: &str) -> String {
+        format!("{}.environmentd.materialize.cloud/{}", self.namespace, key)
+    }
+    fn label_selector_to_k8s(
+        &self,
+        MzLabelSelector { label_name, logic }: MzLabelSelector,
+    ) -> Result<LabelSelectorRequirement, anyhow::Error> {
+        let (operator, values) = match logic {
+            LabelSelectionLogic::Eq { value } => Ok(("In", vec![value])),
+            LabelSelectionLogic::NotEq { value } => Ok(("NotIn", vec![value])),
+            LabelSelectionLogic::Exists => Ok(("Exists", vec![])),
+            LabelSelectionLogic::NotExists => Ok(("DoesNotExist", vec![])),
+            LabelSelectionLogic::InSet { values } => {
+                if values.is_empty() {
+                    Err(anyhow!(
+                        "Invalid selector logic for {label_name}: empty `in` set"
+                    ))
+                } else {
+                    Ok(("In", values))
+                }
+            }
+            LabelSelectionLogic::NotInSet { values } => {
+                if values.is_empty() {
+                    Err(anyhow!(
+                        "Invalid selector logic for {label_name}: empty `notin` set"
+                    ))
+                } else {
+                    Ok(("NotIn", values))
+                }
+            }
+        }?;
+        let lsr = LabelSelectorRequirement {
+            key: self.make_label_key(&label_name),
+            operator: operator.to_string(),
+            values: Some(values),
+        };
+        Ok(lsr)
     }
 }
 
@@ -219,10 +223,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         };
         let mut labels = match_labels.clone();
         for (key, value) in labels_in {
-            labels.insert(
-                format!("{}.environmentd.materialize.cloud/{}", self.namespace, key),
-                value,
-            );
+            labels.insert(self.make_label_key(&key), value);
         }
         for port in &ports_in {
             labels.insert(
@@ -314,7 +315,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .map(|label_selectors| -> Result<_, anyhow::Error> {
                 let label_selector_requirements = label_selectors
                     .into_iter()
-                    .map(|ls| label_selector_to_k8s(ls, &self.namespace))
+                    .map(|ls| self.label_selector_to_k8s(ls))
                     .collect::<Result<Vec<_>, _>>()?;
                 let ls = LabelSelector {
                     match_expressions: Some(label_selector_requirements),
