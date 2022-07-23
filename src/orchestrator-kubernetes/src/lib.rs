@@ -142,7 +142,6 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
     }
 }
 
-
 impl NamespacedKubernetesOrchestrator {
     /// Return a `ListParams` instance that limits results to the namespace
     /// assigned to this orchestrator.
@@ -193,7 +192,6 @@ impl NamespacedKubernetesOrchestrator {
         };
         Ok(lsr)
     }
-
 }
 
 #[async_trait]
@@ -225,10 +223,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         };
         let mut labels = match_labels.clone();
         for (key, value) in labels_in {
-            labels.insert(
-                self.make_label_key(&key),
-                value,
-            );
+            labels.insert(self.make_label_key(&key), value);
         }
         for port in &ports_in {
             labels.insert(
