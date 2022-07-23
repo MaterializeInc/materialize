@@ -1335,9 +1335,9 @@ mod persist_write_handles {
                                         .or(Err(*id))?;
 
                                     let mut change_batch = timely::progress::ChangeBatch::new();
-                                    let old_upper = old_upper.clone();
                                     change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
                                     change_batch.extend(old_upper.iter().cloned().map(|t| (t, -1)));
+                                    old_upper.clone_from(&new_upper);
 
                                     Ok::<_, GlobalId>((*id, change_batch))
                                 })
