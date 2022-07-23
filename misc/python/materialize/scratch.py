@@ -372,8 +372,8 @@ def get_instances_by_tag(k: str, v: str) -> List[InstanceTypeDef]:
 
 
 def get_old_instances() -> List[InstanceTypeDef]:
-    def is_running(i: InstanceTypeDef) -> bool:
-        return i["State"]["Name"] == "running"
+    def exists(i: InstanceTypeDef) -> bool:
+        return i["State"]["Name"] != "terminated"
 
     def is_old(i: InstanceTypeDef) -> bool:
         delete_after = instance_typedef_tags(i).get("scratch-delete-after")
@@ -386,7 +386,7 @@ def get_old_instances() -> List[InstanceTypeDef]:
         i
         for r in boto3.client("ec2").describe_instances()["Reservations"]
         for i in r["Instances"]
-        if is_running(i) and is_old(i)
+        if exists(i) and is_old(i)
     ]
 
 
