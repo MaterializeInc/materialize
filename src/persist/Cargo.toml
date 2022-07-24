@@ -42,7 +42,7 @@ openssl-sys = { version = "0.9.75", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
-serde = { version = "1.0.139", features = ["derive"] }
+serde = { version = "1.0.140", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

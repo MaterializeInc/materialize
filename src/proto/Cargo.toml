@@ -15,7 +15,7 @@ mz-ore = { path = "../ore", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 regex = "1.6.0"
-serde = { version = "1.0.139", features = ["derive"] }
+serde = { version = "1.0.140", features = ["derive"] }
 serde_json = { version = "1.0.82", features = ["arbitrary_precision"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
 url = { version = "2.2.2", features = ["serde"] }

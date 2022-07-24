@@ -14,5 +14,5 @@ datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 mz-ore = { path = "../ore" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-serde = { version = "1.0.139", features = ["derive"] }
+serde = { version = "1.0.140", features = ["derive"] }
 serde_json = "1.0.82"
