@@ -55,8 +55,8 @@ wrappers = [
 [[bans.deny]]
 name = "rustls"
 
-# once_cell is going to be added to std, and doesn't use macros
-# Unfortunately, its heavily used, so we have lots of exceptions.
+# The once_cell crate provides a replacement for the lazy_static crate that is
+# on track for inclusion in the standard library.
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
