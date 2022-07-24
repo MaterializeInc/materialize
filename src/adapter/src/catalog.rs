@@ -144,7 +144,7 @@ pub struct CatalogState {
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
-    replica_sizes: ClusterReplicaSizeMap,
+    cluster_replica_sizes: ClusterReplicaSizeMap,
     availability_zones: Vec<String>,
 }
 
@@ -1459,7 +1459,7 @@ impl<S: Append> Catalog<S> {
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
-                replica_sizes: config.replica_sizes,
+                cluster_replica_sizes: config.cluster_replica_sizes,
                 availability_zones: config.availability_zones,
             },
             transient_revision: 0,
@@ -2032,7 +2032,7 @@ impl<S: Append> Catalog<S> {
             now,
             skip_migrations: true,
             metrics_registry,
-            replica_sizes: Default::default(),
+            cluster_replica_sizes: Default::default(),
             availability_zones: vec![],
         })
         .await?;
@@ -2518,7 +2518,7 @@ impl<S: Append> Catalog<S> {
         &self,
         location: SerializedComputeInstanceReplicaLocation,
     ) -> Result<ConcreteComputeInstanceReplicaLocation, AdapterError> {
-        let replica_sizes = &self.state.replica_sizes;
+        let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
             SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
                 ConcreteComputeInstanceReplicaLocation::Remote { addrs }
@@ -2528,8 +2528,8 @@ impl<S: Append> Catalog<S> {
                 availability_zone,
                 az_user_specified,
             } => {
-                let allocation = replica_sizes.0.get(&size).ok_or_else(|| {
-                    let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
+                let allocation = cluster_replica_sizes.0.get(&size).ok_or_else(|| {
+                    let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
                     entries.sort_by_key(
                         |(
                             _name,
