@@ -30,7 +30,7 @@ paste = "1.0.7"
 pin-project = "1.0.11"
 prometheus = { version = "0.13.1", default-features = false, optional = true }
 smallvec = { version = "1.9.0", optional = true }
-stacker = { version = "0.1.14", optional = true }
+stacker = { version = "0.1.15", optional = true }
 serde = { version = "1.0.139", features = ["derive"], optional = true }
 tokio = { version = "1.19.2", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
 tokio-openssl = { version = "0.6.3", optional = true }
