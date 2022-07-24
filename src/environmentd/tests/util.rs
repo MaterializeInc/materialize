@@ -33,6 +33,7 @@ use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
@@ -56,10 +57,11 @@ pub struct Config {
     workers: usize,
     now: NowFn,
     seed: u32,
+    tracing_handle: TracingHandle,
 }
 
-impl Default for Config {
-    fn default() -> Config {
+impl Config {
+    pub fn new(tracing_handle: TracingHandle) -> Config {
         Config {
             data_directory: None,
             tls: None,
@@ -68,11 +70,10 @@ impl Default for Config {
             workers: 1,
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
+            tracing_handle,
         }
     }
-}
 
-impl Config {
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
         self.data_directory = Some(data_directory.into());
         self
@@ -193,7 +194,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: ConnectionContext::for_tests(
             (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
         ),
-        otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+        tracing_handle: config.tracing_handle,
     }))?;
     let server = Server {
         inner,

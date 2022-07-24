@@ -4025,6 +4025,7 @@ dependencies = [
  "mz-environmentd",
  "mz-orchestrator",
  "mz-orchestrator-process",
+ "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
  "mz-pgrepr",

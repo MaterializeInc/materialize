@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn compare_and_append() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing_sync();
         let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
 
         let writer_id = WriterId::new();
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn snapshot() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing_sync();
         let now = SYSTEM_TIME.clone();
 
         let mut state = State::<String, String, u64, i64>::new(ShardId::new());
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn next_listen_batch() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing_sync();
 
         let mut state = State::<String, String, u64, i64>::new(ShardId::new());
 
@@ -724,7 +724,7 @@ mod tests {
 
     #[test]
     fn expire_writer() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing_sync();
 
         let mut state = State::<String, String, u64, i64>::new(ShardId::new());
 

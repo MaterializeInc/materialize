@@ -494,7 +494,7 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
     // is done by starting a web server that awaits the refresh request, which the
     // test waits for.
 
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
     let ca = Ca::new_root("test ca")?;
     let (server_cert, server_key) =
@@ -548,7 +548,7 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
             .unwrap();
     };
 
-    let config = util::Config::default()
+    let config = util::Config::new(tracing_handle)
         .with_tls(TlsMode::Require, &server_cert, &server_key)
         .with_frontegg(&frontegg_auth);
     let server = util::start_server(config)?;
@@ -597,7 +597,7 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
 #[allow(clippy::unit_arg)]
 #[test]
 fn test_auth() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
     let ca = Ca::new_root("test ca")?;
     let (server_cert, server_key) =
@@ -675,7 +675,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
 
     // Test connecting to a server that requires client TLS and uses Materialize
     // Cloud for authentication.
-    let config = util::Config::default()
+    let config = util::Config::new(tracing_handle.clone())
         .with_tls(
             TlsMode::VerifyFull {
                 ca: ca.ca_cert_path(),
@@ -745,7 +745,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
 
     // Test connecting to a server that requires TLS and uses Materialize Cloud for
     // authentication.
-    let config = util::Config::default()
+    let config = util::Config::new(tracing_handle.clone())
         .with_tls(TlsMode::Require, &server_cert, &server_key)
         .with_frontegg(&frontegg_auth);
     let server = util::start_server(config)?;
@@ -974,7 +974,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     );
 
     // Test TLS modes with a server that does not support TLS.
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle.clone()))?;
     run_tests(
         "TlsMode::Disable",
         &server,
@@ -1032,7 +1032,11 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     );
 
     // Test TLS modes with a server that requires TLS.
-    let config = util::Config::default().with_tls(TlsMode::Require, &server_cert, &server_key);
+    let config = util::Config::new(tracing_handle.clone()).with_tls(
+        TlsMode::Require,
+        &server_cert,
+        &server_key,
+    );
     let server = util::start_server(config)?;
     run_tests(
         "TlsMode::Require",
@@ -1108,7 +1112,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     );
 
     // Test connecting to a server that verifies client certificates.
-    let config = util::Config::default().with_tls(
+    let config = util::Config::new(tracing_handle.clone()).with_tls(
         TlsMode::VerifyCa {
             ca: ca.ca_cert_path(),
         },
@@ -1245,7 +1249,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
 
     // Test connecting to a server that both verifies client certificates and
     // verifies that the CN matches the pgwire user name.
-    let config = util::Config::default().with_tls(
+    let config = util::Config::new(tracing_handle).with_tls(
         TlsMode::VerifyFull {
             ca: ca.ca_cert_path(),
         },
@@ -1414,6 +1418,8 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
+    let tracing_handle = mz_ore::test::init_tracing_sync();
+
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
     let ca = Ca::new_root("test ca")?;
@@ -1434,7 +1440,11 @@ fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
 
     // When the server presents only its own certificate, without the
     // intermediary, the client should fail to verify the chain.
-    let config = util::Config::default().with_tls(TlsMode::Require, &server_cert, &server_key);
+    let config = util::Config::new(tracing_handle.clone()).with_tls(
+        TlsMode::Require,
+        &server_cert,
+        &server_key,
+    );
     let server = util::start_server(config)?;
     run_tests(
         "TlsMode::Require",
@@ -1465,8 +1475,11 @@ fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
     // When the server is configured to present the entire certificate chain,
     // the client should be able to verify the chain even though it only knows
     // about the root CA.
-    let config =
-        util::Config::default().with_tls(TlsMode::Require, &server_cert_chain, &server_key);
+    let config = util::Config::new(tracing_handle).with_tls(
+        TlsMode::Require,
+        &server_cert_chain,
+        &server_key,
+    );
     let server = util::start_server(config)?;
     run_tests(
         "TlsMode::Require",

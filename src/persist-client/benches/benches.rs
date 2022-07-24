@@ -39,11 +39,6 @@ mod plumbing;
 mod porcelain;
 
 pub fn bench_persist(c: &mut Criterion) {
-    // Override the default of "info" here because the s3 library is chatty on
-    // info while initializing. It's good info to have in mz logs, but ends
-    // being as spammy in these benchmarks.
-    mz_ore::test::init_logging_default("warn");
-
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -52,6 +47,11 @@ pub fn bench_persist(c: &mut Criterion) {
         .build()
         .expect("Failed building the Runtime");
     let runtime = Arc::new(runtime);
+
+    // Override the default of "info" here because the s3 library is chatty on
+    // info while initializing. It's good info to have in mz logs, but ends
+    // being as spammy in these benchmarks.
+    runtime.block_on(mz_ore::test::init_tracing_with_filter("warn"));
 
     // Default to latency. First, because it's usually more interesting for
     // these micro-benchmarks (throughput is more the domain of the open-loop

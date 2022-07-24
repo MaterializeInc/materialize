@@ -58,8 +58,6 @@ pub struct TracingConfig {
     /// Configuration of the stderr log.
     pub stderr_log: StderrLogConfig,
     /// Optional configuration for the [`opentelemetry`] library.
-    /// The boolean specifies if you wish to enable the OpenTelemetry
-    /// collector by default
     pub opentelemetry: Option<OpenTelemetryConfig>,
     /// Optional configuration for the [Tokio console] integration.
     ///
@@ -90,25 +88,30 @@ pub struct OpenTelemetryConfig {
     pub headers: HeaderMap,
     /// A filter which determines which events are exported.
     pub filter: Targets,
-    /// `opentelemetry::sdk::resource::Resource` to include with all
-    /// traces.
+    /// A resource to include with each trace.
     pub resource: Resource,
-    /// Whether to startup with the dynamic OpenTelemetry layer enabled
-    pub start_enabled: bool,
+    /// Whether to start with the dynamic OpenTelemetry layer enabled.
+    ///
+    /// OpenTelemetry can be dynamically enabled and disabled via the
+    /// [`TracingHandle`] returned by [`configure`].
+    pub enabled: bool,
 }
 
-/// A callback that can be used to enable or disable the OpenTelemetry
-/// layer.
-pub struct OpenTelemetryEnableCallback {
-    callback: Arc<dyn Fn(bool) -> Result<(), anyhow::Error> + Send + Sync>,
-    current_enabled: Arc<AtomicBool>,
+/// A handle to the tracing stack that can be used to dynamically change a
+/// subset of the tracing configuration.
+#[derive(Clone)]
+pub struct TracingHandle {
+    set_opentelemetry_enabled: Arc<dyn Fn(bool) -> Result<(), anyhow::Error> + Send + Sync>,
+    opentelemetry_enabled: Arc<AtomicBool>,
 }
 
-impl OpenTelemetryEnableCallback {
-    /// Call the contained callback with the `enable` bool.
-    /// This also updates the shared value returned by `current_enabled`
-    pub fn call(&self, enable: bool) -> Result<(), anyhow::Error> {
-        (self.callback)(enable)?;
+impl TracingHandle {
+    /// Sets whether the OpenTelemetry layer is enabled.
+    ///
+    /// Returns an error if the tracing configuration provided to [`configure`]
+    /// did not configure OpenTelemetry.
+    pub fn set_opentelemetry_enabled(&self, enabled: bool) -> Result<(), anyhow::Error> {
+        (self.set_opentelemetry_enabled)(enabled)?;
 
         // Note that this happens AFTER we reset the callback.
         // This is fine, as long as users of `current_enabled`
@@ -120,38 +123,29 @@ impl OpenTelemetryEnableCallback {
         // but could probably all be `Relaxed`, as we don't expect
         // any strict ordering guarantees with enabling/disabling
         // the OpenTelemetry collector
-        self.current_enabled.swap(enable, Ordering::AcqRel);
+        self.opentelemetry_enabled.swap(enabled, Ordering::AcqRel);
         Ok(())
     }
 
-    /// Return the most recent value `call` was called with.
-    pub fn current_enabled(&self) -> bool {
-        self.current_enabled.load(Ordering::Relaxed)
+    /// Reports whether the OpenTelemetry layer is enabled.
+    pub fn opentelemetry_enabled(&self) -> bool {
+        self.opentelemetry_enabled.load(Ordering::Relaxed)
     }
 
-    /// A callback that does nothing. Useful for tests.
-    pub fn none() -> Self {
-        Self {
-            callback: Arc::new(|_| Ok(())),
-            // meaningless, for now
-            current_enabled: Arc::new(AtomicBool::new(false)),
-        }
+    /// Gracefully shuts down tracing.
+    ///
+    /// Calling this method ensures that any pending OpenTelemetry spans are
+    /// flushed to the configured collector, if any.
+    pub fn shutdown(&self) {
+        opentelemetry::global::shutdown_tracer_provider();
     }
 }
 
-impl std::fmt::Debug for OpenTelemetryEnableCallback {
+impl std::fmt::Debug for TracingHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("OpenTelemetryEnableCallback")
+        f.debug_struct("OpenTelemetryHandle")
+            .field("enabled", &self.opentelemetry_enabled())
             .finish_non_exhaustive()
-    }
-}
-
-impl Clone for OpenTelemetryEnableCallback {
-    fn clone(&self) -> Self {
-        Self {
-            callback: Arc::clone(&self.callback),
-            current_enabled: Arc::clone(&self.current_enabled),
-        }
     }
 }
 
@@ -189,7 +183,7 @@ pub struct TokioConsoleConfig {
 ///
 /// The `tokio_console` parameter enables integration with the [Tokio console].
 /// When enabled, `tracing` events are collected and made available to the Tokio
-/// console via a server running on port
+/// console via a server at the configured address.
 ///
 /// [Jaeger]: https://jaegertracing.io
 /// [Honeycomb]: https://www.honeycomb.io
@@ -197,10 +191,7 @@ pub struct TokioConsoleConfig {
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
 #[allow(clippy::unused_async)]
-pub async fn configure<C>(
-    service_name: &str,
-    config: C,
-) -> Result<OpenTelemetryEnableCallback, anyhow::Error>
+pub async fn configure<C>(service_name: &str, config: C) -> Result<TracingHandle, anyhow::Error>
 where
     C: Into<TracingConfig>,
 {
@@ -217,8 +208,6 @@ where
         .with_filter(config.stderr_log.filter);
 
     let (otel_layer, otel_reloader) = if let Some(otel_config) = config.opentelemetry {
-        // TODO(guswynn): figure out where/how to call
-        // opentelemetry::global::shutdown_tracer_provider();
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
         // Manually set up an OpenSSL-backed, h2, proxied `Channel`,
@@ -228,7 +217,6 @@ where
             .timeout(Duration::from_secs(
                 opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
             ))
-            // TODO(guswynn): investigate if this should be non-lazy.
             .connect_with_connector_lazy({
                 let mut http = HttpConnector::new();
                 http.enforce_http(false);
@@ -260,17 +248,17 @@ where
             .with_exporter(exporter)
             .install_batch(opentelemetry::runtime::Tokio)
             .unwrap();
-        let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
+        let (filter, filter_handle) = reload::Layer::new(if otel_config.enabled {
             otel_config.filter.clone()
         } else {
-            // the default `Targets` has everything disabled
+            // The default `Targets` disables all targets.
             Targets::default()
         });
         let layer = tracing_opentelemetry::layer()
             .with_tracer(tracer)
             .with_filter(filter);
-        let reloader = OpenTelemetryEnableCallback {
-            callback: Arc::new(move |enable| {
+        let reloader = TracingHandle {
+            set_opentelemetry_enabled: Arc::new(move |enable| {
                 filter_handle.modify(|filter| {
                     // This code should be kept panic-free to
                     // avoid weird poisoning issues in our subscriber
@@ -283,18 +271,15 @@ where
                 })?;
                 Ok(())
             }),
-            current_enabled: Arc::new(AtomicBool::new(otel_config.start_enabled)),
+            opentelemetry_enabled: Arc::new(AtomicBool::new(otel_config.enabled)),
         };
         (Some(layer), reloader)
     } else {
-        let reloader = OpenTelemetryEnableCallback {
-            callback: Arc::new(move |enable| {
-                bail!(
-                    "Tried to {} the otel collector but there is no endpoint",
-                    if enable { "enable" } else { "disable" },
-                );
+        let reloader = TracingHandle {
+            set_opentelemetry_enabled: Arc::new(move |_| {
+                bail!("OpenTelemetry is not configured");
             }),
-            current_enabled: Arc::new(AtomicBool::new(false)),
+            opentelemetry_enabled: Arc::new(AtomicBool::new(false)),
         };
         (None, reloader)
     };
@@ -327,11 +312,6 @@ where
     }
 
     Ok(otel_reloader)
-}
-
-/// Shutdown any tracing infra, if any.
-pub fn shutdown() {
-    opentelemetry::global::shutdown_tracer_provider();
 }
 
 /// Returns the level of a specific target from a [`Targets`].

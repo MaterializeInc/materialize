@@ -401,7 +401,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-    let otel_enable_callback =
+    let tracing_handle =
         runtime.block_on(mz_ore::tracing::configure("environmentd", &args.tracing))?;
 
     // Initialize fail crate for failpoint support
@@ -544,7 +544,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let orchestrator = Arc::new(TracingOrchestrator::new(
         orchestrator,
         args.tracing.clone(),
-        otel_enable_callback.clone(),
+        tracing_handle.clone(),
     ));
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
@@ -669,7 +669,7 @@ max log level: {max_log_level}",
             args.aws_external_id_prefix,
             secrets_reader,
         ),
-        otel_enable_callback,
+        tracing_handle,
     }))?;
 
     println!(

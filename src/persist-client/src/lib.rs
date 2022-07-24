@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn sanity_check() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -585,7 +585,7 @@ mod tests {
     // Sanity check that the open_reader and open_writer calls work.
     #[tokio::test]
     async fn open_reader_writer() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -626,7 +626,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_usage() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -842,7 +842,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_shards() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data1 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -880,7 +880,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_upper() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -912,7 +912,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_with_invalid_upper() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -952,7 +952,7 @@ mod tests {
     // NOTE: This is a compile-time only test. If it compiles, we're good.
     #[allow(unused)]
     async fn sync_send() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         fn is_send_sync<T: Send + Sync>(_x: T) -> bool {
             true
@@ -971,7 +971,7 @@ mod tests {
 
     #[tokio::test]
     async fn compare_and_append() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1022,7 +1022,7 @@ mod tests {
 
     #[tokio::test]
     async fn overlapping_append() {
-        mz_ore::test::init_logging_default("info");
+        mz_ore::test::init_tracing_with_filter("info").await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1073,7 +1073,7 @@ mod tests {
     // be in advance of the current shard upper.
     #[tokio::test]
     async fn contiguous_append() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1117,7 +1117,7 @@ mod tests {
     // combined are contiguous.
     #[tokio::test]
     async fn noncontiguous_append_per_writer() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1162,7 +1162,7 @@ mod tests {
     // batch needs to match the current shard upper.
     #[tokio::test]
     async fn contiguous_compare_and_append() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1206,7 +1206,7 @@ mod tests {
     // all writers combined are contiguous.
     #[tokio::test]
     async fn noncontiguous_compare_and_append_per_writer() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1285,7 +1285,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrency() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = DataGenerator::small();
 
@@ -1382,7 +1382,7 @@ mod tests {
     // upper to advance past as_of.
     #[tokio::test]
     async fn regression_blocking_reads() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 

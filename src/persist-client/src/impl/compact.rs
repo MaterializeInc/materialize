@@ -293,7 +293,7 @@ mod tests {
     // since of the minimum timestamp.
     #[tokio::test]
     async fn regression_minimum_since() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),

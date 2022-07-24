@@ -14,10 +14,12 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
+use anyhow::{bail, Context};
 use chrono::Utc;
 use time::Instant;
 use walkdir::WalkDir;
 
+use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
 use mz_sqllogictest::util;
@@ -54,14 +56,22 @@ struct Args {
     /// Stop on first failure.
     #[clap(long)]
     fail_fast: bool,
+    // Tracing arguments.
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[tokio::main]
 async fn main() {
     mz_ore::panic::set_abort_on_panic();
-    mz_ore::test::init_logging_default("warn");
+    if let Err(e) = run(cli::parse_args(CliConfig::default())).await {
+        let _ = writeln!(io::stderr(), "fatal: sqllogictest: {:#}", e);
+        process::exit(1);
+    }
+}
 
-    let args: Args = cli::parse_args(CliConfig::default());
+async fn run(args: Args) -> Result<(), anyhow::Error> {
+    let tracing_handle = mz_ore::tracing::configure("sqllogictest", &args.tracing).await?;
 
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
@@ -70,6 +80,8 @@ async fn main() {
         postgres_url: args.postgres_url.clone(),
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
+        tracing: args.tracing.clone(),
+        tracing_handle,
     };
 
     if args.rewrite_results {
@@ -136,7 +148,7 @@ async fn main() {
         }
     }
     if bad_file {
-        process::exit(1);
+        bail!("encountered an error in at least one file");
     }
 
     writeln!(config.stdout, "{}", outcomes.display(config.no_fail));
@@ -145,36 +157,25 @@ async fn main() {
         let report = junit_report::ReportBuilder::new()
             .add_testsuite(junit_suite)
             .build();
-        match report.write_xml(&mut junit_file) {
-            Ok(()) => (),
-            Err(err) => {
-                writeln!(
-                    config.stderr,
-                    "error: unable to write junit report: {}",
-                    err
-                );
-                process::exit(2);
-            }
-        }
+        report
+            .write_xml(&mut junit_file)
+            .context("writing junit report")?;
     }
 
     if outcomes.any_failed() && !args.no_fail {
-        process::exit(1);
+        bail!("encountered an error in at least one file");
     }
+
+    Ok(())
 }
 
-async fn rewrite(config: &RunConfig<'_>, args: Args) {
+async fn rewrite(config: &RunConfig<'_>, args: Args) -> Result<(), anyhow::Error> {
     if args.junit_report.is_some() {
-        writeln!(
-            config.stderr,
-            "--rewrite-results is not compatible with --junit-report"
-        );
-        process::exit(1);
+        bail!("--rewrite-results is not compatible with --junit-report");
     }
 
     if args.paths.iter().any(|path| path == "-") {
-        writeln!(config.stderr, "--rewrite-results cannot be used with stdin");
-        process::exit(1);
+        bail!("--rewrite-results cannot be used with stdin");
     }
 
     let mut bad_file = false;
@@ -197,8 +198,9 @@ async fn rewrite(config: &RunConfig<'_>, args: Args) {
         }
     }
     if bad_file {
-        process::exit(1);
+        bail!("encountered an error in at least one file");
     }
+    Ok(())
 }
 
 struct OutputStream<W> {

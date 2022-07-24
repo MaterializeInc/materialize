@@ -104,7 +104,7 @@ async fn connect_metabase() -> Result<mz_metabase::Client, anyhow::Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    mz_ore::test::init_logging();
+    mz_ore::test::init_tracing().await;
 
     let pgclient = connect_materialized().await?;
     pgclient

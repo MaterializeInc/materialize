@@ -21,6 +21,7 @@ mz-environmentd = { path = "../environmentd", default-features = false }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
