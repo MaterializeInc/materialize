@@ -89,15 +89,21 @@ rustc-demangle = { opt-level = 3 }
 # production installations, but we still want useful crash reports.
 debug = 1
 
-# Use this section only to change the source of dependencies that might
-# also appear as transitive dependencies of other external dependencies in
-# the dependency graph. For everything else (e.g. rust-postgres, rdkafka,
-# differential-dataflow, proptest, timely) set the `git` sourcce
-# direclty in each dependency entry.
+# Use this section only to change the source of dependencies that appear as
+# transitive dependencies of other external dependencies in the dependency
+# graph. For everything else (e.g. rust-postgres, rdkafka,
+# differential-dataflow, proptest, timely), use a `git` source directly in each
+# Cargo.toml.
+#
+# The reasons for each of these overrides are listed in deny.toml.
 [patch.crates-io]
+csv = { git = "https://github.com/BurntSushi/rust-csv.git" }
+csv-core = { git = "https://github.com/BurntSushi/rust-csv.git" }
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
 opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
 prost = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-build = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-derive = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-types = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+vte = { git = "https://github.com/alacritty/vte" }

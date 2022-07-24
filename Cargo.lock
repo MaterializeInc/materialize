@@ -86,12 +86,6 @@ checksum = "bf7d0a018de4f6aa429b9d33d69edf69072b1c5b1cb8d3e4a5f7ef898fc3eb76"
 
 [[package]]
 name = "arrayvec"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
-
-[[package]]
-name = "arrayvec"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
@@ -591,7 +585,7 @@ version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83b74dbb59d20bf29d62772c99dfb8b32377a101c0b03879138f34b3e9b15bdc"
 dependencies = [
- "itoa 1.0.1",
+ "itoa",
  "num-integer",
  "ryu",
  "time",
@@ -637,7 +631,7 @@ dependencies = [
  "http",
  "http-body",
  "hyper",
- "itoa 1.0.1",
+ "itoa",
  "matchit",
  "memchr",
  "mime",
@@ -896,12 +890,11 @@ dependencies = [
 [[package]]
 name = "chrono-tz"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58549f1842da3080ce63002102d5bc954c7bc843d4f47818e642abdc36253552"
+source = "git+https://github.com/chronotope/chrono-tz#13948f4ac5b05e3669f3c50595131f96579d409b"
 dependencies = [
  "chrono",
  "chrono-tz-build",
- "phf 0.10.1",
+ "phf",
  "serde",
  "uncased",
 ]
@@ -909,12 +902,11 @@ dependencies = [
 [[package]]
 name = "chrono-tz-build"
 version = "0.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db058d493fb2f65f41861bfed7e3fe6335264a9f0f92710cab5bdf01fef09069"
+source = "git+https://github.com/chronotope/chrono-tz#13948f4ac5b05e3669f3c50595131f96579d409b"
 dependencies = [
  "parse-zoneinfo",
- "phf 0.10.1",
- "phf_codegen 0.10.0",
+ "phf",
+ "phf_codegen",
  "uncased",
 ]
 
@@ -1252,12 +1244,11 @@ dependencies = [
 [[package]]
 name = "csv"
 version = "1.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22813a6dc45b335f9bade10bf7271dc477e81113e89eb251a0bc2a8a81c536e1"
+source = "git+https://github.com/BurntSushi/rust-csv.git#41c71ed353a71526c52633d854466c1619dacae4"
 dependencies = [
  "bstr",
  "csv-core",
- "itoa 0.4.6",
+ "itoa",
  "ryu",
  "serde",
 ]
@@ -1265,8 +1256,7 @@ dependencies = [
 [[package]]
 name = "csv-core"
 version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b2466559f260f48ad25fe6317b3c8dac77b5bdb5763ac7d9d6103530663bc90"
+source = "git+https://github.com/BurntSushi/rust-csv.git#41c71ed353a71526c52633d854466c1619dacae4"
 dependencies = [
  "memchr",
 ]
@@ -1376,7 +1366,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef552e6f588e446098f6ba40d89ac146c8c7b64aade83c051ee00bb5d2bc18d"
 dependencies = [
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -2077,15 +2067,6 @@ checksum = "74721d007512d0cb3338cd20f0654ac913920061a4c4d0d8708edb3f2a698c0c"
 
 [[package]]
 name = "hashbrown"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
-dependencies = [
- "ahash",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
@@ -2099,7 +2080,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d452c155cb93fecdfb02a73dd57b5d8e442c2063bd7aac72f1bc5e4263a43086"
 dependencies = [
- "hashbrown 0.12.3",
+ "hashbrown",
 ]
 
 [[package]]
@@ -2184,7 +2165,7 @@ checksum = "75f43d41e26995c17e71ee126451dd3941010b0514a81a9d11f3b341debc2399"
 dependencies = [
  "bytes",
  "fnv",
- "itoa 1.0.1",
+ "itoa",
 ]
 
 [[package]]
@@ -2247,7 +2228,7 @@ dependencies = [
  "http-body",
  "httparse",
  "httpdate",
- "itoa 1.0.1",
+ "itoa",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -2342,7 +2323,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10a35a97730320ffe8e2d410b5d3b69279b98d2c14bdb8b70ea89ecf7888d41e"
 dependencies = [
  "autocfg",
- "hashbrown 0.12.3",
+ "hashbrown",
 ]
 
 [[package]]
@@ -2387,12 +2368,6 @@ checksum = "a9a9d19fa1e79b6215ff29b9d6880b706147f16e9b1dbb1e4e5947b5b02bc5e3"
 dependencies = [
  "either",
 ]
-
-[[package]]
-name = "itoa"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc6f3ad7b9d11a0c00842ff8de1b60ee58661048eb8049ed33c73594f359d7e6"
 
 [[package]]
 name = "itoa"
@@ -2754,11 +2729,11 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.7.7"
+version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c84e6fe5655adc6ce00787cf7dcaf8dc4f998a0565d23eafc207a8b08ca3349a"
+checksum = "e999beba7b6e8345721bd280141ed958096a2e4abdf74f67ff4ce49b4b54e47a"
 dependencies = [
- "hashbrown 0.11.2",
+ "hashbrown",
 ]
 
 [[package]]
@@ -2936,7 +2911,7 @@ dependencies = [
  "subprocess",
  "thiserror",
  "time",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3007,7 +2982,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uncased",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3042,7 +3017,7 @@ dependencies = [
  "sha2",
  "snap",
  "tracing",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3072,7 +3047,7 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "tracing-subscriber",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3145,7 +3120,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3180,7 +3155,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tracing",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3210,7 +3185,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3296,7 +3271,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3329,7 +3304,7 @@ dependencies = [
  "num",
  "num_enum",
  "once_cell",
- "ordered-float 3.0.0",
+ "ordered-float",
  "paste",
  "proc-macro2",
  "proptest",
@@ -3344,7 +3319,7 @@ dependencies = [
  "sha-1",
  "sha2",
  "uncased",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3375,7 +3350,7 @@ dependencies = [
  "serde",
  "thiserror",
  "tokio",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3410,7 +3385,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "once_cell",
- "ordered-float 3.0.0",
+ "ordered-float",
  "prost",
  "prost-build",
  "prost-reflect",
@@ -3418,7 +3393,7 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3678,7 +3653,7 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3717,7 +3692,7 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3748,7 +3723,7 @@ dependencies = [
  "mz-repr",
  "once_cell",
  "postgres-types",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3859,7 +3834,7 @@ dependencies = [
  "serde_json",
  "tokio-postgres",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3885,7 +3860,7 @@ dependencies = [
  "num-traits",
  "num_enum",
  "once_cell",
- "ordered-float 3.0.0",
+ "ordered-float",
  "proptest",
  "proptest-derive",
  "prost",
@@ -3898,7 +3873,7 @@ dependencies = [
  "serde_regex",
  "smallvec",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -4012,7 +3987,7 @@ dependencies = [
  "tracing",
  "typemap_rev",
  "uncased",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -4024,8 +3999,8 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-walkabout",
- "phf 0.11.0",
- "phf_codegen 0.11.0",
+ "phf",
+ "phf_codegen",
  "tracing",
  "uncased",
  "unicode-width",
@@ -4063,7 +4038,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tower-http",
- "uuid 1.1.2",
+ "uuid",
  "walkdir",
 ]
 
@@ -4160,7 +4135,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -4268,7 +4243,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "uuid 1.1.2",
+ "uuid",
  "walkdir",
 ]
 
@@ -4620,15 +4595,6 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "2.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7940cf2ca942593318d07fcf2596cdca60a85c9e7fab408a5e21a4f9dcd40d87"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "ordered-float"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96bcbab4bfea7a59c2c0fe47211a1ac4e3e96bea6eb446d704f310bc5c732ae2"
@@ -4764,30 +4730,11 @@ dependencies = [
 
 [[package]]
 name = "phf"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabbf1ead8a5bcbc20f5f8b939ee3f5b0f6f281b6ad3468b84656b658b455259"
-dependencies = [
- "phf_shared 0.10.0",
-]
-
-[[package]]
-name = "phf"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4724fa946c8d1e7cd881bd3dbee63ce32fc1e9e191e35786b3dc1320a3f68131"
 dependencies = [
- "phf_shared 0.11.0",
-]
-
-[[package]]
-name = "phf_codegen"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fb1c3a8bc4dd4e5cfce29b44ffc14bedd2ee294559a294e2a4d4c9e9a6a13cd"
-dependencies = [
- "phf_generator 0.10.0",
- "phf_shared 0.10.0",
+ "phf_shared",
 ]
 
 [[package]]
@@ -4796,18 +4743,8 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32ba0c43d7a1b6492b2924a62290cfd83987828af037b0743b38e6ab092aee58"
 dependencies = [
- "phf_generator 0.11.0",
- "phf_shared 0.11.0",
-]
-
-[[package]]
-name = "phf_generator"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d5285893bb5eb82e6aaf5d59ee909a06a16737a8970984dd7746ba9283498d6"
-dependencies = [
- "phf_shared 0.10.0",
- "rand",
+ "phf_generator",
+ "phf_shared",
 ]
 
 [[package]]
@@ -4816,18 +4753,8 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b450720b6f75cfbfabc195814bd3765f337a4f9a83186f8537297cac12f6705"
 dependencies = [
- "phf_shared 0.11.0",
+ "phf_shared",
  "rand",
-]
-
-[[package]]
-name = "phf_shared"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6796ad771acdc0123d2a88dc428b5e38ef24456743ddb1744ed628f9815c096"
-dependencies = [
- "siphasher",
- "uncased",
 ]
 
 [[package]]
@@ -4968,7 +4895,7 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -5270,7 +5197,7 @@ dependencies = [
 [[package]]
 name = "pubnub-core"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#9da4f3e71b84a9200881612642cf4d18c078e169"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#340171b23eae592cd9f9f3181f767c6d76ee1288"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -5282,13 +5209,13 @@ dependencies = [
  "log",
  "percent-encoding",
  "thiserror",
- "uuid 0.8.2",
+ "uuid",
 ]
 
 [[package]]
 name = "pubnub-hyper"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#9da4f3e71b84a9200881612642cf4d18c078e169"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#340171b23eae592cd9f9f3181f767c6d76ee1288"
 dependencies = [
  "async-trait",
  "derive_builder",
@@ -5308,7 +5235,7 @@ dependencies = [
 [[package]]
 name = "pubnub-util"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#9da4f3e71b84a9200881612642cf4d18c078e169"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#340171b23eae592cd9f9f3181f767c6d76ee1288"
 dependencies = [
  "base64",
  "hmac",
@@ -5599,7 +5526,7 @@ version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0593ce4677e3800ddafb3de917e8397b1348e06e688128ade722d88fbe11ebf"
 dependencies = [
- "arrayvec 0.7.2",
+ "arrayvec",
  "num-traits",
  "serde",
 ]
@@ -5719,10 +5646,9 @@ dependencies = [
 [[package]]
 name = "serde-value"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
+source = "git+https://github.com/MaterializeInc/serde-value.git#62c7e5f84ace6b7b5da48c46cb963be95d43aaab"
 dependencies = [
- "ordered-float 2.10.0",
+ "ordered-float",
  "serde",
 ]
 
@@ -5754,7 +5680,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82c2c1fdcd807d1098552c5b9a36e425e42e9fbd7c6a37a8425f390f781f7fa7"
 dependencies = [
  "indexmap",
- "itoa 1.0.1",
+ "itoa",
  "ryu",
  "serde",
 ]
@@ -5785,7 +5711,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
 dependencies = [
  "form_urlencoded",
- "itoa 1.0.1",
+ "itoa",
  "ryu",
  "serde",
 ]
@@ -6012,7 +5938,7 @@ dependencies = [
  "debugid",
  "memmap2",
  "stable_deref_trait",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -6173,9 +6099,9 @@ dependencies = [
 
 [[package]]
 name = "tiberius"
-version = "0.9.4"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b1c6d3d8b3740376841aed0deeca9f98b0607433a213727c0b7c132b20b4ad3"
+checksum = "332ebb88fba7df15f54c9f1332baf284d6c13c6afa3ff612e924db07a5c1d9ce"
 dependencies = [
  "async-trait",
  "asynchronous-codec",
@@ -6193,7 +6119,7 @@ dependencies = [
  "pretty-hex",
  "thiserror",
  "tracing",
- "uuid 0.8.2",
+ "uuid",
 ]
 
 [[package]]
@@ -6234,7 +6160,7 @@ version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72c91f41dcb2f096c05f0873d667dceec1087ce5bcf984ec8ffb19acddbb3217"
 dependencies = [
- "itoa 1.0.1",
+ "itoa",
  "libc",
  "num_threads",
  "quickcheck",
@@ -6387,7 +6313,7 @@ dependencies = [
  "log",
  "parking_lot",
  "percent-encoding",
- "phf 0.11.0",
+ "phf",
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
@@ -6790,17 +6716,7 @@ checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 [[package]]
 name = "utf8parse"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
-
-[[package]]
-name = "uuid"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
-dependencies = [
- "getrandom",
-]
+source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
 
 [[package]]
 name = "uuid"
@@ -6833,10 +6749,9 @@ checksum = "b5a972e5669d67ba988ce3dc826706fb0a8b01471c088cb0b6110b805cc36aed"
 [[package]]
 name = "vte"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cbce692ab4ca2f1f3047fcf732430249c0e971bfdd2b234cf2c47ad93af5983"
+source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
 dependencies = [
- "arrayvec 0.5.2",
+ "arrayvec",
  "utf8parse",
  "vte_generate_state_changes",
 ]
@@ -6844,8 +6759,7 @@ dependencies = [
 [[package]]
 name = "vte_generate_state_changes"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d257817081c7dffcdbab24b9e62d2def62e2ff7d00b1c20062551e6cccc145ff"
+source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
 dependencies = [
  "proc-macro2",
  "quote",
