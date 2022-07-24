@@ -1690,7 +1690,7 @@ impl RustType<ProtoS3KeySource> for S3KeySource {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceData(pub Result<Row, DataflowError>);
 
 impl Deref for SourceData {

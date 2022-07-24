@@ -136,12 +136,14 @@ where
             let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
             // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-            let mut write = persist_clients
+            let client = persist_clients
                 .lock()
                 .await
                 .open(persist_location)
                 .await
-                .expect("could not open persist client")
+                .expect("could not open persist client");
+
+            let mut write = client
                 .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
                 .await
                 .expect("could not open persist shard");
