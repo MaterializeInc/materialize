@@ -486,7 +486,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for PendingPeek {
                 sender: rows_tx,
                 conn_id: _,
-            } in self.remove_pending_peeks(conn_id).await
+            } in self.cancel_pending_peeks(conn_id).await
             {
                 rows_tx
                     .send(PeekResponse::Canceled)
@@ -506,6 +506,6 @@ impl<S: Append + 'static> Coordinator<S> {
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
         self.active_conns.remove(&session.conn_id());
-        self.remove_pending_peeks(session.conn_id()).await;
+        self.cancel_pending_peeks(session.conn_id()).await;
     }
 }

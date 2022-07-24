@@ -22,7 +22,6 @@ use mz_storage::types::sources::Timeline;
 use crate::catalog::{self};
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
-use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::TimelineState;
 use crate::coord::{
     CoordTimestamp, Coordinator, CreateSourceStatementReady, Message, ReplicaMetadata, SendDiffs,
@@ -62,7 +61,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // in any situation where you use it, you must also have a code
             // path that responds to the client (e.g. reporting an error).
             Message::RemovePendingPeeks { conn_id } => {
-                self.remove_pending_peeks(conn_id).await;
+                self.cancel_pending_peeks(conn_id).await;
             }
         }
     }
@@ -78,26 +77,7 @@ impl<S: Append + 'static> Coordinator<S> {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
             ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
-                // We expect exactly one peek response, which we forward. Then we clean up the
-                // peek's state in the coordinator.
-                if let Some(PendingPeek {
-                    sender: rows_tx,
-                    conn_id,
-                }) = self.pending_peeks.remove(&uuid)
-                {
-                    otel_ctx.attach_as_parent();
-                    // Peek cancellations are best effort, so we might still
-                    // receive a response, even though the recipient is gone.
-                    let _ = rows_tx.send(response);
-                    if let Some(uuids) = self.client_pending_peeks.get_mut(&conn_id) {
-                        uuids.remove(&uuid);
-                        if uuids.is_empty() {
-                            self.client_pending_peeks.remove(&conn_id);
-                        }
-                    }
-                }
-                // Cancellation may cause us to receive responses for peeks no
-                // longer in `self.pending_peeks`, so we quietly ignore them.
+                self.send_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::TailResponse(sink_id, response) => {
                 // We use an `if let` here because the peek could have been canceled already.
@@ -315,7 +295,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn message_advance_timelines(&mut self) {
+    pub(crate) async fn message_advance_timelines(&mut self) {
         // Convince the coordinator it needs to open a new timestamp
         // and advance inputs.
         // Fast forwarding puts the `TimestampOracle` in write mode,

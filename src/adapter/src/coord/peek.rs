@@ -24,6 +24,7 @@ use mz_compute_client::command::{DataflowDescription, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
 use mz_expr::{EvalError, Id, MirScalarExpr};
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_stash::Append;
 
@@ -349,7 +350,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // If it was created, drop the dataflow once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
-            self.remove_global_read_holds_compute(vec![(compute_instance, index_id)]);
+            self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
             self.drop_indexes(vec![(compute_instance, index_id)]).await;
         }
 
@@ -359,9 +360,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         })
     }
 
-    /// Remove all pending peeks that were initiated by `conn_id`.
+    /// Cancel and remove all pending peeks that were initiated by the client with `conn_id`.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
+    pub(crate) async fn cancel_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
         // The peek is present on some specific compute instance.
         // Allow dataflow to cancel any pending peeks.
         if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
@@ -385,5 +386,38 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         } else {
             Vec::new()
         }
+    }
+
+    pub(crate) fn send_peek_response(
+        &mut self,
+        uuid: Uuid,
+        response: PeekResponse,
+        otel_ctx: OpenTelemetryContext,
+    ) {
+        // We expect exactly one peek response, which we forward. Then we clean up the
+        // peek's state in the coordinator.
+        if let Some(PendingPeek {
+            sender: rows_tx,
+            conn_id,
+        }) = self.remove_pending_peek(&uuid)
+        {
+            otel_ctx.attach_as_parent();
+            // Peek cancellations are best effort, so we might still
+            // receive a response, even though the recipient is gone.
+            let _ = rows_tx.send(response);
+            if let Some(uuids) = self.client_pending_peeks.get_mut(&conn_id) {
+                uuids.remove(&uuid);
+                if uuids.is_empty() {
+                    self.client_pending_peeks.remove(&conn_id);
+                }
+            }
+        }
+        // Cancellation may cause us to receive responses for peeks no
+        // longer in `self.pending_peeks`, so we quietly ignore them.
+    }
+
+    /// Clean up a peek's state.
+    pub(crate) fn remove_pending_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek> {
+        self.pending_peeks.remove(uuid)
     }
 }

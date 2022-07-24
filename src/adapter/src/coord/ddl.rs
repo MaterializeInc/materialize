@@ -118,7 +118,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let mut empty_timelines = self.remove_global_read_holds_storage(
+        let mut empty_timelines = self.remove_storage_ids_from_timeline(
             sources_to_drop
                 .iter()
                 .chain(tables_to_drop.iter())
@@ -126,7 +126,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .cloned(),
         );
         empty_timelines.extend(
-            self.remove_global_read_holds_compute(
+            self.remove_compute_ids_from_timeline(
                 sinks_to_drop
                     .iter()
                     .chain(indexes_to_drop.iter())
@@ -202,7 +202,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
-            self.read_capability.remove(id);
+            self.drop_read_policy(id);
         }
         self.controller
             .storage_mut()
@@ -225,7 +225,7 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
         let mut by_compute_instance = HashMap::new();
         for (compute_instance, id) in indexes {
-            if self.read_capability.remove(&id).is_some() {
+            if self.drop_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
                     .or_insert(vec![])
@@ -248,7 +248,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut by_compute_instance = HashMap::new();
         let mut source_ids = Vec::new();
         for (compute_instance, id) in mviews {
-            if self.read_capability.remove(&id).is_some() {
+            if self.drop_read_policy(&id) {
                 by_compute_instance
                     .entry(compute_instance)
                     .or_insert(vec![])

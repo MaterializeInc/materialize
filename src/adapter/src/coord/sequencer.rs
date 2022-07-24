@@ -2939,11 +2939,6 @@ impl<S: Append + 'static> Coordinator<S> {
         id: GlobalId,
         options: Vec<IndexOption>,
     ) -> Result<(), AdapterError> {
-        let needs = self
-            .read_capability
-            .get_mut(&id)
-            .expect("coord indexes out of sync");
-
         for o in options {
             match o {
                 IndexOption::LogicalCompactionWindow(window) => {
@@ -2959,13 +2954,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         Some(time) => ReadPolicy::lag_writes_by(time),
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
-                    needs.base_policy = policy;
-                    self.controller
-                        .compute_mut(compute_instance)
-                        .unwrap()
-                        .set_read_policy(vec![(id, needs.policy())])
-                        .await
-                        .unwrap();
+                    self.update_compute_base_read_policy(compute_instance, id, policy)
+                        .await;
                 }
             }
         }

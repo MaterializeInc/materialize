@@ -93,11 +93,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         if use_timestamp_oracle {
             let timeline = timeline.expect("checked that timeline exists above");
-            let timestamp_oracle = &mut self
-                .global_timelines
-                .get_mut(&timeline)
-                .expect("all timelines have a timestamp oracle")
-                .oracle;
+            let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
             candidate.join_assign(&timestamp_oracle.read_ts());
         } else {
             if when.advance_to_since() {

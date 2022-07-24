@@ -260,13 +260,14 @@ pub struct Coordinator<S> {
     /// active connections.
     active_conns: HashMap<ConnectionId, ConnMeta>,
 
-    // TODO(jkosh44) Access to this field should be restricted to methods in the read_policy API.
     /// For each identifier, its read policy and any transaction holds on time.
     ///
     /// Transactions should introduce and remove constraints through the methods
     /// `acquire_read_holds` and `release_read_holds`, respectively. The base
     /// policy can also be updated, though one should be sure to communicate this
     /// to the controller for it to have an effect.
+    ///
+    /// Access to this field should be restricted to methods in the [`read_policy`] API.
     read_capability: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
     /// For each transaction, the pinned storage and compute identifiers and time at
     /// which they are pinned.
@@ -275,12 +276,13 @@ pub struct Coordinator<S> {
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
     txn_reads: HashMap<ConnectionId, TxnReads>,
 
-    // TODO(jkosh44) Access to this field should be restricted to methods in the peek API
+    /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client
     client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
+
     /// A map from pending tails to the tail description.
     pending_tails: HashMap<GlobalId, PendingTail>,
 
