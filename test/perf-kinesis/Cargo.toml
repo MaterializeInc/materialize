@@ -20,4 +20,4 @@ rand = "0.8.5"
 tokio = "1.19.2"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.35"
-tracing-subscriber = { version = "0.3.14", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }
