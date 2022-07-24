@@ -67,7 +67,7 @@ enum TimestampOracleState<T> {
 ///
 /// Specifically, all read timestamps will be greater or equal to all previously reported write timestamps,
 /// and strictly less than all subsequently emitted write timestamps.
-pub struct TimestampOracle<T> {
+struct TimestampOracle<T> {
     state: TimestampOracleState<T>,
     advance_to: Option<T>,
     next: Box<dyn Fn() -> T>,
@@ -308,6 +308,17 @@ impl<S: Append + 'static> Coordinator<S> {
         to_datetime(self.now())
     }
 
+    pub(crate) fn get_timestamp_oracle_mut(
+        &mut self,
+        timeline: &Timeline,
+    ) -> &mut DurableTimestampOracle<Timestamp> {
+        &mut self
+            .global_timelines
+            .get_mut(timeline)
+            .expect("all timelines have a timestamp oracle")
+            .oracle
+    }
+
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
     fn get_local_timestamp_oracle(&self) -> &DurableTimestampOracle<Timestamp> {
@@ -323,11 +334,7 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) fn get_local_timestamp_oracle_mut(
         &mut self,
     ) -> &mut DurableTimestampOracle<Timestamp> {
-        &mut self
-            .global_timelines
-            .get_mut(&Timeline::EpochMilliseconds)
-            .expect("no realtime timeline")
-            .oracle
+        self.get_timestamp_oracle_mut(&Timeline::EpochMilliseconds)
     }
 
     /// Assign a timestamp for a read from a local input. Reads following writes
@@ -415,7 +422,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("inserted above")
     }
 
-    pub(crate) fn remove_global_read_holds_storage<I>(&mut self, ids: I) -> Vec<Timeline>
+    pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = GlobalId>,
     {
@@ -436,7 +443,7 @@ impl<S: Append + 'static> Coordinator<S> {
         empty_timelines
     }
 
-    pub(crate) fn remove_global_read_holds_compute<I>(&mut self, ids: I) -> Vec<Timeline>
+    pub(crate) fn remove_compute_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
     {

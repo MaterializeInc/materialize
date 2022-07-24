@@ -196,11 +196,37 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .unwrap();
     }
 
+    pub(crate) async fn update_compute_base_read_policy(
+        &mut self,
+        compute_instance: ComputeInstanceId,
+        id: GlobalId,
+        base_policy: ReadPolicy<mz_repr::Timestamp>,
+    ) {
+        let capability = self
+            .read_capability
+            .get_mut(&id)
+            .expect("coord out of sync");
+        capability.base_policy = base_policy;
+        self.controller
+            .compute_mut(compute_instance)
+            .unwrap()
+            .set_read_policy(vec![(id, capability.policy())])
+            .await
+            .unwrap();
+    }
+
+    /// Drop read policy for `id`.
+    ///
+    /// Returns true if `id` had a read policy and false otherwise
+    pub(crate) fn drop_read_policy(&mut self, id: &GlobalId) -> bool {
+        self.read_capability.remove(id).is_some()
+    }
+
     /// Acquire read holds on the indicated collections at the indicated time.
     ///
     /// This method will panic if the holds cannot be acquired. In the future,
     /// it would be polite to have it error instead, as it is not unrecoverable.
-    pub(super) async fn acquire_read_holds(&mut self, read_holds: &ReadHolds<mz_repr::Timestamp>) {
+    pub(crate) async fn acquire_read_holds(&mut self, read_holds: &ReadHolds<mz_repr::Timestamp>) {
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         let storage = self.controller.storage_mut();
