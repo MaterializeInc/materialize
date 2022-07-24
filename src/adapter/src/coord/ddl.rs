@@ -46,6 +46,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
+    /// [`DataflowDesc`]: mz_compute_client::command::DataflowDesc
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact<F, R>(
         &mut self,
