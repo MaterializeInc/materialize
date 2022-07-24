@@ -11,7 +11,7 @@ publish = false
 serde = { version = "1.0.140", features = ["derive"] }
 clap = { version = "3.2.14", features = [ "derive" ] }
 tokio = { version = "1.19.2", features = ["full"] }
-open = "3.0.1"
+open = "3.0.2"
 axum = "0.5.13"
 rpassword = "7.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
