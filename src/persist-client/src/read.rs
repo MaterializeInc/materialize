@@ -13,13 +13,14 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
+use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -97,7 +98,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64,
 {
-    handle: ReadHandle<K, V, T, D>,
+    pub(crate) handle: ReadHandle<K, V, T, D>,
     as_of: Antichain<T>,
     batches: Vec<(PartialBlobKey, Description<T>)>,
 
@@ -478,7 +479,7 @@ where
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
-    pub(crate) last_heartbeat: Instant,
+    pub(crate) last_heartbeat: EpochMillis,
     pub(crate) explicitly_expired: bool,
 }
 
@@ -515,7 +516,7 @@ where
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
-        self.last_heartbeat = Instant::now();
+        self.last_heartbeat = (self.cfg.now)();
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -671,7 +672,7 @@ where
             // This isn't quite right since we did the heartbeat before sending
             // it over the wire, but probably good enough for now? Maybe we
             // should roundtrip the timestamp through SnapshotSplit instead?
-            last_heartbeat: Instant::now(),
+            last_heartbeat: (self.cfg.now)(),
             explicitly_expired: false,
         };
         let iter = SnapshotIter::new(handle, split);
@@ -693,7 +694,7 @@ where
             machine,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
-            last_heartbeat: Instant::now(),
+            last_heartbeat: (self.cfg.now)(),
             explicitly_expired: false,
         };
         new_reader
@@ -712,8 +713,11 @@ where
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
         // above).
-        let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 4;
-        let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
+        let min_elapsed = (PersistConfig::FAKE_READ_LEASE_DURATION / 4)
+            .as_millis()
+            .try_into()
+            .expect("min elapsed time did not fit in u64");
+        let elapsed_since_last_heartbeat = (self.cfg.now)() - self.last_heartbeat;
         if elapsed_since_last_heartbeat >= min_elapsed {
             self.downgrade_since(new_since.clone()).await;
         }
@@ -726,13 +730,16 @@ where
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     pub async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 2;
-        let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
+        let min_elapsed = (PersistConfig::FAKE_READ_LEASE_DURATION / 2)
+            .as_millis()
+            .try_into()
+            .expect("min elapsed time did not fit in u64");
+        let elapsed_since_last_heartbeat = (self.cfg.now)() - self.last_heartbeat;
         if elapsed_since_last_heartbeat >= min_elapsed {
             self.machine
                 .heartbeat_reader(&self.reader_id, (self.cfg.now)())
                 .await;
-            self.last_heartbeat = Instant::now();
+            self.last_heartbeat = (self.cfg.now)();
         }
     }
 

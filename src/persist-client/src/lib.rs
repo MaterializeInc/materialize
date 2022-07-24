@@ -19,7 +19,7 @@
 
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -355,7 +355,7 @@ impl PersistClient {
             machine,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
-            last_heartbeat: Instant::now(),
+            last_heartbeat: (self.cfg.now)(),
             explicitly_expired: false,
         };
 
@@ -1451,6 +1451,48 @@ mod tests {
         // Read the snapshot and check that it got all the appropriate data.
         let mut snap = snap.await;
         assert_eq!(snap.read_all().await, all_ok(&data[..], 3));
+    }
+
+    // Regression test for #13802. A snapshot read would error if its read handle tried
+    // to heartbeat without having recent enough consensus state to contain its reader id.
+    #[tokio::test]
+    async fn regression_snapshot_readers() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let (mut write, mut read) = new_test_client()
+            .await
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+        write
+            .expect_append(&data[..2], write.upper().clone(), vec![3])
+            .await;
+
+        // initialize our snapshot's read handle with a heartbeat timestamp of 0
+        read.cfg.now = NowFn::from(|| 0);
+        let mut snap = read.expect_snapshot(1).await;
+        assert_eq!(snap.handle.last_heartbeat, 0);
+
+        // Fast-forward time enough so the following snapshot read will be forced to heartbeat
+        let near_future = NowFn::from(|| {
+            PersistConfig::FAKE_READ_LEASE_DURATION
+                .as_millis()
+                .try_into()
+                .expect("epoch timestamp did not fit in u64")
+        });
+        snap.handle.cfg.now = near_future.clone();
+
+        // the handle shouldn't have the future timestamp as a heartbeat yet
+        assert_eq!(snap.handle.last_heartbeat, 0);
+        // perform the snapshot read. the read should succeed
+        assert_eq!(snap.read_all().await, all_ok(&data[..1], 1));
+        // afterwards the handle's heartbeat should match
+        assert_eq!(snap.handle.last_heartbeat, near_future());
     }
 
     proptest! {
