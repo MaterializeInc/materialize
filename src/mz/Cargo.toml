@@ -13,7 +13,7 @@ clap = { version = "3.2.14", features = [ "derive" ] }
 tokio = { version = "1.19.2", features = ["full"] }
 open = "3.0.1"
 axum = "0.5.13"
-rpassword = "6.0"
+rpassword = "7.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 toml = "0.5.8"
 dirs = "4.0.0"
