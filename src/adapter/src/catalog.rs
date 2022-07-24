@@ -54,8 +54,8 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
