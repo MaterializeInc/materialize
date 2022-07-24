@@ -41,22 +41,25 @@ use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, Cat
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr,
-    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
-    QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, TailFrom, TailPlan, View,
+    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
+    FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
+    OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy};
 use mz_storage::types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
 use mz_storage::types::sources::IngestionDescription;
 
-use crate::catalog::{self, Catalog, CatalogItem, ComputeInstance, Connection};
+use crate::catalog::{
+    self, Catalog, CatalogItem, ComputeInstance, Connection,
+    SerializedComputeInstanceReplicaLocation,
+};
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
@@ -543,6 +546,26 @@ impl<S: Append + 'static> Coordinator<S> {
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
+    // Utility function used by both `sequence_create_compute_instance`
+    // and `sequence_create_compute_instance_replica`. Chooses the availability zone
+    // for a replica arbitrarily based on some state (currently: the number of replicas
+    // of the given cluster per AZ).
+    //
+    // I put this in the `Coordinator`'s impl block in case we ever want to change the logic
+    // and make it depend on some other state, but for now it's a pure function of the `n_replicas_per_az`
+    // state.
+    fn choose_az<'a>(n_replicas_per_az: &'a HashMap<String, usize>) -> String {
+        let min = *n_replicas_per_az
+            .values()
+            .min()
+            .expect("Must have at least one availability zone");
+        let first_argmin = n_replicas_per_az
+            .iter()
+            .find_map(|(k, v)| (*v == min).then(|| k))
+            .expect("Must have at least one availability zone");
+        first_argmin.clone()
+    }
+
     async fn sequence_create_compute_instance(
         &mut self,
         session: &Session,
@@ -564,10 +587,50 @@ impl<S: Append + 'static> Coordinator<S> {
             introspection_sources,
         }];
 
+        let azs = self.catalog.state().availability_zones();
+        let mut n_replicas_per_az = azs
+            .iter()
+            .map(|s| (s.clone(), 0))
+            .collect::<HashMap<_, _>>();
+        for (_name, r) in replicas.iter() {
+            if let Some(az) = r.get_az() {
+                let ct: &mut usize = n_replicas_per_az.get_mut(az).ok_or_else(|| {
+                    AdapterError::InvalidClusterReplicaAz {
+                        az: az.to_string(),
+                        expected: azs.to_vec(),
+                    }
+                })?;
+                *ct += 1
+            }
+        }
+
         // This vector collects introspection sources of all replicas of this compute instance
         let mut introspection_collections = Vec::new();
 
-        for (replica_name, replica_config) in replicas {
+        for (replica_name, replica_config) in replicas.into_iter() {
+            // If the AZ was not specified, choose one, round-robin, from the ones with
+            // the lowest number of configured replicas for this cluster.
+            let location = match replica_config {
+                ComputeInstanceReplicaConfig::Remote { addrs } => {
+                    SerializedComputeInstanceReplicaLocation::Remote { addrs }
+                }
+                ComputeInstanceReplicaConfig::Managed {
+                    size,
+                    availability_zone,
+                } => {
+                    let (availability_zone, user_specified) =
+                        availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
+                            let az = Self::choose_az(&n_replicas_per_az);
+                            *n_replicas_per_az.get_mut(&az).unwrap() += 1;
+                            (az, false)
+                        });
+                    SerializedComputeInstanceReplicaLocation::Managed {
+                        size,
+                        availability_zone,
+                        az_user_specified: user_specified,
+                    }
+                }
+            };
             // These are the persisted, per replica persisted logs
             let persisted_logs = if compute_instance_config.is_some() {
                 self.catalog
@@ -584,9 +647,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     .map(|(variant, id)| (*id, variant.desc().into())),
             );
 
-            let config = self
-                .catalog
-                .concretize_replica_config(replica_config, persisted_logs)?;
+            let config = ConcreteComputeInstanceReplicaConfig {
+                location: self.catalog.concretize_replica_location(location)?,
+                persisted_logs,
+            };
 
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
@@ -660,9 +724,58 @@ impl<S: Append + 'static> Coordinator<S> {
             .map(|(variant, id)| (*id, variant.desc().into()))
             .collect();
 
-        let config = self
-            .catalog
-            .concretize_replica_config(config, persisted_logs)?;
+        // Choose default AZ if necessary
+        let location = match config {
+            ComputeInstanceReplicaConfig::Remote { addrs } => {
+                SerializedComputeInstanceReplicaLocation::Remote { addrs }
+            }
+            ComputeInstanceReplicaConfig::Managed {
+                size,
+                availability_zone,
+            } => {
+                let (availability_zone, user_specified) = match availability_zone {
+                    Some(az) => {
+                        let azs = self.catalog.state().availability_zones();
+                        if !azs.contains(&az) {
+                            return Err(AdapterError::InvalidClusterReplicaAz {
+                                az,
+                                expected: azs.to_vec(),
+                            });
+                        }
+                        (az, true)
+                    }
+                    None => {
+                        // Choose the least popular AZ among all replicas of this cluster as the default
+                        // if none was specified. If there is a tie for "least popular", pick the first one.
+                        // That is globally unbiased (for Materialize, not necessarily for this customer)
+                        // because we shuffle the AZs on boot.
+                        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+                        let azs = self.catalog.state().availability_zones();
+                        let mut n_replicas_per_az = azs
+                            .iter()
+                            .map(|s| (s.clone(), 0))
+                            .collect::<HashMap<_, _>>();
+                        for r in instance.replicas_by_id.values() {
+                            if let Some(az) = r.config.location.get_az() {
+                                *n_replicas_per_az.get_mut(az).expect("unknown AZ") += 1;
+                            }
+                        }
+                        let az = Self::choose_az(&n_replicas_per_az);
+                        (az, false)
+                    }
+                };
+                SerializedComputeInstanceReplicaLocation::Managed {
+                    size,
+                    availability_zone,
+                    az_user_specified: user_specified,
+                }
+            }
+        };
+
+        let config = ConcreteComputeInstanceReplicaConfig {
+            location: self.catalog.concretize_replica_location(location)?,
+            persisted_logs,
+        };
 
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
@@ -673,6 +786,10 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
 
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let replica_id = instance.replica_id_by_name[&name];
+        let replica_concrete_config = instance.replicas_by_id[&replica_id].config.clone();
+
         self.controller
             .storage_mut()
             .create_collections(persisted_logs_collections)
@@ -682,7 +799,6 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
         let instance_id = instance.id;
         let replica_id = instance.replica_id_by_name[&name];
-        let replica = instance.replicas_by_id[&replica_id].clone();
 
         if instance.logging.is_some() {
             self.initialize_storage_read_policies(
@@ -693,7 +809,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.controller
-            .add_replica_to_instance(instance_id, replica_id, replica.config.clone())
+            .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
             .await
             .unwrap();
 

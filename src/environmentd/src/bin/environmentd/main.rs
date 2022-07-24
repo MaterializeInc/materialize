@@ -644,6 +644,10 @@ max log level: {max_log_level}",
         bail!("--availability-zone values must be unique");
     }
 
+    // Make later logic for choosing AZs unbiased
+    use rand::seq::SliceRandom;
+    args.availability_zone.shuffle(&mut rand::thread_rng());
+
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         sql_listen_addr: args.sql_listen_addr,
         http_listen_addr: args.http_listen_addr,

@@ -134,7 +134,14 @@ pub enum TlsMode {
 }
 
 /// Start an `environmentd` server.
-pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
+pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
+    // Later on, we choose an AZ for every replica, so we need to have at least one.
+    // If we're using an orchestrator that doesn't have the notion of AZs, just create a
+    // fake, blank one.
+    if config.availability_zones.is_empty() {
+        config.availability_zones.push("".to_string());
+    }
+
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
     )?)?;
@@ -190,6 +197,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         stash,
         &BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
+            default_availability_zone: config
+                .availability_zones
+                .first()
+                .expect("Must have at least one availability zone")
+                .clone(),
         },
     )
     .await?;

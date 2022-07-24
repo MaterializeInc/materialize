@@ -132,8 +132,9 @@ impl CatalogState {
             ConcreteComputeInstanceReplicaLocation::Managed {
                 size,
                 availability_zone,
-                ..
-            } => (Some(&**size), availability_zone.as_deref()),
+                az_user_specified: _,
+                allocation: _,
+            } => (Some(&**size), Some(availability_zone.as_str())),
             ConcreteComputeInstanceReplicaLocation::Remote { .. } => (None, None),
         };
 

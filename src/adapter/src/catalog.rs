@@ -53,10 +53,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig, CreateConnectionPlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
-    StatementDesc,
+    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
@@ -864,6 +863,10 @@ impl CatalogState {
     /// identically.
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.database_by_id).expect("serialization cannot fail")
+    }
+
+    pub fn availability_zones(&self) -> &[String] {
+        &self.availability_zones
     }
 }
 
@@ -1716,8 +1719,10 @@ impl<S: Append> Catalog<S> {
                 }
             };
 
-            let config =
-                catalog.concretize_replica_config(serialized_config.into(), persisted_logs)?;
+            let config = ConcreteComputeInstanceReplicaConfig {
+                location: catalog.concretize_replica_location(serialized_config.location)?,
+                persisted_logs,
+            };
 
             // And write the allocated sources back to storage
             catalog
@@ -2016,6 +2021,7 @@ impl<S: Append> Catalog<S> {
             stash,
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
+                default_availability_zone: "".into(),
             },
         )
         .await?;
@@ -2508,20 +2514,19 @@ impl<S: Append> Catalog<S> {
         }
     }
 
-    pub fn concretize_replica_config(
+    pub fn concretize_replica_location(
         &self,
-        config: ComputeInstanceReplicaConfig,
-        persisted_logs: ConcreteComputeInstanceReplicaLogging,
-    ) -> Result<ConcreteComputeInstanceReplicaConfig, AdapterError> {
+        location: SerializedComputeInstanceReplicaLocation,
+    ) -> Result<ConcreteComputeInstanceReplicaLocation, AdapterError> {
         let replica_sizes = &self.state.replica_sizes;
-        let availability_zones = &self.state.availability_zones;
-        let location = match config {
-            ComputeInstanceReplicaConfig::Remote { addrs } => {
+        let location = match location {
+            SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
                 ConcreteComputeInstanceReplicaLocation::Remote { addrs }
             }
-            ComputeInstanceReplicaConfig::Managed {
+            SerializedComputeInstanceReplicaLocation::Managed {
                 size,
                 availability_zone,
+                az_user_specified,
             } => {
                 let allocation = replica_sizes.0.get(&size).ok_or_else(|| {
                     let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
@@ -2539,26 +2544,15 @@ impl<S: Append> Catalog<S> {
                         expected,
                     }
                 })?;
-
-                if let Some(az) = &availability_zone {
-                    if !availability_zones.contains(az) {
-                        return Err(AdapterError::InvalidClusterReplicaAz {
-                            az: az.to_string(),
-                            expected: availability_zones.to_vec(),
-                        });
-                    }
-                }
                 ConcreteComputeInstanceReplicaLocation::Managed {
-                    size,
                     allocation: allocation.clone(),
                     availability_zone,
+                    size,
+                    az_user_specified,
                 }
             }
         };
-        Ok(ConcreteComputeInstanceReplicaConfig {
-            location,
-            persisted_logs,
-        })
+        Ok(location)
     }
 
     pub async fn transact<F, T>(
@@ -3717,7 +3711,16 @@ pub enum SerializedComputeInstanceReplicaLogging {
     Concrete(Vec<(LogVariant, GlobalId)>),
 }
 
-/// A [`ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
+impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
+    fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
+        match conc {
+            ConcreteComputeInstanceReplicaLogging::Default => Self::Default,
+            ConcreteComputeInstanceReplicaLogging::Concrete(vars) => Self::Concrete(vars),
+        }
+    }
+}
+
+/// A [`mz_sql::plan::ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
 /// to the catalog stash. This is a separate type to allow us to evolve the
 /// on-disk format independently from the SQL layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3726,53 +3729,16 @@ pub struct SerializedComputeInstanceReplicaConfig {
     pub location: SerializedComputeInstanceReplicaLocation,
 }
 
-impl SerializedComputeInstanceReplicaConfig {
-    pub fn from(
-        location: ConcreteComputeInstanceReplicaLocation,
-        persisted_logs: ConcreteComputeInstanceReplicaLogging,
+impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
+    fn from(
+        ConcreteComputeInstanceReplicaConfig {
+            location,
+            persisted_logs,
+        }: ConcreteComputeInstanceReplicaConfig,
     ) -> Self {
-        Self {
+        SerializedComputeInstanceReplicaConfig {
             persisted_logs: persisted_logs.into(),
             location: location.into(),
-        }
-    }
-}
-
-impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
-    fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
-        match conc {
-            ConcreteComputeInstanceReplicaLogging::Default => {
-                SerializedComputeInstanceReplicaLogging::Default
-            }
-            ConcreteComputeInstanceReplicaLogging::Concrete(x) => {
-                SerializedComputeInstanceReplicaLogging::Concrete(x)
-            }
-        }
-    }
-}
-
-impl From<SerializedComputeInstanceReplicaConfig> for ComputeInstanceReplicaConfig {
-    fn from(x: SerializedComputeInstanceReplicaConfig) -> Self {
-        match x.location {
-            SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
-                ComputeInstanceReplicaConfig::Remote { addrs }
-            }
-            SerializedComputeInstanceReplicaLocation::Managed {
-                size,
-                availability_zone,
-            } => ComputeInstanceReplicaConfig::Managed {
-                size,
-                availability_zone,
-            },
-        }
-    }
-}
-
-impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
-    fn from(conf: ConcreteComputeInstanceReplicaConfig) -> Self {
-        Self {
-            persisted_logs: conf.persisted_logs.into(),
-            location: conf.location.into(),
         }
     }
 }
@@ -3784,25 +3750,26 @@ pub enum SerializedComputeInstanceReplicaLocation {
     },
     Managed {
         size: String,
-        availability_zone: Option<String>,
+        availability_zone: String,
+        /// `true` if the AZ was specified by the user and must be respected;
+        /// `false` if it was picked arbitrarily by Materialize.
+        az_user_specified: bool,
     },
 }
 
 impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
-    fn from(
-        config: ConcreteComputeInstanceReplicaLocation,
-    ) -> SerializedComputeInstanceReplicaLocation {
-        match config {
-            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
-                SerializedComputeInstanceReplicaLocation::Remote { addrs }
-            }
+    fn from(loc: ConcreteComputeInstanceReplicaLocation) -> Self {
+        match loc {
+            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => Self::Remote { addrs },
             ConcreteComputeInstanceReplicaLocation::Managed {
-                availability_zone,
-                size,
-                ..
-            } => SerializedComputeInstanceReplicaLocation::Managed {
+                allocation: _,
                 size,
                 availability_zone,
+                az_user_specified,
+            } => Self::Managed {
+                size,
+                availability_zone,
+                az_user_specified,
             },
         }
     }
