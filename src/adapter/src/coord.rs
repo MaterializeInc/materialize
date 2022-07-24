@@ -76,6 +76,8 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
+use itertools::Itertools;
+use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -138,6 +140,10 @@ mod timestamp_selection;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
+
+/// A dummy availability zone to use when no availability zones are explicitly
+/// specified.
+pub const DUMMY_AVAILABILITY_ZONE: &str = "";
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
@@ -768,12 +774,26 @@ pub async fn serve<S: Append + 'static>(
         now,
         secrets_controller,
         cluster_replica_sizes,
-        availability_zones,
+        mut availability_zones,
         connection_context,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+
+    // Validate and process availability zones.
+    if !availability_zones.iter().all_unique() {
+        coord_bail!("availability zones must be unique");
+    }
+    // Later on, we choose an AZ for every replica, so we need to have at least
+    // one. If we're using an orchestrator that doesn't have the notion of AZs,
+    // just create a fake, blank one.
+    if availability_zones.is_empty() {
+        availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
+    }
+    // Shuffle availability zones for unbiased selection in
+    // Coordinator::sequence_create_compute_instance_replica.
+    availability_zones.shuffle(&mut rand::thread_rng());
 
     let (mut catalog, builtin_table_updates) = Catalog::open(catalog::Config {
         storage,

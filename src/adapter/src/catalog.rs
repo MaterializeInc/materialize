@@ -71,7 +71,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::storage::BootstrapArgs;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
-use crate::AdapterError;
+use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
 mod builtin_table_updates;
 mod config;
@@ -2077,7 +2077,7 @@ impl<S: Append> Catalog<S> {
             stash,
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
-                default_availability_zone: "".into(),
+                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
         )
         .await?;

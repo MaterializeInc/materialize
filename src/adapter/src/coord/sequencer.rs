@@ -748,7 +748,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         // Choose the least popular AZ among all replicas of this cluster as the default
                         // if none was specified. If there is a tie for "least popular", pick the first one.
                         // That is globally unbiased (for Materialize, not necessarily for this customer)
-                        // because we shuffle the AZs on boot.
+                        // because we shuffle the AZs on boot in `crate::serve`.
                         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
                         let azs = self.catalog.state().availability_zones();
                         let mut n_replicas_per_az = azs

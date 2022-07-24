@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::bail;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -140,14 +141,7 @@ pub enum TlsMode {
 }
 
 /// Start an `environmentd` server.
-pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
-    // Later on, we choose an AZ for every replica, so we need to have at least one.
-    // If we're using an orchestrator that doesn't have the notion of AZs, just create a
-    // fake, blank one.
-    if config.availability_zones.is_empty() {
-        config.availability_zones.push("".to_string());
-    }
-
+pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
     )?)?;
@@ -199,15 +193,25 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     let http_local_addr = http_listener.local_addr()?;
 
     // Load the adapter catalog from disk.
+    if !config
+        .cluster_replica_sizes
+        .0
+        .contains_key(&config.bootstrap_default_cluster_replica_size)
+    {
+        bail!("bootstrap default cluster replica size is unknown");
+    }
     let adapter_storage = mz_adapter::catalog::storage::Connection::open(
         stash,
         &BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
+            // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
+            // shipped to cloud since all clusters will have had a default
+            // availability zone installed.
             default_availability_zone: config
                 .availability_zones
                 .first()
-                .expect("Must have at least one availability zone")
-                .clone(),
+                .cloned()
+                .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
         },
     )
     .await?;
@@ -223,8 +227,8 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller: config.secrets_controller,
-        cluster_replica_sizes: config.cluster_replica_sizes.clone(),
-        availability_zones: config.availability_zones.clone(),
+        cluster_replica_sizes: config.cluster_replica_sizes,
+        availability_zones: config.availability_zones,
         connection_context: config.connection_context,
     })
     .await?;
