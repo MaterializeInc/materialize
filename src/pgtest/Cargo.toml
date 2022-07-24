@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.58"
 bytes = "1.1.0"
-clap = { version = "3.2.12", features = ["derive"] }
+clap = { version = "3.2.14", features = ["derive"] }
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 mz-ore = { path = "../ore" }
