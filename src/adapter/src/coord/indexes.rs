@@ -17,7 +17,7 @@ use mz_transform::IndexOracle;
 
 use crate::catalog::{CatalogItem, CatalogState, Index};
 use crate::coord::dataflows::DataflowBuilder;
-use crate::coord::util::CoordTimestamp;
+use crate::coord::CoordTimestamp;
 use crate::coord::{CollectionIdBundle, Coordinator};
 
 /// Answers questions about the indexes available on a particular compute

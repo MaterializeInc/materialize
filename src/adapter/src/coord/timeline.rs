@@ -13,11 +13,13 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::CollectionPlan;
+use mz_ore::now::{to_datetime, EpochMillis};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_stash::Append;
@@ -27,7 +29,7 @@ use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
-use crate::coord::util::CoordTimestamp;
+use crate::coord::CoordTimestamp;
 use crate::coord::Coordinator;
 use crate::AdapterError;
 
@@ -298,6 +300,14 @@ impl<T: CoordTimestamp> DurableTimestampOracle<T> {
 }
 
 impl<S: Append + 'static> Coordinator<S> {
+    pub(crate) fn now(&self) -> EpochMillis {
+        (self.catalog.config().now)()
+    }
+
+    pub(crate) fn now_datetime(&self) -> DateTime<Utc> {
+        to_datetime(self.now())
+    }
+
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
     fn get_local_timestamp_oracle(&self) -> &DurableTimestampOracle<Timestamp> {

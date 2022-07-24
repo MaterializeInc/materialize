@@ -10,10 +10,7 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
-use chrono::{DateTime, Utc};
-
-use mz_ore::now::{to_datetime, EpochMillis};
-use mz_repr::{GlobalId, ScalarType};
+use mz_repr::ScalarType;
 use mz_sql::names::Aug;
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
@@ -25,14 +22,6 @@ use crate::util::describe;
 use crate::AdapterError;
 
 impl<S: Append + 'static> Coordinator<S> {
-    pub(crate) fn now(&self) -> EpochMillis {
-        (self.catalog.config().now)()
-    }
-
-    pub(crate) fn now_datetime(&self) -> DateTime<Utc> {
-        to_datetime(self.now())
-    }
-
     pub(crate) async fn plan_statement(
         &mut self,
         session: &mut Session,
@@ -163,60 +152,5 @@ impl<S: Append + 'static> Coordinator<S> {
             self.release_read_hold(&txn_reads.read_holds).await;
         }
         txn
-    }
-
-    pub(crate) fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
-        let id = self.transient_id_counter;
-        if id == u64::MAX {
-            coord_bail!("id counter overflows i64");
-        }
-        self.transient_id_counter += 1;
-        Ok(GlobalId::Transient(id))
-    }
-}
-
-pub trait CoordTimestamp:
-    timely::progress::Timestamp
-    + timely::order::TotalOrder
-    + differential_dataflow::lattice::Lattice
-    + std::fmt::Debug
-{
-    /// Advance a timestamp by the least amount possible such that
-    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
-    fn step_forward(&self) -> Self;
-
-    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
-    fn step_forward_by(&self, amount: &Self) -> Self;
-
-    /// Retreat a timestamp by the least amount possible such that
-    /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
-    /// which must only happen if the timestamp is `Timestamp::minimum()`.
-    fn step_back(&self) -> Option<Self>;
-
-    /// Return the maximum value for this timestamp.
-    fn maximum() -> Self;
-}
-
-impl CoordTimestamp for mz_repr::Timestamp {
-    fn step_forward(&self) -> Self {
-        match self.checked_add(1) {
-            Some(ts) => ts,
-            None => panic!("could not step forward"),
-        }
-    }
-
-    fn step_forward_by(&self, amount: &Self) -> Self {
-        match self.checked_add(*amount) {
-            Some(ts) => ts,
-            None => panic!("could not step {self} forward by {amount}"),
-        }
-    }
-
-    fn step_back(&self) -> Option<Self> {
-        self.checked_sub(1)
-    }
-
-    fn maximum() -> Self {
-        Self::MAX
     }
 }
