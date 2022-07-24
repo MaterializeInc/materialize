@@ -13,5 +13,5 @@
 # during a restart
 #
 
-> SHOW CREATE VIEW special_functions_view;
-"materialize.public.special_functions_view" "CREATE VIEW \"materialize\".\"public\".\"special_functions_view\" AS SELECT * FROM \"materialize\".\"public\".\"special_functions\" WHERE \"mz_catalog\".\"mz_logical_timestamp\"() > \"f1\""
+> SHOW CREATE MATERIALIZED VIEW special_functions_view;
+"materialize.public.special_functions_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"special_functions_view\" IN CLUSTER \"default\" AS SELECT * FROM \"materialize\".\"public\".\"special_functions\" WHERE \"mz_catalog\".\"mz_logical_timestamp\"() > \"f1\""

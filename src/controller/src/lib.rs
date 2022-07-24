@@ -116,9 +116,23 @@ pub enum ConcreteComputeInstanceReplicaLocation {
         allocation: ComputeInstanceReplicaAllocation,
         /// SQL size parameter used for allocation
         size: String,
-        /// The replica's availability zone, if `Some`.
-        availability_zone: Option<String>,
+        /// The replica's availability zone
+        availability_zone: String,
+        /// `true` if the AZ was specified by the user and must be respected;
+        /// `false` if it was picked arbitrarily by Materialize.
+        az_user_specified: bool,
     },
+}
+
+impl ConcreteComputeInstanceReplicaLocation {
+    pub fn get_az(&self) -> Option<&str> {
+        match self {
+            ConcreteComputeInstanceReplicaLocation::Remote { .. } => None,
+            ConcreteComputeInstanceReplicaLocation::Managed {
+                availability_zone, ..
+            } => Some(&*availability_zone),
+        }
+    }
 }
 
 /// Logging configuration of a replica
@@ -354,7 +368,7 @@ where
                                 "cluster-id".into() => instance_id.to_string(),
                                 "type".into() => "cluster".into(),
                             },
-                            availability_zone,
+                            availability_zone: Some(availability_zone),
                             // This constrains the orchestrator
                             // (for those orchestrators that support anti-affinity, today just k8s)
                             // to never schedule pods for different replicas of the same cluster

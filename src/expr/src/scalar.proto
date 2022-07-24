@@ -339,8 +339,6 @@ message ProtoUnaryFunc {
 
 message ProtoBinaryFunc {
     oneof kind {
-        google.protobuf.Empty and = 7;
-        google.protobuf.Empty or = 8;
         google.protobuf.Empty add_int16 = 46;
         google.protobuf.Empty add_int32 = 11;
         google.protobuf.Empty add_int64 = 12;
@@ -511,6 +509,8 @@ message ProtoVariadicFunc {
         google.protobuf.Empty error_if_null = 22;
         google.protobuf.Empty date_bin_timestamp = 23;
         google.protobuf.Empty date_bin_timestamp_tz = 24;
+        google.protobuf.Empty and = 25;
+        google.protobuf.Empty or = 26;
     }
 }
 

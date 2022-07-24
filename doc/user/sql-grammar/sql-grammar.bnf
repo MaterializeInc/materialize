@@ -146,6 +146,8 @@ delete_stmt ::=
   'WHERE' condition
 discard ::=
   'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
+drop_connection ::=
+    'DROP' 'CONNECTION' ('IF EXISTS')? connection_name ('CASCADE' | 'RESTRICT')?
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
@@ -285,6 +287,12 @@ select_stmt ::=
   ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
+show_connections ::=
+  'SHOW' 'FULL'? 'CONNECTIONS'
+  ('FROM' schema_name)?
+  ('LIKE' 'pattern' | 'WHERE' expr)?
+show_create_connection ::=
+  'SHOW' 'CREATE' 'CONNECTION' connection_name
 show_create_index ::=
   'SHOW' 'CREATE' 'INDEX' index_name
 show_create_sink ::=

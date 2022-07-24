@@ -14,12 +14,10 @@ use std::mem;
 
 use once_cell::sync::Lazy;
 
-use mz_expr::func;
+use mz_expr::VariadicFunc;
 use mz_repr::{ColumnType, RelationType, ScalarType};
 
-use crate::plan::expr::{
-    AbstractExpr, AggregateFunc, BinaryFunc, HirRelationExpr, HirScalarExpr, UnaryFunc,
-};
+use crate::plan::expr::{AbstractExpr, AggregateFunc, HirRelationExpr, HirScalarExpr};
 
 /// Rewrites predicates that contain subqueries so that the subqueries
 /// appear in their own later predicate when possible.
@@ -119,13 +117,13 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     //// `(<subquery 2>) = e` in the `out` vector.
     fn extract_conjuncted_subqueries(expr: &mut HirScalarExpr, out: &mut Vec<HirScalarExpr>) {
         match expr {
-            HirScalarExpr::CallBinary {
-                func: BinaryFunc::And,
-                expr1,
-                expr2,
+            HirScalarExpr::CallVariadic {
+                func: VariadicFunc::And,
+                exprs,
             } => {
-                extract_conjuncted_subqueries(expr1, out);
-                extract_conjuncted_subqueries(expr2, out);
+                exprs
+                    .into_iter()
+                    .for_each(|e| extract_conjuncted_subqueries(e, out));
             }
             expr if contains_subquery(expr) => {
                 out.push(mem::replace(expr, HirScalarExpr::literal_true()))
@@ -250,18 +248,8 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                         // `<pred>` is false *or* null. To invert the test, we
                         // need `NOT <pred> OR <pred> IS NULL`.
                         let expr = expr.take();
-                        let filter = expr
-                            .clone()
-                            .call_unary(UnaryFunc::Not(func::Not))
-                            .call_binary(
-                                expr.call_unary(UnaryFunc::IsNull(func::IsNull)),
-                                BinaryFunc::Or,
-                            );
-                        *e = input
-                            .take()
-                            .filter(vec![filter])
-                            .exists()
-                            .call_unary(UnaryFunc::Not(func::Not));
+                        let filter = expr.clone().not().or(expr.call_is_null());
+                        *e = input.take().filter(vec![filter]).exists().not();
                     }
                     _ => (),
                 }

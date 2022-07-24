@@ -260,13 +260,13 @@ ts
 contains:Unsupported binary temporal operation: NotEq
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_logical_timestamp() + 1 = ts;
-contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: CallBinary { func: Eq, expr1: CallUnary { func: CastInt64ToNumeric(CastInt64ToNumeric(None)), expr: Column(0) }, expr2: CallBinary { func: AddNumeric, expr1: CallUnmaterializable(MzLogicalTimestamp), expr2: Literal(Ok(Row{[Numeric(OrderedDecimal(1))]}), ColumnType { scalar_type: Numeric { max_scale: None }, nullable: false }) } }
+contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: (bigint_to_numeric(#0) = (mz_logical_timestamp() + 1))
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_logical_timestamp() > ts OR ts = 1;
-contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: CallBinary { func: Or, expr1: CallBinary { func: Eq, expr1: Column(0), expr2: Literal(Ok(Row{[Int64(1)]}), ColumnType { scalar_type: Int64, nullable: false }) }, expr2: CallBinary { func: Gt, expr1: CallUnmaterializable(MzLogicalTimestamp), expr2: CallUnary { func: CastInt64ToNumeric(CastInt64ToNumeric(None)), expr: Column(0) } } }
+contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: ((#0 = 1) || (mz_logical_timestamp() > bigint_to_numeric(#0)))
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE ts BETWEEN mz_logical_timestamp() AND mz_logical_timestamp() + 1;
-contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: CallBinary { func: Lte, expr1: Column(1), expr2: CallBinary { func: AddNumeric, expr1: CallUnmaterializable(MzLogicalTimestamp), expr2: Literal(Ok(Row{[Numeric(OrderedDecimal(1))]}), ColumnType { scalar_type: Numeric { max_scale: None }, nullable: false }) } }
+contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: (#1 <= (mz_logical_timestamp() + 1))
 
 #
 # Numeric comparisons

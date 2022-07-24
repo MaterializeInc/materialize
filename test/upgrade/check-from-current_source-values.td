@@ -11,4 +11,4 @@
 1 2 3
 7 8 9
 
-> DROP VIEW values_view;
+> DROP MATERIALIZED VIEW values_view;

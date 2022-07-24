@@ -281,35 +281,35 @@ CREATE VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, materialized: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: true, materialized: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE TEMP VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: true, materialized: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE OR REPLACE VIEW v AS SELECT 1
 ----
 CREATE OR REPLACE VIEW v AS SELECT 1
 =>
-CreateView(CreateViewStatement { if_exists: Replace, temporary: false, materialized: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE VIEW IF NOT EXISTS v AS SELECT 1
 ----
 CREATE VIEW IF NOT EXISTS v AS SELECT 1
 =>
-CreateView(CreateViewStatement { if_exists: Skip, temporary: false, materialized: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1
@@ -323,35 +323,28 @@ CREATE VIEW v (has, cols) AS SELECT 1, 2
 ----
 CREATE VIEW v (has, cols) AS SELECT 1, 2
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, materialized: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
-CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
+CREATE VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 ----
-CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
+CREATE VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, materialized: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
-
-parse-statement
-CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
-----
-CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
-=>
-CreateView(CreateViewStatement { if_exists: Skip, temporary: false, materialized: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE VIEWS FROM SOURCE "foobar"
 ----
 CREATE VIEWS FROM SOURCE foobar
 =>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
 
 parse-statement
 CREATE OR REPLACE VIEWS FROM SOURCE "foobar"
 ----
 CREATE OR REPLACE VIEWS FROM SOURCE foobar
 =>
-CreateViews(CreateViewsStatement { if_exists: Replace, temporary: false, materialized: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
+CreateViews(CreateViewsStatement { if_exists: Replace, temporary: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
 
 parse-statement
 CREATE VIEWS FROM SOURCE "foobar" ();
@@ -361,53 +354,53 @@ CREATE VIEWS FROM SOURCE "foobar" ();
                                    ^
 
 parse-statement
-CREATE MATERIALIZED VIEWS FROM SOURCE "foobar" (t1, "t2" AS t3);
+CREATE VIEWS FROM SOURCE "foobar" (t1, "t2" AS t3);
 ----
-CREATE MATERIALIZED VIEWS FROM SOURCE foobar (t1, t2 AS t3)
+CREATE VIEWS FROM SOURCE foobar (t1, t2 AS t3)
 =>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: true, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: Some([CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t1")]), alias: None }, CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t2")]), alias: Some(UnresolvedObjectName([Ident("t3")])) }]) })
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: Some([CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t1")]), alias: None }, CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t2")]), alias: Some(UnresolvedObjectName([Ident("t3")])) }]) })
 
 parse-statement
-CREATE RECORDED VIEW myschema.myview AS SELECT foo FROM bar
+CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 ----
-CREATE RECORDED VIEW myschema.myview AS SELECT foo FROM bar
+CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateRecordedView(CreateRecordedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], in_cluster: None, query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], in_cluster: None, query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
-CREATE OR REPLACE RECORDED VIEW v AS SELECT 1
+CREATE OR REPLACE MATERIALIZED VIEW v AS SELECT 1
 ----
-CREATE OR REPLACE RECORDED VIEW v AS SELECT 1
+CREATE OR REPLACE MATERIALIZED VIEW v AS SELECT 1
 =>
-CreateRecordedView(CreateRecordedViewStatement { if_exists: Replace, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
-CREATE RECORDED VIEW IF NOT EXISTS v AS SELECT 1
+CREATE MATERIALIZED VIEW IF NOT EXISTS v AS SELECT 1
 ----
-CREATE RECORDED VIEW IF NOT EXISTS v AS SELECT 1
+CREATE MATERIALIZED VIEW IF NOT EXISTS v AS SELECT 1
 =>
-CreateRecordedView(CreateRecordedViewStatement { if_exists: Skip, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Skip, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
-CREATE RECORDED VIEW v (has, cols) AS SELECT 1, 2
+CREATE MATERIALIZED VIEW v (has, cols) AS SELECT 1, 2
 ----
-CREATE RECORDED VIEW v (has, cols) AS SELECT 1, 2
+CREATE MATERIALIZED VIEW v (has, cols) AS SELECT 1, 2
 =>
-CreateRecordedView(CreateRecordedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], in_cluster: None, query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], in_cluster: None, query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
-CREATE RECORDED VIEW v IN CLUSTER bar AS SELECT 1
+CREATE MATERIALIZED VIEW v IN CLUSTER bar AS SELECT 1
 ----
-CREATE RECORDED VIEW v IN CLUSTER bar AS SELECT 1
+CREATE MATERIALIZED VIEW v IN CLUSTER bar AS SELECT 1
 =>
-CreateRecordedView(CreateRecordedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: Some(Unresolved(Ident("bar"))), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: Some(Unresolved(Ident("bar"))), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
-CREATE RECORDED VIEW v IN CLUSTER [1] AS SELECT 1
+CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 ----
-CREATE RECORDED VIEW v IN CLUSTER [1] AS SELECT 1
+CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 =>
-CreateRecordedView(CreateRecordedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE
@@ -873,14 +866,14 @@ DROP TABLE foo
 ----
 DROP TABLE foo
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: false, names: [UnresolvedObjectName([Ident("foo")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Table, if_exists: false, names: [UnresolvedObjectName([Ident("foo")])], cascade: false })
 
 parse-statement
 DROP TABLE IF EXISTS foo, bar CASCADE
 ----
 DROP TABLE IF EXISTS foo, bar CASCADE
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: true, names: [UnresolvedObjectName([Ident("foo")]), UnresolvedObjectName([Ident("bar")])], cascade: true })
+DropObjects(DropObjectsStatement { object_type: Table, if_exists: true, names: [UnresolvedObjectName([Ident("foo")]), UnresolvedObjectName([Ident("bar")])], cascade: true })
 
 parse-statement
 DROP TABLE
@@ -901,28 +894,28 @@ DROP VIEW myschema.myview
 ----
 DROP VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
-DROP RECORDED VIEW myschema.myview
+DROP MATERIALIZED VIEW myschema.myview
 ----
-DROP RECORDED VIEW myschema.myview
+DROP MATERIALIZED VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: RecordedView, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: MaterializedView, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
 DROP SOURCE myschema.mydatasource
 ----
 DROP SOURCE myschema.mydatasource
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Source, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Source, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
 
 parse-statement
 DROP INDEX IF EXISTS myschema.myindex
 ----
 DROP INDEX IF EXISTS myschema.myindex
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Index, if_exists: true, names: [UnresolvedObjectName([Ident("myschema"), Ident("myindex")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Index, if_exists: true, names: [UnresolvedObjectName([Ident("myschema"), Ident("myindex")])], cascade: false })
 
 parse-statement
 TAIL foo.bar
@@ -1088,11 +1081,11 @@ ALTER VIEW name SET (property = true)
                 ^
 
 parse-statement
-ALTER RECORDED VIEW name SET (property = true)
+ALTER MATERIALIZED VIEW name SET (property = true)
 ----
 error: Expected RENAME, found SET
-ALTER RECORDED VIEW name SET (property = true)
-                         ^
+ALTER MATERIALIZED VIEW name SET (property = true)
+                             ^
 
 parse-statement
 ALTER SINK name SET (property = true)
@@ -1130,11 +1123,11 @@ ALTER VIEW name RENAME TO name2
 AlterObjectRename(AlterObjectRenameStatement { object_type: View, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
 
 parse-statement
-ALTER RECORDED VIEW name RENAME TO name2
+ALTER MATERIALIZED VIEW name RENAME TO name2
 ----
-ALTER RECORDED VIEW name RENAME TO name2
+ALTER MATERIALIZED VIEW name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: RecordedView, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: MaterializedView, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS ()
@@ -1330,21 +1323,21 @@ DROP SECRET secret
 ----
 DROP SECRET secret
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: false, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Secret, if_exists: false, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
 
 parse-statement
 DROP SECRET IF EXISTS secret
 ----
 DROP SECRET IF EXISTS secret
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: true, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Secret, if_exists: true, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
 
 parse-statement
 SHOW SECRETS
 ----
 SHOW SECRETS
 =>
-ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, in_cluster: None, extended: false, full: false, materialized: false, filter: None })
+ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, in_cluster: None, extended: false, full: false, filter: None })
 
 parse-statement
 ALTER SECRET secret RENAME TO secret2
@@ -1372,7 +1365,7 @@ DROP CONNECTION conn1
 ----
 DROP CONNECTION conn1
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Connection, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES

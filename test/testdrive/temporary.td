@@ -56,19 +56,6 @@ contains:non-temporary items cannot depend on temporary item
 2 "bar"
 3 "foo"
 
-> CREATE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v
-
-> SHOW INDEXES FROM foo
-cluster on_name    key_name         seq_in_index  column_name  expression  nullable
----------------------------------------------------------------------------------------
-<CLUSTER_NAME> foo        foo_primary_idx  1             column1      <null>      false
-<CLUSTER_NAME> foo        foo_primary_idx  2             column2      <null>      false
-
-! CREATE TEMP MATERIALIZED VIEW foo AS SELECT * FROM v
-contains:catalog item 'foo' already exists
-
-> CREATE OR REPLACE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v
-
 # A temporary view should mask a normal view with the same name
 
 > CREATE VIEW v1 AS SELECT 1 AS f1;
@@ -214,14 +201,14 @@ $ set schema={
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found SOURCE
+contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE, found SOURCE
 
 
 ##### Temporary sinks.
 ! CREATE TEMPORARY SINK data_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found SINK
+contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE, found SINK
 
 #####################################################################
 

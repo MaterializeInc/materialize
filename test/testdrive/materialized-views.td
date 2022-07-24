@@ -8,13 +8,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Additional test for recorded views, on top of those in test/sqllogictest/recorded_views.slt
+# Additional test for materialized views, on top of those in
+# test/sqllogictest/materialized_views.slt
 
 
 
-# Kafka source as a source for a recorded view
+# Kafka source as a source for a materialized view
 
-$ set recorded-views={
+$ set materialized-views={
         "type" : "record",
         "name" : "test",
         "fields" : [
@@ -22,26 +23,26 @@ $ set recorded-views={
         ]
     }
 
-$ kafka-create-topic topic=recorded-views
+$ kafka-create-topic topic=materialized-views
 
-$ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
 {"f1": "123"}
 
 > CREATE SOURCE s1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-recorded-views-${testdrive.seed}'
+  'testdrive-materialized-views-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
 {"f1": "234"}
 
 > SELECT COUNT(*) FROM s1;
 2
 
-> CREATE RECORDED VIEW v1 AS SELECT COUNT(f1::integer) AS c1 FROM s1;
+> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(f1::integer) AS c1 FROM s1;
 
-$ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
 {"f1": "345"}
 
 > SELECT * FROM v1;
@@ -49,17 +50,17 @@ $ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish
 
 > CREATE SINK sink1 FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-recorded-views-sink-${testdrive.seed}'
+  TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'
   WITH (reuse_topic = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SOURCE sink1_check
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-recorded-views-sink-${testdrive.seed}'
+  'testdrive-materialized-views-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
 {"f1": "456"}
 
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
@@ -72,7 +73,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Inject failure in the source
 
-$ kafka-ingest format=avro topic=recorded-views schema=${recorded-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
 {"f1": "ABC"}
 
 ! SELECT * FROM v1;

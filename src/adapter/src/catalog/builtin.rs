@@ -1070,8 +1070,8 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false)),
 });
-pub static MZ_RECORDED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_recorded_views",
+pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_materialized_views",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
@@ -1227,7 +1227,7 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
       SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
 UNION SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
 UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views
-UNION SELECT id, oid, schema_id, name, 'recorded view' FROM mz_catalog.mz_recorded_views",
+UNION SELECT id, oid, schema_id, name, 'materialized view' FROM mz_catalog.mz_materialized_views",
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
@@ -1492,6 +1492,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
         WHEN mz_objects.type = 'source' THEN 'r'
         WHEN mz_objects.type = 'index' THEN 'i'
         WHEN mz_objects.type = 'view' THEN 'v'
+        WHEN mz_objects.type = 'materialized view' THEN 'm'
     END relkind,
     -- MZ doesn't support CHECK constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
@@ -1935,6 +1936,20 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE d.name = pg_catalog.current_database()",
 };
 
+pub const PG_MATVIEWS: BuiltinView = BuiltinView {
+    name: "pg_matviews",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_matviews AS SELECT
+    s.name AS schemaname,
+    m.name AS matviewname,
+    NULL::pg_catalog.oid AS matviewowner,
+    m.definition AS definition
+FROM mz_catalog.mz_materialized_views m
+LEFT JOIN mz_catalog.mz_schemas s ON s.id = m.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE d.name = pg_catalog.current_database()",
+};
+
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     name: "columns",
     schema: INFORMATION_SCHEMA,
@@ -2137,7 +2152,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SOURCES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
-        Builtin::Table(&MZ_RECORDED_VIEWS),
+        Builtin::Table(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_ARRAY_TYPES),
         Builtin::Table(&MZ_BASE_TYPES),
@@ -2192,6 +2207,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_ACCESS_METHODS),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),
+        Builtin::View(&PG_MATVIEWS),
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),

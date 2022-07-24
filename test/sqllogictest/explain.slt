@@ -549,10 +549,10 @@ Finish order_by=(#1 asc nulls_last, #0 desc nulls_first) limit=5 offset=0 projec
 EOF
 
 statement ok
-CREATE RECORDED VIEW rv AS SELECT * FROM (SELECT 1)
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM (SELECT 1)
 
 query T multiline
-EXPLAIN PLAN FOR RECORDED VIEW rv
+EXPLAIN PLAN FOR MATERIALIZED VIEW mv
 ----
 %0 =
 | Constant (1)

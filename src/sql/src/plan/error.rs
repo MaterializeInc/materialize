@@ -75,10 +75,10 @@ pub enum PlanError {
     InvalidTemporarySchema,
     Parser(ParserError),
     Qgm(QGMError),
-    DropViewOnRecordedView(String),
-    AlterViewOnRecordedView(String),
-    ShowCreateViewOnRecordedView(String),
-    ExplainViewOnRecordedView(String),
+    DropViewOnMaterializedView(String),
+    AlterViewOnMaterializedView(String),
+    ShowCreateViewOnMaterializedView(String),
+    ExplainViewOnMaterializedView(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -97,17 +97,17 @@ impl PlanError {
 
     pub fn hint(&self) -> Option<String> {
         match self {
-            Self::DropViewOnRecordedView(_) => {
-                Some("Use DROP RECORDED VIEW to remove a recorded view.".into())
+            Self::DropViewOnMaterializedView(_) => {
+                Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
-            Self::AlterViewOnRecordedView(_) => {
-                Some("Use ALTER RECORDED VIEW to rename a recorded view.".into())
+            Self::AlterViewOnMaterializedView(_) => {
+                Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
             }
-            Self::ShowCreateViewOnRecordedView(_) => {
-                Some("Use SHOW CREATE RECORDED VIEW to show a recorded view.".into())
+            Self::ShowCreateViewOnMaterializedView(_) => {
+                Some("Use SHOW CREATE MATERIALIZED VIEW to show a materialized view.".into())
             }
-            Self::ExplainViewOnRecordedView(_) => {
-                Some("Use EXPLAIN [...] RECORDED VIEW to explain a recorded view.".into())
+            Self::ExplainViewOnMaterializedView(_) => {
+                Some("Use EXPLAIN [...] MATERIALIZED VIEW to explain a materialized view.".into())
             }
             _ => None,
         }
@@ -195,10 +195,10 @@ impl fmt::Display for PlanError {
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
-            Self::DropViewOnRecordedView(name)
-            | Self::AlterViewOnRecordedView(name)
-            | Self::ShowCreateViewOnRecordedView(name)
-            | Self::ExplainViewOnRecordedView(name) => write!(f, "{name} is not a view"),
+            Self::DropViewOnMaterializedView(name)
+            | Self::AlterViewOnMaterializedView(name)
+            | Self::ShowCreateViewOnMaterializedView(name)
+            | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
         }
     }
 }

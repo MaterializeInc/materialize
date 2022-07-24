@@ -552,6 +552,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_enum`](https://www.postgresql.org/docs/current/catalog-pg-enum.html)
   * [`pg_index`](https://www.postgresql.org/docs/current/catalog-pg-index.html)
   * [`pg_inherits`](https://www.postgresql.org/docs/current/catalog-pg-inherits.html)
+  * [`pg_matviews`](https://www.postgresql.org/docs/current/view-pg-matviews.html)
   * [`pg_namespace`](https://www.postgresql.org/docs/current/catalog-pg-namespace.html)
   * [`pg_policy`](https://www.postgresql.org/docs/current/catalog-pg-policy.html)
   * [`pg_proc`](https://www.postgresql.org/docs/current/catalog-pg-proc.html)

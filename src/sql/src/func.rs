@@ -2958,10 +2958,6 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|
             // message is the second argument.
             params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
         },
-        "mz_is_materialized" => Scalar {
-            params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_catalog.mz_indexes WHERE on_id = $1)") => Bool,
-                oid::FUNC_MZ_IS_MATERIALIZED_OID;
-        },
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },

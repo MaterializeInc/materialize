@@ -42,8 +42,9 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
         )?;
         client.batch_execute(
-            "CREATE MATERIALIZED VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
+            "CREATE VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
         )?;
+        client.batch_execute("CREATE DEFAULT INDEX ON mat")?;
         client.batch_execute("CREATE DATABASE d")?;
         client.batch_execute("CREATE SCHEMA d.s")?;
         client.batch_execute("CREATE VIEW d.s.v AS SELECT 1")?;

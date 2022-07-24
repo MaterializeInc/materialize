@@ -17,7 +17,7 @@ $ set schema={
 
 $ kafka-create-topic topic=re-created partitions=1
 
-# Make sure that we can render a source (by creating a MATERIALIZED VIEW), drop
+# Make sure that we can render a source (by creating an indexed view), drop
 # it, and render it again.
 
 $ kafka-ingest format=avro topic=re-created schema=${schema} publish=true repeat=10
@@ -29,7 +29,8 @@ $ kafka-ingest format=avro topic=re-created schema=${schema} publish=true repeat
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 
-> CREATE MATERIALIZED VIEW a_view AS SELECT * FROM re_created;
+> CREATE VIEW a_view AS SELECT * FROM re_created;
+> CREATE DEFAULT INDEX ON a_view;
 
 > SELECT COUNT(*) FROM a_view;
 10
@@ -40,7 +41,8 @@ $ kafka-ingest format=avro topic=re-created schema=${schema} publish=true repeat
 
 > DROP VIEW a_view;
 
-> CREATE MATERIALIZED VIEW a_view AS SELECT * FROM re_created;
+> CREATE VIEW a_view AS SELECT * FROM re_created;
+> CREATE DEFAULT INDEX ON a_view;
 
 > SELECT COUNT(*) FROM a_view;
 10
