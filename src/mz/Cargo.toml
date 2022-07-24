@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 serde = { version = "1.0.137", features = ["derive"] }
-clap = { version = "3.2.6", features = [ "derive" ] }
+clap = { version = "3.2.14", features = [ "derive" ] }
 tokio = { version = "1.19.2", features = ["full"] }
 open = "3.0.1"
 axum = "0.5.13"
