@@ -200,7 +200,7 @@ pub struct Config<S> {
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,
     pub availability_zones: Vec<String>,
-    pub replica_sizes: ClusterReplicaSizeMap,
+    pub cluster_replica_sizes: ClusterReplicaSizeMap,
     pub connection_context: ConnectionContext,
 }
 
@@ -764,7 +764,7 @@ pub async fn serve<S: Append + 'static>(
         metrics_registry,
         now,
         secrets_controller,
-        replica_sizes,
+        cluster_replica_sizes,
         availability_zones,
         connection_context,
     }: Config<S>,
@@ -779,7 +779,7 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
-        replica_sizes,
+        cluster_replica_sizes,
         availability_zones,
     })
     .await?;

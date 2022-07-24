@@ -34,7 +34,7 @@ pub struct Config<'a, S> {
     /// The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
-    pub replica_sizes: ClusterReplicaSizeMap,
+    pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
 }

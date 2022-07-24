@@ -187,7 +187,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: metrics_registry.clone(),
         now: config.now,
         cors_allowed_origin: AllowOrigin::list([]),
-        replica_sizes: Default::default(),
+        cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: "1".into(),
         availability_zones: Default::default(),
         connection_context: ConnectionContext::for_tests(

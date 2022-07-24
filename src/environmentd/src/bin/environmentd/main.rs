@@ -325,6 +325,10 @@ pub struct Args {
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID")]
     aws_external_id_prefix: Option<String>,
+    /// Availability zones in which storage and compute resources may be
+    /// deployed.
+    #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
+    availability_zone: Vec<String>,
     /// A map from size name to resource allocations for cluster replicas.
     #[clap(
         long,
@@ -339,11 +343,6 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_default_cluster_replica_size: String,
-
-    /// Availability zones in which storage and compute resources may be
-    /// deployed.
-    #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
-    availability_zone: Vec<String>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -629,11 +628,11 @@ max log level: {max_log_level}",
 
     sys::adjust_rlimits();
 
-    let replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
+    let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
         None => Default::default(),
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
-    if !replica_sizes
+    if !cluster_replica_sizes
         .0
         .contains_key(&args.bootstrap_default_cluster_replica_size)
     {
@@ -662,7 +661,7 @@ max log level: {max_log_level}",
         unsafe_mode: args.unsafe_mode,
         metrics_registry,
         now,
-        replica_sizes,
+        cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         availability_zones: args.availability_zone,
         connection_context: ConnectionContext::from_cli_args(
