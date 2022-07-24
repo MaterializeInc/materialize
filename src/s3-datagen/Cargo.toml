@@ -17,4 +17,4 @@ indicatif = "0.16.2"
 mz-ore = { path = "../ore" }
 tokio = { version = "1.19.2", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.35"
-tracing-subscriber = { version = "0.3.14", default-features = false, features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.15", default-features = false, features = ["env-filter", "fmt"] }

@@ -43,7 +43,7 @@ serde = { version = "1.0.139", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync"] }
 tracing = "0.1.35"
-tracing-subscriber = "0.3.14"
+tracing-subscriber = "0.3.15"
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]

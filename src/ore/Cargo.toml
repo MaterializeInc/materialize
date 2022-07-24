@@ -40,7 +40,7 @@ tokio-openssl = { version = "0.6.3", optional = true }
 # log lines we care about.
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
-tracing-subscriber = { version = "0.3.14", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
+tracing-subscriber = { version = "0.3.15", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
 
 # For the `tracing` feature
 ansi_term = { version = "0.12.1", optional = true }
