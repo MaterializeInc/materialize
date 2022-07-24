@@ -23,7 +23,7 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-ore = { path = "../ore" }
 once_cell = "1.13.0"
 semver = "1.0.12"
-serde = { version = "1.0.139", features = ["derive"] }
+serde = { version = "1.0.140", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.19.2"
 tokio-stream = "0.1.9"
