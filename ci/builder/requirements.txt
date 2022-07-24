@@ -45,5 +45,5 @@ types-psutil==5.9.0
 types-PyMYSQL==1.0.19
 types-PyYAML==6.0.10
 types-requests==2.28.1
-types-setuptools==63.2.0
+types-setuptools==63.2.1
 types-toml==0.10.8
