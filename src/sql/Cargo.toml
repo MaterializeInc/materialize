@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.58"
 aws-arn = "0.3.1"
-aws-sdk-sts = { version = "0.15.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sts = { version = "0.16.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 enum-kinds = "0.5.1"
 globset = "0.4.9"
