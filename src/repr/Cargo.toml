@@ -18,7 +18,7 @@ harness = false
 anyhow = "1.0.58"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
-chrono-tz = { version = "0.6.1", features = ["serde", "case-insensitive"] }
+chrono-tz = { git = "https://github.com/chronotope/chrono-tz", features = ["serde", "case-insensitive"] }
 dec = "0.4.8"
 enum-kinds = "0.5.1"
 fast-float = "0.2.0"
