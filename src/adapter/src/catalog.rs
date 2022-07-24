@@ -86,6 +86,7 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::client::ConnectionId;
+use crate::util::index_sql;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 const SYSTEM_USER: &str = "mz_system";
@@ -460,7 +461,7 @@ impl CatalogState {
                                 .into_iter()
                                 .map(MirScalarExpr::Column)
                                 .collect(),
-                            create_sql: super::coord::index_sql(
+                            create_sql: index_sql(
                                 index_item_name,
                                 id,
                                 source_name,

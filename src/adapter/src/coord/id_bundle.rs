@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_compute_client::controller::ComputeInstanceId;
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_repr::GlobalId;
 
 /// A bundle of storage and compute collection identifiers.

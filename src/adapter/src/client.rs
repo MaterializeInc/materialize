@@ -24,7 +24,7 @@ use crate::command::{
     Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
     StartupResponse,
 };
-use crate::coord::PeekResponseUnary;
+use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
