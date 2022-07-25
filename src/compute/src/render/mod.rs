@@ -158,9 +158,9 @@ pub fn build_compute_dataflow<A: Allocate>(
         G: Scope<Timestamp = mz_repr::Timestamp>,
     {
         let logger = logger.clone();
-        let source_id = source_id.clone();
+        let source_id = *source_id;
         let mut dataflow_ids = index_ids.clone();
-        dataflow_ids.append(&mut (sink_ids.clone()));
+        dataflow_ids.extend(sink_ids);
         source_instantiation.inspect_container(move |event| {
             if let Err(frontier) = event {
                 for time in frontier.iter() {
