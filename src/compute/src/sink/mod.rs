@@ -13,4 +13,6 @@ mod persist_sink;
 mod tail;
 
 pub(crate) use metrics::KafkaBaseMetrics;
+pub(crate) use persist_sink::persist_sink;
+
 pub use metrics::SinkBaseMetrics;
