@@ -34,6 +34,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use mz_build_info::BuildInfo;
@@ -60,6 +61,39 @@ struct ReplicaTaskConfig<T> {
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: UnboundedSender<ComputeResponse<T>>,
+    /// A channel to receive drop notifications during initialization
+    drop_rx: oneshot::Receiver<()>,
+}
+
+/// A token to hold on to while the replica task should connect.
+///
+/// Before establishing a connection, the replica task cannot observe that the command
+/// channel is dropped. During this period, the signalling is handled by the token. Later,
+/// dropping the token does not terminate the replica task. To accomplish safe teardown,
+/// both the channel and token need to be dropped.
+#[derive(Debug)]
+struct ReplicaTaskToken {
+    /// Sender to indicate that the token was dropped.
+    tx: Option<oneshot::Sender<()>>,
+}
+
+impl ReplicaTaskToken {
+    /// Construct a new [ReplicaTaskToken].
+    ///
+    /// Returns the token and a receiver, suitable to populate the corresponding `drop_rx` field in
+    /// [ReplicaTaskConfig].
+    fn new() -> (Self, oneshot::Receiver<()>) {
+        let (tx, rx) = oneshot::channel();
+        (Self { tx: Some(tx) }, rx)
+    }
+}
+
+impl Drop for ReplicaTaskToken {
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 /// Asynchronously forwards commands to and responses from a single replica.
@@ -83,32 +117,36 @@ async fn run_replica_core<T>(
         build_info,
         mut command_rx,
         response_tx,
+        drop_rx,
     }: ReplicaTaskConfig<T>,
 ) -> Result<(), anyhow::Error>
 where
     T: Timestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    let mut client = Retry::default()
-        .clamp_backoff(Duration::from_secs(32))
-        .retry_async(|state| {
-            let addrs = addrs.clone();
-            let version = build_info.semver_version();
-            async move {
-                match ComputeGrpcClient::connect_partitioned(addrs, version).await {
-                    Ok(client) => Ok(client),
-                    Err(e) => {
-                        warn!(
-                            "error connecting to replica {replica_id}, retrying in {:?}: {e}",
-                            state.next_backoff.unwrap()
-                        );
-                        Err(e)
+    let mut client = select! {
+        client = Retry::default()
+            .clamp_backoff(Duration::from_secs(32))
+            .retry_async(|state| {
+                let addrs = addrs.clone();
+                let version = build_info.semver_version();
+                async move {
+                    match ComputeGrpcClient::connect_partitioned(addrs, version).await {
+                        Ok(client) => Ok(client),
+                        Err(e) => {
+                            warn!(
+                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                                state.next_backoff.unwrap()
+                            );
+                            Err(e)
+                        }
                     }
                 }
-            }
-        })
-        .await
-        .expect("retry retries forever");
+            }) => client.expect("retry retries forever"),
+        _ = drop_rx => {
+            return Ok(());
+        }
+    };
 
     loop {
         select! {
@@ -393,6 +431,9 @@ struct ReplicaState<T> {
     addrs: Vec<String>,
     /// Where to persist introspection sources
     persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    /// Token to keep the replica task alive
+    #[allow(unused)]
+    token: ReplicaTaskToken,
 }
 
 impl<T> ReplicaState<T> {
@@ -445,6 +486,7 @@ where
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
+        let (token, drop_rx) = ReplicaTaskToken::new();
         mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
             replica_task(ReplicaTaskConfig {
@@ -453,6 +495,7 @@ where
                 addrs: addrs.clone(),
                 command_rx,
                 response_tx,
+                drop_rx,
             }),
         );
 
@@ -464,6 +507,7 @@ where
             response_rx,
             addrs,
             persisted_logs,
+            token,
         };
 
         // Replay the commands at the client, creating new dataflow identifiers.
