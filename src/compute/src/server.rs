@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use crossbeam_channel::TryRecvError;
+use crossbeam_channel::{RecvError, TryRecvError};
 use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
@@ -190,7 +190,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
     /// Draws commands from a single client until disconnected.
     fn run_client(&mut self, mut command_rx: CommandReceiver, mut response_tx: ResponseSender) {
-        self.reconcile(&mut command_rx, &mut response_tx);
+        if let Err(_) = self.reconcile(&mut command_rx, &mut response_tx) {
+            return;
+        }
 
         // Commence normal operation.
         let mut shutdown = false;
@@ -316,15 +318,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
         &mut self,
         command_rx: &mut CommandReceiver,
         mut response_tx: &mut ResponseSender,
-    ) {
+    ) -> Result<(), RecvError> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
-        while let Ok(command) = command_rx.recv() {
-            if let ComputeCommand::InitializationComplete = command {
-                break;
-            } else {
-                new_commands.push(command);
+        loop {
+            match command_rx.recv()? {
+                ComputeCommand::InitializationComplete => break,
+                command => new_commands.push(command),
             }
         }
 
@@ -506,5 +507,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
             compute_state.command_history = command_history;
         }
+        Ok(())
     }
 }
