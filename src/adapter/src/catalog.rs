@@ -413,6 +413,56 @@ impl CatalogState {
         self.entry_by_id.insert(entry.id, entry.clone());
     }
 
+    fn drop_item(&mut self, id: GlobalId) {
+        let metadata = self.entry_by_id.remove(&id).unwrap();
+        if !metadata.item.is_placeholder() {
+            info!(
+                "drop {} {} ({})",
+                metadata.item_type(),
+                self.resolve_full_name(&metadata.name, metadata.conn_id()),
+                id
+            );
+        }
+        for u in metadata.uses() {
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
+                dep_metadata.used_by.retain(|u| *u != metadata.id)
+            }
+        }
+
+        let conn_id = metadata.item.conn_id().unwrap_or(SYSTEM_CONN_ID);
+        let schema = self.get_schema_mut(
+            &metadata.name().qualifiers.database_spec,
+            &metadata.name().qualifiers.schema_spec,
+            conn_id,
+        );
+        schema
+            .items
+            .remove(&metadata.name().item)
+            .expect("catalog out of sync");
+
+        if let CatalogItem::Index(Index {
+            compute_instance, ..
+        })
+        | CatalogItem::Sink(Sink {
+            compute_instance, ..
+        })
+        | CatalogItem::MaterializedView(MaterializedView {
+            compute_instance, ..
+        }) = metadata.item
+        {
+            if !id.is_system() {
+                assert!(
+                    self.compute_instances_by_id
+                        .get_mut(&compute_instance)
+                        .unwrap()
+                        .exports
+                        .remove(&id),
+                    "catalog out of sync"
+                );
+            }
+        };
+    }
+
     fn get_database(&self, database_id: &DatabaseId) -> &Database {
         &self.database_by_id[database_id]
     }
@@ -3236,10 +3286,7 @@ impl<S: Append> Catalog<S> {
                     introspection_source_index_ids,
                 } => {
                     for id in introspection_source_index_ids {
-                        state
-                            .entry_by_id
-                            .remove(&id)
-                            .expect("introspection source index does not exist");
+                        state.drop_item(id);
                     }
 
                     let id = state
@@ -3269,53 +3316,7 @@ impl<S: Append> Catalog<S> {
                 }
 
                 Action::DropItem(id) => {
-                    let metadata = state.entry_by_id.remove(&id).unwrap();
-                    if !metadata.item.is_placeholder() {
-                        info!(
-                            "drop {} {} ({})",
-                            metadata.item_type(),
-                            state.resolve_full_name(&metadata.name, metadata.conn_id()),
-                            id
-                        );
-                    }
-                    for u in metadata.uses() {
-                        if let Some(dep_metadata) = state.entry_by_id.get_mut(&u) {
-                            dep_metadata.used_by.retain(|u| *u != metadata.id)
-                        }
-                    }
-
-                    let conn_id = metadata.item.conn_id().unwrap_or(SYSTEM_CONN_ID);
-                    let schema = state.get_schema_mut(
-                        &metadata.name().qualifiers.database_spec,
-                        &metadata.name().qualifiers.schema_spec,
-                        conn_id,
-                    );
-                    schema
-                        .items
-                        .remove(&metadata.name().item)
-                        .expect("catalog out of sync");
-
-                    if let CatalogItem::Index(Index {
-                        compute_instance, ..
-                    })
-                    | CatalogItem::Sink(Sink {
-                        compute_instance, ..
-                    })
-                    | CatalogItem::MaterializedView(MaterializedView {
-                        compute_instance,
-                        ..
-                    }) = metadata.item
-                    {
-                        assert!(
-                            state
-                                .compute_instances_by_id
-                                .get_mut(&compute_instance)
-                                .unwrap()
-                                .exports
-                                .remove(&id),
-                            "catalog out of sync"
-                        );
-                    };
+                    state.drop_item(id);
                 }
 
                 Action::UpdateItem {

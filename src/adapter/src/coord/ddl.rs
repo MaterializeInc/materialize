@@ -122,7 +122,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let mut timelines_to_drop = self.remove_storage_ids_from_timeline(
+        timelines_to_drop = self.remove_storage_ids_from_timeline(
             sources_to_drop
                 .iter()
                 .chain(tables_to_drop.iter())
