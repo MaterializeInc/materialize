@@ -15,6 +15,7 @@ use const_format::concatcp;
 use once_cell::sync::Lazy;
 use uncased::UncasedStr;
 
+use crate::catalog::DEFAULT_CLUSTER_NAME;
 use mz_ore::cast;
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -59,7 +60,7 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
 
 const CLUSTER: ServerVar<str> = ServerVar {
     name: UncasedStr::new("cluster"),
-    value: "default",
+    value: DEFAULT_CLUSTER_NAME,
     description: "Sets the current cluster (Materialize).",
 };
 

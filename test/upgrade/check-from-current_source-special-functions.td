@@ -14,4 +14,4 @@
 #
 
 > SHOW CREATE MATERIALIZED VIEW special_functions_view;
-"materialize.public.special_functions_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"special_functions_view\" IN CLUSTER \"default\" AS SELECT * FROM \"materialize\".\"public\".\"special_functions\" WHERE \"mz_catalog\".\"mz_logical_timestamp\"() > \"f1\""
+"materialize.public.special_functions_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"special_functions_view\" IN CLUSTER \"default_cluster\" AS SELECT * FROM \"materialize\".\"public\".\"special_functions\" WHERE \"mz_catalog\".\"mz_logical_timestamp\"() > \"f1\""

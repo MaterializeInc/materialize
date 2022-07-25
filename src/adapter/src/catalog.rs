@@ -89,6 +89,7 @@ use crate::util::index_sql;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 const SYSTEM_USER: &str = "mz_system";
+pub const DEFAULT_CLUSTER_NAME: &str = "default_cluster";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -2068,7 +2069,7 @@ impl<S: Append> Catalog<S> {
         ConnCatalog {
             state: Cow::Borrowed(&self.state),
             conn_id: SYSTEM_CONN_ID,
-            compute_instance: "default".into(),
+            compute_instance: DEFAULT_CLUSTER_NAME.into(),
             database: self
                 .resolve_database(DEFAULT_DATABASE_NAME)
                 .ok()

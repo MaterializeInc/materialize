@@ -24,7 +24,7 @@ statement ok
 create index i1 on t1 (f2)
 
 statement ok
-set cluster = default
+set cluster = default_cluster
 
 statement ok
 begin;

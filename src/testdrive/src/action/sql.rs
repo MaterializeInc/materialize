@@ -16,6 +16,7 @@ use std::time::SystemTime;
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use md5::{Digest, Md5};
+use mz_adapter::catalog::DEFAULT_CLUSTER_NAME;
 use postgres_array::Array;
 use regex::Regex;
 use tokio_postgres::error::DbError;
@@ -103,7 +104,7 @@ impl Action for SqlAction {
                 // isolating tests from one another, so testdrive won't let you.
                 assert_ne!(
                     name,
-                    &mz_sql::ast::Ident::from("default"),
+                    &mz_sql::ast::Ident::from(DEFAULT_CLUSTER_NAME),
                     "testdrive cannot create default cluster"
                 );
                 self.try_drop(
@@ -121,7 +122,7 @@ impl Action for SqlAction {
                 // isolating tests from one another, so testdrive won't let you.
                 assert_ne!(
                     of_cluster.to_string(),
-                    "default",
+                    DEFAULT_CLUSTER_NAME,
                     "testdrive cannot create default cluster replicas"
                 );
                 self.try_drop(

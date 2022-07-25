@@ -10,7 +10,7 @@
 # Test that a dependency chain with multiple links is properly maintained
 # across creation and deletion.
 
-$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+$ set-regex match=cluster1|default_cluster replacement=<CLUSTER_NAME>
 
 $ set schema={
     "name": "row",

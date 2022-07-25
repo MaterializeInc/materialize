@@ -208,5 +208,5 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.up("materialized")
     c.wait_for_materialized()
 
-    c.sql("DROP CLUSTER default CASCADE")
-    c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
+    c.sql("DROP CLUSTER default_cluster CASCADE")
+    c.sql("CREATE CLUSTER default_cluster REPLICAS (default_replica (SIZE '1'))")

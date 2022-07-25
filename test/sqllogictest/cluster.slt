@@ -43,7 +43,7 @@ CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235']), r2 (REMOTE ['localh
 query TT rowsort
 SELECT * FROM mz_clusters
 ----
-1 default
+1 default_cluster
 3 foo
 4 bar
 
@@ -51,13 +51,13 @@ query T rowsort
 SHOW CLUSTERS
 ----
 bar
-default
+default_cluster
 foo
 
 query T rowsort
 SHOW CLUSTERS LIKE 'd%'
 ----
-default
+default_cluster
 
 # Test invalid option combinations.
 
@@ -69,7 +69,7 @@ CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], SIZE 'small'))
 query T
 SHOW cluster
 ----
-default
+default_cluster
 
 statement ok
 SET cluster = 'bar'
@@ -86,7 +86,7 @@ statement ok
 CREATE DEFAULT INDEX ON v
 
 statement ok
-SET cluster = 'default'
+SET cluster = 'default_cluster'
 
 query T
 SELECT * FROM v
@@ -190,7 +190,7 @@ CREATE VIEW unmat AS SELECT 1
 
 # Test `CREATE INDEX ... IN CLUSTER`.
 statement ok
-SET cluster = 'default'
+SET cluster = 'default_cluster'
 
 query T
 SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
@@ -215,7 +215,7 @@ CREATE DEFAULT INDEX IN CLUSTER noexist ON v
 query T
 SHOW cluster
 ----
-default
+default_cluster
 
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
@@ -325,16 +325,16 @@ SELECT COUNT(name) FROM mz_indexes;
 17
 
 statement error nvalid SIZE: must provide a string value
-CREATE CLUSTER REPLICA default.size_1 SIZE;
+CREATE CLUSTER REPLICA default_cluster.size_1 SIZE;
 
 statement ok
-CREATE CLUSTER REPLICA default.size_1 SIZE '1';
+CREATE CLUSTER REPLICA default_cluster.size_1 SIZE '1';
 
 query TT
 SHOW CLUSTER REPLICAS
 ----
-default default_replica
-default size_1
+default_cluster default_replica
+default_cluster size_1
 
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
@@ -342,25 +342,25 @@ CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
 query TT
 SHOW CLUSTER REPLICAS
 ----
-default default_replica
-default size_1
+default_cluster default_replica
+default_cluster size_1
 foo size_1
 foo size_2
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS default.bar
+DROP CLUSTER REPLICA IF EXISTS default_cluster.bar
 
 statement ok
 DROP CLUSTER REPLICA IF EXISTS bar.foo
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS default.foo
+DROP CLUSTER REPLICA IF EXISTS default_cluster.foo
 
 query error CLUSTER foo has no CLUSTER REPLICA named foo
-DROP CLUSTER REPLICA default.size_1, foo.foo
+DROP CLUSTER REPLICA default_cluster.size_1, foo.foo
 
 statement ok
-DROP CLUSTER REPLICA default.size_1
+DROP CLUSTER REPLICA default_cluster.size_1
 
 statement ok
 DROP CLUSTER REPLICA foo.size_1, foo.size_2
@@ -368,31 +368,31 @@ DROP CLUSTER REPLICA foo.size_1, foo.size_2
 query TT
 SHOW CLUSTER REPLICAS
 ----
-default default_replica
+default_cluster default_replica
 
 statement ok
-CREATE CLUSTER REPLICA default.foo_bar SIZE '1'
+CREATE CLUSTER REPLICA default_cluster.foo_bar SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA default.foo_bar
+DROP CLUSTER REPLICA default_cluster.foo_bar
 
 statement ok
-CREATE CLUSTER REPLICA default."foo-bar" SIZE '1'
+CREATE CLUSTER REPLICA default_cluster."foo-bar" SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA default."foo-bar"
+DROP CLUSTER REPLICA default_cluster."foo-bar"
 
 statement ok
-CREATE CLUSTER REPLICA default."好-好" SIZE '1'
+CREATE CLUSTER REPLICA default_cluster."好-好" SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA default."好-好"
+DROP CLUSTER REPLICA default_cluster."好-好"
 
 statement ok
-CREATE CLUSTER REPLICA default."好_好" SIZE '1'
+CREATE CLUSTER REPLICA default_cluster."好_好" SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA default."好_好"
+DROP CLUSTER REPLICA default_cluster."好_好"
 
 # clusters wo replicas cannot service selects
 
@@ -409,7 +409,7 @@ SELECT 1;
 # Phillip's tests
 
 statement error zero-length delimited identifier
-CREATE CLUSTER REPLICA default."" SIZE '1';
+CREATE CLUSTER REPLICA default_cluster."" SIZE '1';
 
 statement error unknown cluster
 CREATE CLUSTER REPLICA no_such_cluster.size_1 SIZE '1';
@@ -463,19 +463,19 @@ DROP CLUSTER foo CASCADE
 # can't be meaningfully specified
 
 statement error unknown cluster replica availability zone a
-CREATE CLUSTER REPLICA default.replica SIZE '1', AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default_cluster.replica SIZE '1', AVAILABILITY ZONE 'a'
 
 statement error AVAILABILITY ZONE specified more than once
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
+CREATE CLUSTER REPLICA default_cluster.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default_cluster.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default_cluster.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ['host1']
+CREATE CLUSTER REPLICA default_cluster.replica AVAILABILITY ZONE 'a', REMOTE ['host1']
 
 # Test that the contents of mz_cluster_replicas look sensible
 

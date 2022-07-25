@@ -40,7 +40,7 @@ use mz_storage::types::sources::Timeline;
 
 use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::SerializedComputeInstanceReplicaConfig;
+use crate::catalog::{SerializedComputeInstanceReplicaConfig, DEFAULT_CLUSTER_NAME};
 
 const USER_VERSION: &str = "user_version";
 
@@ -204,7 +204,7 @@ async fn migrate<S: Append>(
                     id: DEFAULT_COMPUTE_INSTANCE_ID,
                 },
                 ComputeInstanceValue {
-                    name: "default".into(),
+                    name: DEFAULT_CLUSTER_NAME.into(),
                     config: Some(
                         "{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}".into(),
                     ),

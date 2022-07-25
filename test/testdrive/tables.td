@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+$ set-regex match=cluster1|default_cluster replacement=<CLUSTER_NAME>
 
 ! INSERT INTO t VALUES (1, 'a');
 contains:unknown catalog item 't'

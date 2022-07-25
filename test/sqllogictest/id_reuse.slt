@@ -90,7 +90,7 @@ CREATE CLUSTER foo REPLICAS (r1 (size '1'))
 query IT rowsort
 SELECT id, name FROM mz_clusters
 ----
-1 default
+1 default_cluster
 2 foo
 
 statement ok
@@ -102,5 +102,5 @@ CREATE CLUSTER bar REPLICAS (r1 (size '1'))
 query IT rowsort
 SELECT id, name FROM mz_clusters
 ----
-1 default
+1 default_cluster
 3 bar

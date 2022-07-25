@@ -78,9 +78,9 @@ CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 query TTT colnames,rowsort
 SHOW FULL MATERIALIZED VIEWS
 ----
-cluster name     type
-default mv       user
-other   other_mv user
+cluster         name     type
+default_cluster mv       user
+other           other_mv user
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -254,7 +254,7 @@ query TT colnames
 SHOW CREATE MATERIALIZED VIEW mv
 ----
 Materialized␠View     Create␠Materialized␠View
-materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
+materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default_cluster"␠AS␠SELECT␠1
 
 
 # Test: SHOW MATERIALIZED VIEWS
@@ -272,9 +272,9 @@ other_mv
 query TTT colnames,rowsort
 SHOW FULL MATERIALIZED VIEWS
 ----
-cluster name     type
-default mv       user
-other   other_mv user
+cluster         name     type
+default_cluster mv       user
+other           other_mv user
 
 query TTT colnames,rowsort
 SHOW FULL MATERIALIZED VIEWS IN CLUSTER other
@@ -341,8 +341,8 @@ CREATE DEFAULT INDEX ON mv
 query TTTITTT colnames
 SHOW INDEXES ON mv
 ----
-cluster on_name key_name       seq_in_index column_name expression nullable
-default mv      mv_primary_idx 1            ?column?    NULL       false
+cluster         on_name key_name       seq_in_index column_name expression nullable
+default_cluster mv      mv_primary_idx 1            ?column?    NULL       false
 
 
 # Test: Creating materialized views that depend on log sources is forbidden.
