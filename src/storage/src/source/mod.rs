@@ -59,6 +59,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
 use crate::controller::CollectionMetadata;
+use crate::source::healthcheck::{Healthchecker, SourceStatusUpdate};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockOperator;
 use crate::source::util::source;
@@ -68,6 +69,7 @@ use crate::types::sources::encoding::SourceDataEncoding;
 use crate::types::sources::{MzOffset, SourceConnection};
 
 pub mod generator;
+mod healthcheck;
 mod kafka;
 mod kinesis;
 pub mod metrics;
@@ -231,6 +233,9 @@ where
                     specific_diff,
                 },
             ))),
+            NextMessage::Ready(SourceMessageType::SourceStatus(update)) => {
+                Ok(NextMessage::Ready(SourceMessageType::SourceStatus(update)))
+            }
             NextMessage::Pending => Ok(NextMessage::Pending),
             NextMessage::TransientDelay => Ok(NextMessage::TransientDelay),
             NextMessage::Finished => Ok(NextMessage::Finished),
@@ -486,6 +491,8 @@ pub enum SourceMessageType<Key, Value, Diff> {
     /// Communicate that more [`SourceMessage`]'s
     /// will come later at the same offset as this one.
     InProgress(SourceMessage<Key, Value, Diff>),
+    /// Information about the source status
+    SourceStatus(SourceStatusUpdate),
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
@@ -729,7 +736,7 @@ where
         let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
         let waker = futures::task::waker(waker_activator);
 
-        let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
+        let metrics_name = upstream_name.clone().unwrap_or_else(|| name.clone());
         let mut source_metrics =
             SourceMetrics::new(base_metrics, &metrics_name, id, &worker_id.to_string());
 
@@ -740,9 +747,9 @@ where
             let upper_ts = resume_upper.as_option().copied().unwrap();
             let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
             let mut timestamper = match ReclockOperator::new(
-                persist_clients,
-                storage_metadata,
-                now,
+                Arc::clone(&persist_clients),
+                storage_metadata.clone(),
+                now.clone(),
                 timestamp_frequency.clone(),
                 as_of,
             )
@@ -751,6 +758,29 @@ where
                 Ok(t) => t,
                 Err(e) => {
                     panic!("Failed to create source {} timestamper: {:#}", name, e);
+                }
+            };
+
+            let mut healthchecker = match Healthchecker::new(
+                name.clone(),
+                upstream_name,
+                id,
+                source_connection.name(),
+                worker_id,
+                worker_count,
+                active,
+                &persist_clients,
+                &storage_metadata,
+                now.clone(),
+            )
+            .await
+            {
+                Ok(h) => h,
+                Err(e) => {
+                    panic!(
+                        "Failed to create healthchecker for source {}: {:#}",
+                        &name, e
+                    );
                 }
             };
 
@@ -809,10 +839,15 @@ where
                                         }
                                         untimestamped_messages.entry(pid).or_default().push((message, offset));
                                     }
+                                    SourceMessageType::SourceStatus(update) => {
+                                        healthchecker.update_status(update).await;
+                                    }
                                 }
                             }
                             // TODO: make errors definite
-                            Some(Err(e)) => non_definite_errors.push(e),
+                            Some(Err(e)) => {
+                                non_definite_errors.push(e);
+                            }
                             None => {},
                         }
                     }
@@ -845,6 +880,9 @@ where
                         }
 
                         timestamper.advance().await;
+
+                        // Advance timestamps for healthchecker collection to ensure it's queryable
+                        healthchecker.advance_upper().await;
 
                         // TODO(petrosagg): compaction should be driven by AllowCompaction commands
                         // coming from the storage controller
