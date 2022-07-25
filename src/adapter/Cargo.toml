@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-bytes = "1.1.0"
+bytes = "1.2.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 const_format = "0.2.26"
 dec = "0.4.8"
@@ -44,7 +44,7 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1.6.0"
 rusqlite = { version = "0.28.0", features = ["bundled", "unlock_notify"] }
 semver = "1.0.12"
-serde = "1.0.139"
+serde = "1.0.140"
 serde_json = "1.0.82"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["rt", "time"] }

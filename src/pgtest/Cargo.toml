@@ -8,11 +8,11 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-bytes = "1.1.0"
+bytes = "1.2.0"
 clap = { version = "3.2.14", features = ["derive"] }
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 mz-ore = { path = "../ore" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-serde = { version = "1.0.139", features = ["derive"] }
+serde = { version = "1.0.140", features = ["derive"] }
 serde_json = "1.0.82"

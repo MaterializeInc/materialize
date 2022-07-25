@@ -16,7 +16,7 @@ anyhow = { version = "1.0.58", optional = true }
 # The only exception to the above is the `either` crate, which itself has zero
 # dependencies and is widely considered to be basically part of the stdlib.
 async-trait = { version = "0.1.56", optional = true }
-bytes = { version = "1.1.0", optional = true }
+bytes = { version = "1.2.0", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
 clap = { version = "3.2.14", features = ["env"], optional = true }
 ctor = { version = "0.1.22", optional = true }
@@ -31,7 +31,7 @@ pin-project = "1.0.11"
 prometheus = { version = "0.13.1", default-features = false, optional = true }
 smallvec = { version = "1.9.0", optional = true }
 stacker = { version = "0.1.15", optional = true }
-serde = { version = "1.0.139", features = ["derive"], optional = true }
+serde = { version = "1.0.140", features = ["derive"], optional = true }
 tokio = { version = "1.19.2", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
 tokio-openssl = { version = "0.6.3", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
@@ -40,7 +40,7 @@ tokio-openssl = { version = "0.6.3", optional = true }
 # log lines we care about.
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
-tracing-subscriber = { version = "0.3.14", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
+tracing-subscriber = { version = "0.3.15", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
 
 # For the `tracing` feature
 ansi_term = { version = "0.12.1", optional = true }
