@@ -32,6 +32,7 @@ Field | Use
 **DECORRELATED** | Display the decorrelated plan
 **OPTIMIZED** | _(Default)_ Display the optimized plan
 **VIEW** | Display the plan for an existing view
+**MATERIALIZED VIEW** | Display the plan for an existing materialized view
 
 ## Details
 

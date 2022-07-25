@@ -1,6 +1,6 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_rename ::=
-  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
+  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name (
     'SET' (
@@ -54,9 +54,14 @@ create_index ::=
     )
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
-  'CREATE' 'OR REPLACE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
+  'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
+    view_name ( '(' col_ident ( ',' col_ident )* ')' )?
+    ('IN CLUSTER' cluster_name)?
+    'AS' select_stmt |
+  'CREATE' 'OR REPLACE' 'MATERIALIZED VIEW'
+    view_name ( '(' col_ident ( ',' col_ident )* ')' )?
+    ('IN CLUSTER' cluster_name)?
+    'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_schema ::=
@@ -124,7 +129,7 @@ create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
 create_views ::=
-  'CREATE' ('MATERIALIZED')? ('TEMP' | 'TEMPORARY')? 'VIEWS' 'IF NOT EXISTS'? 'FROM' 'SOURCE' '"'src_name'"' ( '(' '"' upstream_table '"'  (AS '"' new_view_name '"' )? ')' )?
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEWS' 'IF NOT EXISTS'? 'FROM' 'SOURCE' '"'src_name'"' ( '(' '"' upstream_table '"'  (AS '"' new_view_name '"' )? ')' )?
 create_table ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'TABLE' table_name
   '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
@@ -152,6 +157,8 @@ drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
     'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
+drop_materialized_view ::=
+  'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_schema ::=
@@ -175,7 +182,8 @@ explain ::=
   'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?
   (
     select_stmt |
-    'VIEW' view_name
+    'VIEW' view_name |
+    'MATERIALIZED VIEW' view_name
   )
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
@@ -295,6 +303,8 @@ show_create_connection ::=
   'SHOW' 'CREATE' 'CONNECTION' connection_name
 show_create_index ::=
   'SHOW' 'CREATE' 'INDEX' index_name
+show_create_materialized_view ::=
+  'SHOW' 'CREATE' 'MATERIALIZED VIEW' view_name
 show_create_sink ::=
   'SHOW' 'CREATE' 'SINK' sink_name
 show_create_source ::=
@@ -310,6 +320,8 @@ show_index ::=
     (('FROM' | 'IN') on_name)?
     ('IN' 'CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
+show_materialized_views ::=
+    'SHOW' 'FULL'? 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
@@ -321,7 +333,7 @@ show_tables ::=
 show_types ::=
   'SHOW' 'EXTENDED'? 'FULL'?
 show_views ::=
-  'SHOW' 'FULL'? 'MATERIALIZED'? 'VIEWS' ('FROM' schema_name)?
+  'SHOW' 'FULL'? 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
   'SHOW' 'EXTENDED'? 'FULL'?  'OBJECTS' ('FROM' schema_name)?
 string_agg ::=
