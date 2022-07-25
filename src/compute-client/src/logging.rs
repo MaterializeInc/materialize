@@ -233,9 +233,9 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::DataflowCurrent => DataflowCurrent(()),
                 ComputeLog::DataflowDependency => DataflowDependency(()),
                 ComputeLog::FrontierCurrent => FrontierCurrent(()),
+                ComputeLog::FrontierDelay => FrontierDelay(()),
                 ComputeLog::PeekCurrent => PeekCurrent(()),
                 ComputeLog::PeekDuration => PeekDuration(()),
-                ComputeLog::FrontierDelay => FrontierDelay(()),
             }),
         }
     }
@@ -246,9 +246,9 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(DataflowCurrent(())) => Ok(ComputeLog::DataflowCurrent),
             Some(DataflowDependency(())) => Ok(ComputeLog::DataflowDependency),
             Some(FrontierCurrent(())) => Ok(ComputeLog::FrontierCurrent),
+            Some(FrontierDelay(())) => Ok(ComputeLog::FrontierDelay),
             Some(PeekCurrent(())) => Ok(ComputeLog::PeekCurrent),
             Some(PeekDuration(())) => Ok(ComputeLog::PeekDuration),
-            Some(FrontierDelay(())) => Ok(ComputeLog::FrontierDelay),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }

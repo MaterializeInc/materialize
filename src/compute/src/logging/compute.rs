@@ -1,6 +1,6 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Busin&ess Source License
+// Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 //
 // As of the Change Date specified in that file, in accordance with
@@ -261,10 +261,7 @@ pub fn construct<A: Allocate>(
                                     .or_insert_with(HashMap::new);
                                 let time_entry = source_map
                                     .entry(source_id)
-                                    .or_insert((
-                                        VecDeque::<(u64, u128)>::new(),
-                                        HashMap::<u128, i32>::new()
-                                    ));
+                                    .or_insert((VecDeque::new(), HashMap::new()));
                                 let time_deque = &mut time_entry.0;
                                 time_deque.push_back((logical, time.as_nanos()));
                                 println!(

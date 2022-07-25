@@ -165,7 +165,6 @@ pub fn build_compute_dataflow<A: Allocate>(
             if let Err(frontier) = event {
                 for time in frontier.iter() {
                     for dataflow_id in dataflow_ids.iter() {
-                        // log (source_id, index_id, frontier time) advancement
                         logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, *time));
                     }
                 }
@@ -202,7 +201,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
                 // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
                 // time of the frontier advancement for each dataflow as early as possible.
-                if let Some(logger) = compute_state.compute_logger.as_mut() {
+                if let Some(logger) = compute_state.compute_logger.as_ref() {
                     let index_ids = dataflow.index_exports.keys().cloned().collect::<Vec<_>>();
                     let sink_ids = dataflow.sink_exports.keys().cloned().collect::<Vec<_>>();
                     ok_stream = intercept_source_instantiation_frontiers(
