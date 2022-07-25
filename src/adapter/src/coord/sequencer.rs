@@ -2257,6 +2257,7 @@ impl<S: Append + 'static> Coordinator<S> {
             row_set_finishing,
             stage,
             options,
+            view_id
         } = plan;
 
         struct Timings {
@@ -2290,12 +2291,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
                 coord
                     .dataflow_builder(compute_instance)
-                    .import_view_into_dataflow(
-                        // TODO: If explaining a view, pipe the actual id of the view.
-                        &GlobalId::Explain,
-                        &optimized_plan,
-                        &mut dataflow,
-                    )?;
+                    .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;
                 mz_transform::optimize_dataflow(
                     &mut dataflow,
                     &coord.index_oracle(compute_instance),

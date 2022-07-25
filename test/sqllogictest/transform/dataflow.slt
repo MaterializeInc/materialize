@@ -43,7 +43,7 @@ Source materialize.public.foo (u1):
 | Filter (#0 = 5), (#1 = 6)
 | Project (#0, #1)
 
-Query:
+View materialize.public.foo3 (u3):
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5), (#1 = 6)

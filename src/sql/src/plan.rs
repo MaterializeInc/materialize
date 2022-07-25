@@ -406,6 +406,7 @@ pub struct ExplainPlanOld {
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStageOld,
     pub options: ExplainOptions,
+    pub view_id: GlobalId,
 }
 
 #[derive(Debug)]
