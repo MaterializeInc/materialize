@@ -27,7 +27,7 @@ aws-sdk-s3 = { version = "0.16.0", default-features = false, features = ["native
 aws-smithy-http = "0.46.0"
 aws-types = { version = "0.46.0", features = ["hardcoded-credentials"] }
 base64 = "0.13.0"
-bytes = "1.1.0"
+bytes = "1.2.0"
 crossbeam-channel = "0.5.6"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }

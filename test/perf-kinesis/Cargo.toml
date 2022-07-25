@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.58"
 aws-config = { version = "0.46.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.16.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-bytes = "1.1.0"
+bytes = "1.2.0"
 clap = { version = "3.2.14", features = ["derive"] }
 futures = "0.3.21"
 mz-kinesis-util = { path = "../../src/kinesis-util" }
