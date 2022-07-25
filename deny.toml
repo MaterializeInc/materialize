@@ -24,7 +24,6 @@ name = "strum-macros"
 [[bans.deny]]
 name = "log"
 wrappers = [
-    "deadpool-postgres",
     "env_logger",
     "fail",
     "globset",

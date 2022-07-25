@@ -140,10 +140,7 @@ impl ConsensusConfig {
     }
 
     /// Parses a [Consensus] config from a uri string.
-    pub async fn try_from(
-        value: &str,
-        connection_pool_max_size: usize,
-    ) -> Result<Self, ExternalError> {
+    pub async fn try_from(value: &str) -> Result<Self, ExternalError> {
         let url = Url::parse(value).map_err(|err| {
             anyhow!(
                 "failed to parse consensus location {} as a url: {}",
@@ -154,7 +151,7 @@ impl ConsensusConfig {
 
         let config = match url.scheme() {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(value, connection_pool_max_size).await?,
+                PostgresConsensusConfig::new(value).await?,
             )),
             "mem" => {
                 if !cfg!(debug_assertions) {

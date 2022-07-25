@@ -9,19 +9,19 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use bytes::Bytes;
-use deadpool_postgres::tokio_postgres::config::SslMode;
-use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use deadpool_postgres::tokio_postgres::Config;
-use deadpool_postgres::{Hook, HookError, HookErrorCause, ManagerConfig, RecyclingMethod};
-use deadpool_postgres::{Manager, Pool};
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use tracing::debug;
+use tokio::task::JoinHandle;
+use tokio_postgres::config::SslMode;
+use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use tokio_postgres::Client as PostgresClient;
+
+use mz_ore::task;
 
 use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
@@ -75,7 +75,6 @@ impl<'a> FromSql<'a> for SeqNo {
 #[derive(Clone, Debug)]
 pub struct PostgresConsensusConfig {
     url: String,
-    connection_pool_max_size: usize,
 }
 
 impl PostgresConsensusConfig {
@@ -83,10 +82,9 @@ impl PostgresConsensusConfig {
         "MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL";
 
     /// Returns a new [PostgresConsensusConfig] for use in production.
-    pub async fn new(url: &str, connection_pool_max_size: usize) -> Result<Self, Error> {
+    pub async fn new(url: &str) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
             url: url.to_string(),
-            connection_pool_max_size,
         })
     }
 
@@ -110,53 +108,37 @@ impl PostgresConsensusConfig {
             }
         };
 
-        let config = PostgresConsensusConfig::new(&url, 2).await?;
+        let config = PostgresConsensusConfig::new(&url).await?;
         Ok(Some(config))
     }
 }
 
 /// Implementation of [Consensus] over a Postgres database.
+#[derive(Debug)]
 pub struct PostgresConsensus {
-    pool: Pool,
-}
-
-impl std::fmt::Debug for PostgresConsensus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PostgresConsensus").finish_non_exhaustive()
-    }
+    client: PostgresClient,
+    _handle: JoinHandle<()>,
 }
 
 impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
-        let pg_config: Config = config.url.parse()?;
+        let pg_config: tokio_postgres::Config = config.url.parse()?;
         let tls = make_tls(&pg_config)?;
-
-        let manager = Manager::from_config(
-            pg_config,
-            tls,
-            ManagerConfig {
-                recycling_method: RecyclingMethod::Fast,
-            },
-        );
-
-        let pool = Pool::builder(manager)
-            .max_size(config.connection_pool_max_size)
-            .post_create(Hook::async_fn(|client, _| {
-                Box::pin(async move {
-                    debug!("opened new consensus postgres connection");
-                    client.batch_execute(
-                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-                    ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
-                })
-            }))
-            .build()
-            .expect("postgres connection pool built with incorrect parameters");
-
-        let mut client = pool.get().await?;
+        let (mut client, conn) = tokio_postgres::connect(&config.url, tls)
+            .await
+            .with_context(|| format!("error connecting to postgres"))?;
+        let handle = task::spawn(|| "pg_consensus_client", async move {
+            if let Err(e) = conn.await {
+                tracing::error!("connection error: {}", e);
+                return;
+            }
+        });
 
         let tx = client.transaction().await?;
+        tx.batch_execute("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .await?;
         let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
         // Only get the advisory lock on Postgres (but not Cockroach which doesn't
         // support this function and (we suspect) doesn't have this bug anyway). Use
@@ -177,7 +159,10 @@ impl PostgresConsensus {
         }
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;
-        Ok(PostgresConsensus { pool })
+        Ok(PostgresConsensus {
+            client,
+            _handle: handle,
+        })
     }
 
     /// Drops and recreates the `consensus` table in Postgres
@@ -185,9 +170,8 @@ impl PostgresConsensus {
     /// ONLY FOR TESTING
     pub async fn drop_and_recreate(&self) -> Result<(), ExternalError> {
         // this could be a TRUNCATE if we're confident the db won't reuse any state
-        let client = self.pool.get().await?;
-        client.execute("DROP TABLE consensus", &[]).await?;
-        client.execute(SCHEMA, &[]).await?;
+        self.client.execute("DROP TABLE consensus", &[]).await?;
+        self.client.execute(SCHEMA, &[]).await?;
         Ok(())
     }
 }
@@ -195,7 +179,7 @@ impl PostgresConsensus {
 // This function is copied from mz-postgres-util because of a cyclic dependency
 // difficulty that we don't want to deal with now.
 // TODO: Untangle that and remove this copy.
-fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
+fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, anyhow::Error> {
     let mut builder = SslConnector::builder(SslMethod::tls_client())?;
     // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
     // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
@@ -256,10 +240,7 @@ impl Consensus for PostgresConsensus {
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-        let row = {
-            let client = self.pool.get().await?;
-            client.query_opt(&*q, &[&key]).await?
-        };
+        let row = self.client.query_opt(&*q, &[&key]).await?;
         let row = match row {
             None => return Ok(None),
             Some(row) => row,
@@ -306,8 +287,7 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.pool.get().await?;
-            client
+            self.client
                 .execute(&*q, &[&key, &new.seqno, &new.data.as_ref(), &expected])
                 .await?
         } else {
@@ -317,8 +297,7 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.pool.get().await?;
-            client
+            self.client
                 .execute(&*q, &[&key, &new.seqno, &new.data.as_ref()])
                 .await?
         };
@@ -341,11 +320,8 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
-        let rows = {
-            let client = self.pool.get().await?;
-            client.query(&*q, &[&key, &from]).await?
-        };
-        let mut results = Vec::with_capacity(rows.len());
+        let rows = self.client.query(&*q, &[&key, &from]).await?;
+        let mut results = vec![];
 
         for row in rows {
             let seqno: SeqNo = row.try_get("sequence_number")?;
@@ -373,10 +349,7 @@ impl Consensus for PostgresConsensus {
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
 
-        let result = {
-            let client = self.pool.get().await?;
-            client.execute(&*q, &[&key, &seqno]).await?
-        };
+        let result = { self.client.execute(&*q, &[&key, &seqno]).await? };
         if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to
             // determine whether the request was valid and there were no records in
