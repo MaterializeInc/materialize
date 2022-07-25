@@ -49,8 +49,8 @@ pub enum PeekResponseUnary {
 }
 
 #[derive(Debug)]
-pub struct PeekDataflowPlan<T> {
-    desc: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
+pub struct PeekDataflowPlan<P, T> {
+    desc: DataflowDescription<P, (), T>,
     id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: HashMap<usize, usize>,
@@ -59,13 +59,33 @@ pub struct PeekDataflowPlan<T> {
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
 #[derive(Debug)]
-pub enum Plan<T = mz_repr::Timestamp> {
+pub enum Plan<P, T = mz_repr::Timestamp> {
     /// The view evaluates to a constant result that can be returned.
     Constant(Result<Vec<(Row, T, Diff)>, EvalError>),
     /// The view can be read out of an existing arrangement.
     PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
     /// The view must be installed as a dataflow and then read.
-    PeekDataflow(PeekDataflowPlan<T>),
+    PeekDataflow(PeekDataflowPlan<P, T>),
+}
+
+fn permute_oneshot_mfp_around_index(
+    mfp: mz_expr::MapFilterProject,
+    key: &[MirScalarExpr],
+) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
+    // Convert `mfp` to an executable, non-temporal plan.
+    // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
+    let mut safe_mfp = mfp
+        .clone()
+        .into_plan()
+        .map_err(|e| AdapterError::Unstructured(::anyhow::anyhow!(e)))?
+        .into_nontemporal()
+        .map_err(|_e| {
+            AdapterError::Unstructured(::anyhow::anyhow!("OneShot plan has temporal constraints"))
+        })?;
+    let (permute, thinning) =
+        mz_expr::permutation_for_arrangement::<HashMap<_, _>>(key, mfp.input_arity);
+    safe_mfp.permute(permute, key.len() + thinning.len());
+    Ok(safe_mfp)
 }
 
 /// Determine if the dataflow plan can be implemented without an actual dataflow.
@@ -73,14 +93,14 @@ pub enum Plan<T = mz_repr::Timestamp> {
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-pub fn create_plan(
-    dataflow_plan: DataflowDescription<mz_compute_client::plan::Plan>,
+pub fn create_plan<T: timely::progress::Timestamp>(
+    mut dataflow_plan: DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
     index_id: GlobalId,
     index_key: Vec<MirScalarExpr>,
     index_permutation: HashMap<usize, usize>,
     index_thinned_arity: usize,
-) -> Result<Plan, AdapterError> {
+) -> Result<Plan<mz_expr::OptimizedMirRelationExpr, T>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
 
@@ -88,76 +108,56 @@ pub fn create_plan(
     // to build (no dependent views). There is likely an index to build as well, but we may not be sure.
     if dataflow_plan.objects_to_build.len() >= 1 && dataflow_plan.objects_to_build[0].id == view_id
     {
-        match &dataflow_plan.objects_to_build[0].plan {
+        let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
+        if let mz_expr::MirRelationExpr::Constant { rows, .. } = mir {
             // In the case of a constant, we can return the result now.
-            mz_compute_client::plan::Plan::Constant { rows } => {
-                return Ok(Plan::Constant(rows.clone()));
-            }
-            // In the case of a bare `Get`, we may be able to directly index an arrangement.
-            mz_compute_client::plan::Plan::Get { id, keys, plan } => {
-                match plan {
-                    mz_compute_client::plan::GetPlan::PassArrangements => {
-                        // An arrangement may or may not exist. If not, nothing to be done.
-                        if let Some((key, permute, thinning)) = keys.arbitrary_arrangement() {
-                            // Just grab any arrangement, but be sure to de-permute the results.
-                            for (index_id, (desc, _typ, _monotonic)) in
-                                dataflow_plan.index_imports.iter()
-                            {
-                                if Id::Global(desc.on_id) == *id && &desc.key == key {
-                                    let mut map_filter_project =
-                                        mz_expr::MapFilterProject::new(_typ.arity())
-                                            .into_plan()
-                                            .unwrap()
-                                            .into_nontemporal()
-                                            .unwrap();
-                                    map_filter_project
-                                        .permute(permute.clone(), key.len() + thinning.len());
-                                    return Ok(Plan::PeekExisting(
-                                        *index_id,
-                                        None,
-                                        map_filter_project,
-                                    ));
-                                }
-                            }
+            return Ok(Plan::Constant(rows.clone().map(|rows| {
+                rows.into_iter()
+                    .map(|(row, diff)| (row, T::minimum(), diff))
+                    .collect()
+            })));
+        } else {
+            // In the case of a linear operator around an indexed view, we
+            // can skip creating a dataflow and instead pull all the rows in
+            // index and apply the linear operator against them.
+            let (mfp, mir) = mz_expr::MapFilterProject::extract_from_expression(mir);
+            match mir {
+                mz_expr::MirRelationExpr::Get { id, .. } => {
+                    // Just grab any arrangement
+                    // Nothing to be done if an arrangement does not exist
+                    for (index_id, (desc, _typ, _monotonic)) in dataflow_plan.index_imports.iter() {
+                        if Id::Global(desc.on_id) == *id {
+                            return Ok(Plan::PeekExisting(
+                                *index_id,
+                                None,
+                                permute_oneshot_mfp_around_index(mfp, &desc.key)?,
+                            ));
                         }
                     }
-                    mz_compute_client::plan::GetPlan::Arrangement(key, val, mfp) => {
-                        // Convert `mfp` to an executable, non-temporal plan.
-                        // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
-                        let map_filter_project = mfp
-                            .clone()
-                            .into_plan()
-                            .map_err(|e| {
-                                crate::error::AdapterError::Unstructured(::anyhow::anyhow!(e))
-                            })?
-                            .into_nontemporal()
-                            .map_err(|_e| {
-                                crate::error::AdapterError::Unstructured(::anyhow::anyhow!(
-                                    "OneShot plan has temporal constraints"
-                                ))
-                            })?;
+                }
+                mz_expr::MirRelationExpr::Join { implementation, .. } => {
+                    if let mz_expr::JoinImplementation::PredicateIndex(id, key, val) =
+                        implementation
+                    {
                         // We should only get excited if we can track down an index for `id`.
                         // If `keys` is non-empty, that means we think one exists.
                         for (index_id, (desc, _typ, _monotonic)) in
                             dataflow_plan.index_imports.iter()
                         {
-                            if Id::Global(desc.on_id) == *id && &desc.key == key {
+                            if desc.on_id == *id && &desc.key == key {
                                 // Indicate an early exit with a specific index and key_val.
                                 return Ok(Plan::PeekExisting(
                                     *index_id,
-                                    val.clone(),
-                                    map_filter_project,
+                                    Some(val.clone()),
+                                    permute_oneshot_mfp_around_index(mfp, key)?,
                                 ));
                             }
                         }
                     }
-                    mz_compute_client::plan::GetPlan::Collection(_) => {
-                        // No arrangement, so nothing to be done here.
-                    }
                 }
+                // nothing can be done for non-trivial expressions.
+                _ => {}
             }
-            // nothing can be done for non-trivial expressions.
-            _ => {}
         }
     }
     return Ok(Plan::PeekDataflow(PeekDataflowPlan {
@@ -169,12 +169,39 @@ pub fn create_plan(
     }));
 }
 
+impl<T> Plan<mz_expr::OptimizedMirRelationExpr, T> {
+    pub fn finalize<F>(self, mut finalize_dataflow: F) -> Plan<mz_compute_client::plan::Plan<T>, T>
+    where
+        F: FnMut(
+            DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
+        ) -> DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
+    {
+        match self {
+            Plan::Constant(rows) => Plan::Constant(rows),
+            Plan::PeekExisting(id, val, mfp) => Plan::PeekExisting(id, val, mfp),
+            Plan::PeekDataflow(PeekDataflowPlan {
+                desc,
+                id,
+                key,
+                permutation,
+                thinned_arity,
+            }) => Plan::PeekDataflow(PeekDataflowPlan {
+                desc: finalize_dataflow(desc),
+                id,
+                key,
+                permutation,
+                thinned_arity,
+            }),
+        }
+    }
+}
+
 impl<S: Append + 'static> crate::coord::Coordinator<S> {
     /// Implements a peek plan produced by `create_plan` above.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn implement_fast_path_peek(
         &mut self,
-        fast_path: Plan,
+        fast_path: Plan<mz_compute_client::plan::Plan>,
         timestamp: mz_repr::Timestamp,
         finishing: mz_expr::RowSetFinishing,
         conn_id: ConnectionId,

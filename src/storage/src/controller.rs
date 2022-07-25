@@ -409,7 +409,7 @@ pub struct StorageControllerState<
     /// Read handles for persist shards.
     ///
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
-    /// without blocknig the storage controller.
+    /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
 }

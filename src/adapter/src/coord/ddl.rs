@@ -66,6 +66,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
+        let mut timelines_to_drop = vec![];
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
@@ -115,17 +116,20 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     _ => (),
                 }
+            } else if let catalog::Op::DropComputeInstance { name } = op {
+                let id = self.catalog.resolve_compute_instance(name)?.id;
+                timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
             }
         }
 
-        let mut empty_timelines = self.remove_storage_ids_from_timeline(
+        let mut timelines_to_drop = self.remove_storage_ids_from_timeline(
             sources_to_drop
                 .iter()
                 .chain(tables_to_drop.iter())
                 .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
                 .cloned(),
         );
-        empty_timelines.extend(
+        timelines_to_drop.extend(
             self.remove_compute_ids_from_timeline(
                 sinks_to_drop
                     .iter()
@@ -134,7 +138,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .cloned(),
             ),
         );
-        ops.extend(empty_timelines.into_iter().map(catalog::Op::DropTimeline));
+        ops.extend(timelines_to_drop.into_iter().map(catalog::Op::DropTimeline));
 
         let (builtin_table_updates, result) = self
             .catalog
