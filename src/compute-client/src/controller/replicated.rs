@@ -30,6 +30,7 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::future;
 use futures::stream::{FuturesUnordered, StreamExt};
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::select;
@@ -389,6 +390,8 @@ struct ReplicaState<T> {
     /// If receiving from the channel returns `None`, the replica has failed
     /// and requires rehydration.
     response_rx: UnboundedReceiver<ComputeResponse<T>>,
+    /// A handle to the task that aborts it when the replica is dropped.
+    _task: AbortOnDropHandle<()>,
     /// The network addresses of the processes that make up the replica.
     addrs: Vec<String>,
     /// Where to persist introspection sources
@@ -445,7 +448,7 @@ where
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
-        mz_ore::task::spawn(
+        let task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
             replica_task(ReplicaTaskConfig {
                 replica_id: id,
@@ -462,6 +465,7 @@ where
         let replica_state = ReplicaState {
             command_tx,
             response_rx,
+            _task: task.abort_on_drop(),
             addrs,
             persisted_logs,
         };
