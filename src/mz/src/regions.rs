@@ -90,7 +90,7 @@ pub(crate) fn warning_delete_region(cloud_provider_region: CloudProviderRegion) 
                 false
             }
         }
-        Err(error) => panic!("Problem parsing the region input: {:?}", error),
+        Err(error) => panic!("Error parsing the region input: {:?}", error),
     }
 }
 

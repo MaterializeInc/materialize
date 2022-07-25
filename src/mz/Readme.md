@@ -51,12 +51,18 @@ mz login interactive
 
 ### Profiles
 
-The CLI uses `USER_ID`, `SECRET`, and `Email` to interact with the platform. These values are automatically populated through the login command. If you want to retrieve or manually create the profiles file, the file is in the OS config folder:
+The CLI needs a default profile. To populate it go through the login command `mz login`. If you want to do it manually add the default profile to the config file:
+
+```TOML
+["profiles.default"]
+email = "your@email.com"
+secret = "YOUR_SECRET"
+client_id = "YOUR_CLIENT_ID"
+```
 
 Linux: `.config/mz/profiles.toml`
 macOS (Monterrey): `.config/mz/profiles.toml`
 Windows: (TBC)
-
 
 ### Regions
 

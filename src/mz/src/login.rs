@@ -18,7 +18,7 @@ use crate::profiles::save_profile;
 use crate::utils::trim_newline;
 use crate::{
     BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL,
-    USER_AUTH_URL, WEB_LOGIN_URL,
+    DEFAULT_PROFILE_NAME, USER_AUTH_URL, WEB_LOGIN_URL,
 };
 use mz_ore::task;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
@@ -38,10 +38,11 @@ async fn request(
 ) -> impl IntoResponse {
     if secret != "" {
         let profile = Profile {
+            name: String::from(DEFAULT_PROFILE_NAME),
             email,
             secret,
             client_id,
-            default_region: None,
+            region: None,
         };
         save_profile(profile).unwrap();
     }
@@ -152,10 +153,11 @@ pub(crate) async fn login_with_console() -> Result<(), reqwest::Error> {
     let api_token = generate_api_token(&client, auth_user).await?;
 
     let profile = Profile {
+        name: String::from(DEFAULT_PROFILE_NAME),
         email: email.to_string(),
         secret: api_token.secret,
         client_id: api_token.client_id,
-        default_region: None,
+        region: None,
     };
     save_profile(profile).unwrap();
     Ok(())

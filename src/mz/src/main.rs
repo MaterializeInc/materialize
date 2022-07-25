@@ -27,7 +27,7 @@ use clap::{ArgEnum, Args, Parser, Subcommand};
 use reqwest::Client;
 
 use crate::login::{login_with_browser, login_with_console};
-use crate::profiles::{authenticate_profile, get_local_profile, validate_profile};
+use crate::profiles::{authenticate_profile, get_default_profile, validate_profile};
 use crate::regions::{
     delete_region, enable_region, list_cloud_providers, list_regions, warning_delete_region,
 };
@@ -138,10 +138,11 @@ struct BrowserAPIToken {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Profile {
+    name: String,
     email: String,
     client_id: String,
     secret: String,
-    default_region: Option<String>,
+    region: Option<String>,
 }
 
 const PROFILES_DIR_NAME: &str = ".config/mz";
@@ -154,6 +155,8 @@ const USER_AUTH_URL: &str =
 const MACHINE_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/auth/v1/api-token";
 const WEB_LOGIN_URL: &str = "http://www.materialize.com/account/login?redirectUrl=/access/cli";
+const DEFAULT_PROFILE_NAME: &str = "default";
+const DEFAULT_PROFILE_NOT_FOUND_MESSAGE: &str = "Default profile not found. Please, add one or login using `mz login`.";
 
 #[tokio::main]
 async fn main() {
@@ -161,18 +164,16 @@ async fn main() {
 
     match args.command {
         Commands::Login(login_cmd) => match login_cmd.command {
-            Some(LoginCommands::Interactive) => match get_local_profile() {
-                None => login_with_console().await.unwrap(),
-                Some(profile) => println!(
-                    "There is a profile available: {:?} \nPlease, remove to assign a new one.",
-                    profile
+            Some(LoginCommands::Interactive) => match get_default_profile() {
+                Some(_) => println!(
+                    "There is a default profile available. Please, remove to assign a new one."
                 ),
+                None => login_with_console().await.unwrap(),
             },
-            _ => match get_local_profile() {
+            _ => match get_default_profile() {
                 None => login_with_browser().await.unwrap(),
-                Some(profile) => println!(
-                    "There is a profile available: {:?} \nPlease, remove to assign a new one.",
-                    profile
+                Some(_) => println!(
+                    "There is a default  profile available. Please, remove to assign a new one."
                 ),
             },
         },
@@ -243,7 +244,7 @@ async fn main() {
 
         Commands::Shell => {
             // TODO: Use local profile to retrieve default region.
-            match get_local_profile() {
+            match get_default_profile() {
                 Some(profile) => {
                     let client = Client::new();
                     match authenticate_profile(client.clone(), profile.clone()).await {
@@ -253,7 +254,7 @@ async fn main() {
                         Err(error) => panic!("Error authenticating profile : {:?}", error),
                     }
                 }
-                None => println!("Profile not found. Please, login using `mz login`."),
+                None => println!("{}", DEFAULT_PROFILE_NOT_FOUND_MESSAGE),
             };
         }
     }
