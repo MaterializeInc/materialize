@@ -49,23 +49,28 @@ pub enum PeekResponseUnary {
 }
 
 #[derive(Debug)]
-pub struct PeekDataflowPlan<P, T> {
-    desc: DataflowDescription<P, (), T>,
+pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
+    desc: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
     id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: HashMap<usize, usize>,
     thinned_arity: usize,
 }
 
-/// Possible ways in which the coordinator could produce the result for a goal view.
 #[derive(Debug)]
-pub enum Plan<P, T = mz_repr::Timestamp> {
+pub enum FastPathPlan<T = mz_repr::Timestamp> {
     /// The view evaluates to a constant result that can be returned.
     Constant(Result<Vec<(Row, T, Diff)>, EvalError>),
     /// The view can be read out of an existing arrangement.
     PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
+}
+
+/// Possible ways in which the coordinator could produce the result for a goal view.
+#[derive(Debug)]
+pub enum Plan<P, T = mz_repr::Timestamp> {
+    FastPath(FastPathPlan<T>),
     /// The view must be installed as a dataflow and then read.
-    PeekDataflow(PeekDataflowPlan<P, T>),
+    SlowPath(P),
 }
 
 fn permute_oneshot_mfp_around_index(
@@ -94,13 +99,9 @@ fn permute_oneshot_mfp_around_index(
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
 pub fn create_plan<T: timely::progress::Timestamp>(
-    mut dataflow_plan: DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
+    dataflow_plan: &mut DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
-    index_id: GlobalId,
-    index_key: Vec<MirScalarExpr>,
-    index_permutation: HashMap<usize, usize>,
-    index_thinned_arity: usize,
-) -> Result<Plan<mz_expr::OptimizedMirRelationExpr, T>, AdapterError> {
+) -> Result<Plan<(), T>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
 
@@ -111,11 +112,11 @@ pub fn create_plan<T: timely::progress::Timestamp>(
         let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let mz_expr::MirRelationExpr::Constant { rows, .. } = mir {
             // In the case of a constant, we can return the result now.
-            return Ok(Plan::Constant(rows.clone().map(|rows| {
+            return Ok(Plan::FastPath(FastPathPlan::Constant(rows.clone().map(|rows| {
                 rows.into_iter()
                     .map(|(row, diff)| (row, T::minimum(), diff))
                     .collect()
-            })));
+            }))));
         } else {
             // In the case of a linear operator around an indexed view, we
             // can skip creating a dataflow and instead pull all the rows in
@@ -127,11 +128,11 @@ pub fn create_plan<T: timely::progress::Timestamp>(
                     // Nothing to be done if an arrangement does not exist
                     for (index_id, (desc, _typ, _monotonic)) in dataflow_plan.index_imports.iter() {
                         if Id::Global(desc.on_id) == *id {
-                            return Ok(Plan::PeekExisting(
+                            return Ok(Plan::FastPath(FastPathPlan::PeekExisting(
                                 *index_id,
                                 None,
                                 permute_oneshot_mfp_around_index(mfp, &desc.key)?,
-                            ));
+                            )));
                         }
                     }
                 }
@@ -146,11 +147,11 @@ pub fn create_plan<T: timely::progress::Timestamp>(
                         {
                             if desc.on_id == *id && &desc.key == key {
                                 // Indicate an early exit with a specific index and key_val.
-                                return Ok(Plan::PeekExisting(
+                                return Ok(Plan::FastPath(FastPathPlan::PeekExisting(
                                     *index_id,
                                     Some(val.clone()),
                                     permute_oneshot_mfp_around_index(mfp, key)?,
-                                ));
+                                )));
                             }
                         }
                     }
@@ -160,37 +161,26 @@ pub fn create_plan<T: timely::progress::Timestamp>(
             }
         }
     }
-    return Ok(Plan::PeekDataflow(PeekDataflowPlan {
-        desc: dataflow_plan,
-        id: index_id,
-        key: index_key,
-        permutation: index_permutation,
-        thinned_arity: index_thinned_arity,
-    }));
+    return Ok(Plan::SlowPath(()));
 }
 
-impl<T> Plan<mz_expr::OptimizedMirRelationExpr, T> {
-    pub fn finalize<F>(self, mut finalize_dataflow: F) -> Plan<mz_compute_client::plan::Plan<T>, T>
-    where
-        F: FnMut(
-            DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
-        ) -> DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
+impl<T> Plan<(), T> {
+    pub fn finalize(self,
+        dataflow: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
+        index_id: GlobalId,
+        index_key: Vec<MirScalarExpr>,
+        index_permutation: HashMap<usize, usize>,
+        index_thinned_arity: usize,
+    ) -> Plan<PeekDataflowPlan<T>, T>
     {
         match self {
-            Plan::Constant(rows) => Plan::Constant(rows),
-            Plan::PeekExisting(id, val, mfp) => Plan::PeekExisting(id, val, mfp),
-            Plan::PeekDataflow(PeekDataflowPlan {
-                desc,
-                id,
-                key,
-                permutation,
-                thinned_arity,
-            }) => Plan::PeekDataflow(PeekDataflowPlan {
-                desc: finalize_dataflow(desc),
-                id,
-                key,
-                permutation,
-                thinned_arity,
+            Plan::FastPath(fast_path_plan) => Plan::FastPath(fast_path_plan),
+            Plan::SlowPath(()) => Plan::SlowPath(PeekDataflowPlan {
+                desc: dataflow,
+                id: index_id,
+                key: index_key,
+                permutation: index_permutation,
+                thinned_arity: index_thinned_arity,
             }),
         }
     }
@@ -201,7 +191,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn implement_fast_path_peek(
         &mut self,
-        fast_path: Plan<mz_compute_client::plan::Plan>,
+        fast_path: Plan<PeekDataflowPlan>,
         timestamp: mz_repr::Timestamp,
         finishing: mz_expr::RowSetFinishing,
         conn_id: ConnectionId,
@@ -210,7 +200,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         target_replica: Option<ReplicaId>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
-        if let Plan::Constant(rows) = fast_path {
+        if let Plan::FastPath(FastPathPlan::Constant(rows)) = fast_path {
             let mut rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
@@ -252,11 +242,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // If we must build the view, ship the dataflow.
         let (peek_command, drop_dataflow) = match fast_path {
-            Plan::PeekExisting(id, key, map_filter_project) => (
+            Plan::FastPath(FastPathPlan::PeekExisting(id, key, map_filter_project)) => (
                 (id, key, timestamp, finishing.clone(), map_filter_project),
                 None,
             ),
-            Plan::PeekDataflow(PeekDataflowPlan {
+            Plan::SlowPath(PeekDataflowPlan {
                 desc: dataflow,
                 // n.b. this index_id identifies a transient index the
                 // caller created, so it is guaranteed to be on

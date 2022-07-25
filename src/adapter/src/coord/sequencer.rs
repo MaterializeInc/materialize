@@ -34,7 +34,7 @@ use mz_expr::{
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
-use mz_repr::explain_new::Explain;
+use mz_repr::explain_new::{Explain, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
@@ -1934,23 +1934,19 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
-        let fast_path = peek::create_plan(
-            dataflow,
-            view_id,
-            index_id,
-            key,
-            permutation,
-            thinning.len(),
-        )?;
+        let fast_path = peek::create_plan(&mut dataflow, view_id)?;
 
         // Finalization optimizes the dataflow as much as possible.
-        let fast_path =
-            fast_path.finalize(|dataflow| self.finalize_dataflow(dataflow, compute_instance));
+        let dataflow = self.finalize_dataflow(dataflow, compute_instance);
+        let fast_path = fast_path.finalize(dataflow, index_id, key, permutation, thinning.len());
 
         // We only track the peeks in the session if the query doesn't use AS OF, it's a
         // non-constant or timestamp dependent query.
         if when == QueryWhen::Immediately
-            && (!matches!(fast_path, peek::Plan::Constant(_)) || !timestamp_independent)
+            && (!matches!(
+                fast_path,
+                peek::Plan::FastPath(peek::FastPathPlan::Constant(_))
+            ) || !timestamp_independent)
         {
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
         }
@@ -2101,7 +2097,7 @@ impl<S: Append + 'static> Coordinator<S> {
             stage,
             format,
             config,
-            explainee
+            explainee,
         } = plan;
 
         let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
@@ -2201,12 +2197,21 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = optimize(self, decorrelated_plan)?;
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        match peek::create_plan(&mut dataflow, GlobalId::Explain)? {
+                            peek::Plan::FastPath(fast_path_plan) => Some(fast_path_plan),
+                            peek::Plan::SlowPath(()) => None,
+                        }
+                    }
+                    _ => None,
+                };
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
                     used_indexes: UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                    fast_path_plan,
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -2258,7 +2263,7 @@ impl<S: Append + 'static> Coordinator<S> {
             row_set_finishing,
             stage,
             options,
-            view_id
+            view_id,
         } = plan;
 
         struct Timings {

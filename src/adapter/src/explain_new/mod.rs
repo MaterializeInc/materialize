@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::RowSetFinishing;
 use mz_ore::str::{Indent, IndentLike};
 use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer};
 use mz_repr::GlobalId;
@@ -67,7 +67,7 @@ pub(crate) struct ExplainContext<'a> {
     pub(crate) humanizer: &'a dyn ExprHumanizer,
     pub(crate) used_indexes: UsedIndexes,
     pub(crate) finishing: Option<RowSetFinishing>,
-    pub(crate) fast_path_plan: Option<peek::Plan<OptimizedMirRelationExpr>>,
+    pub(crate) fast_path_plan: Option<peek::FastPathPlan>,
 }
 
 #[derive(Clone)]
