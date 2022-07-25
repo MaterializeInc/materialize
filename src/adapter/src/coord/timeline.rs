@@ -469,6 +469,25 @@ impl<S: Append + 'static> Coordinator<S> {
         empty_timelines
     }
 
+    pub(crate) fn remove_compute_instance_from_timeline(
+        &mut self,
+        compute_instance: ComputeInstanceId,
+    ) -> Vec<Timeline> {
+        let mut empty_timelines = Vec::new();
+        for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
+            read_holds.id_bundle.compute_ids.remove(&compute_instance);
+            if read_holds.id_bundle.is_empty() {
+                empty_timelines.push(timeline.clone());
+            }
+        }
+
+        for timeline in &empty_timelines {
+            self.global_timelines.remove(timeline);
+        }
+
+        empty_timelines
+    }
+
     pub(crate) fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {
         let mut id_bundle = CollectionIdBundle::default();
         for entry in self.catalog.entries() {
