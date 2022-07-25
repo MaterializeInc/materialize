@@ -6,7 +6,7 @@ menu:
     parent: commands
 ---
 
-`SHOW CREATE VIEW` returns the [`SELECT`](../select) statement used to create the view. This works on both materialized and non-materialized views.
+`SHOW CREATE VIEW` returns the [`SELECT`](../select) statement used to create the view.
 
 ## Syntax
 
