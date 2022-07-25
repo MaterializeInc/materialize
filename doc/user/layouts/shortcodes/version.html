@@ -1,1 +1,1 @@
-{{ (index $.Site.Params.versions 0).name -}}
+{{ (index (index (where $.Site.Sections "Title" "Releases") 0).Pages.ByDate.Reverse 0).File.ContentBaseName -}}

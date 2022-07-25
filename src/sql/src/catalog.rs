@@ -264,7 +264,7 @@ pub trait CatalogComputeInstance<'a> {
     /// Returns a stable ID for the compute instance.
     fn id(&self) -> ComputeInstanceId;
 
-    /// Returns the set of non-transient exports (indexes, sinks, recorded
+    /// Returns the set of non-transient exports (indexes, sinks, materialized
     /// views) of this cluster.
     fn exports(&self) -> &std::collections::HashSet<GlobalId>;
 
@@ -347,8 +347,8 @@ pub enum CatalogItemType {
     Sink,
     /// A view.
     View,
-    /// A recorded view.
-    RecordedView,
+    /// A materialized view.
+    MaterializedView,
     /// An index.
     Index,
     /// A type.
@@ -368,7 +368,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Source => f.write_str("source"),
             CatalogItemType::Sink => f.write_str("sink"),
             CatalogItemType::View => f.write_str("view"),
-            CatalogItemType::RecordedView => f.write_str("recorded view"),
+            CatalogItemType::MaterializedView => f.write_str("materialized view"),
             CatalogItemType::Index => f.write_str("index"),
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),

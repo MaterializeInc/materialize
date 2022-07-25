@@ -1587,17 +1587,16 @@ impl<'a> Parser<'a> {
             self.parse_create_secret()
         } else if self.peek_keyword(CONNECTION) {
             self.parse_create_connection()
-        } else if self.peek_keywords(&[RECORDED, VIEW])
-            || self.peek_keywords(&[OR, REPLACE, RECORDED, VIEW])
+        } else if self.peek_keywords(&[MATERIALIZED, VIEW])
+            || self.peek_keywords(&[OR, REPLACE, MATERIALIZED, VIEW])
         {
-            self.parse_create_recorded_view()
+            self.parse_create_materialized_view()
         } else {
             let index = self.index;
 
             // go over optional modifiers
             let _ = self.parse_keywords(&[OR, REPLACE]);
             let _ = self.parse_one_of_keywords(&[TEMP, TEMPORARY]);
-            let _ = self.parse_keyword(MATERIALIZED);
 
             if self.parse_keyword(VIEW) {
                 self.index = index;
@@ -1608,7 +1607,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE",
                     self.peek_token(),
                 )
             }
@@ -2447,7 +2446,6 @@ impl<'a> Parser<'a> {
             IfExistsBehavior::Error
         };
         let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
-        let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(VIEW)?;
         if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
             if_exists = IfExistsBehavior::Skip;
@@ -2456,7 +2454,6 @@ impl<'a> Parser<'a> {
         let definition = self.parse_view_definition()?;
         Ok(Statement::CreateView(CreateViewStatement {
             temporary,
-            materialized,
             if_exists,
             definition,
         }))
@@ -2485,7 +2482,6 @@ impl<'a> Parser<'a> {
             IfExistsBehavior::Error
         };
         let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
-        let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(VIEWS)?;
         if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
             if_exists = IfExistsBehavior::Skip;
@@ -2511,21 +2507,20 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::CreateViews(CreateViewsStatement {
             temporary,
-            materialized,
             if_exists,
             source,
             targets,
         }))
     }
 
-    fn parse_create_recorded_view(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_create_materialized_view(&mut self) -> Result<Statement<Raw>, ParserError> {
         let mut if_exists = if self.parse_keyword(OR) {
             self.expect_keyword(REPLACE)?;
             IfExistsBehavior::Replace
         } else {
             IfExistsBehavior::Error
         };
-        self.expect_keywords(&[RECORDED, VIEW])?;
+        self.expect_keywords(&[MATERIALIZED, VIEW])?;
         if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
             if_exists = IfExistsBehavior::Skip;
         }
@@ -2537,13 +2532,15 @@ impl<'a> Parser<'a> {
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
 
-        Ok(Statement::CreateRecordedView(CreateRecordedViewStatement {
-            if_exists,
-            name,
-            columns,
-            in_cluster,
-            query,
-        }))
+        Ok(Statement::CreateMaterializedView(
+            CreateMaterializedViewStatement {
+                if_exists,
+                name,
+                columns,
+                in_cluster,
+                query,
+            },
+        ))
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2858,11 +2855,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let materialized = self.parse_keyword(MATERIALIZED);
-
         let object_type = match self.expect_one_of_keywords(&[
-            CONNECTION, CLUSTER, DATABASE, INDEX, RECORDED, ROLE, SECRET, SCHEMA, SINK, SOURCE,
-            TABLE, TYPE, USER, VIEW,
+            CONNECTION,
+            CLUSTER,
+            DATABASE,
+            INDEX,
+            MATERIALIZED,
+            ROLE,
+            SECRET,
+            SCHEMA,
+            SINK,
+            SOURCE,
+            TABLE,
+            TYPE,
+            USER,
+            VIEW,
         ])? {
             DATABASE => {
                 let if_exists = self.parse_if_exists()?;
@@ -2911,9 +2918,9 @@ impl<'a> Parser<'a> {
             TABLE => ObjectType::Table,
             TYPE => ObjectType::Type,
             VIEW => ObjectType::View,
-            RECORDED => {
+            MATERIALIZED => {
                 self.expect_keyword(VIEW)?;
-                ObjectType::RecordedView
+                ObjectType::MaterializedView
             }
             SECRET => ObjectType::Secret,
             CONNECTION => ObjectType::Connection,
@@ -2927,7 +2934,6 @@ impl<'a> Parser<'a> {
             Some(CASCADE),
         );
         Ok(Statement::DropObjects(DropObjectsStatement {
-            materialized,
             object_type,
             if_exists,
             names,
@@ -3232,15 +3238,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self
-            .expect_one_of_keywords(&[SINK, SOURCE, VIEW, RECORDED, TABLE, INDEX, SECRET])?
-        {
+        let object_type = match self.expect_one_of_keywords(&[
+            SINK,
+            SOURCE,
+            VIEW,
+            MATERIALIZED,
+            TABLE,
+            INDEX,
+            SECRET,
+        ])? {
             SINK => ObjectType::Sink,
             SOURCE => ObjectType::Source,
             VIEW => ObjectType::View,
-            RECORDED => {
+            MATERIALIZED => {
                 self.expect_keyword(VIEW)?;
-                ObjectType::RecordedView
+                ObjectType::MaterializedView
             }
             TABLE => ObjectType::Table,
             INDEX => return self.parse_alter_index(),
@@ -4333,7 +4345,6 @@ impl<'a> Parser<'a> {
                     CONNECTIONS,
                     MATERIALIZED,
                     OBJECTS,
-                    RECORDED,
                     ROLES,
                     SCHEMAS,
                     SINKS,
@@ -4342,17 +4353,11 @@ impl<'a> Parser<'a> {
                     TYPES,
                     VIEWS,
                 ])?;
-                if kw == RECORDED {
+                if kw == MATERIALIZED {
                     self.expect_keyword(VIEWS)?;
                     self.prev_token();
                 }
             }
-            self.prev_token();
-        }
-
-        let materialized = self.parse_keyword(MATERIALIZED);
-        if materialized {
-            self.expect_keyword(VIEWS)?;
             self.prev_token();
         }
 
@@ -4381,7 +4386,7 @@ impl<'a> Parser<'a> {
             TYPES,
             USERS,
             VIEWS,
-            RECORDED,
+            MATERIALIZED,
             SECRETS,
             CONNECTIONS,
         ]) {
@@ -4403,9 +4408,9 @@ impl<'a> Parser<'a> {
                 TABLES => ObjectType::Table,
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
-                RECORDED => {
+                MATERIALIZED => {
                     self.expect_keyword(VIEWS)?;
-                    ObjectType::RecordedView
+                    ObjectType::MaterializedView
                 }
                 SECRETS => ObjectType::Secret,
                 CONNECTIONS => ObjectType::Connection,
@@ -4415,7 +4420,7 @@ impl<'a> Parser<'a> {
             let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
                 Some(kw) => {
                     if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::Sink | ObjectType::RecordedView) {
+                        if matches!(object_type, ObjectType::Sink | ObjectType::MaterializedView) {
                             // put `IN` back
                             self.prev_token();
                             (None, self.parse_optional_in_cluster()?)
@@ -4439,7 +4444,6 @@ impl<'a> Parser<'a> {
                 object_type,
                 extended,
                 full,
-                materialized,
                 from,
                 in_cluster,
                 filter: self.parse_show_statement_filter()?,
@@ -4476,10 +4480,10 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
             }))
-        } else if self.parse_keywords(&[CREATE, RECORDED, VIEW]) {
-            Ok(Statement::ShowCreateRecordedView(
-                ShowCreateRecordedViewStatement {
-                    recorded_view_name: self.parse_raw_name()?,
+        } else if self.parse_keywords(&[CREATE, MATERIALIZED, VIEW]) {
+            Ok(Statement::ShowCreateMaterializedView(
+                ShowCreateMaterializedViewStatement {
+                    materialized_view_name: self.parse_raw_name()?,
                 },
             ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
@@ -5100,11 +5104,11 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(FOR)?;
 
-        // VIEW name | RECORDED VIEW name | query
+        // VIEW name | MATERIALIZED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
-        } else if self.parse_keywords(&[RECORDED, VIEW]) {
-            Explainee::RecordedView(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
+            Explainee::MaterializedView(self.parse_raw_name()?)
         } else {
             Explainee::Query(self.parse_query()?)
         };
@@ -5193,11 +5197,11 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
 
-        // VIEW name | RECORDED VIEW name | query
+        // VIEW name | MATERIALIZED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
-        } else if self.parse_keywords(&[RECORDED, VIEW]) {
-            Explainee::RecordedView(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
+            Explainee::MaterializedView(self.parse_raw_name()?)
         } else {
             Explainee::Query(self.parse_query()?)
         };

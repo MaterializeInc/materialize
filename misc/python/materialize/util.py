@@ -14,7 +14,6 @@ import random
 from pathlib import Path
 from typing import List
 
-import toml
 from semver import Version
 
 ROOT = Path(os.environ["MZ_ROOT"])
@@ -29,5 +28,5 @@ def known_materialize_versions() -> List[Version]:
 
     The list is returned in version order with newest versions first.
     """
-    config = toml.load(ROOT / "doc" / "user" / "config.toml")
-    return [Version.parse(v["name"].lstrip("v")) for v in config["params"]["versions"]]
+    files = Path(ROOT / "doc" / "user" / "content" / "releases").glob("*.md")
+    return [Version.parse(f.stem.lstrip("v")) for f in files if f.stem.startswith("v")]

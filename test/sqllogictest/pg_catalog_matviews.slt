@@ -1,0 +1,32 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE MATERIALIZED VIEW test_view1 AS SELECT 1
+
+statement ok
+CREATE MATERIALIZED VIEW test_view2 AS SELECT 2
+
+query TTTT colnames
+SELECT * FROM pg_catalog.pg_matviews WHERE matviewname LIKE 'test_%'
+----
+schemaname  matviewname  matviewowner  definition
+public      test_view1   NULL          SELECT␠1;
+public      test_view2   NULL          SELECT␠2;
+
+mode standard
+
+# test SHOW CREATE for pg_matviews
+query TT
+SHOW CREATE VIEW pg_matviews
+----
+pg_catalog.pg_matviews
+CREATE VIEW "pg_catalog"."pg_matviews" AS SELECT "s"."name" AS "schemaname", "m"."name" AS "matviewname", NULL::"pg_catalog"."oid" AS "matviewowner", "m"."definition" AS "definition" FROM "mz_catalog"."mz_materialized_views" AS "m" LEFT JOIN "mz_catalog"."mz_schemas" AS "s" ON "s"."id" = "m"."schema_id" LEFT JOIN "mz_catalog"."mz_databases" AS "d" ON "d"."id" = "s"."database_id" WHERE "d"."name" = "pg_catalog"."current_database"()

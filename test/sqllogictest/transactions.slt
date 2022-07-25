@@ -400,7 +400,7 @@ COMPLETE 0
 simple conn=t1
 COMMIT;
 ----
-db error: ERROR: unknown catalog item 'u17'
+db error: ERROR: unknown catalog item 'u16'
 
 # Test transaction syntax that we don't support.
 

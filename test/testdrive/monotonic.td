@@ -59,13 +59,14 @@ a min max
 1 2 1048577
 2 3 5
 
-# Propagating monotonicity analysis through materialized views
+# Propagating monotonicity analysis through indexed views
 # TODO: After https://github.com/MaterializeInc/materialize/pull/13238 is merged, modify these tests to dig into
 # the plans with `jq` and just check for `MonotonicTopK` being present.
 
-> CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data
+> CREATE VIEW i1 AS SELECT b FROM non_dbz_data
+> CREATE DEFAULT INDEX ON i1
 
-> CREATE VIEW v2 AS SELECT * FROM m1 ORDER BY b LIMIT 3
+> CREATE VIEW v2 AS SELECT * FROM i1 ORDER BY b LIMIT 3
 
 $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 
@@ -136,16 +137,16 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
   }
 }
 
-> CREATE SOURCE non_dbz_data_materialized
+> CREATE SOURCE non_dbz_data_indexed
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
-> CREATE DEFAULT INDEX ON non_dbz_data_materialized
+> CREATE DEFAULT INDEX ON non_dbz_data_indexed
 
-# Propagating monotonicity analysis from a materialized source
+# Propagating monotonicity analysis from an indexed source
 
-> CREATE VIEW v3 AS SELECT * FROM non_dbz_data_materialized ORDER BY b LIMIT 3
+> CREATE VIEW v3 AS SELECT * FROM non_dbz_data_indexed ORDER BY b LIMIT 3
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v3
 {
@@ -223,11 +224,12 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 }
 
 
-> CREATE MATERIALIZED VIEW m4 AS SELECT b+1 as c FROM m1
+> CREATE VIEW i4 AS SELECT b+1 as c FROM i1
+> CREATE DEFAULT INDEX ON i4
 
-# Propagating monotonicity analysis through 2 materialized views (m1 and m4)
+# Propagating monotonicity analysis through 2 indexed views (i1 and i4)
 
-> CREATE VIEW v5 AS SELECT * from m4 ORDER BY c LIMIT 2
+> CREATE VIEW v5 AS SELECT * from i4 ORDER BY c LIMIT 2
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v5
 {
@@ -296,11 +298,12 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
   }
 }
 
-> CREATE MATERIALIZED VIEW m6 AS SELECT c FROM v5
+> CREATE VIEW i6 AS SELECT c FROM v5
+> CREATE DEFAULT INDEX ON i6
 
-# Non-monotonic materialized view -- v7 can't use a monotonic TopK plan, because m6 and v5 are not monotonic
+# Non-monotonic indexed view -- v7 can't use a monotonic TopK plan, because i6 and v5 are not monotonic
 
-> CREATE VIEW v7 AS SELECT * from m6 ORDER BY c LIMIT 2
+> CREATE VIEW v7 AS SELECT * from i6 ORDER BY c LIMIT 2
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v7
 {
@@ -371,13 +374,15 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 }
 
 
-> CREATE MATERIALIZED VIEW m8 AS SELECT * from (SELECT * FROM m1 UNION ALL SELECT * FROM m1)
+> CREATE VIEW i8 AS SELECT * from (SELECT * FROM i1 UNION ALL SELECT * FROM i1)
+> CREATE DEFAULT INDEX ON i8
 
-> CREATE MATERIALIZED VIEW m9 AS SELECT * from (SELECT * FROM m1 UNION ALL SELECT * FROM m8)
+> CREATE VIEW i9 AS SELECT * from (SELECT * FROM i1 UNION ALL SELECT * FROM i8)
+> CREATE DEFAULT INDEX ON i9
 
-> CREATE VIEW v10 as SELECT b FROM m9 ORDER BY b LIMIT 2;
+> CREATE VIEW v10 as SELECT b FROM i9 ORDER BY b LIMIT 2;
 
-# Propagating monotonicity analysis in a complex situation: (m1, m1) -> m8; (m1, m8) -> m9
+# Propagating monotonicity analysis in a complex situation: (i1, i1) -> i8; (i1, i8) -> i9
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v10;
 {
@@ -447,14 +452,14 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 }
 
 
-> CREATE RECORDED VIEW r1 AS SELECT b FROM non_dbz_data
+> CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data
 
-> CREATE VIEW v11 AS SELECT * FROM r1 ORDER BY b LIMIT 3
+> CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3
 
-# Propagating monotonicity analysis through recorded views
+# Propagating monotonicity analysis through materialized views
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v11
-Source materialize.public.r1 UID:
+Source materialize.public.m1 UID:
 {
   "predicates": [],
   "projection": [

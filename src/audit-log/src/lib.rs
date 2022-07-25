@@ -93,7 +93,7 @@ pub enum ObjectType {
     Sink,
     Source,
     View,
-    RecordedView,
+    MaterializedView,
 }
 
 serde_plain::derive_display_from_serialize!(ObjectType);

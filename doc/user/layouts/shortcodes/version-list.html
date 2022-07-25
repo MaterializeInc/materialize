@@ -1,0 +1,23 @@
+<div class="table-scrollable" {{/* style="height: 300px;" */}}>
+  <table>
+    <thead>
+      <th>Version</th>
+      <th>Release date</th>
+    </thead>
+
+    <tbody>
+      {{range $i, $page := .Page.Pages.ByDate.Reverse }}
+        <tr>
+          <td>
+            <strong>
+              <a href="{{.Page.RelPermalink}}">
+                {{$page.File.ContentBaseName}}
+              </a>
+            </strong>
+          </td>
+          <td>{{$page.Date.Format "January 2, 2006"}}</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>

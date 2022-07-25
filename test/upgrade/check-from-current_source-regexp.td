@@ -7,5 +7,5 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SHOW CREATE VIEW regexp_view;
-"materialize.public.regexp_view" "CREATE VIEW \"materialize\".\"public\".\"regexp_view\" AS SELECT \"a\" !~~ 'b' AS \"c1\", \"a\" ~~* 'b' AS \"c2\", \"a\" ~ 'b' AS \"c3\", \"a\" ~* 'b' AS \"c4\", \"a\" !~ 'b' AS \"c5\", \"a\" !~* 'b' AS \"c6\" FROM \"materialize\".\"public\".\"regexp_table\""
+> SHOW CREATE MATERIALIZED VIEW regexp_view;
+"materialize.public.regexp_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"regexp_view\" IN CLUSTER \"default\" AS SELECT \"a\" !~~ 'b' AS \"c1\", \"a\" ~~* 'b' AS \"c2\", \"a\" ~ 'b' AS \"c3\", \"a\" ~* 'b' AS \"c4\", \"a\" !~ 'b' AS \"c5\", \"a\" !~* 'b' AS \"c6\" FROM \"materialize\".\"public\".\"regexp_table\""

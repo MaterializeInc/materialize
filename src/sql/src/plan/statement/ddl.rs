@@ -61,7 +61,7 @@ use crate::ast::{
     AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateRecordedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
+    CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
@@ -94,12 +94,12 @@ use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
     ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, Secret, Sink, Source, Table,
-    Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
+    Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -1430,7 +1430,6 @@ pub fn plan_view(
         Statement::CreateView(CreateViewStatement {
             if_exists: IfExistsBehavior::Error,
             temporary,
-            materialized: false,
             definition: def.clone(),
         }),
     )?;
@@ -1482,7 +1481,6 @@ pub fn plan_create_view(
 ) -> Result<Plan, PlanError> {
     let CreateViewStatement {
         temporary,
-        materialized,
         if_exists,
         definition,
     } = &mut stmt;
@@ -1508,7 +1506,6 @@ pub fn plan_create_view(
         name,
         view,
         replace,
-        materialize: *materialized,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
     }))
 }
@@ -1524,7 +1521,6 @@ pub fn plan_create_views(
     scx: &StatementContext,
     CreateViewsStatement {
         if_exists,
-        materialized,
         temporary,
         source: source_name,
         targets,
@@ -1668,23 +1664,22 @@ pub fn plan_create_views(
             Ok(Plan::CreateViews(CreateViewsPlan {
                 views,
                 if_not_exists: if_exists == IfExistsBehavior::Skip,
-                materialize: materialized,
             }))
         }
         connection @ _ => sql_bail!("cannot generate views from {} sources", connection.name()),
     }
 }
 
-pub fn describe_create_recorded_view(
+pub fn describe_create_materialized_view(
     _: &StatementContext,
-    _: CreateRecordedViewStatement<Aug>,
+    _: CreateMaterializedViewStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_create_recorded_view(
+pub fn plan_create_materialized_view(
     scx: &StatementContext,
-    mut stmt: CreateRecordedViewStatement<Aug>,
+    mut stmt: CreateMaterializedViewStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let compute_instance = match &stmt.in_cluster {
@@ -1696,7 +1691,8 @@ pub fn plan_create_recorded_view(
         print_name: None,
     });
 
-    let create_sql = normalize::create_statement(scx, Statement::CreateRecordedView(stmt.clone()))?;
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
     let partial_name = normalize::unresolved_object_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
@@ -1711,7 +1707,11 @@ pub fn plan_create_recorded_view(
     expr.finish(finishing);
     let expr = expr.optimize_and_lower(&scx.into())?;
 
-    plan_utils::maybe_rename_columns(format!("recorded view {}", name), &mut desc, &stmt.columns)?;
+    plan_utils::maybe_rename_columns(
+        format!("materialized view {}", name),
+        &mut desc,
+        &stmt.columns,
+    )?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = column_names.iter().duplicates().next() {
@@ -1725,21 +1725,21 @@ pub fn plan_create_recorded_view(
             if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
                 if expr.depends_on().contains(&item.id()) {
                     sql_bail!(
-                        "cannot replace recorded view {0}: depended upon by new {0} definition",
+                        "cannot replace materialized view {0}: depended upon by new {0} definition",
                         scx.catalog.resolve_full_name(item.name())
                     );
                 }
                 let cascade = false;
-                replace = plan_drop_item(scx, ObjectType::RecordedView, item, cascade)?;
+                replace = plan_drop_item(scx, ObjectType::MaterializedView, item, cascade)?;
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
         IfExistsBehavior::Error => (),
     }
 
-    Ok(Plan::CreateRecordedView(CreateRecordedViewPlan {
+    Ok(Plan::CreateMaterializedView(CreateMaterializedViewPlan {
         name,
-        recorded_view: RecordedView {
+        materialized_view: MaterializedView {
             create_sql,
             expr,
             column_names,
@@ -2349,7 +2349,7 @@ pub fn plan_create_index(
     let on = scx.get_item_by_resolved_name(&on_name)?;
 
     if CatalogItemType::View != on.item_type()
-        && CatalogItemType::RecordedView != on.item_type()
+        && CatalogItemType::MaterializedView != on.item_type()
         && CatalogItemType::Source != on.item_type()
         && CatalogItemType::Table != on.item_type()
     {
@@ -2365,9 +2365,7 @@ pub fn plan_create_index(
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
         None => {
-            // `key_parts` is None if we're creating a "default" index, i.e.
-            // creating the index as if the index had been created alongside the
-            // view source, e.g. `CREATE MATERIALIZED...`
+            // `key_parts` is None if we're creating a "default" index.
             on.desc(&scx.catalog.resolve_full_name(on.name()))?
                 .typ()
                 .default_key()
@@ -3170,20 +3168,12 @@ pub fn describe_drop_objects(
 pub fn plan_drop_objects(
     scx: &StatementContext,
     DropObjectsStatement {
-        materialized,
         object_type,
         names,
         cascade,
         if_exists,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    if materialized {
-        sql_bail!(
-            "DROP MATERIALIZED {0} is not allowed, use DROP {0}",
-            object_type
-        );
-    }
-
     let mut items = vec![];
     for name in names {
         let name = normalize::unresolved_object_name(name)?;
@@ -3200,7 +3190,7 @@ pub fn plan_drop_objects(
         ObjectType::Source
         | ObjectType::Table
         | ObjectType::View
-        | ObjectType::RecordedView
+        | ObjectType::MaterializedView
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type
@@ -3334,7 +3324,7 @@ pub fn plan_drop_cluster(
                 if !cascade
                     && (!instance.exports().is_empty() || !instance.replica_names().is_empty())
                 {
-                    sql_bail!("cannot drop cluster with active indexes, sinks, recorded views, or replicas");
+                    sql_bail!("cannot drop cluster with active indexes, sinks, materialized views, or replicas");
                 }
                 out.push(name.into_string());
             }
@@ -3422,13 +3412,13 @@ pub fn plan_drop_item(
     }
     let item_type = catalog_entry.item_type();
 
-    // Return a more helpful error on `DROP VIEW <recorded-view>`.
-    if object_type == ObjectType::View && item_type == CatalogItemType::RecordedView {
+    // Return a more helpful error on `DROP VIEW <materialized-view>`.
+    if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
         let name = scx
             .catalog
             .resolve_full_name(catalog_entry.name())
             .to_string();
-        return Err(PlanError::DropViewOnRecordedView(name));
+        return Err(PlanError::DropViewOnMaterializedView(name));
     } else if object_type != item_type {
         sql_bail!(
             "{} is not of type {}",
@@ -3450,7 +3440,7 @@ pub fn plan_drop_item(
                     | CatalogItemType::Table
                     | CatalogItemType::Source
                     | CatalogItemType::View
-                    | CatalogItemType::RecordedView
+                    | CatalogItemType::MaterializedView
                     | CatalogItemType::Sink
                     | CatalogItemType::Type
                     | CatalogItemType::Secret
@@ -3564,9 +3554,11 @@ pub fn plan_alter_object_rename(
             let full_name = scx.catalog.resolve_full_name(entry.name());
             let item_type = entry.item_type();
 
-            // Return a more helpful error on `ALTER VIEW <recorded-view>`.
-            if object_type == ObjectType::View && item_type == CatalogItemType::RecordedView {
-                return Err(PlanError::AlterViewOnRecordedView(full_name.to_string()));
+            // Return a more helpful error on `ALTER VIEW <materialized-view>`.
+            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
+                return Err(PlanError::AlterViewOnMaterializedView(
+                    full_name.to_string(),
+                ));
             } else if object_type != item_type {
                 sql_bail!(
                     "{} is a {} not a {}",

@@ -18,7 +18,8 @@
 
 > DROP VIEW a_view;
 
-> CREATE MATERIALIZED VIEW a_view AS SELECT * FROM re_created;
+> CREATE VIEW a_view AS SELECT * FROM re_created;
+> CREATE DEFAULT INDEX ON a_view;
 
 > SELECT COUNT(*) FROM a_view;
 10

@@ -16,12 +16,17 @@
 
 {% materialization materializedview, adapter='materialize' %}
   {%- set identifier = model['alias'] -%}
+  {%- set old_relation = adapter.get_relation(identifier=identifier,
+                                              schema=schema,
+                                              database=database) -%}
   {%- set target_relation = api.Relation.create(identifier=identifier,
                                                 schema=schema,
                                                 database=database,
                                                 type='materializedview') -%}
 
-  {{ adapter.drop_relation(target_relation) }}
+  {% if old_relation %}
+    {{ adapter.drop_relation(drop_relation) }}
+  {% endif %}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
   {{ run_hooks(pre_hooks, inside_transaction=True) }}

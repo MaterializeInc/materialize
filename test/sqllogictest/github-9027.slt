@@ -481,93 +481,95 @@ Query:
                                       [
                                         4,
                                         {
-                                          "CallBinary": {
+                                          "CallVariadic": {
                                             "func": "Or",
-                                            "expr1": {
-                                              "CallBinary": {
-                                                "func": "Eq",
-                                                "expr1": {
-                                                  "Column": 3
-                                                },
-                                                "expr2": {
-                                                  "Literal": [
-                                                    {
-                                                      "Ok": {
-                                                        "data": [
-                                                          10,
-                                                          205,
-                                                          7,
-                                                          0,
-                                                          0,
-                                                          187,
-                                                          0,
-                                                          0,
-                                                          0
+                                            "exprs": [
+                                              {
+                                                "CallBinary": {
+                                                  "func": "Eq",
+                                                  "expr1": {
+                                                    "Column": 3
+                                                  },
+                                                  "expr2": {
+                                                    "Literal": [
+                                                      {
+                                                        "Ok": {
+                                                          "data": [
+                                                            10,
+                                                            205,
+                                                            7,
+                                                            0,
+                                                            0,
+                                                            187,
+                                                            0,
+                                                            0,
+                                                            0
+                                                          ]
+                                                        }
+                                                      },
+                                                      {
+                                                        "scalar_type": "Date",
+                                                        "nullable": false
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              },
+                                              {
+                                                "CallBinary": {
+                                                  "func": "Eq",
+                                                  "expr1": {
+                                                    "CallUnary": {
+                                                      "func": {
+                                                        "CastDateToTimestamp": null
+                                                      },
+                                                      "expr": {
+                                                        "Column": 2
+                                                      }
+                                                    }
+                                                  },
+                                                  "expr2": {
+                                                    "CallBinary": {
+                                                      "func": "SubDateInterval",
+                                                      "expr1": {
+                                                        "Column": 1
+                                                      },
+                                                      "expr2": {
+                                                        "Literal": [
+                                                          {
+                                                            "Ok": {
+                                                              "data": [
+                                                                14,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                7,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0
+                                                              ]
+                                                            }
+                                                          },
+                                                          {
+                                                            "scalar_type": "Interval",
+                                                            "nullable": false
+                                                          }
                                                         ]
                                                       }
-                                                    },
-                                                    {
-                                                      "scalar_type": "Date",
-                                                      "nullable": false
-                                                    }
-                                                  ]
-                                                }
-                                              }
-                                            },
-                                            "expr2": {
-                                              "CallBinary": {
-                                                "func": "Eq",
-                                                "expr1": {
-                                                  "CallUnary": {
-                                                    "func": {
-                                                      "CastDateToTimestamp": null
-                                                    },
-                                                    "expr": {
-                                                      "Column": 2
-                                                    }
-                                                  }
-                                                },
-                                                "expr2": {
-                                                  "CallBinary": {
-                                                    "func": "SubDateInterval",
-                                                    "expr1": {
-                                                      "Column": 1
-                                                    },
-                                                    "expr2": {
-                                                      "Literal": [
-                                                        {
-                                                          "Ok": {
-                                                            "data": [
-                                                              14,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              7,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0,
-                                                              0
-                                                            ]
-                                                          }
-                                                        },
-                                                        {
-                                                          "scalar_type": "Interval",
-                                                          "nullable": false
-                                                        }
-                                                      ]
                                                     }
                                                   }
                                                 }
                                               }
-                                            }
+                                            ]
                                           }
                                         }
                                       ]

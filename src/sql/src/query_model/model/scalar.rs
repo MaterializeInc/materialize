@@ -130,7 +130,11 @@ impl fmt::Display for BoxScalarExpr {
                 }
             }
             BoxScalarExpr::CallVariadic { func, exprs } => {
-                write!(f, "{}({})", func, separated(", ", exprs.clone()))
+                if func.is_infix_op() && exprs.len() > 1 {
+                    write!(f, "({})", separated(&*format!(" {} ", func), exprs.clone()))
+                } else {
+                    write!(f, "{}({})", func, separated(", ", exprs.clone()))
+                }
             }
             BoxScalarExpr::If { cond, then, els } => {
                 write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)
