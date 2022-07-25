@@ -45,6 +45,8 @@ class FastPathFilterNoIndex(FastPath):
                 f"""
 > CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
 
+> CREATE DEFAULT INDEX ON v1;
+
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
 """
@@ -70,6 +72,8 @@ class FastPathFilterIndex(FastPath):
             TdAction(
                 f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+
+> CREATE DEFAULT INDEX ON v1;
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -112,6 +116,8 @@ class FastPathOrderByLimit(FastPath):
             TdAction(
                 f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+
+> CREATE DEFAULT INDEX ON v1;
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
