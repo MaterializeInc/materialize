@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use mz_persist_types::Codec;
 use mz_proto::RustType;
+use tokio_postgres::error::SqlState;
 
 use crate::error::Error;
 
@@ -204,8 +205,8 @@ impl From<std::io::Error> for ExternalError {
     }
 }
 
-impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
-    fn from(e: deadpool_postgres::tokio_postgres::Error) -> Self {
+impl From<tokio_postgres::Error> for ExternalError {
+    fn from(e: tokio_postgres::Error) -> Self {
         let code = match e.as_db_error().map(|x| x.code()) {
             Some(x) => x,
             None => {
@@ -217,26 +218,11 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
         match code {
             // Feel free to add more things to this whitelist as we encounter
             // them as long as you're certain they're determinate.
-            &deadpool_postgres::tokio_postgres::error::SqlState::T_R_SERIALIZATION_FAILURE => {
-                ExternalError::Determinate(Determinate {
-                    inner: anyhow::Error::new(e),
-                })
-            }
-            _ => ExternalError::Indeterminate(Indeterminate {
+            &SqlState::T_R_SERIALIZATION_FAILURE => ExternalError::Determinate(Determinate {
                 inner: anyhow::Error::new(e),
             }),
-        }
-    }
-}
-
-impl From<deadpool_postgres::PoolError> for ExternalError {
-    fn from(x: deadpool_postgres::PoolError) -> Self {
-        match x {
-            // We have logic for turning a postgres Error into an ExternalError,
-            // so use it.
-            deadpool_postgres::PoolError::Backend(x) => ExternalError::from(x),
-            x => ExternalError::Indeterminate(Indeterminate {
-                inner: anyhow::Error::new(x),
+            _ => ExternalError::Indeterminate(Indeterminate {
+                inner: anyhow::Error::new(e),
             }),
         }
     }

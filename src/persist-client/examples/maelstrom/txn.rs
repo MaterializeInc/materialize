@@ -440,10 +440,9 @@ impl Service for TransactorService {
         let blob = CachingBlob::new(blob);
 
         // Construct requested Consensus.
-        let config = PersistConfig::new(SYSTEM_TIME.clone());
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
-                ConsensusConfig::try_from(consensus_uri, config.consensus_connection_pool_max_size)
+                ConsensusConfig::try_from(consensus_uri)
                     .await?
                     .open()
                     .await?
@@ -455,7 +454,13 @@ impl Service for TransactorService {
 
         // Wire up the TransactorService.
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-        let client = PersistClient::new(config, blob, consensus, metrics).await?;
+        let client = PersistClient::new(
+            PersistConfig::new(SYSTEM_TIME.clone()),
+            blob,
+            consensus,
+            metrics,
+        )
+        .await?;
         let transactor = Transactor::new(&client, shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)

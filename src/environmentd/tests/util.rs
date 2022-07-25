@@ -159,10 +159,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             command_wrapper: vec![],
         }))?,
     );
-    let persist_clients = PersistClientCache::new(
-        PersistConfig::new_for_test(config.now.clone()),
-        &metrics_registry,
-    );
+    let persist_clients =
+        PersistClientCache::new(PersistConfig::new(config.now.clone()), &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
