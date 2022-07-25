@@ -24,10 +24,10 @@ use mz_storage::protocol::client::Update;
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::{CoordTimestamp, Coordinator, Message};
-use crate::session::{EndTransactionAction, Session, WriteOp};
+use crate::coord::{CoordTimestamp, Coordinator, Message, PendingTxn};
+use crate::session::{Session, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::{AdapterError, ExecuteResponse};
+use crate::ExecuteResponse;
 
 #[derive(Debug)]
 pub struct AdvanceLocalInput<T> {
@@ -130,16 +130,10 @@ pub(crate) struct DeferredPlan {
 pub(crate) struct PendingWriteTxn {
     /// List of all write operations within the transaction.
     pub(crate) writes: Vec<WriteOp>,
-    /// Transmitter used to send a response back to the client.
-    pub(crate) client_transmitter: ClientTransmitter<ExecuteResponse>,
-    /// Client response for transaction.
-    pub(crate) response: Result<ExecuteResponse, AdapterError>,
-    /// Session of the client who initiated the transaction.
-    pub(crate) session: Session,
-    /// The action to take at the end of the transaction.
-    pub(crate) action: EndTransactionAction,
     /// Holds the coordinator's write lock.
     pub(crate) write_lock_guard: Option<OwnedMutexGuard<()>>,
+    /// Inner transaction.
+    pub(crate) pending_txn: PendingTxn,
 }
 
 impl PendingWriteTxn {
@@ -262,11 +256,14 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut responses = Vec::with_capacity(self.pending_writes.len());
         for PendingWriteTxn {
             writes,
-            client_transmitter,
-            response,
-            session,
-            action,
             write_lock_guard: _,
+            pending_txn:
+                PendingTxn {
+                    client_transmitter,
+                    response,
+                    session,
+                    action,
+                },
         } in self.pending_writes.drain(..)
         {
             for WriteOp { id, rows } in writes {

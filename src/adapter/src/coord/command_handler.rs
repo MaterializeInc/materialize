@@ -30,7 +30,7 @@ use crate::command::{
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
-use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message};
+use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::ClientTransmitter;
@@ -455,14 +455,19 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // Cancel pending writes. There is at most one pending write per session.
-            if let Some(idx) = self
-                .pending_writes
-                .iter()
-                .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
-            {
+            if let Some(idx) = self.pending_writes.iter().position(
+                |PendingWriteTxn {
+                     pending_txn: PendingTxn { session, .. },
+                     ..
+                 }| session.conn_id() == conn_id,
+            ) {
                 let PendingWriteTxn {
-                    client_transmitter,
-                    session,
+                    pending_txn:
+                        PendingTxn {
+                            client_transmitter,
+                            session,
+                            ..
+                        },
                     ..
                 } = self.pending_writes.remove(idx);
                 let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
