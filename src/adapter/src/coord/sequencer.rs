@@ -2101,6 +2101,7 @@ impl<S: Append + 'static> Coordinator<S> {
             stage,
             format,
             config,
+            explainee
         } = plan;
 
         let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {

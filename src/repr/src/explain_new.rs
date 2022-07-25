@@ -378,6 +378,17 @@ impl TryFrom<HashSet<String>> for ExplainConfig {
     }
 }
 
+/// The type of object to be explained
+#[derive(Debug)]
+pub enum Explainee {
+    /// An object that will be served using a dataflow
+    Dataflow(GlobalId),
+    /// The object to be explained is a one-off query and may or may not served
+    /// using a dataflow.
+    Query,
+}
+
+
 /// A trait that provides a unified interface for objects that
 /// can be explained.
 ///

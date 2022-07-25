@@ -398,6 +398,7 @@ pub struct ExplainPlanNew {
     pub stage: ExplainStageNew,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
+    pub explainee: mz_repr::explain_new::Explainee,
 }
 
 #[derive(Debug)]
