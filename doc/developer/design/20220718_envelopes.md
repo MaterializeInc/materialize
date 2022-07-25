@@ -4,9 +4,9 @@
 
 Support the following envelope types for Avro data over Kafka:
 
-* `UPSERT` (O(n) memory cost)
-* `DEBEZIUM UPSERT` (O(n) memory cost)
-* `DEBEZIUM` (O(1) memory cost in the steady state; O(k) in the set of keys during initial read).
+* `UPSERT` (O(data) memory cost)
+* `DEBEZIUM UPSERT` (O(data) memory cost)
+* `DEBEZIUM` (O(1) memory cost in the steady state; O(keys) during initial read).
 
 ### Timelines (Executive Summary)
 
@@ -38,7 +38,7 @@ have primary keys.
 
 **Nice to Have**: We should be able to ingest Debezium-formatted data (`ENVELOPE DEBEZIUM`)
 with only O(1) persisted and in-memory space requirements in the steady state
-(O(n) in the set of unique keys when reading Debezium's initial snapshot),
+(O(keys) when reading Debezium's initial snapshot),
 subject to the following constraints:
   * The upstream source of the data is either Postgres or MySQL
   * The version of Debezium used is relatively recent
@@ -122,7 +122,7 @@ that data is not being compacted away while we're busy reading it, which is
 somewhat problematic as we have no way to express our frontiers back upstream to
 the user's Kafka installation.
 
-Out-of-core scaling of the O(n)-memory envelopes (`UPSERT` and `UPSERT DEBEZIUM`)
+Out-of-core scaling of the O(data)-memory envelopes (`UPSERT` and `UPSERT DEBEZIUM`)
 is a future goal, but outside the scope of this document. This will probably involve relying
 on the state kept in `persist`, probably with a local caching layer for frequently-used
 keys on top.
@@ -162,7 +162,7 @@ On restart, we will re-ingest that state as of the restart timestamp
 
 The most difficult part of the project is supporting full consistency; i.e.,
 correctly interpreting the transaction metadata topic. Currently, that topic
-cannot be deduplicated without keeping O(k) in-memory state in the number of transations
+cannot be deduplicated without keeping O(n) in-memory state in the number of transations
 that have ever been processed in the lifetime of the upstream database; clearly,
 this cost will be unacceptable for many users. One possible approach is to
 change Debezium upstream to improve this situation; this is very feasible, but
@@ -204,5 +204,5 @@ Petros had an idea last year about doing deduplication by reading Debezium's int
 commit topic, and only keeping state proportional to the size of data _between_ any two offsets.
 This might work, but it seems like relying on internal Debezium state is suboptimal unless
 it's unavoidable. But maybe it could let us more ingest the initial snapshot without requiring
-O(n) state in the number of keys? That could be a game-changer for use cases where that data is too
+O(keys) state? That could be a game-changer for use cases where that data is too
 much to keep in memory even on the largest storage host.
