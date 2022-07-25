@@ -19,7 +19,7 @@ aws-sdk-sts = { version = "0.16.0", default-features = false, features = ["nativ
 aws-smithy-http = "0.46.0"
 aws-types = { version = "0.46.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
-bytes = "1.1.0"
+bytes = "1.2.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.2.14", features = ["derive"] }
 flate2 = "1.0.24"
