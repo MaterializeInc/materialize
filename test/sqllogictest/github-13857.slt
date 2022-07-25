@@ -10,7 +10,7 @@
 # Regression test for https://github.com/MaterializeInc/materialize/issues/13857
 
 statement ok
-DROP CLUSTER default CASCADE
+DROP CLUSTER default_cluster CASCADE
 
 statement ok
 CREATE CLUSTER test
