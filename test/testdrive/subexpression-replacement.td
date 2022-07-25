@@ -28,11 +28,11 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 "%0 =| Get t1| Filter (#0) IS NULL, (#1 = 5)"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
-"%0 =| Get t1| Filter (#0 = 5), (#1 = 1)"
+"%0 =| Get t1| ArrangeBy (#0, #1)%1 =| Join %0| | implementation = IndexedFilter #0 = 5 AND #1 = 1| Filter (#0 = 5), (#1 = 1)"
 
 # NULL-able expressions are dedupped
 > EXPLAIN SELECT * FROM t1 WHERE col_null = 1 AND (col_null = 1 AND col_not_null = 5);
-"%0 =| Get t1| Filter (#0 = 1), (#1 = 5)"
+"%0 =| Get t1| ArrangeBy (#0, #1)%1 =| Join %0| | implementation = IndexedFilter #0 = 1 AND #1 = 5| Filter (#0 = 1), (#1 = 5)"
 
 # OR/disjunction at the top level
 

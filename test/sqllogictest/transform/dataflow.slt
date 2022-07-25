@@ -59,6 +59,11 @@ EXPLAIN PLAN FOR VIEW foo3
 ----
 %0 =
 | Get materialize.public.foo2 (u2)
+| ArrangeBy (#0)
+
+%1 =
+| Join %0
+| | implementation = IndexedFilter #0 = 6
 | Filter (#0 = 6)
 
 EOF
@@ -68,6 +73,11 @@ EXPLAIN PLAN FOR SELECT * from foo3
 ----
 %0 =
 | Get materialize.public.foo2 (u2)
+| ArrangeBy (#0)
+
+%1 =
+| Join %0
+| | implementation = IndexedFilter #0 = 6
 | Filter (#0 = 6)
 
 EOF

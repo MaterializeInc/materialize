@@ -59,6 +59,8 @@ pub fn optimize_dataflow(
 
     optimize_dataflow_monotonic(dataflow)?;
 
+    optimize_dataflow_index_imports(dataflow, indexes)?;
+
     Ok(())
 }
 
@@ -373,5 +375,71 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
         )?;
     }
 
+    Ok(())
+}
+
+/// Restricts the indexes imported by `dataflow` to only the ones it needs.
+///
+/// The input `dataflow` should import all indexes belonging to all views it
+/// references.
+fn optimize_dataflow_index_imports(
+    dataflow: &mut DataflowDesc,
+    indexes: &dyn IndexOracle,
+) -> Result<(), TransformError> {
+    // Generate (a mapping of views used by exports and objects to build) ->
+    // (indexes from that view that have been explicitly chosen to be used)
+    let mut indexes_by_view = HashMap::new();
+    for sink_desc in dataflow.sink_exports.iter() {
+        indexes_by_view
+            .entry(sink_desc.1.from)
+            .or_insert_with(HashSet::new);
+    }
+    for (_, (index_desc, _)) in dataflow.index_exports.iter() {
+        indexes_by_view
+            .entry(index_desc.on_id)
+            .or_insert_with(HashSet::new);
+    }
+    for build_desc in dataflow.objects_to_build.iter_mut() {
+        build_desc
+            .plan
+            .as_inner_mut()
+            .visit_post(&mut |e| match e {
+                MirRelationExpr::Get {
+                    id: Id::Global(id), ..
+                } => {
+                    indexes_by_view.entry(*id).or_insert_with(HashSet::new);
+                }
+                MirRelationExpr::ArrangeBy { input, keys } => {
+                    if let MirRelationExpr::Get {
+                        id: Id::Global(id), ..
+                    } = &**input
+                    {
+                        for key in keys {
+                            if indexes.indexes_on(*id).find(|k| k == &key).is_some() {
+                                indexes_by_view.get_mut(id).unwrap().insert(key.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            })?;
+    }
+    for (id, keys) in indexes_by_view.iter_mut() {
+        if keys.is_empty() {
+            // If a dataflow uses a view that has indexes, but it has not
+            // chosen to use any specific index of that view, pick an arbitrary
+            // index to read from.
+            if let Some(key) = indexes.indexes_on(*id).next() {
+                keys.insert(key.to_owned());
+            }
+        }
+    }
+    dataflow.index_imports.retain(|_, (index_desc, _, _)| {
+        if let Some(keys) = indexes_by_view.get(&index_desc.on_id) {
+            keys.contains(&index_desc.key)
+        } else {
+            false
+        }
+    });
     Ok(())
 }

@@ -411,6 +411,18 @@ impl<'a> ViewExplanation<'a> {
                 }
                 Ok(())
             }
+            JoinImplementation::PredicateIndex(_, key, val) => {
+                writeln!(
+                    f,
+                    "IndexedFilter {}",
+                    separated(
+                        " AND ",
+                        key.iter()
+                            .zip(val.unpack().into_iter())
+                            .map(|(k, v)| format!("{} = {}", k, v))
+                    )
+                )
+            }
             JoinImplementation::Unimplemented => writeln!(f, "Unimplemented"),
         }
     }

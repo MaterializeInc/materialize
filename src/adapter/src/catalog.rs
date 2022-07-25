@@ -331,13 +331,19 @@ impl CatalogState {
         let index_matches =
             move |idx: &Index| idx.on == id && idx.compute_instance == compute_instance;
 
-        self.get_entry(&id)
-            .used_by()
-            .iter()
-            .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
-                CatalogItem::Index(index) if index_matches(index) => Some((*uses_id, index)),
-                _ => None,
+        self.try_get_entry(&id)
+            .into_iter()
+            .map(move |e| {
+                e.used_by()
+                    .iter()
+                    .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
+                        CatalogItem::Index(index) if index_matches(index) => {
+                            Some((*uses_id, index))
+                        }
+                        _ => None,
+                    })
             })
+            .flatten()
     }
 
     fn insert_item(
