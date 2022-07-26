@@ -19,7 +19,7 @@ class DebeziumPostgres(Check):
         return Testdrive(
             dedent(
                 """
-                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 CREATE TABLE debezium_table (f1 TEXT, f2 INTEGER, f3 INTEGER, f4 TEXT, PRIMARY KEY (f1, f2, f3));
                 ALTER TABLE debezium_table REPLICA IDENTITY FULL;
                 INSERT INTO debezium_table SELECT 'A', 1, generate_series, REPEAT('X', 1024) FROM generate_series(1,1000);
@@ -29,13 +29,14 @@ class DebeziumPostgres(Check):
                     "name": "psql-connector",
                   "config": {
                     "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-                    "database.hostname": "postgres",
+                    "database.hostname": "postgres-source",
                     "database.port": "5432",
                     "database.user": "postgres",
                     "database.password": "postgres",
                     "database.dbname" : "postgres",
                     "database.server.name": "postgres",
                     "schema.include.list": "public",
+                    "table.include.list": "public.debezium_table",
                     "plugin.name": "pgoutput",
                     "publication.autocreate.mode": "filtered",
                     "slot.name" : "tester",
@@ -53,7 +54,7 @@ class DebeziumPostgres(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE DEBEZIUM;
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO debezium_table SELECT 'B', 1, generate_series, REPEAT('X', 1024) FROM generate_series(1,1000);
 
                 > CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f2, SUM(LENGTH(f4)) FROM debezium_source1 GROUP BY f1, f2;
@@ -66,7 +67,7 @@ class DebeziumPostgres(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 BEGIN;
                 INSERT INTO debezium_table SELECT 'C', 1, generate_series, REPEAT('X', 1024) FROM generate_series(1,1000);
                 UPDATE debezium_table SET f2 = f2 + 1;
@@ -77,7 +78,7 @@ class DebeziumPostgres(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE DEBEZIUM;
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 BEGIN;
                 INSERT INTO debezium_table SELECT 'D', 1, generate_series, REPEAT('X', 1024) FROM generate_series(1,1000);
                 UPDATE debezium_table SET f2 = f2 + 1;
@@ -86,7 +87,7 @@ class DebeziumPostgres(Check):
                 > CREATE MATERIALIZED VIEW debezium_view2 AS SELECT f1, f2, SUM(LENGTH(f4)) FROM debezium_source2 GROUP BY f1, f2;
                 """,
                 """
-                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 BEGIN;
                 INSERT INTO debezium_table SELECT 'E', 1, generate_series, REPEAT('X', 1024) FROM generate_series(1,1000);
                 UPDATE debezium_table SET f2 = f2 + 1;
@@ -97,7 +98,7 @@ class DebeziumPostgres(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE DEBEZIUM;
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 BEGIN;
                 INSERT INTO debezium_table SELECT 'F', 1, generate_series, REPEAT('X', 1024) FROM generate_series(1,1000);
                 UPDATE debezium_table SET f2 = f2 + 1;
