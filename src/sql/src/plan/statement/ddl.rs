@@ -310,7 +310,7 @@ pub fn plan_create_source(
         name,
         col_names,
         connection,
-        with_options,
+        legacy_with_options,
         envelope,
         if_not_exists,
         format,
@@ -321,14 +321,14 @@ pub fn plan_create_source(
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    let with_options_original = with_options;
-    let mut with_options = normalize::options(with_options_original)?;
+    let legacy_with_options_original = legacy_with_options;
+    let mut legacy_with_options = normalize::options(legacy_with_options_original)?;
 
-    if !with_options.is_empty() {
+    if !legacy_with_options.is_empty() || !with_options.is_empty() {
         scx.require_unsafe_mode("creating sources with WITH options")?;
     }
 
-    let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
+    let ts_frequency = match legacy_with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val.into() {
             Some(Value::Number(n)) => match n.parse::<u64>() {
                 Ok(n) => Duration::from_millis(n),
@@ -353,7 +353,7 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
-            let mut options = kafka_util::extract_config(&mut with_options)?;
+            let mut options = kafka_util::extract_config(&mut legacy_with_options)?;
             let kafka_connection = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
                     scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
@@ -389,7 +389,7 @@ pub fn plan_create_source(
                 }
             };
 
-            let group_id_prefix = match with_options.remove("group_id_prefix") {
+            let group_id_prefix = match legacy_with_options.remove("group_id_prefix") {
                 None => None,
                 Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
                 Some(_) => sql_bail!("group_id_prefix must be a string"),
@@ -408,7 +408,7 @@ pub fn plan_create_source(
             };
 
             let mut start_offsets = HashMap::new();
-            match with_options.remove("start_offset") {
+            match legacy_with_options.remove("start_offset") {
                 None => {
                     start_offsets.insert(0, MzOffset::from(0));
                 }
@@ -522,7 +522,7 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| sql_err!("Provided ARN does not include an AWS region"))?;
 
-            let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let aws = normalize::aws_config(&mut legacy_with_options, Some(region.into()))?;
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
@@ -534,7 +534,7 @@ pub fn plan_create_source(
             compression,
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
-            let aws = normalize::aws_config(&mut with_options, None)?;
+            let aws = normalize::aws_config(&mut legacy_with_options, None)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
@@ -742,7 +742,7 @@ pub fn plan_create_source(
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
-    let ignore_source_keys = match with_options.remove("ignore_source_keys") {
+    let ignore_source_keys = match legacy_with_options.remove("ignore_source_keys") {
         None => false,
         Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
         Some(_) => sql_bail!("ignore_source_keys must be a boolean"),
@@ -808,7 +808,7 @@ pub fn plan_create_source(
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
-    let timeline = if let Some(timeline) = with_options.remove("timeline") {
+    let timeline = if let Some(timeline) = legacy_with_options.remove("timeline") {
         match timeline.into() {
             Some(Value::String(timeline)) => Timeline::User(timeline),
             Some(v) => sql_bail!("unsupported timeline value {}", v.to_ast_string()),
@@ -816,7 +816,7 @@ pub fn plan_create_source(
         }
     } else {
         match envelope {
-            SourceEnvelope::CdcV2 => match with_options.remove("epoch_ms_timeline") {
+            SourceEnvelope::CdcV2 => match legacy_with_options.remove("epoch_ms_timeline") {
                 None => Timeline::External(name.to_string()),
                 Some(SqlValueOrSecret::Value(Value::Boolean(true))) => Timeline::EpochMilliseconds,
                 Some(v) => sql_bail!("unsupported epoch_ms_timeline value {}", v),
@@ -836,7 +836,7 @@ pub fn plan_create_source(
         desc,
     };
 
-    normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
+    normalize::ensure_empty_options(&legacy_with_options, "CREATE SOURCE")?;
 
     Ok(Plan::CreateSource(CreateSourcePlan {
         name,
