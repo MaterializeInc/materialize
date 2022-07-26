@@ -1497,7 +1497,7 @@ pub struct BuiltinMigrationMetadata {
     // Used to drop objects on COMPUTE and STORAGE nodes
     pub previous_index_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
     pub previous_sink_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
-    pub previous_recorded_view_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_materialized_view_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
     pub previous_source_ids: Vec<GlobalId>,
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
@@ -1514,7 +1514,7 @@ impl BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
             previous_index_ids: HashMap::new(),
             previous_sink_ids: HashMap::new(),
-            previous_recorded_view_ids: HashMap::new(),
+            previous_materialized_view_ids: HashMap::new(),
             previous_source_ids: Vec::new(),
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
@@ -2171,14 +2171,18 @@ impl<S: Append> Catalog<S> {
                     .entry(index.compute_instance)
                     .or_default()
                     .push(id),
-                CatalogItem::RecordedView(rview) => migration_metadata
-                    .previous_recorded_view_ids
-                    .entry(rview.compute_instance)
+                CatalogItem::MaterializedView(mview) => migration_metadata
+                    .previous_materialized_view_ids
+                    .entry(mview.compute_instance)
                     .or_default()
                     .push(id),
                 // TODO(jkosh44) Implement log migration
                 CatalogItem::Log(_) => {
                     panic!("Log migration is unimplemented")
+                }
+                // TODO(jkosh44) Implement storage collection migration
+                CatalogItem::StorageCollection(_) => {
+                    panic!("Storage collection migration is unimplemented")
                 }
                 CatalogItem::View(_) => {
                     // Views don't have any objects in STORAGE/COMPUTE to drop.

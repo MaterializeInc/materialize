@@ -376,7 +376,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 .drop_indexes_unvalidated(index_ids)
                 .await?;
         }
-        for (compute_id, recorded_view_ids) in builtin_migration_metadata.previous_recorded_view_ids
+        for (compute_id, recorded_view_ids) in
+            builtin_migration_metadata.previous_materialized_view_ids
         {
             self.controller
                 .compute_mut(compute_id)
