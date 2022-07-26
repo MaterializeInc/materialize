@@ -131,9 +131,6 @@ allow-git = [
     # See: https://github.com/BurntSushi/rust-csv/issues/271
     "https://github.com/BurntSushi/rust-csv.git",
 
-    # Waiting on chrono-tz v0.6.2, which bumps to phf v0.11.
-    "https://github.com/chronotope/chrono-tz",
-
     # Waiting on criterion v0.4, which upgrades to clap v3.
     "https://github.com/MaterializeInc/criterion.rs.git",
 
