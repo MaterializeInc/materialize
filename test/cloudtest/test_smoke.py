@@ -9,46 +9,22 @@
 
 from textwrap import dedent
 
-from materialize.cloudtest.k8s.environmentd import (
-    EnvironmentdService,
-    EnvironmentdStatefulSet,
-)
-from materialize.cloudtest.k8s.minio import Minio
-from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
-from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
-from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
-from materialize.cloudtest.k8s.testdrive import Testdrive
-from materialize.cloudtest.testcase import CloudTestCase
+from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.wait import wait
 
 
-class SimpleCloudTest(CloudTestCase):
-    def test_simple(self) -> None:
-        self.acquire_images()
+def test_wait(mz: MaterializeApplication) -> None:
+    wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
 
-        ed_service = EnvironmentdService()
-        testdrive = Testdrive()
 
-        for resource in [
-            *POSTGRES_RESOURCES,
-            *REDPANDA_RESOURCES,
-            Minio(),
-            AdminRoleBinding(),
-            EnvironmentdStatefulSet(),
-            ed_service,
-            testdrive,
-        ]:
-            print(resource)
-            resource.create()
+def test_sql(mz: MaterializeApplication) -> None:
+    mz.environmentd.sql("SELECT 1")
 
-        wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
 
-        ed_service.sql("SELECT 1")
-
-        wait(condition="condition=Ready", resource="pod/testdrive")
-        testdrive.run_string(
-            input=dedent(
-                """
+def test_testdrive(mz: MaterializeApplication) -> None:
+    mz.testdrive.run_string(
+        input=dedent(
+            """
                 $ kafka-create-topic topic=test
 
                 $ kafka-ingest format=bytes topic=test
@@ -77,5 +53,5 @@ class SimpleCloudTest(CloudTestCase):
                 > SELECT * FROM v2;
                 1
                 """
-            )
         )
+    )
