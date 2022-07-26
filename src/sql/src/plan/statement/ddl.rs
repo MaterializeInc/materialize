@@ -620,7 +620,6 @@ pub fn plan_create_source(
             )
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            scx.require_unsafe_mode("LOAD GENERATOR")?;
             let load_generator = match generator {
                 LoadGenerator::Auction => mz_storage::types::sources::LoadGenerator::Auction,
                 LoadGenerator::Counter => mz_storage::types::sources::LoadGenerator::Counter,
