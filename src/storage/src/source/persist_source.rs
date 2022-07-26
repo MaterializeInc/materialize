@@ -20,6 +20,7 @@ use mz_persist_client::cache::PersistClientCache;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::trace;
 
@@ -28,7 +29,7 @@ use mz_persist_client::read::ListenEvent;
 use mz_repr::{Diff, Row, Timestamp};
 
 use crate::controller::CollectionMetadata;
-use crate::source::{SourceStatus, YIELD_INTERVAL};
+use crate::source::YIELD_INTERVAL;
 use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 
@@ -118,16 +119,7 @@ where
             let waker = futures_util::task::waker(waker_activator);
             let activator = scope.activator_for(&info.address[..]);
 
-            // There is a bit of a mismatch: listening on a ReadHandle will give us an Antichain<T>
-            // as a frontier in `Progress` messages while a timely source usually only has a single
-            // `Capability` that it can downgrade. We can work around that by using a
-            // `CapabilitySet`, which allows downgrading the contained capabilities to a frontier
-            // but `util::source` gives us both a vanilla `Capability` and a `CapabilitySet` that
-            // we have to keep downgrading because we cannot simply drop the one that we don't
-            // need.
-            let mut current_ts = 0;
-
-            move |cap, output| {
+            move |cap_set, output| {
                 let mut context = Context::from_waker(&waker);
                 // Bound execution of operator to prevent a single operator from hogging
                 // the CPU if there are many messages to process
@@ -135,34 +127,67 @@ where
 
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
-                        Some(Ok(ListenEvent::Progress(upper))) => match upper.into_option() {
-                            Some(ts) => {
-                                current_ts = ts;
-                                cap.downgrade(&ts);
+                        Some(Ok(ListenEvent::Progress(upper))) => {
+                            cap_set.downgrade(upper.iter());
+
+                            if upper.is_empty() {
+                                // Return early because we're done now.
+                                return;
                             }
-                            None => return SourceStatus::Done,
-                        },
+                        }
                         Some(Ok(ListenEvent::Updates(mut updates))) => {
                             // This operator guarantees that its output has been advanced by `as_of.
                             // The persist SnapshotIter already has this contract, so nothing to do
                             // here.
-                            let cap = cap.delayed(&current_ts);
-                            let mut session = output.session(&cap);
-                            session.give_vec(&mut updates);
+
+                            if updates.is_empty() {
+                                continue;
+                            }
+
+                            // Swing through all the capabilities we have and
+                            // peel off updates that we can emit with it. For
+                            // the case of totally ordered times, we have at
+                            // most on capability and will peel off all updates
+                            // in one go.
+                            //
+                            // NOTE: We use this seemingly complicated approach
+                            // such that the code is ready to deal with
+                            // partially ordered times.
+                            for cap in cap_set.iter() {
+                                // NOTE: The nightly `drain_filter()` would use
+                                // less allocations than this. Should switch to
+                                // it once it's available in stable rust.
+                                let (mut to_emit, remaining_updates) =
+                                    updates.into_iter().partition(|(_update, ts, _diff)| {
+                                        PartialOrder::less_equal(cap.time(), ts)
+                                    });
+                                updates = remaining_updates;
+
+                                let mut session = output.session(&cap);
+                                session.give_vec(&mut to_emit);
+                            }
+
+                            assert!(
+                                updates.is_empty(),
+                                "did not have matching Capability for updates: {:?}",
+                                updates
+                            );
                         }
                         Some(Err::<_, ExternalError>(e)) => {
                             // TODO(petrosagg): error handling
                             panic!("unexpected error from persist {e}");
                         }
-                        None => return SourceStatus::Done,
+                        None => {
+                            // Empty out the `CapabilitySet` to indicate that we're done.
+                            cap_set.downgrade(&[]);
+                            return;
+                        }
                     }
                     if timer.elapsed() > YIELD_INTERVAL {
                         activator.activate();
                         break;
                     }
                 }
-
-                SourceStatus::Alive
             }
         });
 
