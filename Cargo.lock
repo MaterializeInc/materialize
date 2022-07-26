@@ -3972,6 +3972,7 @@ dependencies = [
  "mz-repr",
  "mz-secrets",
  "mz-sql",
+ "mz-sql-parser",
  "mz-storage",
  "once_cell",
  "postgres-protocol",

@@ -54,6 +54,9 @@ struct Args {
     /// Stop on first failure.
     #[clap(long)]
     fail_fast: bool,
+    /// Inject `CREATE INDEX` after all `CREATE TABLE` statements.
+    #[clap(long)]
+    auto_index_tables: bool,
 }
 
 #[tokio::main]
@@ -70,6 +73,7 @@ async fn main() {
         postgres_url: args.postgres_url.clone(),
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
+        auto_index_tables: args.auto_index_tables,
     };
 
     if args.rewrite_results {
