@@ -126,8 +126,7 @@ The table below lists the intermediary systems a Node.js application can use to 
 Intermediary System | Notes
 -------------|-------------
 **Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Kafka source](/sql/create-source/json-kafka/) to consume them. This is recommended for scenarios where low-latency and high-throughput are important.
-**PostgreSQL** | Send data from Node.js to PostgreSQL, and create a [PostgreSQL source](/sql/create-source/postgres/) that consumes a replication stream from the database based on its write-ahead log. This is recommended for Node.js apps that already use PostgreSQL and fast-changing transactional data.
-**PubNub** | Send data to a PubNub stream using the [Node.js SDK](https://www.pubnub.com/docs/sdks/javascript/nodejs), and create a [PubNub source](/sql/create-source/json-pubnub/) that subscribes to the stream.
+**PostgreSQL** | Send data from Node.js to PostgreSQL, and create a [PostgreSQL source](/sql/create-source/postgres/) that consumes a replication stream from the database based on its write-ahead log. This is recommended for Node.js apps that already use PostgreSQL and fast-changing transactional data.to the stream.
 
 ## Insert data into tables
 
@@ -164,9 +163,7 @@ const client = new Client('postgres://materialize@localhost:6875/materialize');
 async function main() {
     await client.connect();
     const res = await client.query(
-        `CREATE SOURCE market_orders_raw_2 FROM PUBNUB
-            SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
-            CHANNEL 'pubnub-market-orders'`
+        `CREATE SOURCE counter FROM LOAD GENERATOR COUNTER`
         );
     console.log(res);
 }

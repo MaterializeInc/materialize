@@ -34,7 +34,7 @@ Field | Meaning
 ------|--------
 **name** | The name of the source
 **type** | Whether the source was created by the `user` or the `system`.
-**type** | The type of the source:  `kafka`, `postgres`, or `pubnub`.
+**type** | The type of the source:  `kafka` or `postgres`
 
 ### Internal statistic sources
 

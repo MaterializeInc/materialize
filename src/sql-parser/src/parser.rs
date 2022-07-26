@@ -2228,18 +2228,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, PUBNUB, LOAD])? {
-            PUBNUB => {
-                self.expect_keywords(&[SUBSCRIBE, KEY])?;
-                let subscribe_key = self.parse_literal_string()?;
-                self.expect_keyword(CHANNEL)?;
-                let channel = self.parse_literal_string()?;
-
-                Ok(CreateSourceConnection::PubNub {
-                    subscribe_key,
-                    channel,
-                })
-            }
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, LOAD])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;

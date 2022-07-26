@@ -73,7 +73,6 @@ mod kinesis;
 pub mod metrics;
 pub mod persist_source;
 mod postgres;
-mod pubnub;
 mod reclock;
 mod s3;
 pub mod util;
@@ -82,7 +81,6 @@ pub use generator::LoadGeneratorSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
-pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
 
 // Interval after which the source operator will yield control.
