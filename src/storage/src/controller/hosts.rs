@@ -24,12 +24,13 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use bytesize::ByteSize;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 use tracing::info;
 
 use mz_build_info::BuildInfo;
-use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
+use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceConfig, ServicePort};
 use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
 use mz_repr::GlobalId;
@@ -234,9 +235,10 @@ impl<T> StorageHosts<T> {
                             port_hint: 6878,
                         },
                     ],
-                    // TODO: limits?
-                    cpu_limit: None,
-                    memory_limit: None,
+                    // TODO(andrioni): placeholder CPU and memory limits while we work on #13125
+                    // Values coming from the xsmall replica size
+                    cpu_limit: Some(CpuLimit::from_millicpus(2000)),
+                    memory_limit: Some(MemoryLimit(ByteSize::gib(16))),
                     scale: NonZeroUsize::new(1).unwrap(),
                     labels: HashMap::new(),
                     availability_zone: None,
