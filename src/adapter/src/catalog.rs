@@ -2100,8 +2100,8 @@ impl<S: Append> Catalog<S> {
     }
 
     /// The objects in the catalog form one or more DAGs (directed acyclic graph) via object
-    /// dependencies. To migrate a builtin object we must drop that object along with all of it's
-    /// descendants, and then recreate that object along with all of it's descendants using new
+    /// dependencies. To migrate a builtin object we must drop that object along with all of its
+    /// descendants, and then recreate that object along with all of its descendants using new
     /// GlobalId`s. To achieve this we perform a BFS (breadth first search) on the catalog items
     /// starting with the nodes that correspond to builtin objects that have changed schemas.
     ///
