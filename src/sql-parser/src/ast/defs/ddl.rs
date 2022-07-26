@@ -894,14 +894,14 @@ impl_display_t!(CreateSourceConnection);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LoadGenerator {
     Counter,
+    Auction,
 }
 
 impl AstDisplay for LoadGenerator {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Counter => {
-                f.write_str("COUNTER");
-            }
+            Self::Counter => f.write_str("COUNTER"),
+            Self::Auction => f.write_str("AUCTION"),
         }
     }
 }

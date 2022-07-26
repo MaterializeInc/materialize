@@ -205,6 +205,7 @@ message ProtoPubNubSourceConnection {
 message ProtoLoadGeneratorSourceConnection {
     oneof generator {
         google.protobuf.Empty counter = 1;
+        google.protobuf.Empty auction = 3;
     }
     optional uint64 tick_micros = 2;
 }

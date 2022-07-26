@@ -23,9 +23,9 @@ use crate::catalog::{
     SessionCatalog,
 };
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
-    RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedObjectName, ResolvedSchemaName,
-    SchemaSpecifier,
+    self, Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
+    QualifiedObjectName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedObjectName, ResolvedSchemaName, SchemaSpecifier,
 };
 use crate::plan::error::PlanError;
 use crate::plan::query;
@@ -545,6 +545,38 @@ impl<'a> StatementContext<'a> {
     ) -> Result<&dyn CatalogComputeInstance, PlanError> {
         let name = name.map(|name| name.as_str());
         Ok(self.catalog.resolve_compute_instance(name)?)
+    }
+
+    pub fn resolve_type(&self, mut ty: mz_pgrepr::Type) -> Result<ResolvedDataType, PlanError> {
+        // Ignore precision constraints on date/time types until we support
+        // it. This should be safe enough because our types are wide enough
+        // to support the maximum possible precision.
+        //
+        // See: https://github.com/MaterializeInc/materialize/issues/10837
+        match &mut ty {
+            mz_pgrepr::Type::Interval { constraints } => *constraints = None,
+            mz_pgrepr::Type::Time { precision } => *precision = None,
+            mz_pgrepr::Type::TimeTz { precision } => *precision = None,
+            mz_pgrepr::Type::Timestamp { precision } => *precision = None,
+            mz_pgrepr::Type::TimestampTz { precision } => *precision = None,
+            _ => (),
+        }
+        // NOTE(benesch): this *looks* gross, but it is
+        // safe enough. The `fmt::Display`
+        // representation on `pgrepr::Type` promises to
+        // produce an unqualified type name that does
+        // not require quoting.
+        //
+        // TODO(benesch): converting `json` to `jsonb`
+        // is wrong. We ought to support the `json` type
+        // directly.
+        let mut ty = format!("pg_catalog.{}", ty);
+        if ty == "pg_catalog.json" {
+            ty = "pg_catalog.jsonb".into();
+        }
+        let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
+        let (data_type, _) = names::resolve(self.catalog, data_type)?;
+        Ok(data_type)
     }
 
     pub fn unsafe_mode(&self) -> bool {

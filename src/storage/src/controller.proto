@@ -20,3 +20,10 @@ message ProtoCollectionMetadata {
     string remap_shard = 4;
     string status_shard = 5;
 }
+
+message ProtoDurableCollectionMetadata {
+    // This message is persisted to disk. Changes must be backwards compatible.
+    reserved 1, 2, 5;
+    string data_shard = 3;
+    string remap_shard = 4;
+}

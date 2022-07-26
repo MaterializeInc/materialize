@@ -348,8 +348,11 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        self.initialize_storage_read_policies(persisted_log_ids, None)
-            .await;
+        self.initialize_storage_read_policies(
+            persisted_log_ids,
+            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+        )
+        .await;
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
         // Topologically sort entries based on the used_by relationship
