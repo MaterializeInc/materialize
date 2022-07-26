@@ -93,6 +93,7 @@ pub fn serve(
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
                 ingestions: HashMap::new(),
+                exports: HashMap::new(),
                 now: now.clone(),
                 source_metrics,
                 timely_worker_index,

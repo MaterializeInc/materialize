@@ -33,8 +33,10 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE MATERIALIZED VIEW mz_view AS
+> CREATE VIEW mz_view AS
     SELECT * FROM mz_data
+
+> CREATE DEFAULT INDEX ON mz_view
 
 > SHOW INDEXES FROM mz_view
 cluster on_name  key_name             seq_in_index  column_name  expression  nullable
@@ -786,6 +788,8 @@ renamed_j
 > CREATE TABLE t_orig ()
 > ALTER TABLE t_orig RENAME TO t_dontcare
 > CREATE TABLE t_orig ()
-> CREATE MATERIALIZED VIEW v_orig AS SELECT 1
+> CREATE VIEW v_orig AS SELECT 1
+> CREATE DEFAULT INDEX ON v_orig
 > ALTER VIEW v_orig RENAME TO v_dontcare
-> CREATE MATERIALIZED VIEW v_orig AS SELECT 1
+> CREATE VIEW v_orig AS SELECT 1
+> CREATE DEFAULT INDEX ON v_orig

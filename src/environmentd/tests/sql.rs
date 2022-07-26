@@ -1552,7 +1552,7 @@ fn create_postgres_source_with_table(
             PUBLICATION '{source_name}';"
     ))?;
     mz_client.batch_execute(&format!(
-        "CREATE MATERIALIZED VIEWS FROM SOURCE {source_name} ({table_name});"
+        "CREATE VIEWS FROM SOURCE {source_name} ({table_name});"
     ))?;
 
     let table_name = table_name.to_string();
@@ -1599,5 +1599,47 @@ fn wait_for_view_population(
         &format!("SET transaction_isolation = STRICT_SERIALIZABLE"),
         &[],
     );
+    Ok(())
+}
+
+#[test]
+fn test_load_generator() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER TICK INTERVAL '1ms'")
+        .unwrap();
+
+    let row = client
+        .query_one(
+            "SELECT count(*), mz_logical_timestamp()::int8 FROM counter",
+            &[],
+        )
+        .unwrap();
+    let initial_count: i64 = row.get(0);
+    let timestamp_millis: i64 = row.get(1);
+    const WAIT: i64 = 100;
+    let next = timestamp_millis + WAIT;
+    let expect = initial_count + WAIT;
+    Retry::default()
+        .retry(|_| {
+            let row = client
+                .query_one(
+                    &format!("SELECT count(*) FROM counter AS OF AT LEAST {next}"),
+                    &[],
+                )
+                .unwrap();
+            let count: i64 = row.get(0);
+            if count < expect {
+                Err(format!("expected {expect}, got {count}"))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+
     Ok(())
 }

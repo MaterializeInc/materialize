@@ -631,7 +631,7 @@ impl Runner {
             unsafe_mode: true,
             metrics_registry,
             now,
-            replica_sizes: Default::default(),
+            cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             availability_zones: Default::default(),
             connection_context: ConnectionContext::for_tests(

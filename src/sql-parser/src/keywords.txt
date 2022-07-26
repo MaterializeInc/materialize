@@ -33,6 +33,7 @@ Array
 As
 Asc
 At
+Auction
 Authority
 Availability
 Avro
@@ -74,6 +75,7 @@ Connections
 Consistency
 Constraint
 Copy
+Counter
 Create
 Cross
 Csv
@@ -128,6 +130,7 @@ Format
 Forward
 From
 Full
+Generator
 Granularity
 Graph
 Greatest
@@ -177,6 +180,7 @@ Level
 Like
 Limit
 List
+Load
 Local
 Log
 Logical
@@ -243,7 +247,6 @@ Range
 Raw
 Read
 Real
-Recorded
 References
 Regex
 Registry
@@ -304,6 +307,7 @@ Temp
 Temporary
 Text
 Then
+Tick
 Ties
 Time
 Timeout

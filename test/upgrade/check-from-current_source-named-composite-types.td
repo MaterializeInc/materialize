@@ -17,7 +17,7 @@
 > SELECT f1::text, pg_typeof(f1) FROM composite_type_view_after;
 "(1,abc,2)" "composite_type"
 
-> DROP VIEW composite_type_view_after;
+> DROP MATERIALIZED VIEW composite_type_view_after;
 
 # Nested named composite types
 
@@ -29,4 +29,4 @@
 > SELECT f1::text, pg_typeof(f1) FROM nested_composite_type_view_after;
 "(3,\"(1,abc,2)\")" "nested_composite_type"
 
-> DROP VIEW nested_composite_type_view_after;
+> DROP MATERIALIZED VIEW nested_composite_type_view_after;

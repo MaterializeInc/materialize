@@ -22,6 +22,7 @@ use mz_expr::visit::VisitChildren;
 use mz_ore::stack::RecursionLimitError;
 use serde::{Deserialize, Serialize};
 
+use mz_expr::func;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
 use mz_repr::adt::array::ArrayDimension;
@@ -2199,6 +2200,10 @@ impl HirScalarExpr {
         HirScalarExpr::literal(Datum::True, ScalarType::Bool)
     }
 
+    pub fn literal_false() -> HirScalarExpr {
+        HirScalarExpr::literal(Datum::False, ScalarType::Bool)
+    }
+
     pub fn literal_null(scalar_type: ScalarType) -> HirScalarExpr {
         HirScalarExpr::literal(Datum::Null, scalar_type)
     }
@@ -2260,6 +2265,52 @@ impl HirScalarExpr {
             func,
             expr1: Box::new(self),
             expr2: Box::new(other),
+        }
+    }
+
+    pub fn or(self, other: Self) -> Self {
+        HirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or,
+            exprs: vec![self, other],
+        }
+    }
+
+    pub fn and(self, other: Self) -> Self {
+        HirScalarExpr::CallVariadic {
+            func: VariadicFunc::And,
+            exprs: vec![self, other],
+        }
+    }
+
+    pub fn not(self) -> Self {
+        self.call_unary(UnaryFunc::Not(func::Not))
+    }
+
+    pub fn call_is_null(self) -> Self {
+        self.call_unary(UnaryFunc::IsNull(func::IsNull))
+    }
+
+    /// Calls AND with the given arguments. Simplifies if 0 or 1 args.
+    pub fn variadic_and(mut args: Vec<HirScalarExpr>) -> HirScalarExpr {
+        match args.len() {
+            0 => HirScalarExpr::literal_true(), // Same as unit_of_and_or, but that's MirScalarExpr
+            1 => args.swap_remove(0),
+            _ => HirScalarExpr::CallVariadic {
+                func: VariadicFunc::And,
+                exprs: args,
+            },
+        }
+    }
+
+    /// Calls OR with the given arguments. Simplifies if 0 or 1 args.
+    pub fn variadic_or(mut args: Vec<HirScalarExpr>) -> HirScalarExpr {
+        match args.len() {
+            0 => HirScalarExpr::literal_false(), // Same as unit_of_and_or, but that's MirScalarExpr
+            1 => args.swap_remove(0),
+            _ => HirScalarExpr::CallVariadic {
+                func: VariadicFunc::Or,
+                exprs: args,
+            },
         }
     }
 

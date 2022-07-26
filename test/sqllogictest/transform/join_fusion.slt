@@ -149,26 +149,31 @@ EXPLAIN SELECT  MIN( o_orderkey  )
   AND o_orderdate  = l_commitDATE  + ' 7 MONTHS '
   AND o_orderkey  = (  SELECT l_orderkey  FROM lineitem  WHERE l_orderkey  =  38  )
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.lineitem (u10)
+| ArrangeBy (#0)
+
+%1 = Let l0 =
+| Join %0
+| | implementation = IndexedFilter #0 = 38
 | Filter (#0 = 38)
 
-%1 =
+%2 =
 | Get materialize.public.lineitem (u10)
 | Filter (#6 = 1997-01-25)
 | Project (#4)
 | ArrangeBy (#0)
 
-%2 =
+%3 =
 | Get materialize.public.orders (u7)
 | ArrangeBy (#0)
 
-%3 =
-| Get %0 (l0)
+%4 =
+| Get %1 (l0)
 | Project (#0)
 
-%4 =
-| Get %0 (l0)
+%5 =
+| Get %1 (l0)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -176,31 +181,31 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%5 =
-| Union %3 %4
+%6 =
+| Union %4 %5
 
-%6 = Let l1 =
-| Join %1 %2 %5 (= #0 #3) (= #1 #5)
-| | implementation = Differential %5 %2.(#0) %1.(#0)
+%7 = Let l1 =
+| Join %2 %3 %6 (= #0 #3) (= #1 #5)
+| | implementation = Differential %6 %3.(#0) %2.(#0)
 | Filter (#1 <= 195), (#1 >= 38), (1997-08-25 00:00:00 = date_to_timestamp(#4))
 | Project (#1)
 | Reduce group=()
 | | agg min(#0)
 
-%7 =
-| Get %6 (l1)
+%8 =
+| Get %7 (l1)
 | Project ()
 | Negate
 
-%8 =
+%9 =
 | Constant ()
 
-%9 =
-| Union %7 %8
+%10 =
+| Union %8 %9
 | Map null
 
-%10 =
-| Union %6 %9
+%11 =
+| Union %7 %10
 
 EOF
 
@@ -220,18 +225,28 @@ EXPLAIN SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col
 
 %1 =
 | Get materialize.public.orders (u7)
+| ArrangeBy (#1)
+
+%2 =
+| Join %1
+| | implementation = IndexedFilter #1 = 134
 | Filter (#1 = 134), (#2 = (#2 % 5))
 | Project (#2, #3)
 | ArrangeBy (#0, #1)
 
-%2 =
+%3 =
 | Get materialize.public.customer (u4)
+| ArrangeBy (#0)
+
+%4 =
+| Join %3
+| | implementation = IndexedFilter #0 = 134
 | Filter (#0 = 134)
 | Project ()
 
-%3 =
-| Join %0 %1 %2 (= #2 #4) (= #3 #5)
-| | implementation = Differential %2 %0.() %1.(#0, #1)
+%5 =
+| Join %0 %2 %4 (= #2 #4) (= #3 #5)
+| | implementation = Differential %4 %0.() %2.(#0, #1)
 | Project (#1, #0, #1)
 
 EOF
@@ -251,16 +266,26 @@ EXPLAIN SELECT *
 
 %1 =
 | Get materialize.public.orders (u7)
+| ArrangeBy (#1)
+
+%2 =
+| Join %1
+| | implementation = IndexedFilter #1 = 229
 | Filter (#1 = 229)
 | ArrangeBy (#2, #3)
 
-%2 =
+%3 =
 | Get materialize.public.customer (u4)
+| ArrangeBy (#0)
+
+%4 =
+| Join %3
+| | implementation = IndexedFilter #0 = 229
 | Filter (#0 = 229)
 
-%3 =
-| Join %0 %1 %2 (= #4 #10) (= #5 #11)
-| | implementation = Differential %2 %0.() %1.(#2, #3)
+%5 =
+| Join %0 %2 %4 (= #4 #10) (= #5 #11)
+| | implementation = Differential %4 %0.() %2.(#2, #3)
 | Project (#0..=#9, #4, #5, #12..=#14)
 
 EOF

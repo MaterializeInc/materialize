@@ -80,7 +80,9 @@ use std::collections::{HashMap, HashSet};
 use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{
+    func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, VariadicFunc, RECURSION_LIMIT,
+};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{Datum, ScalarType};
 
@@ -654,27 +656,17 @@ impl PredicatePushdown {
                                         let expr1 = pair.pop().unwrap();
                                         let expr2 = pair.pop().unwrap();
 
-                                        use mz_expr::BinaryFunc;
-                                        use mz_expr::UnaryFunc;
-                                        push_downs[input].push(MirScalarExpr::CallBinary {
-                                            func: BinaryFunc::Or,
-                                            expr1: Box::new(MirScalarExpr::CallBinary {
-                                                func: BinaryFunc::Eq,
+                                        push_downs[input].push(
+                                            MirScalarExpr::CallBinary {
+                                                func: mz_expr::BinaryFunc::Eq,
                                                 expr1: Box::new(expr2.clone()),
                                                 expr2: Box::new(expr1.clone()),
-                                            }),
-                                            expr2: Box::new(MirScalarExpr::CallBinary {
-                                                func: BinaryFunc::And,
-                                                expr1: Box::new(MirScalarExpr::CallUnary {
-                                                    func: UnaryFunc::IsNull(func::IsNull),
-                                                    expr: Box::new(expr2.clone()),
-                                                }),
-                                                expr2: Box::new(MirScalarExpr::CallUnary {
-                                                    func: UnaryFunc::IsNull(func::IsNull),
-                                                    expr: Box::new(expr1.clone()),
-                                                }),
-                                            }),
-                                        });
+                                            }
+                                            .or(expr2
+                                                .clone()
+                                                .call_is_null()
+                                                .and(expr1.clone().call_is_null())),
+                                        );
                                     }
 
                                     if localized.len() == equivalences[equivalence_pos].len() {
@@ -817,37 +809,45 @@ impl PredicatePushdown {
         s: &mut MirScalarExpr,
         relation_type: &mz_repr::RelationType,
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
-        // Or, And, and Eq are all commutative functions. For each of these
-        // functions, order expr1 and expr2 so you only need to check
-        // `condition1(expr1) && condition2(expr2)`, and you do
-        // not need to also check for `condition2(expr1) && condition1(expr2)`.
-        use mz_expr::BinaryFunc;
-        use mz_expr::UnaryFunc;
-        if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Or,
-            expr1,
-            expr2,
+        if let MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or,
+            exprs,
         } = s
         {
-            if let MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
-                expr1: eqinnerexpr1,
-                expr2: eqinnerexpr2,
-            } = &mut **expr2
-            {
-                let isnull1 = eqinnerexpr1
-                    .clone()
-                    .call_unary(UnaryFunc::IsNull(func::IsNull));
-                let isnull2 = eqinnerexpr2
-                    .clone()
-                    .call_unary(UnaryFunc::IsNull(func::IsNull));
-                let both_null = isnull1.call_binary(isnull2, BinaryFunc::And);
+            if let &[ref or_lhs, ref or_rhs] = &**exprs {
+                // Check both orders of operands of the OR
+                return Self::extract_equal_or_both_null_inner(or_lhs, or_rhs, relation_type)
+                    .or_else(|| {
+                        Self::extract_equal_or_both_null_inner(or_rhs, or_lhs, relation_type)
+                    });
+            }
+        }
+        None
+    }
 
-                if Self::extract_reduced_conjunction_terms(both_null, relation_type)
-                    == Self::extract_reduced_conjunction_terms((**expr1).clone(), relation_type)
-                {
-                    return Some(((**eqinnerexpr1).clone(), (**eqinnerexpr2).clone()));
-                }
+    fn extract_equal_or_both_null_inner(
+        or_arg1: &MirScalarExpr,
+        or_arg2: &MirScalarExpr,
+        relation_type: &mz_repr::RelationType,
+    ) -> Option<(MirScalarExpr, MirScalarExpr)> {
+        use mz_expr::BinaryFunc;
+        if let MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1: eq_lhs,
+            expr2: eq_rhs,
+        } = &or_arg2
+        {
+            let isnull1 = eq_lhs.clone().call_is_null();
+            let isnull2 = eq_rhs.clone().call_is_null();
+            let both_null = MirScalarExpr::CallVariadic {
+                func: VariadicFunc::And,
+                exprs: vec![isnull1, isnull2],
+            };
+
+            if Self::extract_reduced_conjunction_terms(both_null, relation_type)
+                == Self::extract_reduced_conjunction_terms(or_arg1.clone(), relation_type)
+            {
+                return Some(((**eq_lhs).clone(), (**eq_rhs).clone()));
             }
         }
         None
@@ -860,25 +860,15 @@ impl PredicatePushdown {
     ) -> Vec<MirScalarExpr> {
         s.reduce(relation_type);
 
-        let mut pending = vec![s];
-        let mut terms = Vec::new();
-
-        while let Some(expr) = pending.pop() {
-            if let MirScalarExpr::CallBinary {
-                func: mz_expr::BinaryFunc::And,
-                expr1,
-                expr2,
-            } = expr
-            {
-                pending.push(*expr1);
-                pending.push(*expr2);
-            } else {
-                terms.push(expr);
-            }
+        if let MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And,
+            exprs,
+        } = s
+        {
+            exprs
+        } else {
+            vec![s]
         }
-        terms.sort();
-        terms.dedup();
-        terms
     }
 
     /// Defines a criteria for inlining scalar expressions.
@@ -895,7 +885,9 @@ impl PredicatePushdown {
                 } => {
                     Self::is_safe_leaf(expr1, input_arity) && Self::is_safe_leaf(expr2, input_arity)
                 }
-                // TODO(justin): it is probably also safe to inline variadic functions.
+                MirScalarExpr::CallVariadic { func: _, exprs } => {
+                    exprs.iter().all(|e| Self::is_safe_leaf(e, input_arity))
+                }
                 _ => false,
             }
     }

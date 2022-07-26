@@ -37,9 +37,10 @@ $ set-regex match=u\d+ replacement=UID
 
 # basic test: pushing filters down to sources
 
-> CREATE MATERIALIZED VIEW mv as SELECT * from data where a = 1 and d = 3;
+> CREATE VIEW v as SELECT * from data where a = 1 and d = 3;
+> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 3)
 | Project (#0..=#3)
@@ -49,16 +50,17 @@ Query:
 | Get materialize.public.data (UID)
 | Filter (#0 = 1), (#3 = 3)
 
-> SELECT * FROM mv
+> SELECT * FROM v
 1 2 2 3
 
-> DROP VIEW mv;
+> DROP VIEW v;
 
 # basic test: pushing demand down to sources
 
-> CREATE MATERIALIZED VIEW mv as SELECT b from data where b = 1;
+> CREATE VIEW v as SELECT b from data where b = 1;
+> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Filter (#1 = 1)
 | Project (#1)
@@ -69,20 +71,21 @@ Query:
 | Filter (#1 = 1)
 | Project (#1)
 
-> SELECT * FROM mv
+> SELECT * FROM v
 1
 1
 1
 
-> DROP VIEW mv;
+> DROP VIEW v;
 
 > CREATE VIEW inner_view as SELECT a, b, d from data where d = 4;
 
 # Filter gets pushed through intervening view.
 
-> CREATE MATERIALIZED VIEW mv as SELECT b from inner_view where a = 1
+> CREATE VIEW v as SELECT b from inner_view where a = 1
+> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 4)
 | Project (#0, #1, #3)
@@ -93,16 +96,17 @@ Query:
 | Filter (#0 = 1), (#3 = 4)
 | Project (#1)
 
-> SELECT * FROM mv
+> SELECT * FROM v
 1
 
-> DROP VIEW mv;
+> DROP VIEW v;
 
 # Demand gets pushed through intervening view.
 
-> CREATE MATERIALIZED VIEW mv as SELECT d from inner_view where a = 1
+> CREATE VIEW v as SELECT d from inner_view where a = 1
+> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 4)
 | Project (#0, #3)
@@ -113,14 +117,15 @@ Query:
 | Filter (#0 = 1), (#3 = 4)
 | Project (#3)
 
-> SELECT * FROM mv
+> SELECT * FROM v
 4
 
-> DROP VIEW mv;
+> DROP VIEW v;
 
-> CREATE MATERIALIZED VIEW mv as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4
+> CREATE VIEW v as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4
+> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Project (#0, #1, #3)
 
@@ -141,19 +146,20 @@ Query:
 | | implementation = Differential %1 %0.(#0)
 | Project (#0)
 
-> SELECT * FROM mv
+> SELECT * FROM v
 1
 1
 1
 1
 
-> DROP VIEW mv;
+> DROP VIEW v;
 
 # filters and demand can be inferred in more complicated queries
 
-> CREATE MATERIALIZED VIEW mv as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4
+> CREATE VIEW v as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4
+> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Filter (#3 = 4)
 | Project (#0, #1, #3)
@@ -175,15 +181,16 @@ Query:
 | | implementation = Differential %1 %0.(#0)
 | Project (#1)
 
-> SELECT * FROM mv
+> SELECT * FROM v
 1
 2
 
-> DROP VIEW mv;
+> DROP VIEW v;
 
-> CREATE MATERIALIZED VIEW mv as SELECT s2.c from data s1, data s2 where s1.a = s2.a
+> CREATE VIEW v as SELECT s2.c from data s1, data s2 where s1.a = s2.a
+> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Filter (#0) IS NOT NULL
 | Project (#0, #2)
@@ -207,7 +214,7 @@ Query:
 | | implementation = Differential %2 %1.(#0)
 | Project (#2)
 
-> SELECT * FROM mv
+> SELECT * FROM v
 3
 5
 3
@@ -215,11 +222,12 @@ Query:
 3
 2
 
-> DROP VIEW mv;
+> DROP VIEW v;
 
-> CREATE MATERIALIZED VIEW mv as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1
+> CREATE VIEW v as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1
+> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Filter (#0 = 1)
 | Project (#0..=#2)
@@ -243,12 +251,12 @@ Query:
 %2 =
 | Union %0 %1
 
-> SELECT * FROM mv
+> SELECT * FROM v
 1 3
 1 3
 1 4
 
-> DROP VIEW mv;
+> DROP VIEW v;
 
 # multiple source test
 
@@ -262,9 +270,10 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW mv as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
+> CREATE VIEW v as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
+> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN PLAN FOR VIEW mv;
+? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
 | Project (#0, #2)
 
@@ -287,9 +296,9 @@ Query:
 | Union %0 %1
 | Threshold
 
-> SELECT * FROM mv
+> SELECT * FROM v
 1 2
 1 3
 3 3
 
-> DROP VIEW mv;
+> DROP VIEW v;

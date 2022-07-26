@@ -1935,6 +1935,10 @@ pub enum JoinImplementation {
     /// Each plan starts from the corresponding index, and then in sequence joins
     /// against collections identified by index and with the specified arrangement key.
     DeltaQuery(Vec<Vec<(usize, Vec<MirScalarExpr>)>>),
+    /// Join a constant to a user-created index to speed up evaluation of a predicate
+    ///
+    /// Consists of (<view id>, <keys of index>, <constant>)
+    PredicateIndex(GlobalId, Vec<MirScalarExpr>, #[mzreflect(ignore)] Row),
     /// No implementation yet selected.
     Unimplemented,
 }

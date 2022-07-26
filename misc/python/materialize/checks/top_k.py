@@ -59,15 +59,15 @@ class BasicTopK(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW CREATE VIEW basic_topk_view1;
-                materialize.public.basic_topk_view1 "CREATE VIEW \\"materialize\\".\\"public\\".\\"basic_topk_view1\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"basic_topk_table\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 2"
+                > SHOW CREATE MATERIALIZED VIEW basic_topk_view1;
+                materialize.public.basic_topk_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"basic_topk_view1\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"basic_topk_table\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 2"
 
                 > SELECT * FROM basic_topk_view1;
                 2 32
                 3 48
 
-                > SHOW CREATE VIEW basic_topk_view2;
-                materialize.public.basic_topk_view2 "CREATE VIEW \\"materialize\\".\\"public\\".\\"basic_topk_view2\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"basic_topk_table\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 2"
+                > SHOW CREATE MATERIALIZED VIEW basic_topk_view2;
+                materialize.public.basic_topk_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"basic_topk_view2\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"basic_topk_table\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 2"
 
                 > SELECT * FROM basic_topk_view2;
                 1 16
@@ -122,15 +122,15 @@ class MonotonicTopK(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW CREATE VIEW monotonic_topk_view1;
-                materialize.public.monotonic_topk_view1 "CREATE VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view1\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 2"
+                > SHOW CREATE MATERIALIZED VIEW monotonic_topk_view1;
+                materialize.public.monotonic_topk_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view1\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 2"
 
                 > SELECT * FROM monotonic_topk_view1;
                 E 5
                 D 4
 
-                > SHOW CREATE VIEW monotonic_topk_view2;
-                materialize.public.monotonic_topk_view2 "CREATE VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view2\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 2"
+                > SHOW CREATE MATERIALIZED VIEW monotonic_topk_view2;
+                materialize.public.monotonic_topk_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view2\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 2"
 
                 > SELECT * FROM monotonic_topk_view2;
                 A 1
@@ -185,14 +185,14 @@ class MonotonicTop1(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW CREATE VIEW monotonic_top1_view1;
-                materialize.public.monotonic_top1_view1 "CREATE VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view1\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 1"
+                > SHOW CREATE MATERIALIZED VIEW monotonic_top1_view1;
+                materialize.public.monotonic_top1_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view1\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 1"
 
                 > SELECT * FROM monotonic_top1_view1;
                 D 5
 
-                > SHOW CREATE VIEW monotonic_top1_view2;
-                materialize.public.monotonic_top1_view2 "CREATE VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view2\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 1"
+                > SHOW CREATE MATERIALIZED VIEW monotonic_top1_view2;
+                materialize.public.monotonic_top1_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view2\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 1"
 
                 > SELECT * FROM monotonic_top1_view2;
                 A 1

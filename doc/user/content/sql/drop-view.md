@@ -6,7 +6,7 @@ menu:
     parent: commands
 ---
 
-`DROP VIEW` removes a view from your Materialize instances. This works on both materialized and non-materialized views.
+`DROP VIEW` removes a view from your Materialize instances.
 
 ## Conceptual framework
 
@@ -33,7 +33,9 @@ _view&lowbar;name_ | The view you want to drop. You can find available view name
 SHOW VIEWS;
 ```
 ```nofmt
-my_view
+  name
+---------
+ my_view
 ```
 ```sql
 DROP VIEW my_view;

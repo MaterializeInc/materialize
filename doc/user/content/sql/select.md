@@ -131,7 +131,7 @@ requirement is lifted.
 ### Common table expressions (CTEs)
 
 Common table expressions, also known as CTEs and `WITH` queries, create aliases
-for statements that subsequent expressions can refer to (including subsquent
+for statements that subsequent expressions can refer to (including subsequent
 CTEs). This can enhance legibility of complex queries, but doesn't alter the
 queries' semantics.
 
@@ -145,7 +145,7 @@ CTEs have the following limitations, which we are working to improve:
 - Materialize inlines the CTE where it's referenced, which could cause
   unexpected performance characteristics for especially complex expressions. {{%
   gh 4867 %}}
-- `WTIH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
+- `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
 ### Query hints
 

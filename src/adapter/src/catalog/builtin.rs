@@ -44,6 +44,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     View(&'static BuiltinView),
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
+    StorageCollection(&'static BuiltinStorageCollection),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -54,6 +55,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.name,
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
+            Builtin::StorageCollection(coll) => coll.name,
         }
     }
 
@@ -64,6 +66,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.schema,
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
+            Builtin::StorageCollection(coll) => coll.schema,
         }
     }
 }
@@ -77,6 +80,13 @@ pub struct BuiltinLog {
 
 #[derive(Hash)]
 pub struct BuiltinTable {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub desc: RelationDesc,
+}
+
+#[derive(Clone, Debug, Hash, Serialize)]
+pub struct BuiltinStorageCollection {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
@@ -137,6 +147,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::View(view) => view.fingerprint(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
+            Builtin::StorageCollection(coll) => coll.fingerprint(),
         }
     }
 }
@@ -1059,8 +1070,8 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false)),
 });
-pub static MZ_RECORDED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_recorded_views",
+pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_materialized_views",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
@@ -1192,6 +1203,23 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
 
+pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
+    Lazy::new(|| BuiltinStorageCollection {
+        name: "mz_source_status_history",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("timestamp", ScalarType::Timestamp.nullable(false))
+            .with_column("source_name", ScalarType::String.nullable(false))
+            .with_column("source_id", ScalarType::String.nullable(false))
+            .with_column("source_type", ScalarType::String.nullable(false))
+            .with_column("upstream_name", ScalarType::String.nullable(true))
+            .with_column("worker_id", ScalarType::Int64.nullable(false))
+            .with_column("worker_count", ScalarType::Int64.nullable(false))
+            .with_column("status", ScalarType::String.nullable(false))
+            .with_column("error", ScalarType::String.nullable(true))
+            .with_column("metadata", ScalarType::Jsonb.nullable(true)),
+    });
+
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
@@ -1199,7 +1227,7 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
       SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
 UNION SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
 UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views
-UNION SELECT id, oid, schema_id, name, 'recorded view' FROM mz_catalog.mz_recorded_views",
+UNION SELECT id, oid, schema_id, name, 'materialized view' FROM mz_catalog.mz_materialized_views",
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
@@ -1464,6 +1492,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
         WHEN mz_objects.type = 'source' THEN 'r'
         WHEN mz_objects.type = 'index' THEN 'i'
         WHEN mz_objects.type = 'view' THEN 'v'
+        WHEN mz_objects.type = 'materialized view' THEN 'm'
     END relkind,
     -- MZ doesn't support CHECK constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
@@ -1907,6 +1936,20 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE d.name = pg_catalog.current_database()",
 };
 
+pub const PG_MATVIEWS: BuiltinView = BuiltinView {
+    name: "pg_matviews",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_matviews AS SELECT
+    s.name AS schemaname,
+    m.name AS matviewname,
+    NULL::pg_catalog.oid AS matviewowner,
+    m.definition AS definition
+FROM mz_catalog.mz_materialized_views m
+LEFT JOIN mz_catalog.mz_schemas s ON s.id = m.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE d.name = pg_catalog.current_database()",
+};
+
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     name: "columns",
     schema: INFORMATION_SCHEMA,
@@ -2109,7 +2152,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SOURCES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
-        Builtin::Table(&MZ_RECORDED_VIEWS),
+        Builtin::Table(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_ARRAY_TYPES),
         Builtin::Table(&MZ_BASE_TYPES),
@@ -2164,11 +2207,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_ACCESS_METHODS),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),
+        Builtin::View(&PG_MATVIEWS),
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
     ]);
 
     builtins

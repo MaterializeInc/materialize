@@ -120,18 +120,16 @@ pub(crate) mod exp {
     }
 
     pub(crate) fn or(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
-        BoxScalarExpr::CallBinary {
-            func: mz_expr::BinaryFunc::Or,
-            expr1: Box::new(lhs),
-            expr2: Box::new(rhs),
+        BoxScalarExpr::CallVariadic {
+            func: mz_expr::VariadicFunc::Or,
+            exprs: vec![lhs, rhs],
         }
     }
 
     pub(crate) fn and(lhs: BoxScalarExpr, rhs: BoxScalarExpr) -> BoxScalarExpr {
-        BoxScalarExpr::CallBinary {
-            func: mz_expr::BinaryFunc::And,
-            expr1: Box::new(lhs),
-            expr2: Box::new(rhs),
+        BoxScalarExpr::CallVariadic {
+            func: mz_expr::VariadicFunc::And,
+            exprs: vec![lhs, rhs],
         }
     }
 

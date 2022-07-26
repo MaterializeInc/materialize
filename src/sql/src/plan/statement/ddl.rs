@@ -21,7 +21,8 @@ use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::SshConnectionOption;
+use mz_sql_parser::ast::{LoadGenerator, SshConnectionOption};
+use mz_storage::source::generator::as_generator;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
@@ -50,9 +51,9 @@ use mz_storage::types::sources::encoding::{
 use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
-    KinesisSourceConnection, MzOffset, PostgresSourceConnection, PostgresSourceDetails,
-    ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection, SourceConnection,
-    SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    KinesisSourceConnection, LoadGeneratorSourceConnection, MzOffset, PostgresSourceConnection,
+    PostgresSourceDetails, ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection,
+    SourceConnection, SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -61,7 +62,7 @@ use crate::ast::{
     AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateRecordedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
+    CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
     CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
@@ -70,17 +71,18 @@ use crate::ast::{
     DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
     DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
-    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op,
-    PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
-    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedObjectName, Value, ViewDefinition, WithOptionValue,
+    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
+    PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
+    SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
+    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
 use crate::names::{
-    self, Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
+    Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
     ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
 use crate::normalize::ident;
@@ -93,12 +95,12 @@ use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
     ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, Secret, Sink, Source, Table,
-    Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
+    Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -617,6 +619,26 @@ pub fn plan_create_source(
                 SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Text)),
             )
         }
+        CreateSourceConnection::LoadGenerator { generator, options } => {
+            let load_generator = match generator {
+                LoadGenerator::Auction => mz_storage::types::sources::LoadGenerator::Auction,
+                LoadGenerator::Counter => mz_storage::types::sources::LoadGenerator::Counter,
+            };
+            let generator = as_generator(&load_generator);
+            let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
+            let tick_micros = match tick_interval {
+                Some(interval) => {
+                    let micros: u64 = interval.as_microseconds().try_into()?;
+                    Some(micros)
+                }
+                None => None,
+            };
+            let connection = SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+                load_generator,
+                tick_micros,
+            });
+            (connection, generator.data_encoding())
+        }
     };
     let (key_desc, value_desc) = encoding.desc()?;
 
@@ -841,6 +863,8 @@ pub fn plan_create_source(
         remote,
     }))
 }
+
+generate_extracted_config!(LoadGeneratorOption, (TickInterval, Interval));
 
 fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
     let (before_idx, before_ty) = value_desc
@@ -1407,7 +1431,6 @@ pub fn plan_view(
         Statement::CreateView(CreateViewStatement {
             if_exists: IfExistsBehavior::Error,
             temporary,
-            materialized: false,
             definition: def.clone(),
         }),
     )?;
@@ -1459,7 +1482,6 @@ pub fn plan_create_view(
 ) -> Result<Plan, PlanError> {
     let CreateViewStatement {
         temporary,
-        materialized,
         if_exists,
         definition,
     } = &mut stmt;
@@ -1485,7 +1507,6 @@ pub fn plan_create_view(
         name,
         view,
         replace,
-        materialize: *materialized,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
     }))
 }
@@ -1501,7 +1522,6 @@ pub fn plan_create_views(
     scx: &StatementContext,
     CreateViewsStatement {
         if_exists,
-        materialized,
         temporary,
         source: source_name,
         targets,
@@ -1509,6 +1529,85 @@ pub fn plan_create_views(
 ) -> Result<Plan, PlanError> {
     let source_desc = scx.get_item_by_resolved_name(&source_name)?.source_desc()?;
     match &source_desc.connection {
+        SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+            load_generator, ..
+        }) => {
+            let generator = as_generator(load_generator);
+            let names = generator.views();
+            if names.is_empty() {
+                sql_bail!(
+                    "cannot generate views from {:?} load generator sources",
+                    load_generator
+                );
+            }
+            let views = names
+                .into_iter()
+                .map(|(table, columns)| {
+                    let mut projection = vec![];
+                    for (i, (column_name, column_type)) in columns.iter().enumerate() {
+                        let column_type = mz_pgrepr::Type::from(&column_type.scalar_type);
+                        let data_type = scx.resolve_type(column_type)?;
+                        projection.push(SelectItem::Expr {
+                            expr: Expr::Cast {
+                                expr: Box::new(Expr::Subscript {
+                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
+                                    positions: vec![SubscriptPosition {
+                                        start: Some(Expr::Value(Value::Number(
+                                            // LIST is one based
+                                            (i + 1).to_string(),
+                                        ))),
+                                        end: None,
+                                        explicit_slice: false,
+                                    }],
+                                }),
+                                data_type,
+                            },
+                            alias: Some(Ident::new(column_name.as_str())),
+                        });
+                    }
+                    let query = Query {
+                        ctes: vec![],
+                        body: SetExpr::Select(Box::new(Select {
+                            distinct: None,
+                            projection,
+                            from: vec![TableWithJoins {
+                                relation: TableFactor::Table {
+                                    name: source_name.clone(),
+                                    alias: None,
+                                },
+                                joins: vec![],
+                            }],
+                            selection: Some(Expr::Op {
+                                op: Op::bare("="),
+                                expr1: Box::new(Expr::Identifier(vec![Ident::new("table")])),
+                                expr2: Some(Box::new(Expr::Value(Value::String(
+                                    table.to_string(),
+                                )))),
+                            }),
+                            group_by: vec![],
+                            having: None,
+                            options: vec![],
+                        })),
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    };
+                    let mut viewdef = ViewDefinition {
+                        name: UnresolvedObjectName::unqualified(table),
+                        columns: columns
+                            .iter_names()
+                            .map(|name| Ident::from(name.as_str()))
+                            .collect(),
+                        query,
+                    };
+                    plan_view(scx, &mut viewdef, &Params::empty(), temporary)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Plan::CreateViews(CreateViewsPlan {
+                views,
+                if_not_exists: if_exists == IfExistsBehavior::Skip,
+            }))
+        }
         SourceConnection::Postgres(PostgresSourceConnection { details, .. }) => {
             let targets = targets.unwrap_or_else(|| {
                 details
@@ -1554,37 +1653,9 @@ pub fn plan_create_views(
                 };
                 let mut projection = vec![];
                 for (i, column) in table_desc.columns.iter().enumerate() {
-                    let mut ty =
-                        mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)
-                            .map_err(|e| sql_err!("{}", e))?;
-                    // Ignore precision constraints on date/time types until we support
-                    // it. This should be safe enough because our types are wide enough
-                    // to support the maximum possible precision.
-                    //
-                    // See: https://github.com/MaterializeInc/materialize/issues/10837
-                    match &mut ty {
-                        mz_pgrepr::Type::Interval { constraints } => *constraints = None,
-                        mz_pgrepr::Type::Time { precision } => *precision = None,
-                        mz_pgrepr::Type::TimeTz { precision } => *precision = None,
-                        mz_pgrepr::Type::Timestamp { precision } => *precision = None,
-                        mz_pgrepr::Type::TimestampTz { precision } => *precision = None,
-                        _ => (),
-                    }
-                    // NOTE(benesch): this *looks* gross, but it is
-                    // safe enough. The `fmt::Display`
-                    // representation on `pgrepr::Type` promises to
-                    // produce an unqualified type name that does
-                    // not require quoting.
-                    //
-                    // TODO(benesch): converting `json` to `jsonb`
-                    // is wrong. We ought to support the `json` type
-                    // directly.
-                    let mut ty = format!("pg_catalog.{}", ty);
-                    if ty == "pg_catalog.json" {
-                        ty = "pg_catalog.jsonb".into();
-                    }
-                    let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
-                    let (data_type, _) = names::resolve(scx.catalog, data_type)?;
+                    let ty = mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)
+                        .map_err(|e| sql_err!("{}", e))?;
+                    let data_type = scx.resolve_type(ty)?;
                     projection.push(SelectItem::Expr {
                         expr: Expr::Cast {
                             expr: Box::new(Expr::Subscript {
@@ -1645,23 +1716,22 @@ pub fn plan_create_views(
             Ok(Plan::CreateViews(CreateViewsPlan {
                 views,
                 if_not_exists: if_exists == IfExistsBehavior::Skip,
-                materialize: materialized,
             }))
         }
         connection @ _ => sql_bail!("cannot generate views from {} sources", connection.name()),
     }
 }
 
-pub fn describe_create_recorded_view(
+pub fn describe_create_materialized_view(
     _: &StatementContext,
-    _: CreateRecordedViewStatement<Aug>,
+    _: CreateMaterializedViewStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_create_recorded_view(
+pub fn plan_create_materialized_view(
     scx: &StatementContext,
-    mut stmt: CreateRecordedViewStatement<Aug>,
+    mut stmt: CreateMaterializedViewStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let compute_instance = match &stmt.in_cluster {
@@ -1673,7 +1743,8 @@ pub fn plan_create_recorded_view(
         print_name: None,
     });
 
-    let create_sql = normalize::create_statement(scx, Statement::CreateRecordedView(stmt.clone()))?;
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
     let partial_name = normalize::unresolved_object_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
@@ -1688,7 +1759,11 @@ pub fn plan_create_recorded_view(
     expr.finish(finishing);
     let expr = expr.optimize_and_lower(&scx.into())?;
 
-    plan_utils::maybe_rename_columns(format!("recorded view {}", name), &mut desc, &stmt.columns)?;
+    plan_utils::maybe_rename_columns(
+        format!("materialized view {}", name),
+        &mut desc,
+        &stmt.columns,
+    )?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = column_names.iter().duplicates().next() {
@@ -1702,21 +1777,21 @@ pub fn plan_create_recorded_view(
             if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
                 if expr.depends_on().contains(&item.id()) {
                     sql_bail!(
-                        "cannot replace recorded view {0}: depended upon by new {0} definition",
+                        "cannot replace materialized view {0}: depended upon by new {0} definition",
                         scx.catalog.resolve_full_name(item.name())
                     );
                 }
                 let cascade = false;
-                replace = plan_drop_item(scx, ObjectType::RecordedView, item, cascade)?;
+                replace = plan_drop_item(scx, ObjectType::MaterializedView, item, cascade)?;
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
         IfExistsBehavior::Error => (),
     }
 
-    Ok(Plan::CreateRecordedView(CreateRecordedViewPlan {
+    Ok(Plan::CreateMaterializedView(CreateMaterializedViewPlan {
         name,
-        recorded_view: RecordedView {
+        materialized_view: MaterializedView {
             create_sql,
             expr,
             column_names,
@@ -2326,7 +2401,7 @@ pub fn plan_create_index(
     let on = scx.get_item_by_resolved_name(&on_name)?;
 
     if CatalogItemType::View != on.item_type()
-        && CatalogItemType::RecordedView != on.item_type()
+        && CatalogItemType::MaterializedView != on.item_type()
         && CatalogItemType::Source != on.item_type()
         && CatalogItemType::Table != on.item_type()
     {
@@ -2342,9 +2417,7 @@ pub fn plan_create_index(
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
         None => {
-            // `key_parts` is None if we're creating a "default" index, i.e.
-            // creating the index as if the index had been created alongside the
-            // view source, e.g. `CREATE MATERIALIZED...`
+            // `key_parts` is None if we're creating a "default" index.
             on.desc(&scx.catalog.resolve_full_name(on.name()))?
                 .typ()
                 .default_key()
@@ -3147,20 +3220,12 @@ pub fn describe_drop_objects(
 pub fn plan_drop_objects(
     scx: &StatementContext,
     DropObjectsStatement {
-        materialized,
         object_type,
         names,
         cascade,
         if_exists,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    if materialized {
-        sql_bail!(
-            "DROP MATERIALIZED {0} is not allowed, use DROP {0}",
-            object_type
-        );
-    }
-
     let mut items = vec![];
     for name in names {
         let name = normalize::unresolved_object_name(name)?;
@@ -3177,7 +3242,7 @@ pub fn plan_drop_objects(
         ObjectType::Source
         | ObjectType::Table
         | ObjectType::View
-        | ObjectType::RecordedView
+        | ObjectType::MaterializedView
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type
@@ -3311,7 +3376,7 @@ pub fn plan_drop_cluster(
                 if !cascade
                     && (!instance.exports().is_empty() || !instance.replica_names().is_empty())
                 {
-                    sql_bail!("cannot drop cluster with active indexes, sinks, recorded views, or replicas");
+                    sql_bail!("cannot drop cluster with active indexes, sinks, materialized views, or replicas");
                 }
                 out.push(name.into_string());
             }
@@ -3399,13 +3464,13 @@ pub fn plan_drop_item(
     }
     let item_type = catalog_entry.item_type();
 
-    // Return a more helpful error on `DROP VIEW <recorded-view>`.
-    if object_type == ObjectType::View && item_type == CatalogItemType::RecordedView {
+    // Return a more helpful error on `DROP VIEW <materialized-view>`.
+    if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
         let name = scx
             .catalog
             .resolve_full_name(catalog_entry.name())
             .to_string();
-        return Err(PlanError::DropViewOnRecordedView(name));
+        return Err(PlanError::DropViewOnMaterializedView(name));
     } else if object_type != item_type {
         sql_bail!(
             "{} is not of type {}",
@@ -3427,7 +3492,7 @@ pub fn plan_drop_item(
                     | CatalogItemType::Table
                     | CatalogItemType::Source
                     | CatalogItemType::View
-                    | CatalogItemType::RecordedView
+                    | CatalogItemType::MaterializedView
                     | CatalogItemType::Sink
                     | CatalogItemType::Type
                     | CatalogItemType::Secret
@@ -3541,9 +3606,11 @@ pub fn plan_alter_object_rename(
             let full_name = scx.catalog.resolve_full_name(entry.name());
             let item_type = entry.item_type();
 
-            // Return a more helpful error on `ALTER VIEW <recorded-view>`.
-            if object_type == ObjectType::View && item_type == CatalogItemType::RecordedView {
-                return Err(PlanError::AlterViewOnRecordedView(full_name.to_string()));
+            // Return a more helpful error on `ALTER VIEW <materialized-view>`.
+            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
+                return Err(PlanError::AlterViewOnMaterializedView(
+                    full_name.to_string(),
+                ));
             } else if object_type != item_type {
                 sql_bail!(
                     "{} is a {} not a {}",

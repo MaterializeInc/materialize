@@ -16,11 +16,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
-use futures::executor::block_on;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Exchange, Map, OkErr};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
+use tokio::runtime::Handle as TokioHandle;
 
 use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
@@ -31,8 +31,8 @@ use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited}
 use crate::source::persist_source;
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
-    PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
-    SourceOutput,
+    LoadGeneratorSourceReader, PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig,
+    S3SourceReader, SourceOutput,
 };
 use crate::types::errors::{DataflowError, DecodeError};
 use crate::types::sources::{encoding::*, *};
@@ -195,6 +195,14 @@ where
             );
             ((SourceType::Row(ok), err), cap)
         }
+        SourceConnection::LoadGenerator(_) => {
+            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader>(
+                base_source_config,
+                &connection,
+                storage_state.connection_context.clone(),
+            );
+            ((SourceType::Row(ok), err), cap)
+        }
     };
 
     // Include any source errors.
@@ -231,10 +239,12 @@ where
             let csr_client = match csr_connection {
                 None => None,
                 Some(csr_connection) => Some(
-                    block_on(
-                        csr_connection.connect(&*storage_state.connection_context.secrets_reader),
-                    )
-                    .expect("CSR connection unexpectedly missing secrets"),
+                    TokioHandle::current()
+                        .block_on(
+                            csr_connection
+                                .connect(&*storage_state.connection_context.secrets_reader),
+                        )
+                        .expect("CSR connection unexpectedly missing secrets"),
                 ),
             };
             // TODO(petrosagg): this should move to the envelope section below and

@@ -105,8 +105,8 @@ build apply=CanonicalizeMfp
             [0])
         [
             (call_unary not (call_unary is_null #0))
-            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
-            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+            (call_variadic or [(call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32))])
+            (call_variadic or [(call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32))])
         ])
     [0])
 ----
@@ -138,12 +138,12 @@ build apply=CanonicalizeMfp
             [(call_binary add_int64 #0 #2)])
         [
             (call_unary not (call_unary is_null #0))
-            (call_binary or
+            (call_variadic or [
                 (call_binary eq (call_binary add_int64 #0 #2) (5 Int32))
-                (call_binary eq (call_binary add_int64 #0 #1) (9 Int32)))
-            (call_binary or
+                (call_binary eq (call_binary add_int64 #0 #1) (9 Int32))])
+            (call_variadic or [
                 (call_binary eq #3 (5 Int32))
-                (call_binary eq #3 (9 Int32)))
+                (call_binary eq #3 (9 Int32))])
         ])
     [0])
 ----
@@ -183,8 +183,8 @@ build apply=CanonicalizeMfp
             [0 1 2 3])
         [
             (call_unary not (call_unary is_null #0))
-            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
-            (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+            (call_variadic or [(call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32))])
+            (call_variadic or [(call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32))])
         ])
     [0 3])
 ----
@@ -218,8 +218,8 @@ build apply=CanonicalizeMfp
                 [0 2])
             [
                 (call_unary not (call_unary is_null #0))
-                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
-                (call_binary or (call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32)))
+                (call_variadic or [(call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32))])
+                (call_variadic or [(call_binary eq #0 (5 Int32)) (call_binary eq #0 (1337 Int32))])
             ])
         [(call_binary add_int64 #0 #1)])
     [2])

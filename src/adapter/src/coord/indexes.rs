@@ -16,8 +16,9 @@ use mz_stash::Append;
 use mz_transform::IndexOracle;
 
 use crate::catalog::{CatalogItem, CatalogState, Index};
-use crate::coord::dataflow_builder::DataflowBuilder;
-use crate::coord::{CollectionIdBundle, CoordTimestamp, Coordinator};
+use crate::coord::dataflows::DataflowBuilder;
+use crate::coord::CoordTimestamp;
+use crate::coord::{CollectionIdBundle, Coordinator};
 
 /// Answers questions about the indexes available on a particular compute
 /// instance.
@@ -82,7 +83,8 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)
                     | CatalogItem::Log(_)
-                    | CatalogItem::RecordedView(_) => {
+                    | CatalogItem::MaterializedView(_)
+                    | CatalogItem::StorageCollection(_) => {
                         // Record that we are missing at least one index.
                         id_bundle.storage_ids.insert(id);
                     }

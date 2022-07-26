@@ -16,9 +16,9 @@ use aws_sdk_kinesis::error::GetRecordsError;
 use aws_sdk_kinesis::output::GetRecordsOutput;
 use aws_sdk_kinesis::types::SdkError;
 use aws_sdk_kinesis::Client as KinesisClient;
-use futures::executor::block_on;
 use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
+use tokio::runtime::Handle as TokioHandle;
 use tracing::error;
 
 use mz_expr::PartitionId;
@@ -44,6 +44,7 @@ const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 
 /// Contains all information necessary to ingest data from Kinesis
 pub struct KinesisSourceReader {
+    tokio_handle: TokioHandle,
     /// Kinesis client used to obtain records
     kinesis_client: KinesisClient,
     /// The name of the stream
@@ -141,7 +142,7 @@ impl SourceReader for KinesisSourceReader {
             _ => unreachable!(),
         };
 
-        let state = block_on(create_state(
+        let state = TokioHandle::current().block_on(create_state(
             &metrics.kinesis,
             kc,
             connection_context.aws_external_id_prefix.as_ref(),
@@ -149,6 +150,7 @@ impl SourceReader for KinesisSourceReader {
         ));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceReader {
+                tokio_handle: TokioHandle::current(),
                 kinesis_client,
                 shard_queue,
                 last_checked_shards: Instant::now(),
@@ -168,7 +170,11 @@ impl SourceReader for KinesisSourceReader {
 
         //TODO move to timestamper
         if self.last_checked_shards.elapsed() >= KINESIS_SHARD_REFRESH_RATE {
-            if let Err(e) = block_on(self.update_shard_information()) {
+            if let Err(e) = self
+                .tokio_handle
+                .clone()
+                .block_on(self.update_shard_information())
+            {
                 error!("{:#?}", e);
                 return Err(e.into());
             }
@@ -181,60 +187,61 @@ impl SourceReader for KinesisSourceReader {
             // Rotate through all of a stream's shards, start with a new shard on each activation.
             if let Some((shard_id, mut shard_iterator)) = self.shard_queue.pop_front() {
                 if let Some(iterator) = &shard_iterator {
-                    let get_records_output = match block_on(self.get_records(&iterator)) {
-                        Ok(output) => {
-                            shard_iterator = output.next_shard_iterator.clone();
-                            if let Some(millis) = output.millis_behind_latest {
-                                self.shard_set
-                                    .get(&shard_id)
-                                    .unwrap()
-                                    .millis_behind_latest
-                                    .set(millis);
+                    let get_records_output =
+                        match self.tokio_handle.block_on(self.get_records(&iterator)) {
+                            Ok(output) => {
+                                shard_iterator = output.next_shard_iterator.clone();
+                                if let Some(millis) = output.millis_behind_latest {
+                                    self.shard_set
+                                        .get(&shard_id)
+                                        .unwrap()
+                                        .millis_behind_latest
+                                        .set(millis);
+                                }
+                                output
                             }
-                            output
-                        }
-                        Err(SdkError::DispatchFailure(e)) => {
-                            // todo@jldlaughlin: Parse this to determine fatal/retriable?
-                            error!("{}", e);
-                            self.shard_queue.push_back((shard_id, shard_iterator));
-                            // Do not send error message as this would cause source to terminate
-                            return Ok(NextMessage::TransientDelay);
-                        }
-                        Err(SdkError::ServiceError { err, .. })
-                            if err.is_expired_iterator_exception() =>
-                        {
-                            // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
-                            error!("{}", err);
-                            return Err(SourceReaderError {
-                                inner: SourceErrorDetails::Other(err.to_string()),
-                            });
-                        }
-                        Err(SdkError::ServiceError { err, .. })
-                            if err.is_provisioned_throughput_exceeded_exception() =>
-                        {
-                            self.shard_queue.push_back((shard_id, shard_iterator));
-                            // Do not send error message as this would cause source to terminate
-                            return Ok(NextMessage::Pending);
-                        }
-                        Err(e) => {
-                            // Fatal service errors:
-                            //  - InvalidArgument
-                            //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
-                            //    KMSOptInRequired, KMSThrottling
-                            //  - ResourceNotFound
-                            //
-                            // Other fatal Rusoto errors:
-                            // - Credentials
-                            // - Validation
-                            // - ParseError
-                            // - Unknown (raw HTTP provided)
-                            // - Blocking
-                            error!("{}", e);
-                            return Err(SourceReaderError {
-                                inner: SourceErrorDetails::Other(e.to_string()),
-                            });
-                        }
-                    };
+                            Err(SdkError::DispatchFailure(e)) => {
+                                // todo@jldlaughlin: Parse this to determine fatal/retriable?
+                                error!("{}", e);
+                                self.shard_queue.push_back((shard_id, shard_iterator));
+                                // Do not send error message as this would cause source to terminate
+                                return Ok(NextMessage::TransientDelay);
+                            }
+                            Err(SdkError::ServiceError { err, .. })
+                                if err.is_expired_iterator_exception() =>
+                            {
+                                // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
+                                error!("{}", err);
+                                return Err(SourceReaderError {
+                                    inner: SourceErrorDetails::Other(err.to_string()),
+                                });
+                            }
+                            Err(SdkError::ServiceError { err, .. })
+                                if err.is_provisioned_throughput_exceeded_exception() =>
+                            {
+                                self.shard_queue.push_back((shard_id, shard_iterator));
+                                // Do not send error message as this would cause source to terminate
+                                return Ok(NextMessage::Pending);
+                            }
+                            Err(e) => {
+                                // Fatal service errors:
+                                //  - InvalidArgument
+                                //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
+                                //    KMSOptInRequired, KMSThrottling
+                                //  - ResourceNotFound
+                                //
+                                // Other fatal Rusoto errors:
+                                // - Credentials
+                                // - Validation
+                                // - ParseError
+                                // - Unknown (raw HTTP provided)
+                                // - Blocking
+                                error!("{}", e);
+                                return Err(SourceReaderError {
+                                    inner: SourceErrorDetails::Other(e.to_string()),
+                                });
+                            }
+                        };
 
                     for record in get_records_output.records.unwrap_or_default() {
                         let data = record

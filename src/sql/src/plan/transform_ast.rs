@@ -357,26 +357,6 @@ impl Desugarer {
             }
         }
 
-        // `$expr IN ($e1, $e2, ..., $en)`
-        // =>
-        // `$expr = $e1 OR $expr = $e2 OR ... OR $expr = $en`
-        if let Expr::InList {
-            expr: e,
-            list,
-            negated,
-        } = expr
-        {
-            let mut cond = Expr::Value(Value::Boolean(false));
-            for l in list {
-                cond = cond.or(e.clone().equals(l.take()));
-            }
-            if *negated {
-                *expr = cond.negate();
-            } else {
-                *expr = cond;
-            }
-        }
-
         // `$expr IN ($subquery)` => `$expr = ANY ($subquery)`
         // `$expr NOT IN ($subquery)` => `$expr <> ALL ($subquery)`
         if let Expr::InSubquery {

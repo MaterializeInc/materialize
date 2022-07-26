@@ -44,7 +44,7 @@ You can [cast](../../functions/cast) `date` to:
 
 You can [cast](../../functions/cast) from the following types to `date`:
 
-- [`text`](../text) (explicity)
+- [`text`](../text) (explicitly)
 - [`timestamp`](../timestamp) (by assignment)
 - [`timestamptz`](../timestamp) (by assignment)
 

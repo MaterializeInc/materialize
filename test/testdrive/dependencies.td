@@ -34,13 +34,13 @@ contains:catalog item 's' already exists
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-blah-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW test1 AS SELECT 1;
+> CREATE VIEW test1 AS SELECT 1;
 
-> CREATE MATERIALIZED VIEW test2 AS SELECT * FROM test1;
+> CREATE VIEW test2 AS SELECT * FROM test1;
 
-> CREATE MATERIALIZED VIEW test3a AS SELECT * FROM test2;
+> CREATE VIEW test3a AS SELECT * FROM test2;
 
-> CREATE MATERIALIZED VIEW test3b AS SELECT * FROM test2;
+> CREATE VIEW test3b AS SELECT * FROM test2;
 
 ! DROP VIEW test1;
 contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
@@ -68,9 +68,9 @@ contains:cannot drop materialize.public.test1: still depended upon by catalog it
 # Test that CASCADE causes all dependent views to be dropped along with the
 # named view.
 
-> CREATE MATERIALIZED VIEW test1 AS SELECT 1;
+> CREATE VIEW test1 AS SELECT 1;
 
-> CREATE MATERIALIZED VIEW test2 AS SELECT * FROM test1;
+> CREATE VIEW test2 AS SELECT * FROM test1;
 
 > DROP VIEW test1 CASCADE;
 
@@ -91,7 +91,7 @@ contains:unknown catalog item 'test2'
 # Test that CASCADE causes all dependent views to be dropped along with the
 # named source.
 
-> CREATE MATERIALIZED VIEW test4 as SELECT * FROM s;
+> CREATE VIEW test4 as SELECT * FROM s;
 
 > DROP SOURCE s CASCADE;
 
@@ -120,33 +120,31 @@ contains:catalog item 's1' already exists
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # Test that sinks cannot be depended upon.
-! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
+! CREATE VIEW v2 AS SELECT * FROM s1;
 contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
 
-> CREATE MATERIALIZED VIEW v2 AS SELECT X from s;
+> CREATE VIEW v2 AS SELECT X from s;
 
-> CREATE MATERIALIZED VIEW v2a AS SELECT X+1 as X from v2;
+> CREATE VIEW v2a AS SELECT X+1 as X from v2;
 
 > CREATE INDEX i1 ON v2(x);
 
 # Test that indexes cannot be depended upon
 
-! CREATE MATERIALIZED VIEW v3 as SELECT * FROM i1;
+! CREATE VIEW v3 as SELECT * FROM i1;
 contains:catalog item 'materialize.public.i1' is an index and so cannot be depended upon
 
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEXES FROM v2a;
-cluster on_name   key_name         seq_in_index column_name expression  nullable
-------------------------------------------------------------------------------------
+cluster        on_name   key_name         seq_in_index column_name expression  nullable
+---------------------------------------------------------------------------------------
 <CLUSTER_NAME> v2a       i2               1            <null>      "x * 2"     false
-<CLUSTER_NAME> v2a       v2a_primary_idx  1            x           <null>      false
 
 > SHOW INDEXES FROM v2;
-cluster on_name  key_name        seq_in_index column_name expression nullable
----------------------------------------------------------------------------------
+cluster        on_name  key_name        seq_in_index column_name expression nullable
+------------------------------------------------------------------------------------
 <CLUSTER_NAME> v2       i1              1            x           <null>     false
-<CLUSTER_NAME> v2       v2_primary_idx  1            x           <null>     false
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
@@ -159,14 +157,13 @@ contains:unknown catalog item 'v2a'
 cluster on_name  key_name        seq_in_index   column_name expression nullable
 -----------------------------------------------------------------------------------
 <CLUSTER_NAME> v2       i1              1              x           <null>     false
-<CLUSTER_NAME> v2       v2_primary_idx  1              x           <null>     false
 
 ! DROP INDEX i2;
 contains:unknown catalog item 'i2'
 
-> CREATE MATERIALIZED VIEW v4 AS SELECT x, y from s;
+> CREATE VIEW v4 AS SELECT x, y from s;
 
-> CREATE MATERIALIZED VIEW v4a AS SELECT y from v4;
+> CREATE VIEW v4a AS SELECT y from v4;
 
 > CREATE INDEX i3 ON v4a(y);
 
@@ -174,7 +171,6 @@ contains:unknown catalog item 'i2'
 cluster on_name  key_name         seq_in_index   column_name expression nullable
 ------------------------------------------------------------------------------------
 <CLUSTER_NAME> v4a      i3               1              y           <null>     false
-<CLUSTER_NAME> v4a      v4a_primary_idx  1              y           <null>     false
 
 > CREATE INDEX i4 ON v4(x);
 
@@ -182,8 +178,6 @@ cluster on_name  key_name         seq_in_index   column_name expression nullable
 cluster on_name  key_name        seq_in_index  column_name expression nullable
 ----------------------------------------------------------------------------------
 <CLUSTER_NAME> v4       i4              1             x           <null>     false
-<CLUSTER_NAME> v4       v4_primary_idx  1             x           <null>     false
-<CLUSTER_NAME> v4       v4_primary_idx  2             y           <null>     false
 
 # Test cascade deletes associated indexes as well
 > DROP VIEW v4a CASCADE;
@@ -198,10 +192,8 @@ contains:unknown catalog item 'i3'
 cluster on_name  key_name        seq_in_index  column_name expression nullable
 ----------------------------------------------------------------------------------
 <CLUSTER_NAME> v4       i4              1             x           <null>     false
-<CLUSTER_NAME> v4       v4_primary_idx  1             x           <null>     false
-<CLUSTER_NAME> v4       v4_primary_idx  2             y           <null>     false
 
-> CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
+> CREATE VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
@@ -209,7 +201,6 @@ cluster on_name  key_name        seq_in_index  column_name expression nullable
 cluster on_name   key_name        seq_in_index  column_name expression nullable
 ----------------------------------------------------------------------------------
 <CLUSTER_NAME> v5        i5              1             substr      <null>     true
-<CLUSTER_NAME> v5        v5_primary_idx  1             substr      <null>     true
 
 > CREATE VIEW multicol AS SELECT 'a' AS a, 'b' AS b, 'c' AS c, 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
@@ -335,7 +326,7 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 
 > SHOW TABLES
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM ( SELECT CAST('{2}' AS int4_list) )
+> CREATE VIEW v1 AS SELECT * FROM ( SELECT CAST('{2}' AS int4_list) )
 
 ! DROP TYPE int4_list
 contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
@@ -399,43 +390,43 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 
 # Test CREATE OR REPLACE view.
 
-> CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 1
+> CREATE OR REPLACE VIEW v3 AS SELECT 1
 > SELECT * FROM v3
 1
 
-> CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 2
+> CREATE OR REPLACE VIEW v3 AS SELECT 2
 > SELECT * FROM v3
 2
 
-> CREATE OR REPLACE MATERIALIZED VIEW v4 AS SELECT * FROM v3
+> CREATE OR REPLACE VIEW v4 AS SELECT * FROM v3
 > SELECT * FROM v4
 2
 
-! CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 3
+! CREATE OR REPLACE VIEW v3 AS SELECT 3
 contains:cannot drop materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
 
-> CREATE OR REPLACE MATERIALIZED VIEW v4 AS SELECT 3
+> CREATE OR REPLACE VIEW v4 AS SELECT 3
 > SELECT * FROM v4
 3
 
 > SELECT * FROM v3
 2
 
-> CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 4
+> CREATE OR REPLACE VIEW v3 AS SELECT 4
 > SELECT * FROM v3
 4
 
 # Test CREATE VIEW IF NOT EXISTS
 
-> CREATE MATERIALIZED VIEW test1 AS SELECT 1;
+> CREATE VIEW test1 AS SELECT 1;
 
-> CREATE MATERIALIZED VIEW test2 AS SELECT * FROM test1;
+> CREATE VIEW test2 AS SELECT * FROM test1;
 
 ! DROP VIEW test1;
 contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 # Succeeds even though it's dependent on.
-> CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 2 as b;
+> CREATE VIEW IF NOT EXISTS test1 AS SELECT 2 as b;
 
 > SELECT * FROM test1;
 1

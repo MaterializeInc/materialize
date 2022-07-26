@@ -11,7 +11,7 @@ anyhow = "1.0.57"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 axum = { version = "0.5.13", features = ["headers"] }
 headers = "0.3.7"
-serde = "1.0.139"
+serde = "1.0.140"
 include_dir = "0.7.2"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
 prometheus = { version = "0.13.1", default-features = false, features = ["process"] }

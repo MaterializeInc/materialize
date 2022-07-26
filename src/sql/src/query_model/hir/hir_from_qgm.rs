@@ -212,22 +212,12 @@ impl FromModel {
                     JoinKind::Inner
                 };
                 let column_map = ColumnMap::new(r#box.input_quantifiers().map(|q| q.id), model);
-                let mut converted_predicates = outer_join
+                let converted_predicates = outer_join
                     .predicates
                     .iter()
                     .map(|pred| self.convert_scalar(pred, &column_map))
                     .collect_vec();
-                let on = if let Some(start) = converted_predicates.pop() {
-                    converted_predicates.into_iter().fold(start, |acc, pred| {
-                        HirScalarExpr::CallBinary {
-                            func: mz_expr::BinaryFunc::And,
-                            expr1: Box::new(acc),
-                            expr2: Box::new(pred),
-                        }
-                    })
-                } else {
-                    HirScalarExpr::literal_true()
-                };
+                let on = HirScalarExpr::variadic_and(converted_predicates);
                 let result = HirRelationExpr::Join {
                     left: Box::new(left),
                     right: Box::new(right),

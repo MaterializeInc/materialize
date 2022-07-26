@@ -97,7 +97,7 @@ query error log source reads must target a replica
 SELECT * FROM mz_materializations
 
 statement ok
-CREATE MATERIALIZED VIEW introspection_view AS SELECT * FROM mz_materializations
+CREATE VIEW introspection_view AS SELECT * FROM mz_materializations
 
 query error log source reads must target a replica
 SELECT * FROM introspection_view

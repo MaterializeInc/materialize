@@ -29,10 +29,10 @@ from materialize.checks.join_types import *  # noqa: F401 F403
 from materialize.checks.jsonb_type import *  # noqa: F401 F403
 from materialize.checks.large_tables import *  # noqa: F401 F403
 from materialize.checks.like import *  # noqa: F401 F403
+from materialize.checks.materialized_views import *  # noqa: F401 F403
 from materialize.checks.nested_types import *  # noqa: F401 F403
 from materialize.checks.null_value import *  # noqa: F401 F403
 from materialize.checks.numeric_types import *  # noqa: F401 F403
-from materialize.checks.recorded_views import *  # noqa: F401 F403
 from materialize.checks.regex import *  # noqa: F401 F403
 from materialize.checks.rename_index import *  # noqa: F401 F403
 from materialize.checks.rename_source import *  # noqa: F401 F403
@@ -43,6 +43,7 @@ from materialize.checks.roles import *  # noqa: F401 F403
 from materialize.checks.rollback import *  # noqa: F401 F403
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
+from materialize.checks.sink import *  # noqa: F401 F403
 from materialize.checks.temporal_types import *  # noqa: F401 F403
 from materialize.checks.text_bytea_types import *  # noqa: F401 F403
 from materialize.checks.threshold import *  # noqa: F401 F403
@@ -52,12 +53,21 @@ from materialize.checks.upsert import *  # noqa: F401 F403
 from materialize.checks.users import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Redpanda
+from materialize.mzcompose.services import Materialized, Postgres, Redpanda
 from materialize.mzcompose.services import Testdrive as TestdriveService
 
 SERVICES = [
+    Postgres(name="postgres-stash"),
     Redpanda(),
-    Materialized(),
+    Materialized(
+        options=" ".join(
+            [
+                "--persist-consensus-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=consensus",
+                "--storage-stash-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=storage",
+                "--adapter-stash-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=adapter",
+            ]
+        )
+    ),
     TestdriveService(default_timeout="300s", no_reset=True, seed=1),
 ]
 
@@ -75,7 +85,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("testdrive", persistent=True)
 
-    c.start_and_wait_for_tcp(services=["redpanda"])
+    c.start_and_wait_for_tcp(services=["redpanda", "postgres-stash"])
+    c.wait_for_postgres(service="postgres-stash")
+    c.sql(
+        sql=f"""
+       CREATE SCHEMA IF NOT EXISTS consensus;
+       CREATE SCHEMA IF NOT EXISTS storage;
+       CREATE SCHEMA IF NOT EXISTS adapter;
+    """,
+        service="postgres-stash",
+        user="postgres",
+        password="postgres",
+    )
 
     scenarios = (
         [globals()[args.scenario]] if args.scenario else Scenario.__subclasses__()

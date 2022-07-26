@@ -53,8 +53,8 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig, CreateConnectionPlan,
-    CreateIndexPlan, CreateRecordedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
@@ -65,12 +65,13 @@ use mz_transform::Optimizer;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
+    BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::catalog::storage::BootstrapArgs;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
-use crate::AdapterError;
+use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
 mod builtin_table_updates;
 mod config;
@@ -84,6 +85,7 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::client::ConnectionId;
+use crate::util::index_sql;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 const SYSTEM_USER: &str = "mz_system";
@@ -143,7 +145,7 @@ pub struct CatalogState {
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
-    replica_sizes: ClusterReplicaSizeMap,
+    cluster_replica_sizes: ClusterReplicaSizeMap,
     availability_zones: Vec<String>,
 }
 
@@ -189,7 +191,7 @@ impl CatalogState {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
-            | CatalogItem::RecordedView(_)
+            | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
                 for id in item.uses() {
                     self.log_dependencies_inner(*id, out);
@@ -201,14 +203,15 @@ impl CatalogState {
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Secret(_) => (),
+            | CatalogItem::Secret(_)
+            | CatalogItem::StorageCollection(_) => (),
         }
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         match self.get_entry(&id).item() {
             CatalogItem::Table(_) => true,
-            item @ (CatalogItem::View(_) | CatalogItem::RecordedView(_)) => {
+            item @ (CatalogItem::View(_) | CatalogItem::MaterializedView(_)) => {
                 item.uses().iter().any(|id| self.uses_tables(*id))
             }
             CatalogItem::Index(idx) => self.uses_tables(idx.on),
@@ -218,7 +221,8 @@ impl CatalogState {
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageCollection(_) => false,
         }
     }
 
@@ -328,13 +332,19 @@ impl CatalogState {
         let index_matches =
             move |idx: &Index| idx.on == id && idx.compute_instance == compute_instance;
 
-        self.get_entry(&id)
-            .used_by()
-            .iter()
-            .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
-                CatalogItem::Index(index) if index_matches(index) => Some((*uses_id, index)),
-                _ => None,
+        self.try_get_entry(&id)
+            .into_iter()
+            .map(move |e| {
+                e.used_by()
+                    .iter()
+                    .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
+                        CatalogItem::Index(index) if index_matches(index) => {
+                            Some((*uses_id, index))
+                        }
+                        _ => None,
+                    })
             })
+            .flatten()
     }
 
     fn insert_item(
@@ -360,7 +370,7 @@ impl CatalogState {
             | CatalogItem::Sink(Sink {
                 compute_instance, ..
             })
-            | CatalogItem::RecordedView(RecordedView {
+            | CatalogItem::MaterializedView(MaterializedView {
                 compute_instance, ..
             }) = item
             {
@@ -438,7 +448,7 @@ impl CatalogState {
         | CatalogItem::Sink(Sink {
             compute_instance, ..
         })
-        | CatalogItem::RecordedView(RecordedView {
+        | CatalogItem::MaterializedView(MaterializedView {
             compute_instance, ..
         }) = metadata.item
         {
@@ -508,7 +518,7 @@ impl CatalogState {
                                 .into_iter()
                                 .map(MirScalarExpr::Column)
                                 .collect(),
-                            create_sql: super::coord::index_sql(
+                            create_sql: index_sql(
                                 index_item_name,
                                 id,
                                 source_name,
@@ -736,6 +746,16 @@ impl CatalogState {
         self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
     }
 
+    /// Optimized lookup for a builtin storage collection
+    ///
+    /// Panics if the builtin storage collection doesn't exist in the catalog
+    pub fn resolve_builtin_storage_collection(
+        &self,
+        builtin: &'static BuiltinStorageCollection,
+    ) -> GlobalId {
+        self.resolve_builtin_object(&Builtin::<IdReference>::StorageCollection(builtin))
+    }
+
     /// Optimized lookup for a builtin object
     ///
     /// Panics if the builtin object doesn't exist in the catalog
@@ -902,6 +922,10 @@ impl CatalogState {
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.database_by_id).expect("serialization cannot fail")
     }
+
+    pub fn availability_zones(&self) -> &[String] {
+        &self.availability_zones
+    }
 }
 
 #[derive(Debug)]
@@ -1002,7 +1026,7 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub logging: Option<DataflowLoggingConfig>,
-    /// Indexes, sinks, and recorded views exported by this compute instance.
+    /// Indexes, sinks, and materialized views exported by this compute instance.
     /// Does not include introspection source indexes.
     pub exports: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
@@ -1030,13 +1054,14 @@ pub enum CatalogItem {
     Source(Source),
     Log(&'static BuiltinLog),
     View(View),
-    RecordedView(RecordedView),
+    MaterializedView(MaterializedView),
     Sink(Sink),
     Index(Index),
     Type(Type),
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+    StorageCollection(&'static BuiltinStorageCollection),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1094,7 +1119,7 @@ pub struct View {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RecordedView {
+pub struct MaterializedView {
     pub create_sql: String,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
@@ -1147,12 +1172,13 @@ impl CatalogItem {
             CatalogItem::Log(_) => mz_sql::catalog::CatalogItemType::Source,
             CatalogItem::Sink(_) => mz_sql::catalog::CatalogItemType::Sink,
             CatalogItem::View(_) => mz_sql::catalog::CatalogItemType::View,
-            CatalogItem::RecordedView(_) => mz_sql::catalog::CatalogItemType::RecordedView,
+            CatalogItem::MaterializedView(_) => mz_sql::catalog::CatalogItemType::MaterializedView,
             CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
             CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
+            CatalogItem::StorageCollection(_) => mz_sql::catalog::CatalogItemType::Source,
         }
     }
 
@@ -1162,7 +1188,8 @@ impl CatalogItem {
             CatalogItem::Log(log) => Ok(Cow::Owned(log.variant.desc())),
             CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
             CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
-            CatalogItem::RecordedView(rview) => Ok(Cow::Borrowed(&rview.desc)),
+            CatalogItem::MaterializedView(mview) => Ok(Cow::Borrowed(&mview.desc)),
+            CatalogItem::StorageCollection(coll) => Ok(Cow::Borrowed(&coll.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1204,9 +1231,10 @@ impl CatalogItem {
             CatalogItem::Table(table) => &table.depends_on,
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
-            CatalogItem::RecordedView(rview) => &rview.depends_on,
+            CatalogItem::MaterializedView(mview) => &mview.depends_on,
             CatalogItem::Secret(_) => &[],
             CatalogItem::Connection(connection) => &connection.depends_on,
+            CatalogItem::StorageCollection(_) => &[],
         }
     }
 
@@ -1221,9 +1249,10 @@ impl CatalogItem {
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
             | CatalogItem::View(_)
-            | CatalogItem::RecordedView(_)
+            | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageCollection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
                 SinkConnectionState::Pending(_) => true,
                 SinkConnectionState::Ready(_) => false,
@@ -1241,11 +1270,12 @@ impl CatalogItem {
             CatalogItem::Log(_)
             | CatalogItem::Source(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::RecordedView(_)
+            | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageCollection(_) => None,
         }
     }
 
@@ -1295,10 +1325,10 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::View(i))
             }
-            CatalogItem::RecordedView(i) => {
+            CatalogItem::MaterializedView(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::RecordedView(i))
+                Ok(CatalogItem::MaterializedView(i))
             }
             CatalogItem::Index(i) => {
                 let mut i = i.clone();
@@ -1318,6 +1348,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
+            CatalogItem::StorageCollection(i) => Ok(CatalogItem::StorageCollection(i)),
         }
     }
 }
@@ -1561,7 +1592,7 @@ impl<S: Append> Catalog<S> {
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
-                replica_sizes: config.replica_sizes,
+                cluster_replica_sizes: config.cluster_replica_sizes,
                 availability_zones: config.availability_zones,
             },
             transient_revision: 0,
@@ -1725,6 +1756,16 @@ impl<S: Append> Catalog<S> {
                         CatalogItem::Func(Func { inner: func.inner }),
                     );
                 }
+
+                Builtin::StorageCollection(coll) => {
+                    let oid = catalog.allocate_oid().await?;
+                    catalog.state.insert_item(
+                        id,
+                        oid,
+                        name.clone(),
+                        CatalogItem::StorageCollection(coll),
+                    );
+                }
             }
         }
         let new_system_id_mappings = new_builtins
@@ -1805,8 +1846,10 @@ impl<S: Append> Catalog<S> {
                 }
             };
 
-            let config =
-                catalog.concretize_replica_config(serialized_config.into(), persisted_logs)?;
+            let config = ConcreteComputeInstanceReplicaConfig {
+                location: catalog.concretize_replica_location(serialized_config.location)?,
+                persisted_logs,
+            };
 
             // And write the allocated sources back to storage
             catalog
@@ -2318,6 +2361,7 @@ impl<S: Append> Catalog<S> {
             stash,
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
+                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
         )
         .await?;
@@ -2328,7 +2372,7 @@ impl<S: Append> Catalog<S> {
             now,
             skip_migrations: true,
             metrics_registry,
-            replica_sizes: Default::default(),
+            cluster_replica_sizes: Default::default(),
             availability_zones: vec![],
         })
         .await?;
@@ -2518,6 +2562,14 @@ impl<S: Append> Catalog<S> {
     /// Resolves a `BuiltinLog`.
     pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
         self.state.resolve_builtin_log(builtin)
+    }
+
+    /// Resolves a `BuiltinStorageCollection`.
+    pub fn resolve_builtin_storage_collection(
+        &self,
+        builtin: &'static BuiltinStorageCollection,
+    ) -> GlobalId {
+        self.state.resolve_builtin_storage_collection(builtin)
     }
 
     /// Resolves `name` to a function [`CatalogEntry`].
@@ -2776,7 +2828,7 @@ impl<S: Append> Catalog<S> {
             && matches!(
                 item.typ(),
                 SqlCatalogItemType::View
-                    | SqlCatalogItemType::RecordedView
+                    | SqlCatalogItemType::MaterializedView
                     | SqlCatalogItemType::Source
                     | SqlCatalogItemType::Sink
                     | SqlCatalogItemType::Index
@@ -2802,23 +2854,22 @@ impl<S: Append> Catalog<S> {
         }
     }
 
-    pub fn concretize_replica_config(
+    pub fn concretize_replica_location(
         &self,
-        config: ComputeInstanceReplicaConfig,
-        persisted_logs: ConcreteComputeInstanceReplicaLogging,
-    ) -> Result<ConcreteComputeInstanceReplicaConfig, AdapterError> {
-        let replica_sizes = &self.state.replica_sizes;
-        let availability_zones = &self.state.availability_zones;
-        let location = match config {
-            ComputeInstanceReplicaConfig::Remote { addrs } => {
+        location: SerializedComputeInstanceReplicaLocation,
+    ) -> Result<ConcreteComputeInstanceReplicaLocation, AdapterError> {
+        let cluster_replica_sizes = &self.state.cluster_replica_sizes;
+        let location = match location {
+            SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
                 ConcreteComputeInstanceReplicaLocation::Remote { addrs }
             }
-            ComputeInstanceReplicaConfig::Managed {
+            SerializedComputeInstanceReplicaLocation::Managed {
                 size,
                 availability_zone,
+                az_user_specified,
             } => {
-                let allocation = replica_sizes.0.get(&size).ok_or_else(|| {
-                    let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
+                let allocation = cluster_replica_sizes.0.get(&size).ok_or_else(|| {
+                    let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
                     entries.sort_by_key(
                         |(
                             _name,
@@ -2833,26 +2884,15 @@ impl<S: Append> Catalog<S> {
                         expected,
                     }
                 })?;
-
-                if let Some(az) = &availability_zone {
-                    if !availability_zones.contains(az) {
-                        return Err(AdapterError::InvalidClusterReplicaAz {
-                            az: az.to_string(),
-                            expected: availability_zones.to_vec(),
-                        });
-                    }
-                }
                 ConcreteComputeInstanceReplicaLocation::Managed {
-                    size,
                     allocation: allocation.clone(),
                     availability_zone,
+                    size,
+                    az_user_specified,
                 }
             }
         };
-        Ok(ConcreteComputeInstanceReplicaConfig {
-            location,
-            persisted_logs,
-        })
+        Ok(location)
     }
 
     pub async fn transact<F, T>(
@@ -2959,7 +2999,7 @@ impl<S: Append> Catalog<S> {
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
                 SqlCatalogItemType::View => ObjectType::View,
-                SqlCatalogItemType::RecordedView => ObjectType::RecordedView,
+                SqlCatalogItemType::MaterializedView => ObjectType::MaterializedView,
                 SqlCatalogItemType::Source => ObjectType::Source,
                 SqlCatalogItemType::Sink => ObjectType::Sink,
                 SqlCatalogItemType::Index => ObjectType::Index,
@@ -3530,10 +3570,7 @@ impl<S: Append> Catalog<S> {
                     introspection_source_index_ids,
                 } => {
                     for id in introspection_source_index_ids {
-                        state
-                            .entry_by_id
-                            .remove(&id)
-                            .expect("introspection source index does not exist");
+                        state.drop_item(id);
                     }
 
                     let id = state
@@ -3640,8 +3677,8 @@ impl<S: Append> Catalog<S> {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
             },
-            CatalogItem::RecordedView(rview) => SerializedCatalogItem::V1 {
-                create_sql: rview.create_sql.clone(),
+            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
+                create_sql: mview.create_sql.clone(),
                 eval_env: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
@@ -3665,6 +3702,9 @@ impl<S: Append> Catalog<S> {
                 eval_env: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::StorageCollection(_) => {
+                unreachable!("builtin storage collections cannot be serialized")
+            }
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
@@ -3721,16 +3761,18 @@ impl<S: Append> Catalog<S> {
                     depends_on,
                 })
             }
-            Plan::CreateRecordedView(CreateRecordedViewPlan { recorded_view, .. }) => {
+            Plan::CreateMaterializedView(CreateMaterializedViewPlan {
+                materialized_view, ..
+            }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
-                let optimized_expr = optimizer.optimize(recorded_view.expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), recorded_view.column_names);
-                CatalogItem::RecordedView(RecordedView {
-                    create_sql: recorded_view.create_sql,
+                let optimized_expr = optimizer.optimize(materialized_view.expr)?;
+                let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
+                CatalogItem::MaterializedView(MaterializedView {
+                    create_sql: materialized_view.create_sql,
                     optimized_expr,
                     desc,
                     depends_on,
-                    compute_instance: recorded_view.compute_instance,
+                    compute_instance: materialized_view.compute_instance,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
@@ -3960,7 +4002,16 @@ pub enum SerializedComputeInstanceReplicaLogging {
     Concrete(Vec<(LogVariant, GlobalId)>),
 }
 
-/// A [`ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
+impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
+    fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
+        match conc {
+            ConcreteComputeInstanceReplicaLogging::Default => Self::Default,
+            ConcreteComputeInstanceReplicaLogging::Concrete(vars) => Self::Concrete(vars),
+        }
+    }
+}
+
+/// A [`mz_sql::plan::ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
 /// to the catalog stash. This is a separate type to allow us to evolve the
 /// on-disk format independently from the SQL layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3969,53 +4020,16 @@ pub struct SerializedComputeInstanceReplicaConfig {
     pub location: SerializedComputeInstanceReplicaLocation,
 }
 
-impl SerializedComputeInstanceReplicaConfig {
-    pub fn from(
-        location: ConcreteComputeInstanceReplicaLocation,
-        persisted_logs: ConcreteComputeInstanceReplicaLogging,
+impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
+    fn from(
+        ConcreteComputeInstanceReplicaConfig {
+            location,
+            persisted_logs,
+        }: ConcreteComputeInstanceReplicaConfig,
     ) -> Self {
-        Self {
+        SerializedComputeInstanceReplicaConfig {
             persisted_logs: persisted_logs.into(),
             location: location.into(),
-        }
-    }
-}
-
-impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
-    fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
-        match conc {
-            ConcreteComputeInstanceReplicaLogging::Default => {
-                SerializedComputeInstanceReplicaLogging::Default
-            }
-            ConcreteComputeInstanceReplicaLogging::Concrete(x) => {
-                SerializedComputeInstanceReplicaLogging::Concrete(x)
-            }
-        }
-    }
-}
-
-impl From<SerializedComputeInstanceReplicaConfig> for ComputeInstanceReplicaConfig {
-    fn from(x: SerializedComputeInstanceReplicaConfig) -> Self {
-        match x.location {
-            SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
-                ComputeInstanceReplicaConfig::Remote { addrs }
-            }
-            SerializedComputeInstanceReplicaLocation::Managed {
-                size,
-                availability_zone,
-            } => ComputeInstanceReplicaConfig::Managed {
-                size,
-                availability_zone,
-            },
-        }
-    }
-}
-
-impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
-    fn from(conf: ConcreteComputeInstanceReplicaConfig) -> Self {
-        Self {
-            persisted_logs: conf.persisted_logs.into(),
-            location: conf.location.into(),
         }
     }
 }
@@ -4027,25 +4041,26 @@ pub enum SerializedComputeInstanceReplicaLocation {
     },
     Managed {
         size: String,
-        availability_zone: Option<String>,
+        availability_zone: String,
+        /// `true` if the AZ was specified by the user and must be respected;
+        /// `false` if it was picked arbitrarily by Materialize.
+        az_user_specified: bool,
     },
 }
 
 impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
-    fn from(
-        config: ConcreteComputeInstanceReplicaLocation,
-    ) -> SerializedComputeInstanceReplicaLocation {
-        match config {
-            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
-                SerializedComputeInstanceReplicaLocation::Remote { addrs }
-            }
+    fn from(loc: ConcreteComputeInstanceReplicaLocation) -> Self {
+        match loc {
+            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => Self::Remote { addrs },
             ConcreteComputeInstanceReplicaLocation::Managed {
-                availability_zone,
-                size,
-                ..
-            } => SerializedComputeInstanceReplicaLocation::Managed {
+                allocation: _,
                 size,
                 availability_zone,
+                az_user_specified,
+            } => Self::Managed {
+                size,
+                availability_zone,
+                az_user_specified,
             },
         }
     }
@@ -4428,13 +4443,14 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Source(Source { create_sql, .. }) => create_sql,
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
             CatalogItem::View(View { create_sql, .. }) => create_sql,
-            CatalogItem::RecordedView(RecordedView { create_sql, .. }) => create_sql,
+            CatalogItem::MaterializedView(MaterializedView { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
+            CatalogItem::StorageCollection(_) => "<builtin>",
         }
     }
 

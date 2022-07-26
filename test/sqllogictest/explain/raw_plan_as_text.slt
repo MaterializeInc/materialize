@@ -17,11 +17,14 @@ statement ok
 CREATE VIEW ov AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS
+CREATE VIEW v AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 statement ok
-CREATE RECORDED VIEW rv AS
+CREATE DEFAULT INDEX ON v
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 mode cockroach
@@ -135,7 +138,7 @@ EOF
 # Test SELECT subqueries.
 query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
-SELECT (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1), (SELECT rv.a FROM rv WHERE rv.b = t.b LIMIT 1) FROM t
+SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Project #2, #3
   Let
@@ -146,12 +149,12 @@ Project #2, #3
         Project #0
           TopK limit=1
             Filter (#1 = #^1)
-              Get materialize.public.mv
+              Get materialize.public.v
       l2 =
         Project #0
           TopK limit=1
             Filter (#1 = #^1)
-              Get materialize.public.rv
+              Get materialize.public.mv
 
 EOF
 

@@ -52,39 +52,37 @@ position         name
 1                a
 2                b
 
-# Materialized views are synonymous with having an index automatically created
-> CREATE MATERIALIZED VIEW matv AS
-  SELECT b, sum(a) FROM data GROUP BY b
-
-> SHOW INDEXES FROM matv
-cluster on_name   key_name          seq_in_index column_name  expression  nullable
------------------------------------------------------------------------------------------
-<VARIABLE_OUTPUT> matv      matv_primary_idx  1            b            <null>      false
-
-# Non-materialized views do not have indexes automatically created
+# Views do not have indexes automatically created
 > CREATE VIEW data_view as SELECT * from data
 
 > SHOW INDEXES FROM data_view
 cluster on_name  key_name  seq_in_index  column_name  expression  nullable
-------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------
 
 # Views can have default indexes added
 > CREATE DEFAULT INDEX ON data_view
 
 > SHOW INDEXES FROM data_view
-cluster on_name    key_name               seq_in_index  column_name  expression  nullable
------------------------------------------------------------------------------------------------
+cluster           on_name    key_name               seq_in_index  column_name  expression  nullable
+---------------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  1             a            <null>      false
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  2             b            <null>      false
 
-# Default indexes are equivalent in structure to indexes added automatically with the "MATERIALIZED" keyword
-> CREATE MATERIALIZED VIEW mz_data_view as SELECT * from data
+# Materialized views do not have indexes automatically created
+> CREATE MATERIALIZED VIEW matv AS
+  SELECT b, sum(a) FROM data GROUP BY b
 
-> SHOW INDEXES FROM mz_data_view
-cluster on_name       key_name                  seq_in_index  column_name  expression  nullable
--------------------------------------------------------------------------------------------------------
-<VARIABLE_OUTPUT> mz_data_view  mz_data_view_primary_idx  1             a            <null>      false
-<VARIABLE_OUTPUT> mz_data_view  mz_data_view_primary_idx  2             b            <null>      false
+> SHOW INDEXES FROM matv
+cluster on_name  key_name  seq_in_index  column_name  expression  nullable
+--------------------------------------------------------------------------
+
+# Materialized views can have default indexes added
+> CREATE DEFAULT INDEX ON matv
+
+> SHOW INDEXES FROM matv
+cluster           on_name   key_name          seq_in_index column_name  expression  nullable
+--------------------------------------------------------------------------------------------
+<VARIABLE_OUTPUT> matv      matv_primary_idx  1            b            <null>      false
 
 # IF NOT EXISTS prevents adding multiple default indexes
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
@@ -94,14 +92,6 @@ cluster on_name    key_name               seq_in_index  column_name  expression 
 -------------------------------------------------------------------------------------------------
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  1             a            <null>      false
 <VARIABLE_OUTPUT> data_view  data_view_primary_idx  2             b            <null>      false
-
-# IF NOT EXISTS works for both automatically and explicitly created default indexes
-> CREATE DEFAULT INDEX IF NOT EXISTS ON matv
-
-> SHOW INDEXES FROM matv
-cluster on_name  key_name          seq_in_index  column_name  expression  nullable
-----------------------------------------------------------------------------------------------
-<VARIABLE_OUTPUT> matv     matv_primary_idx  1             b            <null>      false
 
 # Additional default indexes have the same structure as the first
 > CREATE DEFAULT INDEX ON matv

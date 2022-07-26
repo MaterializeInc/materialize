@@ -12,13 +12,13 @@ use std::error::Error;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
-use futures::executor::block_on;
 use futures::{pin_mut, FutureExt, StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
 use timely::scheduling::SyncActivator;
+use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
@@ -195,12 +195,13 @@ impl SourceReader for PostgresSourceReader {
             })
             .unwrap_or_default();
 
-        let connection_config = block_on(
-            connection
-                .connection
-                .config(&*connection_context.secrets_reader),
-        )
-        .expect("Postgres connection unexpectedly missing secrets");
+        let connection_config = TokioHandle::current()
+            .block_on(
+                connection
+                    .connection
+                    .config(&*connection_context.secrets_reader),
+            )
+            .expect("Postgres connection unexpectedly missing secrets");
 
         let task_info = PostgresTaskInfo {
             source_id: source_id.clone(),

@@ -24,7 +24,7 @@ use crate::command::{
     Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
     StartupResponse,
 };
-use crate::coord::PeekResponseUnary;
+use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
@@ -492,7 +492,7 @@ impl SessionClient {
                 | ExecuteResponse::CreatedSources
                 | ExecuteResponse::CreatedSink { existed: _ }
                 | ExecuteResponse::CreatedView { existed: _ }
-                | ExecuteResponse::CreatedRecordedView { existed: _ }
+                | ExecuteResponse::CreatedMaterializedView { existed: _ }
                 | ExecuteResponse::CreatedType
                 | ExecuteResponse::Deleted(_)
                 | ExecuteResponse::DiscardedTemp
@@ -507,7 +507,7 @@ impl SessionClient {
                 | ExecuteResponse::DroppedSink
                 | ExecuteResponse::DroppedTable
                 | ExecuteResponse::DroppedView
-                | ExecuteResponse::DroppedRecordedView
+                | ExecuteResponse::DroppedMaterializedView
                 | ExecuteResponse::DroppedType
                 | ExecuteResponse::DroppedSecret
                 | ExecuteResponse::DroppedConnection

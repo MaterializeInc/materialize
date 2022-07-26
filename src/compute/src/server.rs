@@ -386,6 +386,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
             }
 
+            assert!(old_config.is_some() || old_dataflows.is_empty() && old_frontiers.is_empty());
+
             // Compaction commands that can be applied to existing dataflows.
             let mut old_compaction = BTreeMap::default();
 
@@ -435,7 +437,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                     ComputeCommand::CreateInstance(new_config) => {
                         // Cluster creation should not be performed again!
-                        assert_eq!(old_config, Some(new_config));
+                        if let Some(old_config) = old_config {
+                            assert_eq!(old_config, new_config);
+                        }
                     }
                     // All other commands we apply as requested.
                     command => {

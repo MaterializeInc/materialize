@@ -45,6 +45,8 @@ class FastPathFilterNoIndex(FastPath):
                 f"""
 > CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
 
+> CREATE DEFAULT INDEX ON v1;
+
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
 """
@@ -70,6 +72,8 @@ class FastPathFilterIndex(FastPath):
             TdAction(
                 f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+
+> CREATE DEFAULT INDEX ON v1;
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -112,6 +116,8 @@ class FastPathOrderByLimit(FastPath):
             TdAction(
                 f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+
+> CREATE DEFAULT INDEX ON v1;
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -326,7 +332,7 @@ true
         # Explicit LIMIT is needed for the ORDER BY to not be optimized away
         return Td(
             f"""
-> DROP VIEW IF EXISTS v2
+> DROP MATERIALIZED VIEW IF EXISTS v2
   /* A */
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT * FROM v1 ORDER BY f1 LIMIT 999999999999
@@ -429,7 +435,7 @@ class CrossJoin(Dataflow):
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
-> DROP VIEW IF EXISTS v1;
+> DROP MATERIALIZED VIEW IF EXISTS v1;
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} FROM {self.join()}
   /* A */
@@ -578,9 +584,9 @@ class FullOuterJoin(Dataflow):
         return [
             Td(
                 f"""
-> DROP VIEW IF EXISTS v2 CASCADE;
+> DROP MATERIALIZED VIEW IF EXISTS v2 CASCADE;
 
-> DROP VIEW IF EXISTS v1 CASCADE;
+> DROP MATERIALIZED VIEW IF EXISTS v1 CASCADE;
 
 > DROP TABLE IF EXISTS ten;
 

@@ -66,6 +66,7 @@ use crate::types::errors::{DecodeError, SourceError, SourceErrorDetails};
 use crate::types::sources::encoding::SourceDataEncoding;
 use crate::types::sources::{MzOffset, SourceConnection};
 
+pub mod generator;
 mod kafka;
 mod kinesis;
 pub mod metrics;
@@ -76,6 +77,7 @@ mod reclock;
 mod s3;
 pub mod util;
 
+pub use generator::LoadGeneratorSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;

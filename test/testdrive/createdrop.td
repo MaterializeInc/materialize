@@ -138,7 +138,7 @@ contains:s is not of type VIEW
 
 > DROP INDEX i
 
-> DROP VIEW v
+> DROP MATERIALIZED VIEW v
 
 > DROP SOURCE s
 
@@ -151,11 +151,11 @@ contains:s is not of type VIEW
 
 > CREATE INDEX v ON s(b)
 
-# Test that if exists works when the referred objects do not exist
+# Test that if exists works when the referred objects exist
 
 > DROP INDEX IF EXISTS v
 
-> DROP VIEW IF EXISTS s
+> DROP MATERIALIZED VIEW IF EXISTS s
 
 > DROP SOURCE IF EXISTS i
 
@@ -179,14 +179,14 @@ contains:unknown catalog item 'nonexistent'
 contains:unknown catalog item 'nonexistent'
 
 # Test CREATE VIEW IF NOT EXISTS
-> CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
+> CREATE VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
 
 > SHOW CREATE VIEW test1
 View                      "Create View"
-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------
 materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT 42 AS \"a\""
 
-! CREATE MATERIALIZED VIEW test1 AS SELECT 43 AS b
+! CREATE VIEW test1 AS SELECT 43 AS b
 contains:catalog item 'test1' already exists
 
 > SELECT * FROM test1
@@ -194,6 +194,6 @@ a
 -----------
 42
 
-> CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
+> CREATE VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
 
 > DROP VIEW test1

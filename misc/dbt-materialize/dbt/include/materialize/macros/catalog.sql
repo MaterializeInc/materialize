@@ -52,7 +52,7 @@
           upper(sch.nspname) = upper('{{ schema }}'){%- if not loop.last %} or {% endif -%}
         {%- endfor -%}
       )
-      and tbl.relkind in ('r', 'v', 'f', 'p') -- o[r]dinary table, [v]iew, [f]oreign table, [p]artitioned table. Other values are [i]ndex, [S]equence, [c]omposite type, [t]OAST table, [m]aterialized view
+      and tbl.relkind in ('r', 'v', 'f', 'p', 'm') -- o[r]dinary table, [v]iew, [f]oreign table, [p]artitioned table, [m]aterialized view. Other values are [i]ndex, [S]equence, [c]omposite type, [t]OAST table
       and col.attnum > 0 -- negative numbers are used for system columns such as oid
       and not col.attisdropped -- column as not been dropped
 
@@ -66,3 +66,32 @@
   {{ return(load_result('catalog').table) }}
 
 {%- endmacro %}
+
+{% macro postgres__list_relations_without_caching(schema_relation) %}
+  {% call statement('list_relations_without_caching', fetch_result=True) -%}
+    select
+      '{{ schema_relation.database }}' as database,
+      tablename as name,
+      schemaname as schema,
+      'table' as type
+    from pg_tables
+    where schemaname ilike '{{ schema_relation.schema }}'
+    union all
+    select
+      '{{ schema_relation.database }}' as database,
+      viewname as name,
+      schemaname as schema,
+      'view' as type
+    from pg_views
+    where schemaname ilike '{{ schema_relation.schema }}'
+    union all
+    select
+      '{{ schema_relation.database }}' as database,
+      matviewname as name,
+      schemaname as schema,
+      'materializedview' as type
+    from pg_matviews
+    where schemaname ilike '{{ schema_relation.schema }}'
+  {% endcall %}
+  {{ return(load_result('list_relations_without_caching').table) }}
+{% endmacro %}

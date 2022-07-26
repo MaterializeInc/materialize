@@ -2889,15 +2889,25 @@ fn plan_using_constraint(
 
     both_scope = both_scope.project(&project_key);
 
-    let on = join_exprs
-        .into_iter()
-        .fold(HirScalarExpr::literal_true(), |expr1, expr2| {
-            HirScalarExpr::CallBinary {
-                func: BinaryFunc::And,
-                expr1: Box::new(expr1),
-                expr2: Box::new(expr2),
-            }
-        });
+    // TODO: This should be just
+    // let on = HirScalarExpr::variadic_and(join_exprs);
+    // However, if I remove the literal true, then some plans change in weird ways
+    // (e.g., column_knowledge.slt:117 and 558)
+    // Note that before moving to variadic and, this code was
+    //         .fold(HirScalarExpr::literal_true(), |expr1, expr2| {
+    //             HirScalarExpr::CallBinary {
+    //                 func: BinaryFunc::And,
+    //                 expr1: Box::new(expr1),
+    //                 expr2: Box::new(expr2),
+    //             }
+    //         });
+    let on = HirScalarExpr::variadic_and(
+        vec![HirScalarExpr::literal_true()]
+            .into_iter()
+            .chain(join_exprs.into_iter())
+            .collect(),
+    );
+
     let both = left
         .join(right, on, kind)
         .map(map_exprs)
@@ -2986,6 +2996,12 @@ fn plan_expr_inner<'a>(
         )?
         .into()),
 
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => plan_in_list(ecx, expr, list, negated),
+
         // Subqueries.
         Expr::Exists(query) => plan_exists(ecx, query),
         Expr::Subquery(query) => plan_subquery(ecx, query),
@@ -2993,7 +3009,6 @@ fn plan_expr_inner<'a>(
         Expr::ArraySubquery(query) => plan_array_subquery(ecx, query),
         Expr::Collate { expr, collation } => plan_collate(ecx, expr, collation),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
-        Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
         Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
         Expr::AnyExpr { .. } => unreachable!("Expr::AnyExpr not desugared"),
         Expr::AllExpr { .. } => unreachable!("Expr::AllExpr not desugared"),
@@ -3067,11 +3082,10 @@ fn plan_and(
     right: &Expr<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let ecx = ecx.with_name("AND argument");
-    Ok(HirScalarExpr::CallBinary {
-        func: BinaryFunc::And,
-        expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?),
-        expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?),
-    }
+    Ok(HirScalarExpr::variadic_and(vec![
+        plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?,
+        plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?,
+    ])
     .into())
 }
 
@@ -3081,10 +3095,32 @@ fn plan_or(
     right: &Expr<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let ecx = ecx.with_name("OR argument");
-    Ok(HirScalarExpr::CallBinary {
-        func: BinaryFunc::Or,
-        expr1: Box::new(plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?),
-        expr2: Box::new(plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?),
+    Ok(HirScalarExpr::variadic_or(vec![
+        plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?,
+        plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?,
+    ])
+    .into())
+}
+
+fn plan_in_list(
+    ecx: &ExprContext,
+    lhs: &Expr<Aug>,
+    list: &Vec<Expr<Aug>>,
+    negated: &bool,
+) -> Result<CoercibleScalarExpr, PlanError> {
+    let ecx = ecx.with_name("IN list");
+    let or = HirScalarExpr::variadic_or(
+        list.into_iter()
+            .map(|e| {
+                let eq = lhs.clone().equals(e.clone());
+                plan_expr(&ecx, &eq)?.type_as(&ecx, &ScalarType::Bool)
+            })
+            .collect::<Result<Vec<HirScalarExpr>, PlanError>>()?,
+    );
+    Ok(if *negated {
+        or.call_unary(UnaryFunc::Not(expr_func::Not))
+    } else {
+        or
     }
     .into())
 }

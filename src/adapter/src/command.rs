@@ -24,7 +24,7 @@ use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
 
 use crate::client::ConnectionId;
-use crate::coord::PeekResponseUnary;
+use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 
@@ -228,8 +228,8 @@ pub enum ExecuteResponse {
     CreatedView {
         existed: bool,
     },
-    /// The requested recorded view was created.
-    CreatedRecordedView {
+    /// The requested materialized view was created.
+    CreatedMaterializedView {
         existed: bool,
     },
     /// The requested type was created.
@@ -264,8 +264,8 @@ pub enum ExecuteResponse {
     DroppedTable,
     /// The requested view was dropped.
     DroppedView,
-    /// The requested recorded view was dropped.
-    DroppedRecordedView,
+    /// The requested materialized view was dropped.
+    DroppedMaterializedView,
     /// The requested index was dropped.
     DroppedIndex,
     /// The requested sink was dropped.

@@ -116,6 +116,8 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_cargo-test_*.xml
+    env:
+      AWS_DEFAULT_REGION: "us-east-2"
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -254,6 +256,8 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
+    env:
+      AWS_DEFAULT_REGION: "us-east-2"
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
