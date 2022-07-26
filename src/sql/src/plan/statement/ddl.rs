@@ -52,8 +52,8 @@ use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
     KinesisSourceConnection, LoadGeneratorSourceConnection, MzOffset, PostgresSourceConnection,
-    PostgresSourceDetails, ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection,
-    SourceConnection, SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    PostgresSourceDetails, ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection,
+    SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -601,23 +601,6 @@ pub fn plan_create_source(
             let encoding =
                 SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
             (connection, encoding)
-        }
-        CreateSourceConnection::PubNub {
-            subscribe_key,
-            channel,
-        } => {
-            match format {
-                CreateSourceFormat::None | CreateSourceFormat::Bare(Format::Text) => (),
-                _ => sql_bail!("CREATE SOURCE ... PUBNUB must specify FORMAT TEXT"),
-            }
-            let connection = SourceConnection::PubNub(PubNubSourceConnection {
-                subscribe_key: subscribe_key.clone(),
-                channel: channel.clone(),
-            });
-            (
-                connection,
-                SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Text)),
-            )
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let load_generator = match generator {

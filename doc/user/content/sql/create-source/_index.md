@@ -28,9 +28,6 @@ Materialize bundles **native connectors** for the following external systems:
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
 {{</ linkbox >}}
-{{< linkbox title="Other" >}}
-- [PubNub](/sql/create-source/pubnub)
-{{</ linkbox >}}
 {{</ multilinkbox >}}
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.

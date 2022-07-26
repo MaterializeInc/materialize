@@ -575,48 +575,6 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red'
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, remote: None })
 
 parse-statement
-CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel';
-----
-CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel'
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: PubNub { subscribe_key: "subscribe_key", channel: "channel" }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, remote: None })
-
-parse-statement
-CREATE SOURCE remote FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE 'gus:123';
-----
-CREATE SOURCE remote FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE 'gus:123'
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("remote")]), col_names: [], connection: PubNub { subscribe_key: "subscribe_key", channel: "channel" }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, remote: Some("gus:123") })
-
-parse-statement
-CREATE SOURCE remote_ident_is_wrong FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE "gus:123";
-----
-error: Expected literal string, found identifier "gus:123"
-CREATE SOURCE remote_ident_is_wrong FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE "gus:123";
-                                                                                                       ^
-
-parse-statement
-CREATE SOURCE remote_error FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE;
-----
-error: Expected literal string, found semicolon
-CREATE SOURCE remote_error FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE;
-                                                                                             ^
-
-parse-statement
-CREATE SOURCE no_remote FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE
-----
-error: Expected literal string, found EOF
-CREATE SOURCE no_remote FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE
-                                                                                          ^
-
-parse-statement
-CREATE SOURCE remote_fail_in_planning FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE 1;
-----
-error: Expected literal string, found number "1"
-CREATE SOURCE remote_fail_in_planning FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel' REMOTE 1;
-                                                                                                         ^
-
-parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT

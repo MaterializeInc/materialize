@@ -19,9 +19,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 statement ok
-CREATE SOURCE s FROM PUBNUB
-SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
-CHANNEL 'pubnub-market-orders';
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
 
 query TTTT colnames
 SELECT * FROM information_schema.tables ORDER BY table_name

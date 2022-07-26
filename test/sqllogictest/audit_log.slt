@@ -39,9 +39,7 @@ statement ok
 DROP VIEW renamed
 
 statement ok
-CREATE SOURCE s FROM PUBNUB
-SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
-CHANNEL 'pubnub-market-orders';
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
 
 query ITTTT
 SELECT id, event_type, object_type, event_details, user FROM mz_audit_events ORDER BY id
