@@ -79,6 +79,15 @@ pub enum AdapterError {
         size: String,
         expected: Vec<String>,
     },
+    /// Storage instance size has scale > 1 (i.e. multiple instances)
+    InvalidStorageInstanceScale {
+        size: String,
+    },
+    /// No such storage instance size has been configured.
+    InvalidStorageInstanceSize {
+        size: String,
+        expected: Vec<String>,
+    },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
     /// Expression violated a column's constraint
@@ -228,6 +237,9 @@ impl AdapterError {
                 "Valid cluster replica sizes are: {}",
                 expected.join(", ")
             )),
+            AdapterError::InvalidStorageInstanceSize { expected, .. } => {
+                Some(format!("Valid source sizes are: {}", expected.join(", ")))
+            }
             AdapterError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
@@ -299,6 +311,15 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::InvalidClusterReplicaSize { size, expected: _ } => {
                 write!(f, "unknown cluster replica size {size}",)
+            }
+            AdapterError::InvalidStorageInstanceScale { size } => {
+                write!(
+                    f,
+                    "invalid source size {size}: only single node sizes are supported"
+                )
+            }
+            AdapterError::InvalidStorageInstanceSize { size, .. } => {
+                write!(f, "unknown source size {size}")
             }
             AdapterError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")

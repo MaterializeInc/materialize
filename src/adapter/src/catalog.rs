@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -56,11 +57,14 @@ use mz_sql::plan::{
     ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    StorageInstanceConfig,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
 use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
-use mz_storage::types::sources::{SourceDesc, Timeline};
+use mz_storage::types::sources::{
+    SourceDesc, StorageInstanceResourceAllocation, StorageInstanceSizeOrAddress, Timeline,
+};
 use mz_transform::Optimizer;
 use uuid::Uuid;
 
@@ -2614,6 +2618,69 @@ impl<S: Append> Catalog<S> {
             }
         };
         Ok(location)
+    }
+
+    pub fn resolve_storage_instance(
+        &self,
+        storage_instance_config: StorageInstanceConfig,
+    ) -> Result<StorageInstanceSizeOrAddress, AdapterError> {
+        let instance_sizes = &self.state.cluster_replica_sizes;
+        let instance_size_or_address = match storage_instance_config {
+            StorageInstanceConfig::Remote { addr } => StorageInstanceSizeOrAddress::Remote { addr },
+            StorageInstanceConfig::Managed { size } => {
+                let allocation = instance_sizes.0.get(&size).ok_or_else(|| {
+                    let mut entries = instance_sizes.0.iter().collect::<Vec<_>>();
+                    entries.sort_by_key(
+                        |(
+                            _name,
+                            ComputeInstanceReplicaAllocation {
+                                scale, cpu_limit, ..
+                            },
+                        )| (scale, cpu_limit),
+                    );
+                    let expected = entries
+                        .into_iter()
+                        .filter(|(_, allocation)| allocation.scale == NonZeroUsize::new(1).unwrap())
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    AdapterError::InvalidStorageInstanceSize {
+                        size: size.clone(),
+                        expected,
+                    }
+                })?;
+
+                // Forbid sizes with multiple instances
+                if allocation.scale > NonZeroUsize::new(1).unwrap() {
+                    return Err(AdapterError::InvalidStorageInstanceScale { size: size.clone() });
+                }
+                StorageInstanceSizeOrAddress::Managed {
+                    allocation: StorageInstanceResourceAllocation {
+                        memory_limit: allocation.memory_limit,
+                        cpu_limit: allocation.cpu_limit,
+                        workers: allocation.workers,
+                    },
+                    size,
+                }
+            }
+            StorageInstanceConfig::Undefined => {
+                // When no size specifier is given, the smallest instance size available is chosen instead
+                let (size, allocation) = instance_sizes
+                    .0
+                    .iter()
+                    .filter(|(_, a)| a.scale == NonZeroUsize::new(1).unwrap())
+                    .min_by_key(|(_, a)| a.memory_limit)
+                    .expect("should have at least one valid storage instance size");
+                StorageInstanceSizeOrAddress::Managed {
+                    allocation: StorageInstanceResourceAllocation {
+                        memory_limit: allocation.memory_limit,
+                        cpu_limit: allocation.cpu_limit,
+                        workers: allocation.workers,
+                    },
+                    size: size.clone(),
+                }
+            }
+        };
+        Ok(instance_size_or_address)
     }
 
     pub async fn transact<F, T>(
