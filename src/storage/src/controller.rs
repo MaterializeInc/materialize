@@ -58,7 +58,10 @@ use crate::protocol::client::{
 };
 use crate::types::errors::DataflowError;
 use crate::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
-use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
+use crate::types::sources::{
+    IngestionDescription, MzOffset, SourceData, SourceEnvelope, StorageInstanceResourceAllocation,
+    StorageInstanceSizeOrAddress,
+};
 
 mod hosts;
 mod rehydration;
@@ -75,16 +78,14 @@ pub struct CollectionDescription<T> {
     pub desc: RelationDesc,
     /// The description of the source to ingest into this collection, if any.
     pub ingestion: Option<IngestionDescription<()>>,
-    /// The address of a `storaged` process on which to install the source.
-    ///
-    /// If `None`, the controller manages the lifetime of the `storaged`
-    /// process.
-    pub remote_addr: Option<String>,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
     /// A GlobalId to use for this collection to use for the status collection.
     /// Used to keep track of source status/error information.
     pub status_collection_id: Option<GlobalId>,
+    /// The address of a `storaged` process on which to install the source or the
+    /// settings for spinning up a controller-managed process.
+    pub instance_setting: Option<StorageInstanceSizeOrAddress>,
 }
 
 impl<T> From<RelationDesc> for CollectionDescription<T> {
@@ -92,9 +93,9 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
         Self {
             desc,
             ingestion: None,
-            remote_addr: None,
             since: None,
             status_collection_id: None,
+            instance_setting: None,
         }
     }
 }
@@ -702,7 +703,12 @@ where
                 // Provision a storage host for the ingestion.
                 let client = self
                     .hosts
-                    .provision(id, description.remote_addr.clone())
+                    .provision(
+                        id,
+                        description.instance_setting.clone().expect(
+                            "CollectionDescription with ingestion should have instance_setting set",
+                        ),
+                    )
                     .await?;
 
                 client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
@@ -748,11 +754,16 @@ where
                 // TODO(chae): derive this
                 resume_upper: Antichain::from_elem(T::minimum()),
             };
+            // TODO: allow specifying a size parameter for sinks, tracked in #13889
+            let instance_setting = match description.remote_addr {
+                Some(addr) => StorageInstanceSizeOrAddress::Remote { addr },
+                None => StorageInstanceSizeOrAddress::Managed {
+                    allocation: StorageInstanceResourceAllocation::new(),
+                    size: "arbitrary".to_string(),
+                },
+            };
             // Provision a storage host for the ingestion.
-            let client = self
-                .hosts
-                .provision(id, description.remote_addr.clone())
-                .await?;
+            let client = self.hosts.provision(id, instance_setting).await?;
 
             client.send(StorageCommand::ExportSinks(vec![cmd]));
         }
