@@ -2116,6 +2116,16 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // New WITH block
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_source_options)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
@@ -2127,6 +2137,7 @@ impl<'a> Parser<'a> {
             if_not_exists,
             key_constraint,
             remote,
+            with_options,
         }))
     }
 
@@ -2170,6 +2181,20 @@ impl<'a> Parser<'a> {
         } else {
             Ok(None)
         }
+    }
+
+    /// Parses the final WITH block of a CREATE SOURCE statement
+    fn parse_create_source_options(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SIZE])? {
+            SIZE => CreateSourceOptionName::Size,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(CreateSourceOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
