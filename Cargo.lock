@@ -4082,6 +4082,7 @@ dependencies = [
  "aws-types",
  "bincode",
  "bytes",
+ "bytesize",
  "chrono",
  "crossbeam-channel",
  "csv-core",
