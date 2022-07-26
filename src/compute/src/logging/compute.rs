@@ -178,9 +178,6 @@ pub fn construct<A: Allocate>(
                                         for (source_id, time_entry) in source_map.into_iter() {
                                             let delay_map = time_entry.1;
                                             for (delay_ns, delay_count) in delay_map {
-                                                println!("removal of dataflow-source frontier reported: ({}, {}, {}, {}, {})",
-                                                    id, source_id, worker, delay_ns, -delay_count
-                                                );
                                                 frontier_delay_session.give((
                                                     (id, source_id, worker, delay_ns),
                                                     time_ms,
@@ -221,10 +218,6 @@ pub fn construct<A: Allocate>(
                                     // and report frontier advancement delays
                                     let dataflow_key = (name, worker);
                                     if let Some(source_map) = storage_sources.get_mut(&dataflow_key) {
-                                        println!(
-                                            "dataflow with source frontier logged as:({}, {}, {}, {})",
-                                            name, logical, time.as_nanos(), delta
-                                        );
                                         for (source_id, time_entry) in source_map  {
                                             let time_deque = &mut time_entry.0;
                                             while let Some(current_front) = time_deque.pop_front() {
@@ -234,11 +227,6 @@ pub fn construct<A: Allocate>(
                                                     let delay_map = &mut time_entry.1;
                                                     let delay_count = delay_map.entry(delay_ns).or_insert(0);
                                                     *delay_count += 1;
-                                                    // TODO report delay!
-                                                    println!(
-                                                        "delay reported as:({}, {}, {}, {}, {})",
-                                                        name, *source_id, worker, delay_ns, 1
-                                                    );
                                                     frontier_delay_session.give((
                                                         (name, *source_id, worker, delay_ns),
                                                         time_ms,
@@ -264,10 +252,6 @@ pub fn construct<A: Allocate>(
                                     .or_insert((VecDeque::new(), HashMap::new()));
                                 let time_deque = &mut time_entry.0;
                                 time_deque.push_back((logical, time.as_nanos()));
-                                println!(
-                                    "source frontier logged as:({}, {}, {}, {})",
-                                    dataflow, source_id, logical, time.as_nanos()
-                                );
                             }
                             ComputeEvent::Peek(peek, is_install) => {
                                 let key = (worker, peek.uuid);
