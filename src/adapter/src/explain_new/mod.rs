@@ -25,7 +25,7 @@ use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer};
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
-use crate::coord::peek;
+use crate::coord::peek::{self, FastPathPlan};
 
 pub(crate) mod common;
 pub(crate) mod hir;
@@ -93,10 +93,26 @@ impl UsedIndexes {
     }
 }
 
-// TODO (#13472)
-impl DisplayText<()> for UsedIndexes {
-    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        unimplemented!() // TODO (#13472)
+impl<'a, T> DisplayText<PlanRenderingContext<'a, T>> for UsedIndexes {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
+        write!(f, "{}used_indexes:", ctx.indent)?;
+        ctx.indent += 1;
+        for id in &self.0 {
+            write!(
+                f,
+                "{}- {}",
+                ctx.indent,
+                ctx.humanizer
+                    .humanize_id(*id)
+                    .unwrap_or_else(|| id.to_string())
+            )?;
+        }
+        ctx.indent -= 1;
+        Ok(())
     }
 }
 
@@ -108,6 +124,22 @@ impl DisplayText<()> for UsedIndexes {
 pub(crate) struct ExplainSinglePlan<'a, T> {
     context: &'a ExplainContext<'a>,
     plan: AnnotatedPlan<'a, T>,
+}
+
+fn fmt_plan<'a, T>(
+    ctx: &mut PlanRenderingContext<'a, T>,
+    f: &mut fmt::Formatter<'_>,
+    fast_path_plan: &Option<FastPathPlan>,
+    plan: &'a T,
+) -> fmt::Result
+where
+    Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
+{
+    if let Some(fast_path_plan) = fast_path_plan {
+        fast_path_plan.fmt_text(f, ctx)
+    } else {
+        Displayable::from(plan).fmt_text(f, ctx)
+    }
 }
 
 impl<'a, T: 'a> DisplayText<()> for ExplainSinglePlan<'a, T>
@@ -124,14 +156,14 @@ where
 
         if let Some(finishing) = &self.context.finishing {
             finishing.fmt_text(f, &mut ctx.indent)?;
-            ctx.indented(|ctx| Displayable::from(self.plan.plan).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| fmt_plan(ctx, f, &self.context.fast_path_plan, self.plan.plan))?;
         } else {
-            Displayable::from(self.plan.plan).fmt_text(f, &mut ctx)?;
+            fmt_plan(&mut ctx, f, &self.context.fast_path_plan, self.plan.plan)?;
         }
-        // writeln!(f, "")?;
-
-        // TODO (#13472)
-        // self.context.used_indexes.fmt_text(..., f)?;
+        if !self.context.used_indexes.0.is_empty() {
+            writeln!(f, "")?;
+            self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
 
         Ok(())
     }
@@ -157,16 +189,23 @@ impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
 where
     Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
 {
-    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         // TODO (#13472)
-        // let mut context = RenderingContext::new(Indent::default(), self.context.humanizer);
+        let mut ctx = PlanRenderingContext::new(
+            Indent::default(),
+            self.context.humanizer,
+            HashMap::<&T, Attributes>::new(),
+            self.context.config,
+        );
         // self.context.finishing.fmt_text(f, &mut context.indent)?;
         // writeln!(f, "")?;
         // self.plans.fmt_text(..., f)?;
         // writeln!(f, "")?;
         // self.sources.used_indexes.fmt_text(..., f)?;
-        // writeln!(f, "")?;
-        // self.context.used_indexes.fmt_text(..., f)?;
+        if !self.context.used_indexes.0.is_empty() {
+            writeln!(f, "")?;
+            self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
 
         Ok(())
     }

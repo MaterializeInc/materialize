@@ -13,9 +13,11 @@
 //! or by reading out of existing arrangements, and implements the appropriate plan.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::{collections::HashMap, num::NonZeroUsize};
 
 use futures::{FutureExt, StreamExt};
+use mz_repr::explain_new::DisplayText;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -29,6 +31,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_stash::Append;
 
 use crate::client::ConnectionId;
+use crate::explain_new::PlanRenderingContext;
 use crate::util::send_immediate_rows;
 use crate::AdapterError;
 
@@ -63,6 +66,16 @@ pub enum FastPathPlan<T = mz_repr::Timestamp> {
     Constant(Result<Vec<(Row, T, Diff)>, EvalError>),
     /// The view can be read out of an existing arrangement.
     PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
+}
+
+impl<'a, S, T> DisplayText<PlanRenderingContext<'a, S>> for FastPathPlan<T> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, S>,
+    ) -> fmt::Result {
+        unimplemented!()
+    }
 }
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
@@ -112,11 +125,13 @@ pub fn create_plan<T: timely::progress::Timestamp>(
         let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let mz_expr::MirRelationExpr::Constant { rows, .. } = mir {
             // In the case of a constant, we can return the result now.
-            return Ok(Plan::FastPath(FastPathPlan::Constant(rows.clone().map(|rows| {
-                rows.into_iter()
-                    .map(|(row, diff)| (row, T::minimum(), diff))
-                    .collect()
-            }))));
+            return Ok(Plan::FastPath(FastPathPlan::Constant(rows.clone().map(
+                |rows| {
+                    rows.into_iter()
+                        .map(|(row, diff)| (row, T::minimum(), diff))
+                        .collect()
+                },
+            ))));
         } else {
             // In the case of a linear operator around an indexed view, we
             // can skip creating a dataflow and instead pull all the rows in
@@ -165,14 +180,14 @@ pub fn create_plan<T: timely::progress::Timestamp>(
 }
 
 impl<T> Plan<(), T> {
-    pub fn finalize(self,
+    pub fn finalize(
+        self,
         dataflow: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
         index_id: GlobalId,
         index_key: Vec<MirScalarExpr>,
         index_permutation: HashMap<usize, usize>,
         index_thinned_arity: usize,
-    ) -> Plan<PeekDataflowPlan<T>, T>
-    {
+    ) -> Plan<PeekDataflowPlan<T>, T> {
         match self {
             Plan::FastPath(fast_path_plan) => Plan::FastPath(fast_path_plan),
             Plan::SlowPath(()) => Plan::SlowPath(PeekDataflowPlan {

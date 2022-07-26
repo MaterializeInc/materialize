@@ -2197,6 +2197,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = optimize(self, decorrelated_plan)?;
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
+                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
                 let fast_path_plan = match explainee {
                     Explainee::Query => {
                         match peek::create_plan(&mut dataflow, GlobalId::Explain)? {
@@ -2209,7 +2210,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: UsedIndexes::new(used_indexes),
                     finishing: row_set_finishing,
                     fast_path_plan,
                 };
@@ -2220,7 +2221,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 // run partial pipeline
                 let decorrelated_plan = decorrelate(raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(self, decorrelated_plan)?;
+                let mut dataflow = optimize(self, decorrelated_plan)?;
+                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        match peek::create_plan(&mut dataflow, GlobalId::Explain)? {
+                            peek::Plan::FastPath(fast_path_plan) => Some(fast_path_plan),
+                            peek::Plan::SlowPath(()) => None,
+                        }
+                    }
+                    _ => None,
+                };
                 let mut dataflow_plan =
                     mz_compute_client::plan::Plan::<mz_repr::Timestamp>::finalize_dataflow(
                         dataflow,
@@ -2231,9 +2242,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: UsedIndexes::new(used_indexes),
                     finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                    fast_path_plan,
                 };
                 // explain plan
                 Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
