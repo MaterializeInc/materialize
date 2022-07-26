@@ -118,7 +118,7 @@ fn install_desired_into_persist<G>(
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
-    as_of: Antichain<Timestamp>,
+    _as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> Option<Rc<dyn Any>>
 where
@@ -133,9 +133,13 @@ where
     let operator_name = format!("persist_sink({})", shard_id);
     let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
 
-    // Only attempt to write from this frontier onward, as our data are not necessarily
-    // correct for times not greater or equal to this frontier.
-    let mut write_lower_bound = as_of;
+    // We might want a lower bound on when we should start writing, especially as the
+    // dataflow is only valid from an `as_of` onward. However, if the sink's shard's
+    // `upper` is not initially beyond that frontier we should do *something*.
+    // Writing here allows the sink to advance the shard using the empty collection,
+    // but it should perhaps be considered a bug when this happens, as we are writing
+    // "junk data" which is a serious smell.
+    let mut write_lower_bound = Antichain::from_elem(TimelyTimestamp::minimum());
 
     // TODO(mcsherry): this is shardable, eventually. But for now use a single writer.
     let hashed_id = sink_id.hashed();
