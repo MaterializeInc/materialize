@@ -564,6 +564,10 @@ class ViewsNested(Generator):
 
 
 class ViewsMaterializedNested(Generator):
+    COUNT = min(
+        Generator.COUNT, 25
+    )  # https://github.com/MaterializeInc/materialize/issues/13840
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t (f1 INTEGER);")
