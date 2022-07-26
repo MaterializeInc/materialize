@@ -57,6 +57,9 @@ pub struct KubernetesOrchestratorConfig {
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
     pub image_pull_policy: KubernetesImagePullPolicy,
+    /// Whether the orchestrator is required to assume only one node exists
+    /// (currently used to prevent application of anti-affinity rules)
+    pub local: bool,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -118,6 +121,7 @@ impl Orchestrator for KubernetesOrchestrator {
             kubernetes_namespace: self.kubernetes_namespace.clone(),
             namespace: namespace.into(),
             config: self.config.clone(),
+            local: self.config.local,
         })
     }
 }
@@ -130,6 +134,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
+    local: bool,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -310,7 +315,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             "--secrets-reader-kubernetes-context={}",
             self.config.context
         ));
-
+        let anti_affinity = if self.local { None } else { anti_affinity };
         let anti_affinity = anti_affinity
             .map(|label_selectors| -> Result<_, anyhow::Error> {
                 let label_selector_requirements = label_selectors

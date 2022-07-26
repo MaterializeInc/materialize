@@ -352,6 +352,10 @@ pub struct Args {
 #[derive(ArgEnum, Debug, Clone)]
 enum OrchestratorKind {
     Kubernetes,
+    /// Like `Kubernetes`, but the orchestrator is required
+    /// to be able to work when only one node is available.
+    /// Useful e.g. for local dev and tests.
+    KubernetesLocal,
     Process,
 }
 
@@ -481,7 +485,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure controller.
     let (orchestrator, secrets_controller) = match args.orchestrator {
-        OrchestratorKind::Kubernetes => {
+        OrchestratorKind::Kubernetes | OrchestratorKind::KubernetesLocal => {
+            let local = matches!(args.orchestrator, OrchestratorKind::KubernetesLocal);
             let orchestrator = Arc::new(
                 runtime
                     .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
@@ -498,6 +503,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .collect(),
                         service_account: args.orchestrator_kubernetes_service_account,
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
+                        local,
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
