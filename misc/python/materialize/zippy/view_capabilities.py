@@ -7,18 +7,29 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Union
+from typing import List, Optional, Union
 
 from materialize.zippy.framework import Capability
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
+from materialize.zippy.watermarks import Watermarks
 
-WatermarkedObjects = List[Union[TableExists, SourceExists]]
+WatermarkedObjects = List[Union[TableExists, SourceExists, "ViewExists"]]
 
 
 class ViewExists(Capability):
     """A view exists in Materialize."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, froms: Optional[WatermarkedObjects] = None) -> None:
         self.name = name
-        self.froms: WatermarkedObjects = []
+        self.froms = froms if froms is not None else []
+
+    def get_watermarks(self) -> Watermarks:
+        """Calculate the intersection of the mins/maxs of the inputs. The result from the view should match the calculation."""
+
+        assert self.froms is not None
+
+        return Watermarks(
+            min_watermark=max([f.get_watermarks().min for f in self.froms]),
+            max_watermark=min([f.get_watermarks().max for f in self.froms]),
+        )
