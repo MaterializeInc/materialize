@@ -413,9 +413,9 @@ impl<S: Append + 'static> Coordinator<S> {
                             CollectionDescription {
                                 desc: source.desc.clone(),
                                 ingestion: Some(ingestion),
-                                remote_addr: source.remote_addr.clone(),
                                 since: None,
                                 status_collection_id: Some(source_status_collection_id),
+                                instance_setting: Some(source.instance_setting.clone()),
                             },
                         )])
                         .await

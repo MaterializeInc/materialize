@@ -1093,6 +1093,7 @@ pub struct Source {
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
     pub remote_addr: Option<String>,
+    pub instance_setting: StorageInstanceSizeOrAddress,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3528,6 +3529,7 @@ impl<S: Append> Catalog<S> {
                 source,
                 remote,
                 timeline,
+                instance_config,
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
@@ -3536,6 +3538,7 @@ impl<S: Append> Catalog<S> {
                 timeline,
                 depends_on,
                 remote_addr: remote,
+                instance_setting: self.resolve_storage_instance(instance_config)?,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
