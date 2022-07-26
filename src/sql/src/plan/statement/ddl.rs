@@ -64,13 +64,13 @@ use crate::ast::{
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnection, CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName,
-    CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode, DbzTxMetadataOption,
-    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
-    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
+    CreateViewsSourceTarget, CreateViewsStatement, CsrConnection, CsrConnectionAvro,
+    CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
     KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
     PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
@@ -100,7 +100,7 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
-    Table, Type, View,
+    StorageInstanceConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -302,6 +302,8 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(CreateSourceOption, (Size, String));
+
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
@@ -317,6 +319,7 @@ pub fn plan_create_source(
         key_constraint,
         include_metadata,
         remote,
+        with_options,
     } = &stmt;
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
@@ -803,6 +806,15 @@ pub fn plan_create_source(
         None
     };
 
+    let opt = CreateSourceOptionExtracted::try_from(with_options.clone())?;
+
+    let instance_config = match (&remote, &opt.size) {
+        (None, None) => StorageInstanceConfig::Undefined,
+        (None, Some(size)) => StorageInstanceConfig::Managed { size: size.clone() },
+        (Some(addr), None) => StorageInstanceConfig::Remote { addr: addr.clone() },
+        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+    };
+
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
@@ -844,6 +856,7 @@ pub fn plan_create_source(
         if_not_exists,
         timeline,
         remote,
+        instance_config,
     }))
 }
 
