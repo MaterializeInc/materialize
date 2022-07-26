@@ -2089,7 +2089,7 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connection = self.parse_create_source_connection()?;
-        let with_options = self.parse_opt_with_options()?;
+        let legacy_with_options = self.parse_opt_with_options()?;
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
                 self.expect_keyword(FORMAT)?;
@@ -2120,7 +2120,7 @@ impl<'a> Parser<'a> {
             name,
             col_names,
             connection,
-            with_options,
+            legacy_with_options,
             format,
             include_metadata,
             envelope,

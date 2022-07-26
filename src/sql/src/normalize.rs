@@ -351,7 +351,7 @@ pub fn create_statement(
             name,
             col_names: _,
             connection: _,
-            with_options: _,
+            legacy_with_options: _,
             format: _,
             include_metadata: _,
             envelope: _,
