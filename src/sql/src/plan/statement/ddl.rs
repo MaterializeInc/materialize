@@ -22,6 +22,7 @@ use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
 use mz_sql_parser::ast::{LoadGenerator, SshConnectionOption};
+use mz_storage::source::generator::as_generator;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
@@ -49,7 +50,7 @@ use mz_storage::types::sources::encoding::{
 };
 use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
-    DebeziumTransactionMetadata, Generator, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
+    DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
     KinesisSourceConnection, LoadGeneratorSourceConnection, MzOffset, PostgresSourceConnection,
     PostgresSourceDetails, ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection,
     SourceConnection, SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
@@ -81,7 +82,7 @@ use crate::ast::{
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
 use crate::names::{
-    self, Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
+    Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
     ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
 use crate::normalize::ident;
@@ -620,9 +621,11 @@ pub fn plan_create_source(
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             scx.require_unsafe_mode("LOAD GENERATOR")?;
-            let generator = match generator {
-                LoadGenerator::Counter => Generator::Counter,
+            let load_generator = match generator {
+                LoadGenerator::Auction => mz_storage::types::sources::LoadGenerator::Auction,
+                LoadGenerator::Counter => mz_storage::types::sources::LoadGenerator::Counter,
             };
+            let generator = as_generator(&load_generator);
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
                 Some(interval) => {
@@ -631,12 +634,11 @@ pub fn plan_create_source(
                 }
                 None => None,
             };
-            let encoding = generator.data_encoding();
             let connection = SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-                generator,
+                load_generator,
                 tick_micros,
             });
-            (connection, encoding)
+            (connection, generator.data_encoding())
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -1528,6 +1530,85 @@ pub fn plan_create_views(
 ) -> Result<Plan, PlanError> {
     let source_desc = scx.get_item_by_resolved_name(&source_name)?.source_desc()?;
     match &source_desc.connection {
+        SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+            load_generator, ..
+        }) => {
+            let generator = as_generator(load_generator);
+            let names = generator.views();
+            if names.is_empty() {
+                sql_bail!(
+                    "cannot generate views from {:?} load generator sources",
+                    load_generator
+                );
+            }
+            let views = names
+                .into_iter()
+                .map(|(table, columns)| {
+                    let mut projection = vec![];
+                    for (i, (column_name, column_type)) in columns.iter().enumerate() {
+                        let column_type = mz_pgrepr::Type::from(&column_type.scalar_type);
+                        let data_type = scx.resolve_type(column_type)?;
+                        projection.push(SelectItem::Expr {
+                            expr: Expr::Cast {
+                                expr: Box::new(Expr::Subscript {
+                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
+                                    positions: vec![SubscriptPosition {
+                                        start: Some(Expr::Value(Value::Number(
+                                            // LIST is one based
+                                            (i + 1).to_string(),
+                                        ))),
+                                        end: None,
+                                        explicit_slice: false,
+                                    }],
+                                }),
+                                data_type,
+                            },
+                            alias: Some(Ident::new(column_name.as_str())),
+                        });
+                    }
+                    let query = Query {
+                        ctes: vec![],
+                        body: SetExpr::Select(Box::new(Select {
+                            distinct: None,
+                            projection,
+                            from: vec![TableWithJoins {
+                                relation: TableFactor::Table {
+                                    name: source_name.clone(),
+                                    alias: None,
+                                },
+                                joins: vec![],
+                            }],
+                            selection: Some(Expr::Op {
+                                op: Op::bare("="),
+                                expr1: Box::new(Expr::Identifier(vec![Ident::new("table")])),
+                                expr2: Some(Box::new(Expr::Value(Value::String(
+                                    table.to_string(),
+                                )))),
+                            }),
+                            group_by: vec![],
+                            having: None,
+                            options: vec![],
+                        })),
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    };
+                    let mut viewdef = ViewDefinition {
+                        name: UnresolvedObjectName::unqualified(table),
+                        columns: columns
+                            .iter_names()
+                            .map(|name| Ident::from(name.as_str()))
+                            .collect(),
+                        query,
+                    };
+                    plan_view(scx, &mut viewdef, &Params::empty(), temporary)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Plan::CreateViews(CreateViewsPlan {
+                views,
+                if_not_exists: if_exists == IfExistsBehavior::Skip,
+            }))
+        }
         SourceConnection::Postgres(PostgresSourceConnection { details, .. }) => {
             let targets = targets.unwrap_or_else(|| {
                 details
@@ -1573,37 +1654,9 @@ pub fn plan_create_views(
                 };
                 let mut projection = vec![];
                 for (i, column) in table_desc.columns.iter().enumerate() {
-                    let mut ty =
-                        mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)
-                            .map_err(|e| sql_err!("{}", e))?;
-                    // Ignore precision constraints on date/time types until we support
-                    // it. This should be safe enough because our types are wide enough
-                    // to support the maximum possible precision.
-                    //
-                    // See: https://github.com/MaterializeInc/materialize/issues/10837
-                    match &mut ty {
-                        mz_pgrepr::Type::Interval { constraints } => *constraints = None,
-                        mz_pgrepr::Type::Time { precision } => *precision = None,
-                        mz_pgrepr::Type::TimeTz { precision } => *precision = None,
-                        mz_pgrepr::Type::Timestamp { precision } => *precision = None,
-                        mz_pgrepr::Type::TimestampTz { precision } => *precision = None,
-                        _ => (),
-                    }
-                    // NOTE(benesch): this *looks* gross, but it is
-                    // safe enough. The `fmt::Display`
-                    // representation on `pgrepr::Type` promises to
-                    // produce an unqualified type name that does
-                    // not require quoting.
-                    //
-                    // TODO(benesch): converting `json` to `jsonb`
-                    // is wrong. We ought to support the `json` type
-                    // directly.
-                    let mut ty = format!("pg_catalog.{}", ty);
-                    if ty == "pg_catalog.json" {
-                        ty = "pg_catalog.jsonb".into();
-                    }
-                    let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
-                    let (data_type, _) = names::resolve(scx.catalog, data_type)?;
+                    let ty = mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)
+                        .map_err(|e| sql_err!("{}", e))?;
+                    let data_type = scx.resolve_type(ty)?;
                     projection.push(SelectItem::Expr {
                         expr: Expr::Cast {
                             expr: Box::new(Expr::Subscript {

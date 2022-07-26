@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::BufMut;
-
 use globset::{Glob, GlobBuilder};
+use mz_ore::now::NowFn;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -28,9 +28,7 @@ use uuid::Uuid;
 use mz_persist_types::Codec;
 use mz_proto::{any_uuid, TryFromProtoError};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, ScalarType};
-
-pub mod encoding;
+use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::controller::CollectionMetadata;
 use crate::types::connections::aws::AwsConfig;
@@ -38,6 +36,9 @@ use crate::types::connections::{KafkaConnection, PostgresConnection, StringOrSec
 use crate::types::errors::DataflowError;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
+use proto_load_generator_source_connection::Generator as ProtoGenerator;
+
+pub mod encoding;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sources.rs"));
 
@@ -1508,62 +1509,46 @@ impl RustType<ProtoPubNubSourceConnection> for PubNubSourceConnection {
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LoadGeneratorSourceConnection {
-    pub generator: Generator,
+    pub load_generator: LoadGenerator,
     pub tick_micros: Option<u64>,
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum Generator {
+pub enum LoadGenerator {
+    Auction,
     Counter,
 }
 
-impl Generator {
-    pub fn data_encoding(&self) -> SourceDataEncoding {
-        let inner = match self {
-            Generator::Counter => DataEncodingInner::RowCodec(
-                RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
-            ),
-        };
-        SourceDataEncoding::Single(DataEncoding::new(inner))
+pub trait Generator {
+    fn data_encoding_inner(&self) -> DataEncodingInner;
+    fn data_encoding(&self) -> SourceDataEncoding {
+        SourceDataEncoding::Single(DataEncoding::new(self.data_encoding_inner()))
     }
-
-    pub fn by_offset(&self, offset: MzOffset) -> Row {
-        match self {
-            Self::Counter => Row::pack_slice(&[Datum::Int64(offset.offset as i64)]),
-        }
-    }
-}
-
-impl FromStr for Generator {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "counter" => Ok(Self::Counter),
-            _ => Err("unknown load generator".into()),
-        }
-    }
+    /// Returns the list of table names and their column types for use with `CREATE
+    /// VIEWS`. Returns empty if `CREATE VIEWS` should error.
+    fn views(&self) -> Vec<(&str, RelationDesc)>;
+    fn by_seed(&self, now: NowFn, seed: Option<u64>) -> Box<dyn Iterator<Item = Row>>;
 }
 
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
     fn into_proto(&self) -> ProtoLoadGeneratorSourceConnection {
-        use proto_load_generator_source_connection::Generator as ProtoGenerator;
         ProtoLoadGeneratorSourceConnection {
-            generator: Some(match self.generator {
-                Generator::Counter => ProtoGenerator::Counter(()),
+            generator: Some(match self.load_generator {
+                LoadGenerator::Auction => ProtoGenerator::Auction(()),
+                LoadGenerator::Counter => ProtoGenerator::Counter(()),
             }),
             tick_micros: self.tick_micros,
         }
     }
 
     fn from_proto(proto: ProtoLoadGeneratorSourceConnection) -> Result<Self, TryFromProtoError> {
-        use proto_load_generator_source_connection::Generator as ProtoGenerator;
         let generator = proto.generator.ok_or_else(|| {
             TryFromProtoError::missing_field("ProtoLoadGeneratorSourceConnection::generator")
         })?;
         Ok(LoadGeneratorSourceConnection {
-            generator: match generator {
-                ProtoGenerator::Counter(()) => Generator::Counter,
+            load_generator: match generator {
+                ProtoGenerator::Auction(()) => LoadGenerator::Auction,
+                ProtoGenerator::Counter(()) => LoadGenerator::Counter,
             },
             tick_micros: proto.tick_micros,
         })
