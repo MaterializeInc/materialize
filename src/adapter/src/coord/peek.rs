@@ -17,7 +17,9 @@ use std::fmt;
 use std::{collections::HashMap, num::NonZeroUsize};
 
 use futures::{FutureExt, StreamExt};
-use mz_repr::explain_new::DisplayText;
+use mz_expr::explain::Indices;
+use mz_ore::str::separated;
+use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, RenderingContext};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -26,12 +28,12 @@ use mz_compute_client::command::{DataflowDescription, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
 use mz_expr::{EvalError, Id, MirScalarExpr};
+use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_stash::Append;
 
 use crate::client::ConnectionId;
-use crate::explain_new::PlanRenderingContext;
 use crate::util::send_immediate_rows;
 use crate::AdapterError;
 
@@ -68,13 +70,60 @@ pub enum FastPathPlan<T = mz_repr::Timestamp> {
     PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
 }
 
-impl<'a, S, T> DisplayText<PlanRenderingContext<'a, S>> for FastPathPlan<T> {
-    fn fmt_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'a, S>,
-    ) -> fmt::Result {
-        unimplemented!()
+impl<'a, T> DisplayText<RenderingContext<'a>> for FastPathPlan<T> {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut RenderingContext<'a>) -> fmt::Result {
+        match self {
+            FastPathPlan::Constant(Ok(rows)) => fmt_text_constant_rows(
+                f,
+                rows.iter().map(|(row, _, diff)| (row, diff)),
+                &mut ctx.indent,
+            ),
+            FastPathPlan::Constant(Err(err)) => {
+                writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())
+            }
+            FastPathPlan::PeekExisting(id, lookup, mfp) => {
+                let mut total_indents = 0;
+                let (map, filter, project) = mfp.as_map_filter_project();
+                if project.len() != mfp.input_arity + map.len()
+                    || !project.iter().enumerate().all(|(i, o)| i == *o)
+                {
+                    let outputs = Indices(&project);
+                    writeln!(f, "{}Project {}", ctx.indent, outputs)?;
+                    ctx.indent += 1;
+                    total_indents += 1;
+                }
+                if !filter.is_empty() {
+                    // TODO (#13299) use separated_text
+                    //let predicates = separated_text(", ", filter.iter().map(Displayable::from));
+                    writeln!(f, "{}Filter {}", ctx.indent, separated(" AND ", filter))?;
+                    ctx.indent += 1;
+                    total_indents += 1;
+                }
+                if !map.is_empty() {
+                    // TODO (#13299) use separated_text
+                    //let scalars = separated_text(", ", map.iter().map(Displayable::from));
+                    writeln!(f, "{}Map {}", ctx.indent, separated(", ", map))?;
+                    ctx.indent += 1;
+                    total_indents += 1;
+                }
+                let humanized_index = ctx
+                    .humanizer
+                    .humanize_id(*id)
+                    .unwrap_or_else(|| id.to_string());
+                if let Some(lookup) = lookup {
+                    writeln!(
+                        f,
+                        "{}ReadExistingIndex {} lookup_value={}",
+                        ctx.indent, humanized_index, lookup
+                    )?;
+                } else {
+                    writeln!(f, "{}ReadExistingIndex {}", ctx.indent, humanized_index)?;
+                }
+                ctx.indent -= total_indents;
+                Ok(())
+            }
+        }?;
+        Ok(())
     }
 }
 
@@ -451,5 +500,79 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     /// Clean up a peek's state.
     pub(crate) fn remove_pending_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek> {
         self.pending_peeks.remove(uuid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
+    use mz_ore::str::Indent;
+    use mz_repr::{
+        explain_new::{text_string_at, DummyHumanizer},
+        Datum,
+    };
+
+    #[test]
+    fn test_fast_path_plan_as_text() {
+        let constant_err =
+            FastPathPlan::<mz_repr::Timestamp>::Constant(Err(EvalError::DivisionByZero));
+        let no_lookup = FastPathPlan::<mz_repr::Timestamp>::PeekExisting(
+            GlobalId::User(10),
+            None,
+            MapFilterProject::new(4)
+                .map(Some(MirScalarExpr::column(0).or(MirScalarExpr::column(2))))
+                .project([1, 4])
+                .into_plan()
+                .unwrap()
+                .into_nontemporal()
+                .unwrap(),
+        );
+        let lookup = FastPathPlan::<mz_repr::Timestamp>::PeekExisting(
+            GlobalId::User(11),
+            Some(Row::pack(Some(Datum::Int32(5)))),
+            MapFilterProject::new(3)
+                .filter(Some(
+                    MirScalarExpr::column(0).call_unary(UnaryFunc::IsNull(IsNull)),
+                ))
+                .into_plan()
+                .unwrap()
+                .into_nontemporal()
+                .unwrap(),
+        );
+
+        let humanizer = DummyHumanizer;
+        let ctx_gen = || RenderingContext::new(Indent::default(), &humanizer);
+
+        let constant_err_exp = "Error \"division by zero\"\n";
+        let no_lookup_exp = "Project #1, #4\n  Map (#0 OR #2)\n    ReadExistingIndex u10\n";
+        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup_value=(5)\n";
+
+        assert_eq!(text_string_at(&constant_err, ctx_gen), constant_err_exp);
+        assert_eq!(text_string_at(&no_lookup, ctx_gen), no_lookup_exp);
+        assert_eq!(text_string_at(&lookup, ctx_gen), lookup_exp);
+
+        let mut constant_rows = vec![
+            (Row::pack(Some(Datum::String("hello"))), 0, 1),
+            (Row::pack(Some(Datum::String("world"))), 0, 2),
+            (Row::pack(Some(Datum::String("star"))), 0, 500),
+        ];
+        let constant_exp1 =
+            "Constant\n  - (\"hello\")\n  - ((\"world\") x 2)\n  - ((\"star\") x 500)\n";
+        assert_eq!(
+            text_string_at(&FastPathPlan::Constant(Ok(constant_rows.clone())), ctx_gen),
+            constant_exp1
+        );
+        constant_rows
+            .extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), 0, 1)));
+        let constant_exp2 = "Constant\n  total_rows: 523\n  first_rows:\n    - (\"hello\")\
+        \n    - ((\"world\") x 2)\n    - ((\"star\") x 500)\n    - (\"0\")\n    - (\"1\")\
+        \n    - (\"2\")\n    - (\"3\")\n    - (\"4\")\n    - (\"5\")\n    - (\"6\")\
+        \n    - (\"7\")\n    - (\"8\")\n    - (\"9\")\n    - (\"10\")\n    - (\"11\")\
+        \n    - (\"12\")\n    - (\"13\")\n    - (\"14\")\n    - (\"15\")\n    - (\"16\")\n";
+        assert_eq!(
+            text_string_at(&FastPathPlan::Constant(Ok(constant_rows)), ctx_gen),
+            constant_exp2
+        );
     }
 }
