@@ -34,11 +34,11 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
-use crate::r#impl::encoding::SerdeSnapshotSplit;
+use crate::r#impl::encoding::{SerdeReaderEnrichedHollowBatch, SerdeSnapshotSplit};
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::state::Since;
+use crate::r#impl::state::{HollowBatch, Since};
 use crate::{GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -60,6 +60,55 @@ impl std::fmt::Debug for ReaderId {
 impl ReaderId {
     pub(crate) fn new() -> Self {
         ReaderId(*Uuid::new_v4().as_bytes())
+    }
+}
+
+/// Propagates metadata from readers alongside a `HollowBatch` to apply the
+/// desired semantics.
+#[derive(Debug, Clone)]
+pub(crate) enum HollowBatchReaderMetadata<T> {
+    /// Apply snapshot-style semantics to the fetched batch.
+    Snapshot {
+        /// Return all values with time leq `as_of`.
+        as_of: Antichain<T>,
+    },
+    /// Apply listen-style semantics to the fetched batch.
+    Listen {
+        /// Return all values with time in advance of `as_of`.
+        as_of: Antichain<T>,
+        /// Return all values with time leq `until`.
+        until: Antichain<T>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "T: Timestamp + Codec64",
+    deserialize = "T: Timestamp + Codec64"
+))]
+#[serde(
+    into = "SerdeReaderEnrichedHollowBatch",
+    from = "SerdeReaderEnrichedHollowBatch"
+)]
+/// A [`HollowBatch`] plus the metadata necessary to apply the appropriate read
+/// style's semantics (i.e. snapshotting or listening).
+pub struct ReaderEnrichedHollowBatch<T> {
+    pub(crate) shard_id: ShardId,
+    pub(crate) reader_metadata: HollowBatchReaderMetadata<T>,
+    pub(crate) batch: HollowBatch<T>,
+}
+
+impl<T> ReaderEnrichedHollowBatch<T>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    /// Signals whether or not `self` should downgrade the `Capability` its
+    /// presented alongside.
+    pub fn generate_progress(&self) -> Option<Antichain<T>> {
+        match self.reader_metadata {
+            HollowBatchReaderMetadata::Listen { .. } => Some(self.batch.desc.upper().clone()),
+            HollowBatchReaderMetadata::Snapshot { .. } => None,
+        }
     }
 }
 
