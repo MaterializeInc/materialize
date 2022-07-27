@@ -1413,6 +1413,11 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Table(_))
     }
 
+    /// Reports whether this catalog entry is a storage collection.
+    pub fn is_storage_collection(&self) -> bool {
+        matches!(self.item(), CatalogItem::StorageCollection(_))
+    }
+
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {

@@ -370,9 +370,13 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn queue_local_input_advances(&mut self, advance_to: mz_repr::Timestamp) {
         self.advance_tables.insert(
             advance_to,
-            self.catalog
-                .entries()
-                .filter_map(|e| if e.is_table() { Some(e.id()) } else { None }),
+            self.catalog.entries().filter_map(|e| {
+                if e.is_table() || e.is_storage_collection() {
+                    Some(e.id())
+                } else {
+                    None
+                }
+            }),
         );
     }
 
