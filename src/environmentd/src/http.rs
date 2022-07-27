@@ -36,7 +36,7 @@ use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
 use mz_adapter::SessionClient;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_ore::tracing::TracingHandle;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
@@ -322,17 +322,14 @@ async fn auth<B>(
 #[derive(Clone)]
 pub struct InternalServer {
     metrics_registry: MetricsRegistry,
-    otel_enable_callback: OpenTelemetryEnableCallback,
+    tracing_handle: TracingHandle,
 }
 
 impl InternalServer {
-    pub fn new(
-        metrics_registry: MetricsRegistry,
-        otel_enable_callback: OpenTelemetryEnableCallback,
-    ) -> Self {
+    pub fn new(metrics_registry: MetricsRegistry, tracing_handle: TracingHandle) -> Self {
         Self {
             metrics_registry,
-            otel_enable_callback,
+            tracing_handle,
         }
     }
 
@@ -352,7 +349,7 @@ impl InternalServer {
             .route(
                 "/api/opentelemetry/config",
                 routing::put(move |payload| async move {
-                    mz_http_util::handle_enable_otel(self.otel_enable_callback, payload).await
+                    mz_http_util::handle_opentelemetry_configure(self.tracing_handle, payload).await
                 }),
             );
         axum::Server::bind(&addr).serve(router.into_make_service())

@@ -812,7 +812,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn s3_blob() -> Result<(), ExternalError> {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
             None => {

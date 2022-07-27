@@ -513,7 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn batch_builder_flushing() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -589,7 +589,7 @@ mod tests {
 
     #[tokio::test]
     async fn batch_builder_keys() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let mut cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part

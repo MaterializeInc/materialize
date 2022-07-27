@@ -55,7 +55,7 @@ fn main() {
         .build()
         .expect("Failed building the Runtime");
 
-    let _ = runtime
+    let tracing_handle = runtime
         .block_on(mz_ore::tracing::configure(
             "persist-open-loop",
             TracingConfig::from(&args.tracing),
@@ -83,7 +83,7 @@ fn main() {
         }
     };
 
-    mz_ore::tracing::shutdown();
+    tracing_handle.shutdown();
 
     if let Err(err) = res {
         eprintln!("error: {:#}", err);

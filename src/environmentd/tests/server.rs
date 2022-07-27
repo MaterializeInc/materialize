@@ -23,10 +23,10 @@ pub mod util;
 
 #[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
     let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default()
+    let config = util::Config::new(tracing_handle)
         .data_directory(data_dir.path())
         .unsafe_mode();
 
@@ -101,8 +101,8 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
 // Test the /sql POST endpoint of the HTTP server.
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-    let server = util::start_server(util::Config::default())?;
+    let tracing_handle = mz_ore::test::init_tracing_sync();
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let url = Url::parse(&format!(
         "http://{}/api/sql",
         server.inner.http_local_addr()
@@ -168,7 +168,9 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
 // Test that the server properly handles cancellation requests.
 #[test]
 fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
-    let config = util::Config::default();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
+
+    let config = util::Config::new(tracing_handle);
     let server = util::start_server(config)?;
 
     let mut client = server.connect(postgres::NoTls)?;
@@ -198,9 +200,9 @@ fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
 // Test that dataflow uninstalls cancelled peeks.
 #[test]
 fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default();
+    let config = util::Config::new(tracing_handle);
     let server = util::start_server(config)?;
 
     let mut client1 = server.connect(postgres::NoTls)?;

@@ -939,7 +939,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn apply_unbatched_cmd_truncate() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let (mut write, _) = new_test_client()
             .await

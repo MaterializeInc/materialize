@@ -61,11 +61,13 @@ use uuid::Uuid;
 use mz_controller::ControllerConfig;
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
@@ -599,6 +601,13 @@ impl Runner {
             })
             .await?,
         );
+        let secrets_controller = Arc::clone(&orchestrator) as Arc<dyn SecretsController>;
+        let connection_context = ConnectionContext::for_tests(secrets_controller.reader());
+        let orchestrator = Arc::new(TracingOrchestrator::new(
+            orchestrator,
+            config.tracing.clone(),
+            config.tracing_handle.clone(),
+        ));
         let now = SYSTEM_TIME.clone();
         let metrics_registry = MetricsRegistry::new();
         let persist_clients =
@@ -618,7 +627,7 @@ impl Runner {
                 persist_clients,
                 storage_stash_url,
             },
-            secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+            secrets_controller,
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -634,10 +643,8 @@ impl Runner {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             availability_zones: Default::default(),
-            connection_context: ConnectionContext::for_tests(
-                (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
-            ),
-            otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+            connection_context,
+            tracing_handle: config.tracing_handle.clone(),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1053,6 +1060,8 @@ pub struct RunConfig<'a> {
     pub postgres_url: String,
     pub no_fail: bool,
     pub fail_fast: bool,
+    pub tracing: TracingCliArgs,
+    pub tracing_handle: TracingHandle,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

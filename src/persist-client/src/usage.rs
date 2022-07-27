@@ -76,7 +76,7 @@ mod tests {
 
     #[tokio::test]
     async fn size() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing().await;
 
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),

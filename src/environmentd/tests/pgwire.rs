@@ -29,6 +29,7 @@ use tokio::sync::mpsc;
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::task;
+use mz_ore::tracing::TracingHandle;
 use mz_pgrepr::{Numeric, Record};
 
 use crate::util::PostgresErrorExt;
@@ -37,9 +38,9 @@ pub mod util;
 
 #[test]
 fn test_bind_params() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().unsafe_mode();
+    let config = util::Config::new(tracing_handle).unsafe_mode();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -107,9 +108,9 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_partial_read() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client = server.connect(postgres::NoTls)?;
     let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
 
@@ -137,9 +138,9 @@ fn test_partial_read() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client = server.connect(postgres::NoTls)?;
     let query = "VALUES (1), (2), (3)";
 
@@ -155,9 +156,9 @@ fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_conn_startup() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client = server.connect(postgres::NoTls)?;
 
     // The default database should be `materialize`.
@@ -286,9 +287,9 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_conn_user() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client = server.connect(postgres::NoTls)?;
 
     // Attempting to connect as a nonexistent user should fail.
@@ -316,9 +317,9 @@ fn test_conn_user() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client = server.connect(postgres::NoTls)?;
     assert!(client.simple_query("asdfjkl;").is_err());
     // This will hang if #2880 is not fixed.
@@ -329,9 +330,9 @@ fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_copy() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client = server.connect(postgres::NoTls)?;
 
     // Ensure empty COPY result sets work. We used to mishandle this with binary
@@ -372,9 +373,9 @@ fn test_copy() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_arrays() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default().unsafe_mode())?;
+    let server = util::start_server(util::Config::new(tracing_handle).unsafe_mode())?;
     let mut client = server.connect(postgres::NoTls)?;
 
     let row = client.query_one("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]", &[])?;
@@ -419,9 +420,9 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_record_types() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client = server.connect(postgres::NoTls)?;
 
     let row = client.query_one("SELECT ROW()", &[])?;
@@ -461,10 +462,11 @@ fn test_record_types() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
+fn pg_test_inner(tracing_handle: TracingHandle, dir: PathBuf) -> Result<(), Box<dyn Error>> {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
-        let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+        let server =
+            util::start_server(util::Config::new(tracing_handle.clone()).unsafe_mode()).unwrap();
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {
@@ -483,17 +485,17 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_pgtest() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-    pg_test_inner(dir)
+    pg_test_inner(tracing_handle, dir)
 }
 
 #[test]
 // Materialize's differences from Postgres' responses.
 fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
-    pg_test_inner(dir)
+    pg_test_inner(tracing_handle, dir)
 }

@@ -16,40 +16,60 @@
 //! Test utilities.
 
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::Once;
-use std::thread;
 use std::time::Duration;
+use std::{env, thread};
 
 use anyhow::bail;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tokio::runtime::Runtime;
+use tokio::sync::OnceCell;
 
-static LOG_INIT: Once = Once::new();
+use crate::tracing::{StderrLogConfig, TracingConfig, TracingHandle};
 
-/// Initialize global logger, using the [`tracing_subscriber`] crate, with
-/// sensible defaults.
+static TRACING_HANDLE: OnceCell<TracingHandle> = OnceCell::const_new();
+
+/// Initialize [`tracing`](crate::tracing) in tests.
 ///
-/// It is safe to call `init_logging` multiple times. Since `cargo test` does
-/// not run tests in any particular order, each must call `init_logging`.
-pub fn init_logging() {
-    init_logging_default("info");
+/// It is safe to call `init_tracing` multiple times. Since `cargo test` does
+/// not run tests in any particular order, each must call `init_tracing`.
+pub async fn init_tracing() -> TracingHandle {
+    init_tracing_with_filter("info").await
 }
 
-/// Initialize global logger, using the [`tracing_subscriber`] crate.
+/// Like [`init_tracing`], but with the specified filter level.
+pub async fn init_tracing_with_filter(filter: &str) -> TracingHandle {
+    TRACING_HANDLE
+        .get_or_init(|| async {
+            crate::tracing::configure(
+                "cargo-test",
+                TracingConfig {
+                    stderr_log: StderrLogConfig {
+                        prefix: Some("cargo-test".into()),
+                        filter: env::var("MZ_LOG_FILTER")
+                            .unwrap_or_else(|_| filter.into())
+                            .parse()
+                            .unwrap_or_else(|e| panic!("unable to parse MZ_LOG_FILTER: {e}")),
+                    },
+                    opentelemetry: None,
+                },
+            )
+            .await
+            .expect("failed to configure tracing")
+        })
+        .await
+        .clone()
+}
+
+/// Like [`init_tracing`] but for use in non-async contexts.
 ///
-/// The default log level will be set to the value passed in.
-///
-/// It is safe to call `init_logging_level` multiple times. Since `cargo test` does
-/// not run tests in any particular order, each must call `init_logging`.
-pub fn init_logging_default(level: &str) {
-    LOG_INIT.call_once(|| {
-        let filter = EnvFilter::try_from_env("MZ_LOG_FILTER")
-            .or_else(|_| EnvFilter::try_new(level))
-            .unwrap();
-        FmtSubscriber::builder()
-            .with_env_filter(filter)
-            .with_test_writer()
-            .init();
-    });
+/// Prefer [`init_tracing`] whenever possible.
+pub fn init_tracing_sync() -> TracingHandle {
+    // NOTE(benesch): this is only possible because the tracing configuration we
+    // use in tests does not enable OpenTelemetry and so does not actually make
+    // use of the runtime. If it did, we'd need the test to keep the runtime
+    // handle alive for the duration of the test--at which point it would
+    // probably be better to just convert all of our tests that use logging to
+    // `async` tests (i.e., via `tokio::test`).
+    Runtime::new().unwrap().block_on(init_tracing())
 }
 
 /// Runs a function with a timeout.

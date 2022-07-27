@@ -975,7 +975,7 @@ mod tests {
     // the next request.
     #[tokio::test]
     async fn skip_consensus_fetch_optimization() {
-        mz_ore::test::init_logging();
+        mz_ore::test::init_tracing();
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("1".to_owned(), "one".to_owned()), 1, 1),

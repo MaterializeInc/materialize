@@ -97,13 +97,13 @@ impl MockHttpServer {
 
 #[test]
 fn test_no_block() -> Result<(), anyhow::Error> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
     mz_ore::test::timeout(Duration::from_secs(30), || {
         info!("test_no_block: starting server");
-        let server = util::start_server(util::Config::default())?;
+        let server = util::start_server(util::Config::new(tracing_handle))?;
 
         server.runtime.block_on(async {
             info!("test_no_block: starting mock HTTP server");
@@ -161,10 +161,10 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 /// does not crash the server.
 #[test]
 fn test_drop_connection_race() -> Result<(), anyhow::Error> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
     info!("test_drop_connection_race: starting server");
-    let server = util::start_server(util::Config::default().unsafe_mode())?;
+    let server = util::start_server(util::Config::new(tracing_handle).unsafe_mode())?;
 
     server.runtime.block_on(async {
         info!("test_drop_connection_race: starting mock HTTP server");
@@ -236,9 +236,9 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
 
 #[test]
 fn test_time() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client = server.connect(postgres::NoTls)?;
 
     // Confirm that `now()` and `current_timestamp()` both return a
@@ -275,9 +275,9 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().workers(2);
+    let config = util::Config::new(tracing_handle).workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
@@ -303,9 +303,9 @@ fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().workers(2);
+    let config = util::Config::new(tracing_handle).workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
@@ -351,7 +351,7 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
     // Set the timestamp to zero for deterministic initial timestamps.
     let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
@@ -359,7 +359,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         let nowfn = Arc::clone(&nowfn);
         NowFn::from(move || (nowfn.lock().unwrap())())
     };
-    let config = util::Config::default().workers(2).with_now(now);
+    let config = util::Config::new(tracing_handle).workers(2).with_now(now);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
@@ -475,9 +475,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 /// data row we will also see one progressed message.
 #[test]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().workers(2);
+    let config = util::Config::new(tracing_handle).workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
@@ -557,9 +557,9 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 // turns them into nullable columns. See #6304.
 #[test]
 fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().workers(2);
+    let config = util::Config::new(tracing_handle).workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
@@ -606,9 +606,9 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
 /// receive data or not.
 #[test]
 fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().workers(2);
+    let config = util::Config::new(tracing_handle).workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
@@ -689,9 +689,9 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().workers(2);
+    let config = util::Config::new(tracing_handle).workers(2);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -778,9 +778,9 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().workers(2);
+    let config = util::Config::new(tracing_handle).workers(2);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -837,9 +837,9 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default();
+    let config = util::Config::new(tracing_handle);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -858,9 +858,9 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
 // does not keep the server alive forever.
 #[test]
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
 
     // We have to use the async PostgreSQL client so that we can ungracefully
     // abort the connection task.
@@ -896,9 +896,9 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let config = util::Config::default().workers(3);
+    let config = util::Config::new(tracing_handle).workers(3);
     let server = util::start_server(config)?;
     let mut client_interactive = server.connect(postgres::NoTls)?;
     let mut client_tail = server.connect(postgres::NoTls)?;
@@ -1005,9 +1005,9 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
 // by another connection.
 #[test]
 fn test_temporary_views() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::new(tracing_handle))?;
     let mut client_a = server.connect(postgres::NoTls)?;
     let mut client_b = server.connect(postgres::NoTls)?;
     client_a
@@ -1037,13 +1037,13 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 // is now(), not 0.
 #[test]
 fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
     let timestamp = Arc::new(Mutex::new(1_000));
     let now = {
         let timestamp = Arc::clone(&timestamp);
         NowFn::from(move || *timestamp.lock().unwrap())
     };
-    let config = util::Config::default().with_now(now);
+    let config = util::Config::new(tracing_handle).with_now(now);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
     let timestamp_re = Regex::new(r"\d{4}").unwrap();
@@ -1085,8 +1085,8 @@ write frontier:[         <TIMESTAMP>]\n";
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[test]
 fn test_github_12546() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-    let config = util::Config::default();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
+    let config = util::Config::new(tracing_handle);
     let server = util::start_server(config)?;
 
     server.runtime.block_on(async {
@@ -1132,8 +1132,8 @@ fn test_github_12546() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_github_12951() {
-    mz_ore::test::init_logging();
-    let config = util::Config::default();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
+    let config = util::Config::new(tracing_handle);
     let server = util::start_server(config).unwrap();
 
     // Verify sinks (TAIL) are correctly handled for a dropped cluster.
@@ -1191,8 +1191,8 @@ fn test_github_12951() {
 #[test]
 // Tests github issue #13100
 fn test_tail_outlive_cluster() {
-    mz_ore::test::init_logging();
-    let config = util::Config::default();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
+    let config = util::Config::new(tracing_handle);
     let server = util::start_server(config).unwrap();
 
     // Verify sinks (TAIL) are correctly handled for a dropped cluster, when a new cluster is created.
@@ -1227,8 +1227,8 @@ fn test_tail_outlive_cluster() {
 
 #[test]
 fn test_read_then_write_serializability() {
-    mz_ore::test::init_logging();
-    let config = util::Config::default();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
+    let config = util::Config::new(tracing_handle);
     let server = util::start_server(config).unwrap();
 
     // Create table with initial value
@@ -1279,14 +1279,14 @@ fn test_read_then_write_serializability() {
 
 #[test]
 fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
     let now = Arc::new(Mutex::new(1_000_000_000));
     let now_fn = {
         let timestamp = Arc::clone(&now);
         NowFn::from(move || *timestamp.lock().unwrap())
     };
     let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default()
+    let config = util::Config::new(tracing_handle)
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
@@ -1315,14 +1315,16 @@ fn test_timestamp_recovery() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
         let now = Arc::clone(&now);
         NowFn::from(move || *now.lock().unwrap())
     };
-    let config = util::Config::default().with_now(now_fn).unsafe_mode();
+    let config = util::Config::new(tracing_handle)
+        .with_now(now_fn)
+        .unsafe_mode();
     let server = util::start_server(config).unwrap();
     let mut mz_client = server.connect(postgres::NoTls)?;
 
@@ -1366,14 +1368,16 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_linearizability() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
         let now = Arc::clone(&now);
         NowFn::from(move || *now.lock().unwrap())
     };
-    let config = util::Config::default().with_now(now_fn).unsafe_mode();
+    let config = util::Config::new(tracing_handle)
+        .with_now(now_fn)
+        .unsafe_mode();
     let server = util::start_server(config)?;
     let mut mz_client = server.connect(postgres::NoTls)?;
 
@@ -1604,9 +1608,9 @@ fn wait_for_view_population(
 
 #[test]
 fn test_load_generator() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
+    let tracing_handle = mz_ore::test::init_tracing_sync();
 
-    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    let server = util::start_server(util::Config::new(tracing_handle).unsafe_mode()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
