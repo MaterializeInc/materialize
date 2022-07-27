@@ -22,13 +22,15 @@ use uuid::Uuid;
 
 use crate::error::CodecMismatch;
 use crate::r#impl::paths::PartialBlobKey;
+use crate::r#impl::state::proto_hollow_batch_reader_metadata;
 use crate::r#impl::state::{
-    HollowBatch, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReaderState, ProtoSnapshotSplit,
-    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
-    ReaderState, State, StateCollections, WriterState,
+    HollowBatch, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowBatchReaderMetadata,
+    ProtoReadEnrichedHollowBatch, ProtoReaderState, ProtoSnapshotSplit, ProtoStateRollup,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, ReaderState, State,
+    StateCollections, WriterState,
 };
 use crate::r#impl::trace::Trace;
-use crate::read::{ReaderId, SnapshotSplit};
+use crate::read::{HollowBatchReaderMetadata, ReaderEnrichedHollowBatch, ReaderId, SnapshotSplit};
 use crate::{ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
@@ -338,6 +340,96 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
             .map(|x| T::decode(x.to_le_bytes()))
             .collect::<Vec<_>>();
         Ok(Antichain::from(elements))
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchReaderMetadata>
+    for HollowBatchReaderMetadata<T>
+{
+    fn into_proto(&self) -> ProtoHollowBatchReaderMetadata {
+        use proto_hollow_batch_reader_metadata::*;
+        ProtoHollowBatchReaderMetadata {
+            kind: Some(match self {
+                HollowBatchReaderMetadata::Snapshot { as_of } => {
+                    Kind::Snapshot(ProtoHollowBatchReaderMetadataSnapshot {
+                        as_of: Some(as_of.into_proto()),
+                    })
+                }
+                HollowBatchReaderMetadata::Listen { as_of, until } => {
+                    Kind::Listen(ProtoHollowBatchReaderMetadataListen {
+                        as_of: Some(as_of.into_proto()),
+                        until: Some(until.into_proto()),
+                    })
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowBatchReaderMetadata) -> Result<Self, TryFromProtoError> {
+        use proto_hollow_batch_reader_metadata::Kind::*;
+        Ok(match proto.kind {
+            Some(Snapshot(snapshot)) => HollowBatchReaderMetadata::Snapshot {
+                as_of: snapshot
+                    .as_of
+                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Snapshot::as_of")?,
+            },
+            Some(Listen(listen)) => HollowBatchReaderMetadata::Listen {
+                as_of: listen
+                    .as_of
+                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::as_of")?,
+                until: listen
+                    .until
+                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::until")?,
+            },
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoHollowBatchReaderMetadata::Kind",
+                ))
+            }
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SerdeReaderEnrichedHollowBatch(Vec<u8>);
+
+impl<T: Timestamp + Codec64> From<ReaderEnrichedHollowBatch<T>> for SerdeReaderEnrichedHollowBatch {
+    fn from(x: ReaderEnrichedHollowBatch<T>) -> Self {
+        SerdeReaderEnrichedHollowBatch(x.into_proto().encode_to_vec())
+    }
+}
+
+impl<T: Timestamp + Codec64> From<SerdeReaderEnrichedHollowBatch> for ReaderEnrichedHollowBatch<T> {
+    fn from(x: SerdeReaderEnrichedHollowBatch) -> Self {
+        let proto = ProtoReadEnrichedHollowBatch::decode(x.0.as_slice())
+            .expect("internal error: invalid snapshot split");
+        proto
+            .into_rust()
+            .expect("internal error: invalid snapshot split")
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoReadEnrichedHollowBatch>
+    for ReaderEnrichedHollowBatch<T>
+{
+    fn into_proto(&self) -> ProtoReadEnrichedHollowBatch {
+        ProtoReadEnrichedHollowBatch {
+            shard_id: self.shard_id.into_proto(),
+            reader_metadata: Some(self.reader_metadata.into_proto()),
+            batch: Some(self.batch.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoReadEnrichedHollowBatch) -> Result<Self, TryFromProtoError> {
+        Ok(ReaderEnrichedHollowBatch {
+            shard_id: proto.shard_id.into_rust()?,
+            reader_metadata: proto
+                .reader_metadata
+                .into_rust_if_some("ProtoReadEnrichedHollowBatch::reader_metadata")?,
+            batch: proto
+                .batch
+                .into_rust_if_some("ProtoReadEnrichedHollowBatch::batch")?,
+        })
     }
 }
 
