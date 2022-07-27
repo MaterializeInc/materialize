@@ -73,7 +73,7 @@ where y.f4 \<\> 0"
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| ((Q0.C0 = Q1.C0) && (Q0.C1 = Q1.C1)) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0| 1: Q0.C1| 2: Q1.C0| 3: Q1.C1| 4: Q1.C2| 5: Q1.C3| ((Q0.C0 = Q1.C0) AND (Q0.C1 = Q1.C1)) }" ]
         {
             rank = same
             node [ shape = circle ]
