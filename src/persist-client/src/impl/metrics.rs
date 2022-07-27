@@ -46,6 +46,8 @@ pub struct Metrics {
     pub compaction: CompactionMetrics,
     /// Metrics for garbage collection.
     pub gc: GcMetrics,
+    /// Metrics for leasing and automatic lease expiry.
+    pub lease: LeaseMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
 }
@@ -63,6 +65,7 @@ impl Metrics {
             user: BatchWriteMetrics::new(registry, "user"),
             compaction: CompactionMetrics::new(registry),
             gc: GcMetrics::new(registry),
+            lease: LeaseMetrics::new(registry),
             _vecs: vecs,
         }
     }
@@ -499,6 +502,22 @@ impl GcMetrics {
             seconds: registry.register(metric!(
                 name: "mz_persist_gc_seconds",
                 help: "time spent in garbage collections",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LeaseMetrics {
+    pub(crate) timeout_read: IntCounter,
+}
+
+impl LeaseMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        LeaseMetrics {
+            timeout_read: registry.register(metric!(
+                name: "mz_persist_lease_timeout_read",
+                help: "count of readers whose lease timed out",
             )),
         }
     }
