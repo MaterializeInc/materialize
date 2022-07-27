@@ -269,8 +269,11 @@ where
                     }
                 }
 
-                // Confirm that we only require updates from our lower bound onward.
-                shared_frontier.borrow_mut().clone_from(&write_lower_bound);
+                // Share that we have finished processing all times less than the persist frontier.
+                // Advancing the sink upper communicates to the storage controller that it is
+                // permitted to compact our target storage collection up to the new upper. So we
+                // must be careful to not advance the sink upper beyond our read frontier.
+                shared_frontier.borrow_mut().clone_from(&persist_frontier);
             }
         },
     );
