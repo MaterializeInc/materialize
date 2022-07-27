@@ -343,6 +343,9 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_default_cluster_replica_size: String,
+    /// A map from size name to resource allocations for storage hosts.
+    #[clap(long, env = "STORAGE_HOST_SIZES")]
+    storage_host_sizes: Option<String>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -633,6 +636,11 @@ max log level: {max_log_level}",
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
 
+    let storage_host_sizes = match args.storage_host_sizes {
+        None => Default::default(),
+        Some(json) => serde_json::from_str(&json).context("parsing storage host map")?,
+    };
+
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         sql_listen_addr: args.sql_listen_addr,
         http_listen_addr: args.http_listen_addr,
@@ -649,6 +657,7 @@ max log level: {max_log_level}",
         now,
         cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+        storage_host_sizes,
         availability_zones: args.availability_zone,
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,

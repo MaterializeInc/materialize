@@ -633,6 +633,7 @@ impl Runner {
             now,
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
+            storage_host_sizes: Default::default(),
             availability_zones: Default::default(),
             connection_context: ConnectionContext::for_tests(
                 (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),

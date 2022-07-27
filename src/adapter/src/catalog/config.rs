@@ -15,6 +15,7 @@ use serde::Deserialize;
 use mz_build_info::BuildInfo;
 use mz_controller::ComputeInstanceReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
+use mz_storage::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
 
@@ -35,6 +36,8 @@ pub struct Config<'a, S> {
     pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
+    /// Map of strings to corresponding storage host sizes.
+    pub storage_host_sizes: StorageHostSizeMap,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
 }
@@ -98,5 +101,28 @@ impl Default for ClusterReplicaSizeMap {
             },
         );
         Self(inner)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StorageHostSizeMap(pub HashMap<String, StorageHostResourceAllocation>);
+
+impl Default for StorageHostSizeMap {
+    fn default() -> Self {
+        Self(
+            (0..=5)
+                .map(|i| {
+                    let workers = 1 << i;
+                    (
+                        workers.to_string(),
+                        StorageHostResourceAllocation {
+                            memory_limit: None,
+                            cpu_limit: None,
+                            workers: NonZeroUsize::new(workers).unwrap(),
+                        },
+                    )
+                })
+                .collect::<HashMap<_, _>>(),
+        )
     }
 }

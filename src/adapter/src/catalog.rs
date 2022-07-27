@@ -11,7 +11,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -85,7 +84,7 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{ClusterReplicaSizeMap, Config};
+pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::client::ConnectionId;
 use crate::util::index_sql;
@@ -148,6 +147,7 @@ pub struct CatalogState {
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    storage_host_sizes: StorageHostSizeMap,
     availability_zones: Vec<String>,
 }
 
@@ -1525,6 +1525,7 @@ impl<S: Append> Catalog<S> {
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
+                storage_host_sizes: config.storage_host_sizes,
                 availability_zones: config.availability_zones,
             },
             transient_revision: 0,
@@ -2098,6 +2099,7 @@ impl<S: Append> Catalog<S> {
             skip_migrations: true,
             metrics_registry,
             cluster_replica_sizes: Default::default(),
+            storage_host_sizes: Default::default(),
             availability_zones: vec![],
         })
         .await?;
@@ -2624,7 +2626,7 @@ impl<S: Append> Catalog<S> {
         &self,
         storage_host_config: PlanStorageHostConfig,
     ) -> Result<StorageHostConfig, AdapterError> {
-        let host_sizes = &self.state.cluster_replica_sizes;
+        let host_sizes = &self.state.storage_host_sizes;
         let storage_host_config = match storage_host_config {
             PlanStorageHostConfig::Remote { addr } => StorageHostConfig::Remote { addr },
             PlanStorageHostConfig::Managed { size } => {
@@ -2633,32 +2635,22 @@ impl<S: Append> Catalog<S> {
                     entries.sort_by_key(
                         |(
                             _name,
-                            ComputeInstanceReplicaAllocation {
-                                scale, cpu_limit, ..
+                            StorageHostResourceAllocation {
+                                workers,
+                                memory_limit,
+                                ..
                             },
-                        )| (scale, cpu_limit),
+                        )| (workers, memory_limit),
                     );
-                    let expected = entries
-                        .into_iter()
-                        .filter(|(_, allocation)| allocation.scale == NonZeroUsize::new(1).unwrap())
-                        .map(|(name, _)| name.clone())
-                        .collect();
+                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
                     AdapterError::InvalidStorageHostSize {
                         size: size.clone(),
                         expected,
                     }
                 })?;
 
-                // Forbid sizes with multiple instances
-                if allocation.scale > NonZeroUsize::new(1).unwrap() {
-                    return Err(AdapterError::InvalidStorageHostScale { size: size.clone() });
-                }
                 StorageHostConfig::Managed {
-                    allocation: StorageHostResourceAllocation {
-                        memory_limit: allocation.memory_limit,
-                        cpu_limit: allocation.cpu_limit,
-                        workers: allocation.workers,
-                    },
+                    allocation: allocation.clone(),
                     size,
                 }
             }
@@ -2667,15 +2659,10 @@ impl<S: Append> Catalog<S> {
                 let (size, allocation) = host_sizes
                     .0
                     .iter()
-                    .filter(|(_, a)| a.scale == NonZeroUsize::new(1).unwrap())
-                    .min_by_key(|(_, a)| a.memory_limit)
+                    .min_by_key(|(_, a)| (a.workers, a.memory_limit))
                     .expect("should have at least one valid storage instance size");
                 StorageHostConfig::Managed {
-                    allocation: StorageHostResourceAllocation {
-                        memory_limit: allocation.memory_limit,
-                        cpu_limit: allocation.cpu_limit,
-                        workers: allocation.workers,
-                    },
+                    allocation: allocation.clone(),
                     size: size.clone(),
                 }
             }

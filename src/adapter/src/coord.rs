@@ -108,7 +108,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, ClusterReplicaSizeMap, Sink,
-    SinkConnectionState,
+    SinkConnectionState, StorageHostSizeMap,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -207,6 +207,7 @@ pub struct Config<S> {
     pub secrets_controller: Arc<dyn SecretsController>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
+    pub storage_host_sizes: StorageHostSizeMap,
     pub connection_context: ConnectionContext,
 }
 
@@ -774,6 +775,7 @@ pub async fn serve<S: Append + 'static>(
         now,
         secrets_controller,
         cluster_replica_sizes,
+        storage_host_sizes,
         mut availability_zones,
         connection_context,
     }: Config<S>,
@@ -803,6 +805,7 @@ pub async fn serve<S: Append + 'static>(
         skip_migrations: false,
         metrics_registry: &metrics_registry,
         cluster_replica_sizes,
+        storage_host_sizes,
         availability_zones,
     })
     .await?;
