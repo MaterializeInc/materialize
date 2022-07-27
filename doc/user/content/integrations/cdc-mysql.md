@@ -108,8 +108,8 @@ Debezium emits change events using an envelope that contains detailed informatio
 
 ```sql
 CREATE SOURCE kafka_repl
-    FROM KAFKA BROKER 'kafka:9092' TOPIC 'dbserver1.db1.table1'
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+    FROM KAFKA CONNECTION kafka_connection TOPIC 'dbserver1.db1.table1'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
     ENVELOPE DEBEZIUM;
 ```
 

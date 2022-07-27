@@ -78,7 +78,7 @@ create_sink ::=
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
+  'FROM' 'KAFKA' 'CONNECTION' connection_name 'TOPIC' topic with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
   ('INCLUDE'
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
@@ -92,8 +92,7 @@ create_source_kinesis ::=
   ('ENVELOPE NONE')?
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM' 'POSTGRES'
-  'CONNECTION' connection_info
+  'FROM' 'POSTGRES' 'CONNECTION' connection_name
   'PUBLICATION' publication_name
   ('WITH timestamp_frequency_ms =' int)?
 create_source_s3 ::=
@@ -183,8 +182,8 @@ fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec ::=
-  'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url key_strat? val_strat? with_options? |
-  'PROTOBUF' 'USING CONFLUENT SCHEMA REGISTRY' url with_options |
+  'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name key_strat? val_strat? with_options? |
+  'PROTOBUF USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name with_options |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
