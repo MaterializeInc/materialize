@@ -98,6 +98,8 @@ pub struct Config {
     pub bootstrap_default_cluster_replica_size: String,
     /// A map from size name to resource allocations for storage hosts.
     pub storage_host_sizes: StorageHostSizeMap,
+    /// Default storage host size, should be a key from storage_host_sizes.
+    pub default_storage_host_size: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -231,6 +233,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         secrets_controller: config.secrets_controller,
         cluster_replica_sizes: config.cluster_replica_sizes,
         storage_host_sizes: config.storage_host_sizes,
+        default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
     })

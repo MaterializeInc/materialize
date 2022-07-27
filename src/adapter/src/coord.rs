@@ -208,6 +208,7 @@ pub struct Config<S> {
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     pub storage_host_sizes: StorageHostSizeMap,
+    pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
 }
 
@@ -776,6 +777,7 @@ pub async fn serve<S: Append + 'static>(
         secrets_controller,
         cluster_replica_sizes,
         storage_host_sizes,
+        default_storage_host_size,
         mut availability_zones,
         connection_context,
     }: Config<S>,
@@ -806,6 +808,7 @@ pub async fn serve<S: Append + 'static>(
         metrics_registry: &metrics_registry,
         cluster_replica_sizes,
         storage_host_sizes,
+        default_storage_host_size,
         availability_zones,
     })
     .await?;
