@@ -83,9 +83,7 @@ fn main() {
         Command::SourceExample(args) => {
             runtime.block_on(crate::source_example::run(args).instrument(root_span))
         }
-        Command::ShardedWritesExample(args) => {
-            runtime.block_on(crate::sharded_writes_example::run(args).instrument(root_span))
-        }
+        Command::ShardedWritesExample(args) => crate::sharded_writes_example::run(args),
     };
 
     mz_ore::tracing::shutdown();

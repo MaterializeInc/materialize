@@ -39,7 +39,7 @@ pub struct Args {
     num_workers: usize,
 }
 
-pub async fn run(args: Args) -> Result<(), anyhow::Error> {
+pub fn run(args: Args) -> Result<(), anyhow::Error> {
     let source_interval_ms = 1000;
     let now_fn = SYSTEM_TIME.clone();
 
@@ -212,7 +212,7 @@ where
 
                 while let Some((_cap, data)) = input_data.next() {
                     data.swap(&mut data_buffer);
-                    pending_updates.extend(data_buffer.drain(..));
+                    pending_updates.append(&mut data_buffer);
                 }
 
                 // Peel off any pending updates that fall into an in-flight
@@ -224,8 +224,8 @@ where
                         pending_updates.drain(..).partition(|(_update, ts, _diff)| {
                             metadata.lower.less_equal(ts) && !metadata.upper.less_equal(ts)
                         });
-                    pending_updates.extend(remaining_updates.drain(..));
-                    batch.extend(matching_updates.drain(..));
+                    pending_updates.append(&mut remaining_updates);
+                    batch.append(&mut matching_updates);
                 }
 
                 // Emit finished batches.
