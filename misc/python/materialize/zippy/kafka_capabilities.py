@@ -37,3 +37,6 @@ class TopicExists(Capability):
         self.partitions = partitions
         self.envelope = envelope
         self.watermarks = Watermarks()
+
+    def get_watermarks(self) -> Watermarks:
+        return self.watermarks
