@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::{Collection, Hashable};
+use mz_persist_client::{PersistClient, ShardId};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
@@ -69,6 +71,7 @@ where
             ok_collection,
             err_collection,
             compute_state,
+            false,
         )
     }
 }
@@ -79,6 +82,7 @@ pub(crate) fn persist_sink<G>(
     ok_collection: Collection<G, Row, Diff>,
     err_collection: Collection<G, DataflowError, Diff>,
     compute_state: &mut ComputeState,
+    truncate: bool,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -136,14 +140,18 @@ where
             let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
             // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-            let client = persist_clients
+            let persist_client = persist_clients
                 .lock()
                 .await
                 .open(persist_location)
                 .await
                 .expect("could not open persist client");
 
-            let mut write = client
+            if truncate {
+                truncate_persist_shard(shard_id, &persist_client).await;
+            }
+
+            let mut write = persist_client
                 .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
                 .await
                 .expect("could not open persist shard");
@@ -211,4 +219,45 @@ where
     );
 
     Some(token)
+}
+
+async fn truncate_persist_shard(shard_id: ShardId, persist_client: &PersistClient) {
+    let (mut write, read) = persist_client
+        .open::<SourceData, (), Timestamp, Diff>(shard_id)
+        .await
+        .expect("could not open persist shard");
+
+    let upper = write.upper().clone();
+    let upper_ts = upper[0];
+    if let Some(ts) = upper_ts.checked_sub(1) {
+        let as_of = Antichain::from_elem(ts);
+
+        let mut snapshot_iter = read
+            .snapshot(as_of)
+            .await
+            .expect("cannot serve requested as_of");
+
+        let mut updates = Vec::new();
+        while let Some(next) = snapshot_iter.next().await {
+            updates.extend(next);
+        }
+        snapshot_iter.expire().await;
+
+        consolidate_updates(&mut updates);
+
+        let retractions = updates
+            .into_iter()
+            .map(|((k, v), _ts, diff)| ((k.unwrap(), v.unwrap()), upper_ts, diff * -1));
+
+        let new_upper = Antichain::from_elem(upper_ts + 1);
+        write
+            .compare_and_append(retractions, upper, new_upper)
+            .await
+            .expect("external durability failure")
+            .expect("invalid usage")
+            .expect("unexpected upper");
+    }
+
+    write.expire().await;
+    read.expire().await;
 }
