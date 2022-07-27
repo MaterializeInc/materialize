@@ -552,10 +552,10 @@ Field       | Type       | Meaning
 
 ### `mz_worker_materialization_delays`
 
-The `mz_worker_materialization_delays` source provides, for each worker, 
+The `mz_worker_materialization_delays` source provides, for each worker,
 a histogram of wall-clock delays between observations of source frontier
 advancements at the dataflow layer and the advancements of the corresponding
-[dataflow] frontiers. 
+[dataflow] frontiers.
 
 Field       | Type       | Meaning
 ------------|------------|--------

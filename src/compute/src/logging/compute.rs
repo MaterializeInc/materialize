@@ -118,7 +118,10 @@ pub fn construct<A: Allocate>(
         demux.build(move |_capability| {
             let mut active_dataflows = HashMap::new();
             let mut peek_stash = HashMap::new();
-            let mut storage_sources = HashMap::<(GlobalId,usize),HashMap<GlobalId,(VecDeque<(u64, u128)>, HashMap<u128, i32>)>>::new();
+            let mut storage_sources = HashMap::<
+                (GlobalId, usize),
+                HashMap<GlobalId, (VecDeque<(u64, u128)>, HashMap<u128, i32>)>,
+            >::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
@@ -217,22 +220,25 @@ pub fn construct<A: Allocate>(
                                     // check if we have a storage source associated to this dataflow
                                     // and report frontier advancement delays
                                     let dataflow_key = (name, worker);
-                                    if let Some(source_map) = storage_sources.get_mut(&dataflow_key) {
-                                        for (source_id, time_entry) in source_map  {
+                                    if let Some(source_map) = storage_sources.get_mut(&dataflow_key)
+                                    {
+                                        for (source_id, time_entry) in source_map {
                                             let time_deque = &mut time_entry.0;
                                             while let Some(current_front) = time_deque.pop_front() {
                                                 if logical >= current_front.0 {
-                                                    let elapsed_ns = time.as_nanos() - current_front.1;
+                                                    let elapsed_ns =
+                                                        time.as_nanos() - current_front.1;
                                                     let delay_ns = elapsed_ns.next_power_of_two();
                                                     let delay_map = &mut time_entry.1;
-                                                    let delay_count = delay_map.entry(delay_ns).or_insert(0);
+                                                    let delay_count =
+                                                        delay_map.entry(delay_ns).or_insert(0);
                                                     *delay_count += 1;
                                                     frontier_delay_session.give((
                                                         (name, *source_id, worker, delay_ns),
                                                         time_ms,
                                                         1,
                                                     ));
-                                                } else  {
+                                                } else {
                                                     time_deque.push_front(current_front);
                                                     break;
                                                 }
@@ -310,17 +316,20 @@ pub fn construct<A: Allocate>(
 
         let frontier_current = frontier.as_collection();
 
-        let frontier_delay = frontier_delay.as_collection().count_total_core::<i64>().map({
-            move |((dataflow, source_id, worker, delay_pow), count)| {
-                Row::pack_slice(&[
-                    Datum::String(&dataflow.to_string()),
-                    Datum::String(&source_id.to_string()),
-                    Datum::Int64(worker as i64),
-                    Datum::Int64(delay_pow as i64),
-                    Datum::Int64(count as i64),
-                ])
-            }
-        });
+        let frontier_delay = frontier_delay
+            .as_collection()
+            .count_total_core::<i64>()
+            .map({
+                move |((dataflow, source_id, worker, delay_pow), count)| {
+                    Row::pack_slice(&[
+                        Datum::String(&dataflow.to_string()),
+                        Datum::String(&source_id.to_string()),
+                        Datum::Int64(worker as i64),
+                        Datum::Int64(delay_pow as i64),
+                        Datum::Int64(count as i64),
+                    ])
+                }
+            });
 
         let peek_current = peek.as_collection().map({
             move |(peek, worker)| {
@@ -357,7 +366,10 @@ pub fn construct<A: Allocate>(
                 LogVariant::Compute(ComputeLog::FrontierCurrent),
                 frontier_current,
             ),
-            (LogVariant::Compute(ComputeLog::FrontierDelay), frontier_delay),
+            (
+                LogVariant::Compute(ComputeLog::FrontierDelay),
+                frontier_delay,
+            ),
             (LogVariant::Compute(ComputeLog::PeekCurrent), peek_current),
             (LogVariant::Compute(ComputeLog::PeekDuration), peek_duration),
         ];
