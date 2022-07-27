@@ -25,6 +25,7 @@ use tracing::{info_span, Instrument};
 
 pub mod maelstrom;
 pub mod open_loop;
+pub mod sharded_writes_example;
 pub mod source_example;
 
 #[derive(Debug, clap::Parser)]
@@ -42,6 +43,7 @@ enum Command {
     Maelstrom(crate::maelstrom::Args),
     OpenLoop(crate::open_loop::Args),
     SourceExample(crate::source_example::Args),
+    ShardedWritesExample(crate::sharded_writes_example::Args),
 }
 
 fn main() {
@@ -80,6 +82,9 @@ fn main() {
         }
         Command::SourceExample(args) => {
             runtime.block_on(crate::source_example::run(args).instrument(root_span))
+        }
+        Command::ShardedWritesExample(args) => {
+            runtime.block_on(crate::sharded_writes_example::run(args).instrument(root_span))
         }
     };
 
