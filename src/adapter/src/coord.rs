@@ -415,7 +415,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 ingestion: Some(ingestion),
                                 since: None,
                                 status_collection_id: Some(source_status_collection_id),
-                                instance_setting: Some(source.instance_setting.clone()),
+                                host_config: Some(source.host_config.clone()),
                             },
                         )])
                         .await

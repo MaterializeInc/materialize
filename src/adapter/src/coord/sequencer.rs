@@ -387,9 +387,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
         let source_oid = self.catalog.allocate_oid().await?;
-        let instance_setting = self
-            .catalog
-            .resolve_storage_instance(plan.instance_config)?;
+        let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
             source_desc: plan.source.source_desc,
@@ -397,7 +395,7 @@ impl<S: Append + 'static> Coordinator<S> {
             timeline: plan.timeline,
             depends_on,
             remote_addr: plan.remote,
-            instance_setting,
+            host_config,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,
@@ -440,7 +438,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             ingestion: Some(ingestion),
                             since: None,
                             status_collection_id: Some(source_status_collection_id),
-                            instance_setting: Some(source.instance_setting),
+                            host_config: Some(source.host_config),
                         },
                     )])
                     .await
@@ -1244,7 +1242,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             ingestion: None,
                             since: Some(as_of),
                             status_collection_id: None,
-                            instance_setting: None,
+                            host_config: None,
                         },
                     )])
                     .await

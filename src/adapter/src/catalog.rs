@@ -57,14 +57,13 @@ use mz_sql::plan::{
     ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
-    StorageInstanceConfig,
+    StorageHostConfig as PlanStorageHostConfig,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
+use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
-use mz_storage::types::sources::{
-    SourceDesc, StorageInstanceResourceAllocation, StorageInstanceSizeOrAddress, Timeline,
-};
+use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 use uuid::Uuid;
 
@@ -1093,7 +1092,7 @@ pub struct Source {
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
     pub remote_addr: Option<String>,
-    pub instance_setting: StorageInstanceSizeOrAddress,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2621,16 +2620,16 @@ impl<S: Append> Catalog<S> {
         Ok(location)
     }
 
-    pub fn resolve_storage_instance(
+    pub fn resolve_storage_host_config(
         &self,
-        storage_instance_config: StorageInstanceConfig,
-    ) -> Result<StorageInstanceSizeOrAddress, AdapterError> {
-        let instance_sizes = &self.state.cluster_replica_sizes;
-        let instance_size_or_address = match storage_instance_config {
-            StorageInstanceConfig::Remote { addr } => StorageInstanceSizeOrAddress::Remote { addr },
-            StorageInstanceConfig::Managed { size } => {
-                let allocation = instance_sizes.0.get(&size).ok_or_else(|| {
-                    let mut entries = instance_sizes.0.iter().collect::<Vec<_>>();
+        storage_host_config: PlanStorageHostConfig,
+    ) -> Result<StorageHostConfig, AdapterError> {
+        let host_sizes = &self.state.cluster_replica_sizes;
+        let storage_host_config = match storage_host_config {
+            PlanStorageHostConfig::Remote { addr } => StorageHostConfig::Remote { addr },
+            PlanStorageHostConfig::Managed { size } => {
+                let allocation = host_sizes.0.get(&size).ok_or_else(|| {
+                    let mut entries = host_sizes.0.iter().collect::<Vec<_>>();
                     entries.sort_by_key(
                         |(
                             _name,
@@ -2644,7 +2643,7 @@ impl<S: Append> Catalog<S> {
                         .filter(|(_, allocation)| allocation.scale == NonZeroUsize::new(1).unwrap())
                         .map(|(name, _)| name.clone())
                         .collect();
-                    AdapterError::InvalidStorageInstanceSize {
+                    AdapterError::InvalidStorageHostSize {
                         size: size.clone(),
                         expected,
                     }
@@ -2652,10 +2651,10 @@ impl<S: Append> Catalog<S> {
 
                 // Forbid sizes with multiple instances
                 if allocation.scale > NonZeroUsize::new(1).unwrap() {
-                    return Err(AdapterError::InvalidStorageInstanceScale { size: size.clone() });
+                    return Err(AdapterError::InvalidStorageHostScale { size: size.clone() });
                 }
-                StorageInstanceSizeOrAddress::Managed {
-                    allocation: StorageInstanceResourceAllocation {
+                StorageHostConfig::Managed {
+                    allocation: StorageHostResourceAllocation {
                         memory_limit: allocation.memory_limit,
                         cpu_limit: allocation.cpu_limit,
                         workers: allocation.workers,
@@ -2663,16 +2662,16 @@ impl<S: Append> Catalog<S> {
                     size,
                 }
             }
-            StorageInstanceConfig::Undefined => {
+            PlanStorageHostConfig::Undefined => {
                 // When no size specifier is given, the smallest instance size available is chosen instead
-                let (size, allocation) = instance_sizes
+                let (size, allocation) = host_sizes
                     .0
                     .iter()
                     .filter(|(_, a)| a.scale == NonZeroUsize::new(1).unwrap())
                     .min_by_key(|(_, a)| a.memory_limit)
                     .expect("should have at least one valid storage instance size");
-                StorageInstanceSizeOrAddress::Managed {
-                    allocation: StorageInstanceResourceAllocation {
+                StorageHostConfig::Managed {
+                    allocation: StorageHostResourceAllocation {
                         memory_limit: allocation.memory_limit,
                         cpu_limit: allocation.cpu_limit,
                         workers: allocation.workers,
@@ -2681,7 +2680,7 @@ impl<S: Append> Catalog<S> {
                 }
             }
         };
-        Ok(instance_size_or_address)
+        Ok(storage_host_config)
     }
 
     pub async fn transact<F, T>(
@@ -3529,7 +3528,7 @@ impl<S: Append> Catalog<S> {
                 source,
                 remote,
                 timeline,
-                instance_config,
+                host_config,
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
@@ -3538,7 +3537,7 @@ impl<S: Append> Catalog<S> {
                 timeline,
                 depends_on,
                 remote_addr: remote,
-                instance_setting: self.resolve_storage_instance(instance_config)?,
+                host_config: self.resolve_storage_host_config(host_config)?,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();

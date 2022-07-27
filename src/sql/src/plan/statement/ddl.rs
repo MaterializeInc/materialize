@@ -100,7 +100,7 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
-    StorageInstanceConfig, Table, Type, View,
+    StorageHostConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -808,10 +808,10 @@ pub fn plan_create_source(
 
     let opt = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let instance_config = match (&remote, &opt.size) {
-        (None, None) => StorageInstanceConfig::Undefined,
-        (None, Some(size)) => StorageInstanceConfig::Managed { size: size.clone() },
-        (Some(addr), None) => StorageInstanceConfig::Remote { addr: addr.clone() },
+    let host_config = match (&remote, &opt.size) {
+        (None, None) => StorageHostConfig::Undefined,
+        (None, Some(size)) => StorageHostConfig::Managed { size: size.clone() },
+        (Some(addr), None) => StorageHostConfig::Remote { addr: addr.clone() },
         (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
     };
 
@@ -856,7 +856,7 @@ pub fn plan_create_source(
         if_not_exists,
         timeline,
         remote,
-        instance_config,
+        host_config,
     }))
 }
 

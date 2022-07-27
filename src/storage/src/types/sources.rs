@@ -10,14 +10,13 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::num::{NonZeroUsize, TryFromIntError};
+use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::BufMut;
-use bytesize::ByteSize;
 use globset::{Glob, GlobBuilder};
 use mz_ore::now::NowFn;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -26,7 +25,6 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use mz_orchestrator::{CpuLimit, MemoryLimit};
 use mz_persist_types::Codec;
 use mz_proto::{any_uuid, TryFromProtoError};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
@@ -1698,50 +1696,6 @@ impl Codec for SourceData {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
     }
-}
-
-/// Resource allocations for a storage instance.
-///
-/// Has some overlap with mz_controller::ComputeInstanceReplicaAllocation,
-/// but keeping it separate for now due slightly different semantics.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct StorageInstanceResourceAllocation {
-    /// The memory limit for each process in the replica.
-    pub memory_limit: Option<MemoryLimit>,
-    /// The CPU limit for each process in the replica.
-    pub cpu_limit: Option<CpuLimit>,
-    /// The number of worker threads in the replica.
-    pub workers: NonZeroUsize,
-}
-
-impl StorageInstanceResourceAllocation {
-    pub fn new() -> Self {
-        StorageInstanceResourceAllocation {
-            memory_limit: Some(MemoryLimit(ByteSize::gib(8))),
-            cpu_limit: Some(CpuLimit::from_millicpus(1000)),
-            workers: NonZeroUsize::new(1).unwrap(),
-        }
-    }
-}
-
-/// Size or address of a storage instance
-///
-/// This represents how resources for a storage instance are going to be
-/// provisioned.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum StorageInstanceSizeOrAddress {
-    /// Remote unmanaged storage
-    Remote {
-        /// The network addresses of the storaged process.
-        addr: String,
-    },
-    /// A remote but managed replica
-    Managed {
-        /// The resource allocation for the replica.
-        allocation: StorageInstanceResourceAllocation,
-        /// SQL size parameter used for allocation
-        size: String,
-    },
 }
 
 #[test]
