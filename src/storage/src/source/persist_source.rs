@@ -50,7 +50,7 @@ pub fn persist_source<G>(
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
-    as_of: Antichain<Timestamp>,
+    as_of: Option<Antichain<Timestamp>>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -90,6 +90,8 @@ where
             .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(metadata.data_shard)
             .await
             .expect("could not open persist shard");
+
+        let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
         let mut subscription = read
             .subscribe(as_of)

@@ -300,7 +300,7 @@ where
                                     id,
                                     persist_clients,
                                     tx_storage_metadata,
-                                    as_of,
+                                    Some(as_of),
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),

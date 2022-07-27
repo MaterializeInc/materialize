@@ -86,13 +86,17 @@ pub(crate) fn persist_sink<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let scope = desired_collection.scope();
+    // There is no guarantee that `as_of` is beyond the persist shard's since. If it isn't,
+    // instantiating a `persist_source` with it would panic. So instead we leave it to
+    // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
+    // current shard upper anyway.
+    let source_as_of = None;
     let (ok_stream, err_stream, token) = mz_storage::source::persist_source::persist_source(
-        &scope,
+        &desired_collection.scope(),
         sink_id.clone(),
         Arc::clone(&compute_state.persist_clients),
         target.clone(),
-        as_of.clone(),
+        source_as_of,
     );
     use differential_dataflow::AsCollection;
     let persist_collection = ok_stream

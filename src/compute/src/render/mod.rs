@@ -171,7 +171,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     *source_id,
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
-                    dataflow.as_of.clone().unwrap(),
+                    dataflow.as_of.clone(),
                 );
 
                 // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
