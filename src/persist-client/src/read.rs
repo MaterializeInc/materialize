@@ -90,8 +90,7 @@ pub(crate) enum HollowBatchReaderMetadata<T> {
     into = "SerdeReaderEnrichedHollowBatch",
     from = "SerdeReaderEnrichedHollowBatch"
 )]
-/// A [`HollowBatch`] plus the metadata necessary to apply the appropriate read
-/// style's semantics (i.e. snapshotting or listening).
+/// An exchangeable struct with sufficient metadata to fetch [`HollowBatch`]es.
 pub struct ReaderEnrichedHollowBatch<T> {
     pub(crate) shard_id: ShardId,
     pub(crate) reader_metadata: HollowBatchReaderMetadata<T>,
@@ -273,6 +272,155 @@ where
         }
         ret.sort();
         ret
+    }
+}
+
+#[derive(Debug)]
+/// Describes which phase of the subscription is in.
+pub enum SubscribeMode<T> {
+    /// Subscriptions begin in snapshot mode, and we load the intial batches.
+    Snapshot(Vec<ReaderEnrichedHollowBatch<T>>),
+    /// After handling all snapshot batches, subscriptions move into listening
+    /// where batches are doled out as they're generated.
+    Listen,
+}
+
+/// Capable of generating a snapshot of all data up to `as_of`, followed by a
+/// listen of all updates.
+#[derive(Debug)]
+pub struct Subscribe<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+    // These are only here so we can use them in the auto-expiring `Drop` impl.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
+{
+    handle: ReadHandle<K, V, T, D>,
+    mode: SubscribeMode<T>,
+
+    as_of: Antichain<T>,
+    frontier: Antichain<T>,
+    since: Antichain<T>,
+}
+
+impl<K, V, T, D> Subscribe<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
+    async fn new(mut handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
+        // Gather all of the batches for the snapshot now so the first call to
+        // `Self::next` has batches to dole out.
+        let batches = handle
+            .machine
+            .snapshot(&as_of)
+            .await
+            .expect("ReadHandle should validate `as_of` valid before generating Subscribe");
+
+        let enriched_batches = batches
+            .into_iter()
+            .filter(|batch| batch.len > 0)
+            .map(|batch| ReaderEnrichedHollowBatch {
+                shard_id: handle.machine.shard_id(),
+                reader_metadata: HollowBatchReaderMetadata::Snapshot {
+                    as_of: as_of.clone(),
+                },
+                batch,
+            })
+            .collect::<Vec<_>>();
+
+        let mode = SubscribeMode::Snapshot(enriched_batches);
+        let mut ret = Subscribe {
+            handle,
+            since: as_of.clone(),
+            frontier: as_of.clone(),
+            as_of,
+            mode,
+        };
+
+        // This subscription only needs to distinguish things after its frontier
+        // (initially as_of although the frontier is inclusive and the as_of
+        // isn't). Be a good citizen and downgrade early.
+        ret.handle.downgrade_since(ret.since.clone()).await;
+        ret
+    }
+
+    /// Returns a `HollowBatch` enriched with this metadata appropriate for
+    /// snapshot-style behavior.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.handle.machine.shard_id()))]
+    pub async fn next(&mut self) -> ReaderEnrichedHollowBatch<T> {
+        trace!(
+            "Subscribe::next as_of={:?}, frontier={:?}",
+            self.as_of,
+            self.frontier
+        );
+
+        if let SubscribeMode::Snapshot(ref batches) = &self.mode {
+            if batches.is_empty() {
+                self.mode = SubscribeMode::Listen;
+            }
+        }
+
+        match &mut self.mode {
+            SubscribeMode::Snapshot(ref mut batches) => {
+                self.handle.maybe_heartbeat_reader().await;
+                batches
+                    .pop()
+                    .expect("verified batches remain in last iteration")
+            }
+            SubscribeMode::Listen => {
+                let batch = self.handle.machine.next_listen_batch(&self.frontier).await;
+                let new_frontier = batch.desc.upper().clone();
+                // We will have a new frontier, so this is an opportunity to downgrade our
+                // since capability. Go through `maybe_heartbeat` so we can rate limit
+                // this along with our heartbeats.
+                //
+                // HACK! Everything would be simpler if we could downgrade since to the
+                // new frontier, but we can't. The next call needs to be able to
+                // distinguish between the times T at the frontier (to emit updates with
+                // these times) and T-1 (to filter them). Advancing the since to
+                // frontier would erase the ability to distinguish between them. Ideally
+                // we'd use what is conceptually "frontier - 1" (the greatest elements
+                // that are still strictly less than frontier), but the trait bounds on
+                // T don't give us a way to compute that directly. Instead, we sniff out
+                // any elements in lower that are strictly less_than frontier to compute
+                // a new since. For totally ordered times (currently always the case in
+                // mz) lower will always have a single element and it will be less_than
+                // upper, but the following logic is (hopefully) correct for partially
+                // order times as well. We could also abuse the fact that every time we
+                // actually emit is guaranteed by definition to be less_than upper to be
+                // a bit more prompt, but this would involve a lot more temporary
+                // antichains and it's unclear if that's worth it.
+                for l in batch.desc.lower().elements().iter() {
+                    let lower_than_upper =
+                        batch.desc.upper().elements().iter().any(|u| l.less_than(u));
+                    if lower_than_upper {
+                        self.since.join_assign(&Antichain::from_elem(l.clone()));
+                    }
+                }
+
+                let batch = ReaderEnrichedHollowBatch {
+                    shard_id: self.handle.machine.shard_id(),
+                    reader_metadata: HollowBatchReaderMetadata::Listen {
+                        as_of: self.as_of.clone(),
+                        // The HollowBatch should be read until the upper of
+                        // the _last_ batch. Ideally this would instead be
+                        // new_frontier - 1, but that isn't directly computable
+                        // as noted above.
+                        until: self.frontier.clone(),
+                    },
+                    batch,
+                };
+
+                self.frontier = new_frontier;
+                self.handle.maybe_downgrade_since(&self.since).await;
+
+                batch
+            }
+        }
     }
 }
 
@@ -730,6 +878,19 @@ where
         Ok(iter)
     }
 
+    /// Returns a snapshot of all of a shard's data using `as_of`, followed by
+    /// listening to any future updates.
+    ///
+    /// For more details on this operation's semantics, see [Self::snapshot] and
+    /// [Self::listen].
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn subscribe(self, as_of: Antichain<T>) -> Result<Subscribe<K, V, T, D>, Since<T>> {
+        trace!("ReadHandle::subscribe as_of={:?}", as_of);
+
+        let () = self.machine.verify_listen(&as_of).await?;
+        Ok(Subscribe::new(self, as_of).await)
+    }
+
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
     /// `since`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
@@ -1081,12 +1242,14 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_split_exchange_data() {
+    fn client_exchange_data() {
         // The whole point of SnapshotSplit is that it can be exchanged between
         // timely workers, including over the network. Enforce then that it
         // implements ExchangeData.
         fn is_exchange_data<T: ExchangeData>() {}
         is_exchange_data::<SnapshotSplit<u64>>();
         is_exchange_data::<SnapshotSplit<i64>>();
+        is_exchange_data::<ReaderEnrichedHollowBatch<u64>>();
+        is_exchange_data::<ReaderEnrichedHollowBatch<i64>>();
     }
 }
