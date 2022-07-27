@@ -148,6 +148,7 @@ pub struct CatalogState {
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
     storage_host_sizes: StorageHostSizeMap,
+    default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
 }
 
@@ -927,6 +928,33 @@ impl CatalogState {
     pub fn availability_zones(&self) -> &[String] {
         &self.availability_zones
     }
+
+    /// Returns the default storage host size
+    ///
+    /// If a default size was given as configuration, it is always used, otherwise the
+    /// smallest host size is used instead.
+    pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
+        match &self.default_storage_host_size {
+            Some(default_storage_host_size) => {
+                // The default is guaranteed to be in the size map during startup
+                let allocation = self
+                    .storage_host_sizes
+                    .0
+                    .get(default_storage_host_size)
+                    .expect("default storage host size must exist in size map");
+                (default_storage_host_size.clone(), allocation.clone())
+            }
+            None => {
+                let (size, allocation) = self
+                    .storage_host_sizes
+                    .0
+                    .iter()
+                    .min_by_key(|(_, a)| (a.workers, a.memory_limit))
+                    .expect("should have at least one valid storage instance size");
+                (size.clone(), allocation.clone())
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1526,6 +1554,7 @@ impl<S: Append> Catalog<S> {
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 storage_host_sizes: config.storage_host_sizes,
+                default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
             },
             transient_revision: 0,
@@ -2100,6 +2129,7 @@ impl<S: Append> Catalog<S> {
             metrics_registry,
             cluster_replica_sizes: Default::default(),
             storage_host_sizes: Default::default(),
+            default_storage_host_size: None,
             availability_zones: vec![],
         })
         .await?;
@@ -2655,16 +2685,8 @@ impl<S: Append> Catalog<S> {
                 }
             }
             PlanStorageHostConfig::Undefined => {
-                // When no size specifier is given, the smallest instance size available is chosen instead
-                let (size, allocation) = host_sizes
-                    .0
-                    .iter()
-                    .min_by_key(|(_, a)| (a.workers, a.memory_limit))
-                    .expect("should have at least one valid storage instance size");
-                StorageHostConfig::Managed {
-                    allocation: allocation.clone(),
-                    size: size.clone(),
-                }
+                let (size, allocation) = self.state.default_storage_host_size();
+                StorageHostConfig::Managed { allocation, size }
             }
         };
         Ok(storage_host_config)

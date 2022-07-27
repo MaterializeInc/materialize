@@ -38,6 +38,8 @@ pub struct Config<'a, S> {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Map of strings to corresponding storage host sizes.
     pub storage_host_sizes: StorageHostSizeMap,
+    /// Default storage host size, should be a key from storage_host_sizes.
+    pub default_storage_host_size: Option<String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
 }

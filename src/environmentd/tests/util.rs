@@ -192,6 +192,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: "1".into(),
         storage_host_sizes: Default::default(),
+        default_storage_host_size: None,
         availability_zones: Default::default(),
         connection_context: ConnectionContext::for_tests(
             (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
