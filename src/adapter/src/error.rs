@@ -79,10 +79,6 @@ pub enum AdapterError {
         size: String,
         expected: Vec<String>,
     },
-    /// Storage instance size has scale > 1 (i.e. multiple instances)
-    InvalidStorageHostScale {
-        size: String,
-    },
     /// No such storage instance size has been configured.
     InvalidStorageHostSize {
         size: String,
@@ -311,12 +307,6 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::InvalidClusterReplicaSize { size, expected: _ } => {
                 write!(f, "unknown cluster replica size {size}",)
-            }
-            AdapterError::InvalidStorageHostScale { size } => {
-                write!(
-                    f,
-                    "invalid source size {size}: only single node sizes are supported"
-                )
             }
             AdapterError::InvalidStorageHostSize { size, .. } => {
                 write!(f, "unknown source size {size}")

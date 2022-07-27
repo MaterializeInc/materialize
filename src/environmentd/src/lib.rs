@@ -28,7 +28,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
-use mz_adapter::catalog::ClusterReplicaSizeMap;
+use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
 use mz_build_info::{build_info, BuildInfo};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -96,6 +96,8 @@ pub struct Config {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
+    /// A map from size name to resource allocations for storage hosts.
+    pub storage_host_sizes: StorageHostSizeMap,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -228,6 +230,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         now: config.now,
         secrets_controller: config.secrets_controller,
         cluster_replica_sizes: config.cluster_replica_sizes,
+        storage_host_sizes: config.storage_host_sizes,
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
     })
