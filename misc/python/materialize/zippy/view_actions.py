@@ -91,17 +91,14 @@ class ValidateView(Action):
         self.view = random.choice(capabilities.get(ViewExists))
 
     def run(self, c: Composition) -> None:
-        # Calculate the intersection of the mins/maxs of the inputs
-        # The result from the view should match the calculation.
-
-        froms: WatermarkedObjects = self.view.froms
-        view_min = max([f.get_watermarks().min for f in froms])
-        view_max = min([f.get_watermarks().max for f in froms])
+        watermarks = self.view.get_watermarks()
+        view_min = watermarks.min
+        view_max = watermarks.max
 
         if view_min <= view_max:
             c.testdrive(
                 f"""
-> SELECT * FROM {self.view.name};
+> SELECT * FROM {self.view.name} /* {view_min} {view_max} {(view_max-view_min)+1} {(view_max-view_min)+1} */ ;
 {view_min} {view_max} {(view_max-view_min)+1} {(view_max-view_min)+1}
 """
             )

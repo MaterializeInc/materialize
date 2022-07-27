@@ -801,12 +801,6 @@ pub enum CreateSourceConnection<T: AstInfo> {
         /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
         details: Option<String>,
     },
-    PubNub {
-        /// PubNub's subscribe key
-        subscribe_key: String,
-        /// The PubNub channel to subscribe to
-        channel: String,
-    },
     LoadGenerator {
         generator: LoadGenerator,
         options: Vec<LoadGeneratorOption<T>>,
@@ -866,16 +860,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                     f.write_str("' DETAILS '");
                     f.write_str(&display::escape_single_quote_string(details));
                 }
-                f.write_str("'");
-            }
-            CreateSourceConnection::PubNub {
-                subscribe_key,
-                channel,
-            } => {
-                f.write_str("PUBNUB SUBSCRIBE KEY '");
-                f.write_str(&display::escape_single_quote_string(subscribe_key));
-                f.write_str("' CHANNEL '");
-                f.write_str(&display::escape_single_quote_string(channel));
                 f.write_str("'");
             }
             CreateSourceConnection::LoadGenerator { generator, options } => {

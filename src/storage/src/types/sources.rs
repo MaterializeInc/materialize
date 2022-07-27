@@ -446,9 +446,8 @@ impl FromStr for Timeline {
 /// into a _differential stream_, that is, a stream of (data, time, diff)
 /// triples.
 ///
-/// Some sources (namely postgres and pubnub) skip any explicit envelope handling, effectively
+/// PostgreSQL sources skip any explicit envelope handling, effectively
 /// asserting that `SourceEnvelope` is `None` with `KeyEnvelope::None`.
-// TODO(guswynn): update this ^ when SimpleSource is gone.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum SourceEnvelope {
     /// The most trivial version is `None`, which typically produces triples where the diff
@@ -1202,10 +1201,7 @@ impl SourceDesc {
                 envelope:
                     SourceEnvelope::Debezium(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
                 connection:
-                    SourceConnection::S3(_)
-                    | SourceConnection::Kafka(_)
-                    | SourceConnection::Kinesis(_)
-                    | SourceConnection::PubNub(_),
+                    SourceConnection::S3(_) | SourceConnection::Kafka(_) | SourceConnection::Kinesis(_),
                 ..
             } => false,
         }
@@ -1226,7 +1222,6 @@ pub enum SourceConnection {
     Kinesis(KinesisSourceConnection),
     S3(S3SourceConnection),
     Postgres(PostgresSourceConnection),
-    PubNub(PubNubSourceConnection),
     LoadGenerator(LoadGeneratorSourceConnection),
 }
 
@@ -1239,7 +1234,6 @@ impl RustType<ProtoSourceConnection> for SourceConnection {
                 SourceConnection::Kinesis(kinesis) => Kind::Kinesis(kinesis.into_proto()),
                 SourceConnection::S3(s3) => Kind::S3(s3.into_proto()),
                 SourceConnection::Postgres(postgres) => Kind::Postgres(postgres.into_proto()),
-                SourceConnection::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
                 SourceConnection::LoadGenerator(loadgen) => Kind::Loadgen(loadgen.into_proto()),
             }),
         }
@@ -1255,7 +1249,6 @@ impl RustType<ProtoSourceConnection> for SourceConnection {
             Kind::Kinesis(kinesis) => SourceConnection::Kinesis(kinesis.into_rust()?),
             Kind::S3(s3) => SourceConnection::S3(s3.into_rust()?),
             Kind::Postgres(postgres) => SourceConnection::Postgres(postgres.into_rust()?),
-            Kind::Pubnub(pubnub) => SourceConnection::PubNub(pubnub.into_rust()?),
             Kind::Loadgen(loadgen) => SourceConnection::LoadGenerator(loadgen.into_rust()?),
         })
     }
@@ -1323,7 +1316,6 @@ impl SourceConnection {
             Self::Kinesis(_) => vec![],
             Self::S3(_) => vec![],
             Self::Postgres(_) => vec![],
-            Self::PubNub(_) => vec![],
             Self::LoadGenerator(_) => vec![],
         }
     }
@@ -1360,7 +1352,6 @@ impl SourceConnection {
             SourceConnection::Kinesis(_)
             | SourceConnection::S3(_)
             | SourceConnection::Postgres(_)
-            | SourceConnection::PubNub(_)
             | SourceConnection::LoadGenerator(_) => Vec::new(),
         }
     }
@@ -1372,7 +1363,6 @@ impl SourceConnection {
             SourceConnection::Kinesis(_) => "kinesis",
             SourceConnection::S3(_) => "s3",
             SourceConnection::Postgres(_) => "postgres",
-            SourceConnection::PubNub(_) => "pubnub",
             SourceConnection::LoadGenerator(_) => "loadgen",
         }
     }
@@ -1388,7 +1378,6 @@ impl SourceConnection {
             }
             SourceConnection::S3(_) => None,
             SourceConnection::Postgres(_) => None,
-            SourceConnection::PubNub(_) => None,
             SourceConnection::LoadGenerator(_) => None,
         }
     }
@@ -1400,7 +1389,6 @@ impl SourceConnection {
             SourceConnection::Kafka(_)
             | SourceConnection::Kinesis(_)
             | SourceConnection::Postgres(_)
-            | SourceConnection::PubNub(_)
             | SourceConnection::LoadGenerator(_) => false,
         }
     }
@@ -1481,28 +1469,6 @@ impl RustType<ProtoPostgresSourceDetails> for PostgresSourceDetails {
                 .map(mz_postgres_util::desc::PostgresTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
             slot: proto.slot,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PubNubSourceConnection {
-    pub subscribe_key: String,
-    pub channel: String,
-}
-
-impl RustType<ProtoPubNubSourceConnection> for PubNubSourceConnection {
-    fn into_proto(&self) -> ProtoPubNubSourceConnection {
-        ProtoPubNubSourceConnection {
-            subscribe_key: self.subscribe_key.clone(),
-            channel: self.channel.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoPubNubSourceConnection) -> Result<Self, TryFromProtoError> {
-        Ok(PubNubSourceConnection {
-            subscribe_key: proto.subscribe_key,
-            channel: proto.channel,
         })
     }
 }

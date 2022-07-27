@@ -234,7 +234,7 @@ pub struct CpuLimit {
 
 impl CpuLimit {
     /// Constructs a new CPU limit from a number of millicpus.
-    pub fn from_millicpus(&self, millicpus: usize) -> CpuLimit {
+    pub fn from_millicpus(millicpus: usize) -> CpuLimit {
         CpuLimit { millicpus }
     }
 
