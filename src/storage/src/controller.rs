@@ -1104,6 +1104,7 @@ mod persist_read_handles {
     use mz_persist_types::Codec64;
     use mz_repr::Row;
     use mz_repr::{Diff, GlobalId};
+    use tracing::Instrument;
 
     use crate::controller::StorageError;
     use crate::types::sources::SourceData;
@@ -1119,7 +1120,7 @@ mod persist_read_handles {
     /// persist calls.
     #[derive(Debug)]
     pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
-        tx: UnboundedSender<PersistWorkerCmd<T>>,
+        tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
     impl<T> Drop for PersistWorker<T>
@@ -1147,7 +1148,7 @@ mod persist_read_handles {
 
     impl<T: Timestamp + Lattice + Codec64> PersistWorker<T> {
         pub(crate) fn new() -> Self {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
             mz_ore::task::spawn(|| "PersistReadHandles", async move {
                 let mut read_handles: BTreeMap<GlobalId, ReadHandle<SourceData, (), T, Diff>> =
@@ -1164,7 +1165,7 @@ mod persist_read_handles {
                     let mut downgrades = BTreeMap::default();
                     let mut shutdown = false;
 
-                    for command in commands {
+                    for (span, command) in commands {
                         match command {
                             PersistWorkerCmd::Register(id, read_handle) => {
                                 let previous = read_handles.insert(id, read_handle);
@@ -1177,7 +1178,7 @@ mod persist_read_handles {
                             }
                             PersistWorkerCmd::Downgrade(since_frontiers) => {
                                 for (id, frontier) in since_frontiers {
-                                    downgrades.insert(id, frontier);
+                                    downgrades.insert(id, (span.clone(), frontier));
                                 }
                             }
                             PersistWorkerCmd::Snapshot(id, as_of, oneshot) => {
@@ -1206,7 +1207,9 @@ mod persist_read_handles {
                                 }
 
                                 if let Some(read_handle) = read_handles.get_mut(&id) {
-                                    let result = snapshot(read_handle, id, as_of).await;
+                                    let result = snapshot(read_handle, id, as_of)
+                                        .instrument(span.clone())
+                                        .await;
                                     oneshot.send(result).expect("Oneshot should not fail");
                                 } else {
                                     oneshot
@@ -1224,9 +1227,9 @@ mod persist_read_handles {
                         let futs = FuturesUnordered::new();
 
                         for (id, read) in read_handles.iter_mut() {
-                            if let Some(since) = downgrades.remove(id) {
+                            if let Some((span, since)) = downgrades.remove(id) {
                                 let fut = async move {
-                                    read.downgrade_since(since).await;
+                                    read.downgrade_since(since).instrument(span).await;
                                 };
 
                                 futs.push(fut);
@@ -1269,7 +1272,7 @@ mod persist_read_handles {
         }
 
         fn send(&self, cmd: PersistWorkerCmd<T>) {
-            match self.tx.send(cmd) {
+            match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
                     tracing::error!("could not forward command: {:?}", e);
@@ -1291,6 +1294,7 @@ mod persist_write_handles {
     use mz_persist_client::write::WriteHandle;
     use mz_persist_types::Codec64;
     use mz_repr::{Diff, GlobalId};
+    use tracing::Instrument;
 
     use crate::controller::StorageError;
     use crate::protocol::client::StorageResponse;
@@ -1299,7 +1303,7 @@ mod persist_write_handles {
 
     #[derive(Debug)]
     pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
-        tx: UnboundedSender<PersistWorkerCmd<T>>,
+        tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
     impl<T> Drop for PersistWorker<T>
@@ -1327,7 +1331,7 @@ mod persist_write_handles {
         pub(crate) fn new(
             mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         ) -> Self {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
             mz_ore::task::spawn(|| "PersistWriteHandles", async move {
                 let mut write_handles = BTreeMap::new();
@@ -1348,7 +1352,7 @@ mod persist_write_handles {
 
                     let mut shutdown = false;
 
-                    for command in commands {
+                    for (span, command) in commands {
                         match command {
                             PersistWorkerCmd::Register(id, write_handle) => {
                                 let previous = write_handles
@@ -1362,11 +1366,25 @@ mod persist_write_handles {
                             }
                             PersistWorkerCmd::Append(updates, response) => {
                                 for (id, update, upper) in updates {
-                                    let (updates, old_upper) =
+                                    let (old_span, updates, old_upper) =
                                         all_updates.entry(id).or_insert_with(|| {
-                                            (Vec::default(), Antichain::from_elem(T::minimum()))
+                                            (
+                                                span.clone(),
+                                                Vec::default(),
+                                                Antichain::from_elem(T::minimum()),
+                                            )
                                         });
 
+                                    if old_span.id() != span.id() {
+                                        // Link in any spans for `Append`
+                                        // operations that we lump together by
+                                        // doing this. This is not ideal,
+                                        // because we only have a true tracing
+                                        // history for the "first" span that we
+                                        // process, but it's better than
+                                        // nothing.
+                                        old_span.follows_from(span.id());
+                                    }
                                     updates.extend(update);
                                     old_upper.join_assign(&Antichain::from_elem(upper));
                                 }
@@ -1386,7 +1404,10 @@ mod persist_write_handles {
                             GlobalId,
                             (WriteHandle<SourceData, (), T2, Diff>, Antichain<T2>),
                         >,
-                        mut commands: BTreeMap<GlobalId, (Vec<Update<T2>>, Antichain<T2>)>,
+                        mut commands: BTreeMap<
+                            GlobalId,
+                            (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
+                        >,
                     ) -> Result<(), GlobalId> {
                         let futs = FuturesUnordered::new();
 
@@ -1398,7 +1419,7 @@ mod persist_write_handles {
                         // through all available write handles and see if there are any updates
                         // for it. If yes, we send them all in one go.
                         for (id, (write, old_upper)) in write_handles.iter_mut() {
-                            if let Some((updates, new_upper)) = commands.remove(id) {
+                            if let Some((span, updates, new_upper)) = commands.remove(id) {
                                 let persist_upper = write.upper().clone();
                                 let updates = updates
                                     .into_iter()
@@ -1411,6 +1432,7 @@ mod persist_write_handles {
                                             persist_upper.clone(),
                                             new_upper.clone(),
                                         )
+                                        .instrument(span)
                                         .await
                                         .expect("cannot append updates")
                                         .expect("cannot append updates")
@@ -1473,7 +1495,7 @@ mod persist_write_handles {
         }
 
         fn send(&self, cmd: PersistWorkerCmd<T>) {
-            match self.tx.send(cmd) {
+            match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
                     tracing::error!("could not forward command: {:?}", e);
