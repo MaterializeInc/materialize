@@ -39,7 +39,7 @@ use crate::r#impl::machine::{retry_external, Machine};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::Since;
-use crate::{PersistConfig, ShardId};
+use crate::{GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -157,10 +157,12 @@ where
                 // collection of blobs.
                 None => {
                     trace!("SnapshotIter::expire");
-                    self.handle
+                    let (_, maintenance) = self
+                        .handle
                         .machine
                         .expire_reader(&self.handle.reader_id)
                         .await;
+                    maintenance.perform(&self.handle.gc);
                     self.handle.explicitly_expired = true;
                     return None;
                 }
@@ -475,6 +477,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
+    pub(crate) gc: GarbageCollector,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
@@ -508,7 +511,7 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
         trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
-        let (_seqno, current_reader_since) = self
+        let (_seqno, current_reader_since, maintenance) = self
             .machine
             .downgrade_since(&self.reader_id, &new_since, (self.cfg.now)())
             .await;
@@ -516,6 +519,7 @@ where
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
         self.last_heartbeat = Instant::now();
+        maintenance.perform(&self.gc);
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -666,6 +670,7 @@ where
             metrics: Arc::clone(&self.metrics),
             reader_id: split.reader_id.clone(),
             machine,
+            gc: self.gc.clone(),
             blob: Arc::clone(&self.blob),
             since: self.since.clone(),
             // This isn't quite right since we did the heartbeat before sending
@@ -691,6 +696,7 @@ where
             metrics: Arc::clone(&self.metrics),
             reader_id: new_reader_id,
             machine,
+            gc: self.gc.clone(),
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
             last_heartbeat: Instant::now(),
@@ -729,10 +735,12 @@ where
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 2;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.machine
+            let (_, maintenance) = self
+                .machine
                 .heartbeat_reader(&self.reader_id, (self.cfg.now)())
                 .await;
             self.last_heartbeat = Instant::now();
+            maintenance.perform(&self.gc);
         }
     }
 
@@ -747,7 +755,8 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
         trace!("ReadHandle::expire");
-        self.machine.expire_reader(&self.reader_id).await;
+        let (_, maintenance) = self.machine.expire_reader(&self.reader_id).await;
+        maintenance.perform(&self.gc);
         self.explicitly_expired = true;
     }
 
@@ -790,6 +799,7 @@ where
             }
         };
         let mut machine = self.machine.clone();
+        let gc = self.gc.clone();
         let reader_id = self.reader_id.clone();
         // Spawn a best-effort task to expire this read handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
@@ -801,7 +811,8 @@ where
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
                 trace!("ReadHandle::expire");
-                machine.expire_reader(&reader_id).await;
+                let (_, maintenance) = machine.expire_reader(&reader_id).await;
+                maintenance.perform(&gc);
             }
             .instrument(expire_span),
         );
