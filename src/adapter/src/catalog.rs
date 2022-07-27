@@ -3316,8 +3316,14 @@ impl<S: Append> Catalog<S> {
                         .get_mut(&compute_id)
                         .expect("can only drop replicas from known instances");
                     let replica_id = instance.replica_id_by_name.remove(&name).unwrap();
-                    assert!(instance.replicas_by_id.remove(&replica_id).is_some());
+                    let replica = instance.replicas_by_id.remove(&replica_id).unwrap();
+                    let persisted_log_ids = replica.config.persisted_logs.get_log_ids();
                     assert!(instance.replica_id_by_name.len() == instance.replicas_by_id.len());
+
+                    for id in persisted_log_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, -1));
+                        state.drop_item(id);
+                    }
                 }
 
                 Action::DropItem(id) => {
@@ -4126,6 +4132,13 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
 
     fn replica_names(&self) -> HashSet<&String> {
         self.replica_id_by_name.keys().collect::<HashSet<_>>()
+    }
+
+    fn replica_logs(&self, name: &String) -> Option<Vec<GlobalId>> {
+        let replica = self
+            .replicas_by_id
+            .get(self.replica_id_by_name.get(name)?)?;
+        Some(replica.config.persisted_logs.get_log_ids())
     }
 }
 

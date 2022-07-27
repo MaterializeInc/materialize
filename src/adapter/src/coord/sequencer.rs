@@ -1403,7 +1403,19 @@ impl<S: Append + 'static> Coordinator<S> {
                     compute_id: instance.id,
                 });
             }
-            let ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
+
+            let mut ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeInstanceReplica.
+            for replica in instance.replicas_by_id.values() {
+                let log_ids = replica.config.persisted_logs.get_log_ids();
+                for log_id in log_ids {
+                    ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                }
+            }
+
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
@@ -1432,6 +1444,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         let mut ops = Vec::with_capacity(names.len());
         let mut replicas_to_drop = Vec::with_capacity(names.len());
+        let mut ids_to_drop = vec![];
         for (instance_name, replica_name) in names {
             let instance = self.catalog.resolve_compute_instance(&instance_name)?;
             ops.push(catalog::Op::DropComputeInstanceReplica {
@@ -1440,12 +1453,28 @@ impl<S: Append + 'static> Coordinator<S> {
             });
             let replica_id = instance.replica_id_by_name[&replica_name];
 
+            // Determine from the replica which additional items to drop. This is the set
+            // of items depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeInstanceReplica.
+            for log_id in instance
+                .replicas_by_id
+                .get(&replica_id)
+                .unwrap()
+                .config
+                .persisted_logs
+                .get_log_ids()
+            {
+                ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+            }
+
             replicas_to_drop.push((
                 instance.id,
                 replica_id,
                 instance.replicas_by_id[&replica_id].clone(),
             ));
         }
+
+        ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
 
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
