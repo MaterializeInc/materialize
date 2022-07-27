@@ -352,8 +352,8 @@ impl<S: Append + 'static> Coordinator<S> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingTxn>) {
-        // An empty catalog transaction will confirm our leadership before sending a response.
-        self.catalog_transact(None, Vec::new(), |_| Ok(()))
+        self.catalog
+            .confirm_leadership()
             .await
             .expect("unable to confirm leadership");
         for PendingTxn {
