@@ -38,7 +38,7 @@ use crate::controller::rehydration::RehydratingStorageClient;
 use crate::protocol::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
-use crate::types::sources::{StorageInstanceResourceAllocation, StorageInstanceSizeOrAddress};
+use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 
 /// The network address of a storage host.
 pub type StorageHostAddr = String;
@@ -112,16 +112,16 @@ impl<T> StorageHosts<T> {
     pub async fn provision(
         &mut self,
         id: GlobalId,
-        instance_setting: StorageInstanceSizeOrAddress,
+        host_config: StorageHostConfig,
     ) -> Result<&mut RehydratingStorageClient<T>, anyhow::Error>
     where
         T: Timestamp + Lattice,
         StorageCommand<T>: RustType<ProtoStorageCommand>,
         StorageResponse<T>: RustType<ProtoStorageResponse>,
     {
-        let (host_addr, orchestrated) = match instance_setting {
-            StorageInstanceSizeOrAddress::Remote { addr } => (addr, false),
-            StorageInstanceSizeOrAddress::Managed { allocation, .. } => {
+        let (host_addr, orchestrated) = match host_config {
+            StorageHostConfig::Remote { addr } => (addr, false),
+            StorageHostConfig::Managed { allocation, .. } => {
                 (self.start_storage_host(id, allocation).await?, true)
             }
         };
@@ -209,7 +209,7 @@ impl<T> StorageHosts<T> {
     async fn start_storage_host(
         &self,
         id: GlobalId,
-        allocation: StorageInstanceResourceAllocation,
+        allocation: StorageHostResourceAllocation,
     ) -> Result<StorageHostAddr, anyhow::Error> {
         let storage_service = self
             .orchestrator
