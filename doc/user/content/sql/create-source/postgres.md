@@ -14,7 +14,7 @@ aliases:
 {{< beta />}}
 
 {{% create-source/intro %}}
-This page describes how to connect Materialize to a PostgreSQL (10+) database to create and efficiently maintain real-time materialized views on top of a replication stream.
+To connect to a Postgres instance, you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -25,7 +25,7 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**CONNECTION** _connection_info_ | Postgres connection parameters. See the Postgres documentation on [supported connection parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.
+**CONNECTION** _connection_name_ | The name of the Postgres connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 
 ### `WITH` options
@@ -51,7 +51,7 @@ To avoid creating multiple replication slots upstream and minimize the required 
 ```sql
 CREATE SOURCE mz_source
 FROM POSTGRES
-  CONNECTION 'host=example.com port=5432 user=host dbname=postgres sslmode=require'
+  CONNECTION pg_connection
   PUBLICATION 'mz_source';
 ```
 
@@ -146,7 +146,40 @@ Sources can only be created from publications that use [data types](/sql/types/)
 
 Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is recreated.
 
+## Examples
+
+### Creating a connection
+
+A connection describes how to connect and authenticate to an external system you want Materialize to read data from.
+
+Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
+
+```sql
+CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
+
+CREATE CONNECTION pg_connection
+  FOR POSTGRES
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 5432,
+    USER 'postgres',
+    PASSWORD SECRET pgpass,
+    SSL MODE 'require',
+    DATABASE 'postgres';
+```
+
+### Creating a source
+
+```sql
+CREATE SOURCE mz_source
+FROM POSTGRES
+  CONNECTION pg_connection
+  PUBLICATION 'mz_source';
+```
+
 ## Related pages
 
-- [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)
+- `CREATE SECRET`
+- [`CREATE CONNECTION`](/sql/create-connection)
+- [`CREATE SOURCE`](../)
 - [`CREATE VIEWS`](../../create-views)
+- [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)
