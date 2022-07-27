@@ -147,7 +147,7 @@ where
                 .await
                 .expect("could not open persist client");
 
-            if truncate {
+            if truncate && active_write_worker {
                 truncate_persist_shard(shard_id, &persist_client).await;
             }
 
