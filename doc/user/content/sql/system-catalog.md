@@ -497,7 +497,7 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
-`type`           | [`text`]   | The type of the source: `kafka`, `postgres`, or `pubnub`.
+`type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
 
 ### `mz_tables`
 

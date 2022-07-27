@@ -156,9 +156,7 @@ Typically, you create sources, views, and indexes when deploying Materialize, al
 // Include the Postgres connection details
 require 'connect.php';
 
-$sql = "CREATE SOURCE market_orders_raw_2 FROM PUBNUB
-            SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
-            CHANNEL 'pubnub-market-orders'";
+$sql = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER";
 
 $statement = $connection->prepare($sql);
 $statement->execute();

@@ -632,20 +632,6 @@ max log level: {max_log_level}",
         None => Default::default(),
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
-    if !cluster_replica_sizes
-        .0
-        .contains_key(&args.bootstrap_default_cluster_replica_size)
-    {
-        bail!("--bootstrap-default-cluster-replica-size must name a size in the cluster replica size map");
-    }
-
-    if !args.availability_zone.iter().all_unique() {
-        bail!("--availability-zone values must be unique");
-    }
-
-    // Make later logic for choosing AZs unbiased
-    use rand::seq::SliceRandom;
-    args.availability_zone.shuffle(&mut rand::thread_rng());
 
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         sql_listen_addr: args.sql_listen_addr,
