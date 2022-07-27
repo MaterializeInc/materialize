@@ -20,7 +20,6 @@ use mz_compute_client::command::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr};
 use mz_ore::id_gen::IdGen;
-use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};

@@ -18,8 +18,8 @@ use std::{collections::HashMap, num::NonZeroUsize};
 
 use futures::{FutureExt, StreamExt};
 use mz_expr::explain::Indices;
-use mz_ore::str::separated;
-use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, RenderingContext};
+use mz_ore::str::{bracketed, separated};
+use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, RenderingContext, ExprHumanizer};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -68,6 +68,73 @@ pub enum FastPathPlan<T = mz_repr::Timestamp> {
     Constant(Result<Vec<(Row, T, Diff)>, EvalError>),
     /// The view can be read out of an existing arrangement.
     PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
+}
+
+impl FastPathPlan {
+    pub fn explain_old<'a>(
+        &self,
+        humanizer: &'a dyn ExprHumanizer,
+    ) -> String {
+        let mut explanation = String::new();
+        use std::fmt::Write;
+        match self {
+            FastPathPlan::PeekExisting(index, value, mfp) => {
+                writeln!(
+                    &mut explanation,
+                    "%0 =\n| ReadExistingIndex {}",
+                    humanizer
+                        .humanize_id(*index)
+                        .unwrap_or_else(|| index.to_string())
+                )
+                .unwrap();
+                if let Some(value) = value {
+                    writeln!(&mut explanation, "| | Lookup value {}", value).unwrap();
+                }
+                if !mfp.is_identity() {
+                    let (map, filter, project) = mfp.as_map_filter_project();
+                    if !map.is_empty() {
+                        writeln!(&mut explanation, "| Map {}", separated(", ", &map)).unwrap();
+                    }
+                    if !filter.is_empty() {
+                        writeln!(
+                            &mut explanation,
+                            "| Filter {}",
+                            separated(", ", filter)
+                        ).unwrap();
+                    }
+                    if project.len() != mfp.input_arity + map.len()
+                        || project.iter().enumerate().any(|(i, p)| i != *p)
+                    {
+                        writeln!(
+                            &mut explanation,
+                            "| Project {}",
+                            bracketed("(", ")", Indices(&project))
+                        ).unwrap();
+                    }
+                }
+            }
+            FastPathPlan::Constant(rows) => {
+                write!(&mut explanation, "%0 =\n| Constant").unwrap();
+                match rows {
+                    Ok(rows) if !rows.is_empty() => writeln!(
+                        &mut explanation,
+                        " {}",
+                        separated(
+                            " ",
+                            rows.iter().map(|(row, _, count)| if *count == 1 {
+                                format!("{row}")
+                            } else {
+                                format!("({row} x {count})")
+                            })
+                        )
+                    ).unwrap(),
+                    Ok(_) => writeln!(&mut explanation).unwrap(),
+                    Err(e) => writeln!(&mut explanation, " Err({})", e.to_string().quoted()).unwrap(),
+                };
+            }
+        }
+        explanation
+    }
 }
 
 impl<'a, T> DisplayText<RenderingContext<'a>> for FastPathPlan<T> {

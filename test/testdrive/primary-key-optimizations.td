@@ -47,28 +47,28 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 # Optimization is possible - no distinct is mentioned in the plan
 
 > EXPLAIN SELECT DISTINCT key1, key2 FROM t1;
-"%0 =| Get t1| Project (#0, #1)"
+"%0 =| ReadExistingIndex t1_primary_idx| Project (#0, #1)"
 
 > EXPLAIN SELECT DISTINCT key2, key1 FROM t1;
-"%0 =| Get t1| Project (#1, #0)"
+"%0 =| ReadExistingIndex t1_primary_idx| Project (#1, #0)"
 
 > EXPLAIN SELECT DISTINCT key2, key1, key2 FROM t1;
-"%0 =| Get t1| Project (#1, #0, #1)"
+"%0 =| ReadExistingIndex t1_primary_idx| Project (#1, #0, #1)"
 
 > EXPLAIN SELECT key2, key1 FROM t1 GROUP BY key1, key2;
-"%0 =| Get t1| Project (#1, #0)"
+"%0 =| ReadExistingIndex t1_primary_idx| Project (#1, #0)"
 
 > EXPLAIN SELECT key2, key1 FROM t1 GROUP BY key1, key2, key2 || 'a';
-"%0 =| Get t1| Project (#1, #0)"
+"%0 =| ReadExistingIndex t1_primary_idx| Project (#1, #0)"
 
 > EXPLAIN SELECT DISTINCT key1, key2, nokey FROM t1;
-"%0 =| Get t1"
+"%0 =| ReadExistingIndex t1_primary_idx"
 
 > EXPLAIN SELECT key1, key2, nokey FROM t1 GROUP BY key1, key2, nokey;
-"%0 =| Get t1"
+"%0 =| ReadExistingIndex t1_primary_idx"
 
 > EXPLAIN SELECT key1, key2 FROM t1 GROUP BY key1, key2 HAVING key1 = 'a';
-"%0 =| Get t1| Map \"a\"| Filter (#0 = \"a\")| Project (#3, #1)"
+"%0 =| ReadExistingIndex t1_primary_idx| Map \"a\"| Filter (#0 = \"a\")| Project (#3, #1)"
 
 # Optimization not possible - explicit distinct is present in plan
 
@@ -97,13 +97,13 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 > CREATE VIEW v1 AS SELECT * FROM t1;
 
 > EXPLAIN SELECT DISTINCT key1, key2 FROM v1;
-"%0 =| Get t1| Project (#0, #1)"
+"%0 =| ReadExistingIndex t1_primary_idx| Project (#0, #1)"
 
 > CREATE VIEW v2 AS SELECT * FROM t1;
 > CREATE DEFAULT INDEX ON v2;
 
 > EXPLAIN SELECT DISTINCT key1, key2 FROM v2;
-"%0 =| Get v2| Project (#0, #1)"
+"%0 =| ReadExistingIndex v2_primary_idx| Project (#0, #1)"
 
 # Make sure that having a DISTINCT or GROUP BY confers PK semantics on upstream views
 
@@ -111,24 +111,24 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 > CREATE DEFAULT INDEX ON distinct_view;
 
 > EXPLAIN SELECT DISTINCT nokey FROM distinct_view
-"%0 =| Get distinct_view"
+"%0 =| ReadExistingIndex distinct_view_primary_idx"
 
 > CREATE VIEW group_by_view AS SELECT nokey || 'a' AS f1 , nokey || 'b' AS f2 FROM t1 GROUP BY nokey || 'a', nokey || 'b';
 > CREATE DEFAULT INDEX ON group_by_view;
 
 > EXPLAIN SELECT DISTINCT f1, f2 FROM group_by_view;
-"%0 =| Get group_by_view"
+"%0 =| ReadExistingIndex group_by_view_primary_idx"
 
 # Redundant table is eliminated from an inner join using PK information
 
 > EXPLAIN SELECT a1.* FROM t1 AS a1, t1 AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
-"%0 =| Get t1"
+"%0 =| ReadExistingIndex t1_primary_idx"
 
 > EXPLAIN SELECT a1.* FROM v1 AS a1, v1 AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
-"%0 =| Get t1"
+"%0 =| ReadExistingIndex t1_primary_idx"
 
 > EXPLAIN SELECT a1.* FROM v2 AS a1, v2 AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
-"%0 =| Get v2"
+"%0 =| ReadExistingIndex v2_primary_idx"
 
 # Declare a key constraint (PRIMARY KEY NOT ENFORCED); otherwise identical tests as above.
 
@@ -157,28 +157,28 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 # Optimization is possible - no distinct is mentioned in the plan
 
 > EXPLAIN SELECT DISTINCT key1, key2 FROM t1_pkne;
-"%0 =| Get t1_pkne| Project (#0, #1)"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx| Project (#0, #1)"
 
 > EXPLAIN SELECT DISTINCT key2, key1 FROM t1_pkne;
-"%0 =| Get t1_pkne| Project (#1, #0)"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx| Project (#1, #0)"
 
 > EXPLAIN SELECT DISTINCT key2, key1, key2 FROM t1_pkne;
-"%0 =| Get t1_pkne| Project (#1, #0, #1)"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx| Project (#1, #0, #1)"
 
 > EXPLAIN SELECT key2, key1 FROM t1_pkne GROUP BY key1, key2;
-"%0 =| Get t1_pkne| Project (#1, #0)"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx| Project (#1, #0)"
 
 > EXPLAIN SELECT key2, key1 FROM t1_pkne GROUP BY key1, key2, key2 || 'a';
-"%0 =| Get t1_pkne| Project (#1, #0)"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx| Project (#1, #0)"
 
 > EXPLAIN SELECT DISTINCT key1, key2, nokey FROM t1_pkne;
-"%0 =| Get t1_pkne"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx"
 
 > EXPLAIN SELECT key1, key2, nokey FROM t1_pkne GROUP BY key1, key2, nokey;
-"%0 =| Get t1_pkne"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx"
 
 > EXPLAIN SELECT key1, key2 FROM t1_pkne GROUP BY key1, key2 HAVING key1 = 'a';
-"%0 =| Get t1_pkne| Map \"a\"| Filter (#0 = \"a\")| Project (#3, #1)"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx| Map \"a\"| Filter (#0 = \"a\")| Project (#3, #1)"
 
 # Optimization not possible - explicit distinct is present in plan
 
@@ -208,13 +208,13 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 > CREATE VIEW v1_pkne AS SELECT * FROM t1_pkne;
 
 > EXPLAIN SELECT DISTINCT key1, key2 FROM v1_pkne;
-"%0 =| Get t1_pkne| Project (#0, #1)"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx| Project (#0, #1)"
 
 > CREATE VIEW v2_pkne AS SELECT * FROM t1_pkne;
 > CREATE DEFAULT INDEX ON v2_pkne;
 
 > EXPLAIN SELECT DISTINCT key1, key2 FROM v2_pkne;
-"%0 =| Get v2_pkne| Project (#0, #1)"
+"%0 =| ReadExistingIndex v2_pkne_primary_idx| Project (#0, #1)"
 
 # Make sure that having a DISTINCT or GROUP BY confers PK semantics on upstream views
 
@@ -222,21 +222,21 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 > CREATE DEFAULT INDEX ON distinct_view_pkne;
 
 > EXPLAIN SELECT DISTINCT nokey FROM distinct_view_pkne
-"%0 =| Get distinct_view_pkne"
+"%0 =| ReadExistingIndex distinct_view_pkne_primary_idx"
 
 > CREATE VIEW group_by_view_pkne AS SELECT nokey || 'a' AS f1 , nokey || 'b' AS f2 FROM t1_pkne GROUP BY nokey || 'a', nokey || 'b';
 > CREATE DEFAULT INDEX ON group_by_view_pkne;
 
 > EXPLAIN SELECT DISTINCT f1, f2 FROM group_by_view_pkne;
-"%0 =| Get group_by_view_pkne"
+"%0 =| ReadExistingIndex group_by_view_pkne_primary_idx"
 
 # Redundant table is eliminated from an inner join using PK information
 
 > EXPLAIN SELECT a1.* FROM t1_pkne AS a1, t1_pkne AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
-"%0 =| Get t1_pkne"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx"
 
 > EXPLAIN SELECT a1.* FROM v1_pkne AS a1, v1_pkne AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
-"%0 =| Get t1_pkne"
+"%0 =| ReadExistingIndex t1_pkne_primary_idx"
 
 > EXPLAIN SELECT a1.* FROM v2_pkne AS a1, v2_pkne AS a2 WHERE a1.key1 = a2.key1 AND a1.key2 = a2.key2;
-"%0 =| Get v2_pkne"
+"%0 =| ReadExistingIndex v2_pkne_primary_idx"

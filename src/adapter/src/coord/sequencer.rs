@@ -2357,13 +2357,20 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStageOld::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
+                let mut dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
                 let formatter = DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
                     Explanation::new_from_dataflow(&dataflow, &catalog, &formatter);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
+                }
+                let mut explanation = explanation.to_string();
+                if view_id == GlobalId::Explain {
+                    let fast_path_plan = peek::create_plan(&mut dataflow, view_id).expect("Fast path planning failed; unrecoverable error");
+                    if let peek::Plan::FastPath(fast_path_plan) = fast_path_plan {
+                        explanation = fast_path_plan.explain_old(&catalog);
+                    }
                 }
                 explanation.to_string()
             }
