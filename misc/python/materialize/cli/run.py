@@ -188,10 +188,15 @@ def _run_sql(url: str, sql: str) -> None:
 
 
 def _handle_lingering_services(kill: bool = False) -> None:
+    uid = os.getuid()
     for proc in psutil.process_iter():
         try:
             if proc.name() in REQUIRED_SERVICES:
-                if kill:
+                if proc.uids().real != uid:
+                    print(
+                        f"Ignoring {proc.name()} process with different UID (PID {proc.pid}, likely running in Docker)"
+                    )
+                elif kill:
                     print(f"Killing orphaned {proc.name()} process (PID {proc.pid})")
                     proc.kill()
                 else:
