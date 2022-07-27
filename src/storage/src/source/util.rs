@@ -70,6 +70,7 @@ where
 
     builder.build(|capabilities| {
         let cap_set = CapabilitySet::from_elem(capabilities.into_element());
+        let mut capability = Some(cap_set);
 
         let drop_activator = Rc::new(ActivateOnDrop::new(
             (),
@@ -83,27 +84,20 @@ where
             _activator: drop_activator,
         });
 
-        let tick = construct(operator_info);
-        let mut cap_and_tick = Some((cap_set, tick));
+        let mut tick = construct(operator_info);
 
         move |_frontier| {
             // Drop all capabilities if `token` is dropped.
             if drop_activator_weak.upgrade().is_none() {
-                // Drop the tick closure, too, in case dropping anything it owns
-                // (such as a MutexGuard) is important.
-                //
-                // TODO: This assumes that `tick` is "cancel safe" (in async
-                // lingo). Perhaps we want a more graceful shutdown protocol
-                // instead/in addition.
-                cap_and_tick = None;
+                capability = None;
             }
-            if let Some((cap, tick)) = &mut cap_and_tick {
+            if let Some(cap) = &mut capability {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
                 tick(cap, &mut data_output.activate());
                 if cap.is_empty() {
                     // The inner source is finished. Drop our capability.
-                    cap_and_tick = None;
+                    capability = None;
                 }
             }
         }
