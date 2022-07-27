@@ -291,7 +291,7 @@ pub struct CollectionMetadata {
     /// The persist shard containing the contents of this storage collection
     pub data_shard: ShardId,
     /// The persist shard containing the status updates for this storage collection
-    pub status_shard: ShardId,
+    pub status_shard: Option<ShardId>,
 }
 
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
@@ -301,7 +301,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             consensus_uri: self.persist_location.consensus_uri.clone(),
             data_shard: self.data_shard.to_string(),
             remap_shard: self.remap_shard.to_string(),
-            status_shard: self.status_shard.to_string(),
+            status_shard: self.status_shard.map(|s| s.to_string()),
         }
     }
 
@@ -321,8 +321,8 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .map_err(TryFromProtoError::InvalidShardId)?,
             status_shard: value
                 .status_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
+                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
+                .transpose()?,
         })
     }
 }
@@ -611,13 +611,15 @@ where
 
             let status_shard = if let Some(status_collection_id) = description.status_collection_id
             {
-                METADATA_COLLECTION
-                    .peek_key_one(&mut self.state.stash, &status_collection_id)
-                    .await?
-                    .ok_or(StorageError::IdentifierMissing(status_collection_id))?
-                    .data_shard
+                Some(
+                    METADATA_COLLECTION
+                        .peek_key_one(&mut self.state.stash, &status_collection_id)
+                        .await?
+                        .ok_or(StorageError::IdentifierMissing(status_collection_id))?
+                        .data_shard,
+                )
             } else {
-                ShardId::new()
+                None
             };
 
             let metadata = CollectionMetadata {
