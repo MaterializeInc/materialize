@@ -105,5 +105,7 @@ prost = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" 
 prost-build = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-derive = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-types = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 vte = { git = "https://github.com/alacritty/vte" }
