@@ -392,7 +392,7 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 
 ## Related pages
 
-- [`CREATE SECRET`]()
+- `CREATE SECRET`
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
 - [Using Debezium](/integrations/debezium/)

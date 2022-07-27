@@ -7,7 +7,7 @@ menu:
 
 ---
 
-A [connection](../../overview/key-concepts/#connection) describes how to connect and authenticate to an external system you want Materialize to read data from. Once created, a connection is **reusable** across multiple [`CREATE SOURCE`](/sql/create-source) statements.
+A connection describes how to connect and authenticate to an external system you want Materialize to read data from. Once created, a connection is **reusable** across multiple [`CREATE SOURCE`](/sql/create-source) statements.
 
 [//]: # "TODO(morsapaes) Adapt once sinks are wired up to use connections."
 
@@ -17,7 +17,7 @@ A [connection](../../overview/key-concepts/#connection) describes how to connect
 
 ## Kafka
 
-### SSL
+### SSL {#kafka-ssl}
 
 To connect to a Kafka broker that requires [SSL authentication](https://docs.confluent.io/platform/current/kafka/authentication_ssl.html), use the provided options.
 
@@ -44,7 +44,7 @@ CREATE CONNECTION kafka_connection
     SSL CERTIFICATE = SECRET kafka_ssl_crt;
 ```
 
-#### Confluent Schema Registry SSL options
+#### Confluent Schema Registry SSL options {#csr-ssl}
 
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:| ------------
@@ -71,7 +71,7 @@ CREATE CONNECTION csr_ssl
     PASSWORD = SECRET csr_password;
 ```
 
-### SASL
+### SASL {#kafka-sasl}
 
 To create a connection to a Kafka broker that requires [SASL authentication](https://docs.confluent.io/platform/current/kafka/authentication_sasl/auth-sasl-overview.html), use the provided options.
 
@@ -107,7 +107,7 @@ Field                       | Value            | Required | Description
 `HOST`                      | `text`           | ✓        | Database hostname.
 `PORT`                      | `int4`           |          | Default: `5432`. Port number to connect to at the server host.
 `PASSWORD`                  | secret           |          | Password for the connection
-`SSH TUNNEL`                | `text`           |          | `SSH TUNNEL` connection name. See [SSH tunneling](#ssh-tunneling).
+`SSH TUNNEL`                | `text`           |          | `SSH TUNNEL` connection name. See [SSH tunneling](#postgres-ssh).
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL MODE`                  | `text`           |          | Default: `disable`. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
 `SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate.
@@ -129,7 +129,7 @@ CREATE CONNECTION pg_connection
     DATABASE 'postgres';
 ```
 
-### SSH tunneling
+### SSH tunneling {#postgres-ssh}
 
 If your PostgreSQL instance is running in a Virtual Private Cloud (VPC), you can securely connect via an SSH bastion host.
 
@@ -151,5 +151,5 @@ CREAT CONNECTION ssh_connection
 
 ## Related pages
 
-- [`CREATE SECRET`]()
+- `CREATE SECRET`
 - [`CREATE SOURCE`](/sql/create-source)

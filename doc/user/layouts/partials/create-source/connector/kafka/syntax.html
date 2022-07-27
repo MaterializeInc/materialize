@@ -1,4 +1,4 @@
-**CONNECTION** _connection_name_ | The name of the Kafka [connection](../../overview/key-concepts/#connection) to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation page.
+**CONNECTION** _connection_name_ | The name of the Kafka connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation page.
 **TOPIC** _topic_ | The Kafka topic you want to subscribe to.
 **INCLUDE KEY** | Include a column containing the Kafka message key. If the key is encoded using a format that includes schemas the column will take its name from the schema. For unnamed formats (e.g. `TEXT`), the column will be named `key`. The column can be renamed with the optional **AS** *name* statement.
 **INCLUDE PARTITION** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause. *New in v0.12.0.*

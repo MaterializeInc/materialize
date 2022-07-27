@@ -25,7 +25,7 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**CONNECTION** _connection_name_ | The name of the Postgres [connection](../../overview/key-concepts/#connection) to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
+**CONNECTION** _connection_name_ | The name of the Postgres connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 
 ### `WITH` options
@@ -178,5 +178,8 @@ FROM POSTGRES
 
 ## Related pages
 
-- [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)
+- `CREATE SECRET`
+- [`CREATE CONNECTION`](/sql/create-connection)
+- [`CREATE SOURCE`](../)
 - [`CREATE VIEWS`](../../create-views)
+- [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source)
