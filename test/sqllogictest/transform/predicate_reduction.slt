@@ -97,7 +97,7 @@ EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t1 WHERE (f1 is null)::int - 1 = 0 a
 %2 =
 | Join %0 %1
 | | implementation = Unimplemented
-| Filter (((boolean_to_integer((#0) IS NULL) - 1) = 0) && ((#0) IS NULL || ((boolean_to_integer((#0) IS NULL) - 1) = 0)))
+| Filter (((boolean_to_integer((#0) IS NULL) - 1) = 0) AND ((#0) IS NULL OR ((boolean_to_integer((#0) IS NULL) - 1) = 0)))
 
 EOF
 

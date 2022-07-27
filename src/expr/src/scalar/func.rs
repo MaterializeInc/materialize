@@ -5740,8 +5740,8 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ErrorIfNull => f.write_str("error_if_null"),
             VariadicFunc::DateBinTimestamp => f.write_str("timestamp_bin"),
             VariadicFunc::DateBinTimestampTz => f.write_str("timestamptz_bin"),
-            VariadicFunc::And => f.write_str("&&"),
-            VariadicFunc::Or => f.write_str("||"),
+            VariadicFunc::And => f.write_str("AND"),
+            VariadicFunc::Or => f.write_str("OR"),
         }
     }
 }
