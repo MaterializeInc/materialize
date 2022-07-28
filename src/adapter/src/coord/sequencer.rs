@@ -1396,18 +1396,30 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::new();
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
-        for name in plan.names {
-            let instance = self.catalog.resolve_compute_instance(&name)?;
+        for compute_name in plan.names {
+            let instance = self.catalog.resolve_compute_instance(&compute_name)?;
             instance_replica_drop_sets.push((instance.id, instance.replicas_by_id.clone()));
             for replica_name in instance.replica_id_by_name.keys() {
                 ops.push(catalog::Op::DropComputeInstanceReplica {
                     name: replica_name.to_string(),
-                    compute_id: instance.id,
+                    compute_name: compute_name.clone(),
                 });
             }
-            let ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
+
+            let mut ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items that depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeInstanceReplica.
+            for replica in instance.replicas_by_id.values() {
+                let log_ids = replica.config.persisted_logs.get_log_ids();
+                for log_id in log_ids {
+                    ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                }
+            }
+
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
-            ops.push(catalog::Op::DropComputeInstance { name });
+            ops.push(catalog::Op::DropComputeInstance { name: compute_name });
         }
 
         self.catalog_transact(Some(session), ops, |_| Ok(()))
@@ -1434,13 +1446,28 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         let mut ops = Vec::with_capacity(names.len());
         let mut replicas_to_drop = Vec::with_capacity(names.len());
+        let mut ids_to_drop = vec![];
         for (instance_name, replica_name) in names {
             let instance = self.catalog.resolve_compute_instance(&instance_name)?;
             ops.push(catalog::Op::DropComputeInstanceReplica {
                 name: replica_name.clone(),
-                compute_id: instance.id,
+                compute_name: instance_name.clone(),
             });
             let replica_id = instance.replica_id_by_name[&replica_name];
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items that depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeInstanceReplica.
+            for log_id in instance
+                .replicas_by_id
+                .get(&replica_id)
+                .unwrap()
+                .config
+                .persisted_logs
+                .get_log_ids()
+            {
+                ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+            }
 
             replicas_to_drop.push((
                 instance.id,
@@ -1448,6 +1475,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 instance.replicas_by_id[&replica_id].clone(),
             ));
         }
+
+        ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
 
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;

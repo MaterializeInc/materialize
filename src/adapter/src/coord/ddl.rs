@@ -117,8 +117,23 @@ impl<S: Append + 'static> Coordinator<S> {
                     _ => (),
                 }
             } else if let catalog::Op::DropComputeInstance { name } = op {
-                let id = self.catalog.resolve_compute_instance(name)?.id;
+                let instance = self.catalog.resolve_compute_instance(name)?;
+                let id = instance.id;
+
+                // Drop the introspection sources
+                for replica in instance.replicas_by_id.values() {
+                    sources_to_drop.extend(replica.config.persisted_logs.get_log_ids());
+                }
+
+                // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
+            } else if let catalog::Op::DropComputeInstanceReplica { name, compute_name } = op {
+                let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
+                let replica_id = &compute_instance.replica_id_by_name[name];
+                let replica = &compute_instance.replicas_by_id[&replica_id];
+
+                // Drop the introspection sources
+                sources_to_drop.extend(replica.config.persisted_logs.get_log_ids());
             }
         }
 
