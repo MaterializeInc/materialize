@@ -136,7 +136,7 @@ contains:Cannot call function current_schemas(): arguments cannot be implicitly 
 name                nullable    type
 ------------------------------------------------------------
  oid                false       oid
- name               false       text
+ rolname            false       text
  rolsuper           false       boolean
  rolinherit         false       boolean
  rolcreaterole      false       boolean
