@@ -33,6 +33,7 @@ use timely::progress::Timestamp;
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::encoding::parse_id;
@@ -41,6 +42,7 @@ use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
 
+pub mod async_runtime;
 pub mod batch;
 pub mod cache;
 pub mod error;
@@ -277,6 +279,7 @@ pub struct PersistClient {
     blob: Arc<dyn Blob + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
+    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
 }
 
 impl PersistClient {
@@ -290,6 +293,7 @@ impl PersistClient {
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     ) -> Result<Self, ExternalError> {
         trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
@@ -299,6 +303,7 @@ impl PersistClient {
             blob,
             consensus,
             metrics,
+            cpu_heavy_runtime,
         })
     }
 
@@ -414,6 +419,7 @@ impl PersistClient {
                 self.cfg.clone(),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.metrics),
+                Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
             )
         });

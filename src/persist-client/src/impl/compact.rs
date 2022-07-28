@@ -21,9 +21,9 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
-use tokio::runtime::Handle;
 use tracing::{debug_span, warn, Instrument, Span};
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
 use crate::r#impl::machine::Machine;
 use crate::r#impl::state::HollowBatch;
@@ -64,6 +64,7 @@ pub struct Compactor {
     cfg: PersistConfig,
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
+    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     writer_id: WriterId,
 }
 
@@ -72,12 +73,14 @@ impl Compactor {
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
     ) -> Self {
         Compactor {
             cfg,
             blob,
             metrics,
+            cpu_heavy_runtime,
             writer_id,
         }
     }
@@ -90,7 +93,7 @@ impl Compactor {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         assert_eq!(req.shard_id, machine.shard_id());
 
@@ -110,6 +113,7 @@ impl Compactor {
         let cfg = self.cfg.clone();
         let blob = Arc::clone(&self.blob);
         let metrics = Arc::clone(&self.metrics);
+        let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let mut machine = machine.clone();
         let writer_id = self.writer_id.clone();
 
@@ -126,9 +130,9 @@ impl Compactor {
                 let start = Instant::now();
                 let res = Self::compact::<T, D>(
                     cfg,
-                    Handle::current(),
                     blob,
                     Arc::clone(&metrics),
+                    Arc::clone(&cpu_heavy_runtime),
                     req,
                     writer_id,
                 )
@@ -161,17 +165,17 @@ impl Compactor {
 
     pub async fn compact<T, D>(
         cfg: PersistConfig,
-        handle: Handle,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         req: CompactReq<T>,
         writer_id: WriterId,
     ) -> Result<CompactRes<T>, anyhow::Error>
     where
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
-        let compact_blocking = move || {
+        let compact_blocking = async move {
             let () = Self::validate_req(&req)?;
 
             let mut parts = BatchParts::new(
@@ -192,7 +196,7 @@ impl Compactor {
             let mut updates = Vec::new();
             for part in req.inputs.iter() {
                 for key in part.keys.iter() {
-                    handle.block_on(fetch_batch_part(
+                    fetch_batch_part(
                         &req.shard_id,
                         blob.as_ref(),
                         &metrics,
@@ -203,7 +207,8 @@ impl Compactor {
                             let d = D::decode(d);
                             updates.push(((k.to_vec(), v.to_vec()), t, d));
                         },
-                    ));
+                    )
+                    .await;
                 }
             }
             consolidate_updates(&mut updates);
@@ -215,21 +220,17 @@ impl Compactor {
 
                 // Flush out filled parts as we go to keep bounded memory use.
                 for chunk in builder.take_filled() {
-                    handle.block_on(parts.write(
-                        chunk,
-                        req.desc.upper().clone(),
-                        req.desc.since().clone(),
-                    ));
+                    parts
+                        .write(chunk, req.desc.upper().clone(), req.desc.since().clone())
+                        .await;
                 }
             }
             for chunk in builder.finish() {
-                handle.block_on(parts.write(
-                    chunk,
-                    req.desc.upper().clone(),
-                    req.desc.since().clone(),
-                ));
+                parts
+                    .write(chunk, req.desc.upper().clone(), req.desc.since().clone())
+                    .await;
             }
-            let keys = handle.block_on(parts.finish());
+            let keys = parts.finish().await;
 
             Ok(CompactRes {
                 output: HollowBatch {
@@ -241,13 +242,14 @@ impl Compactor {
         };
 
         // Compaction is cpu intensive, so be polite and spawn it on the
-        // blocking threadpool.
+        // CPU heavy runtime.
         let compact_span = debug_span!("compact::consolidate");
-        mz_ore::task::spawn_blocking(
-            || "persist::compact::consolidate",
-            move || compact_span.in_scope(compact_blocking),
-        )
-        .await?
+        cpu_heavy_runtime
+            .spawn_named(
+                || "persist::compact::consolidate",
+                compact_blocking.instrument(compact_span),
+            )
+            .await?
     }
 
     fn validate_req<T: Timestamp>(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
@@ -325,9 +327,9 @@ mod tests {
         };
         let res = Compactor::compact::<u64, i64>(
             write.cfg.clone(),
-            Handle::current(),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
+            Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
             write.writer_id.clone(),
         )

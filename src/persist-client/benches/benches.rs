@@ -23,6 +23,7 @@ use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::s3::{S3Blob, S3BlobConfig};
 use mz_persist::workload::DataGenerator;
+use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Metrics, PersistClient, PersistConfig};
 use mz_persist_types::Codec64;
@@ -99,11 +100,13 @@ async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
     let consensus = Arc::new(MemConsensus::default());
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     PersistClient::new(
         PersistConfig::new(SYSTEM_TIME.clone()),
         blob,
         consensus,
         metrics,
+        cpu_heavy_runtime,
     )
     .await
 }
@@ -121,11 +124,13 @@ async fn create_file_pg_client(
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     let client = PersistClient::new(
         PersistConfig::new(SYSTEM_TIME.clone()),
         blob,
         consensus,
         metrics,
+        cpu_heavy_runtime,
     )
     .await?;
     Ok(Some((postgres_consensus, client, dir)))
@@ -146,11 +151,13 @@ async fn create_s3_pg_client(
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     let client = PersistClient::new(
         PersistConfig::new(SYSTEM_TIME.clone()),
         blob,
         consensus,
         metrics,
+        cpu_heavy_runtime,
     )
     .await?;
     Ok(Some((postgres_consensus, client)))
