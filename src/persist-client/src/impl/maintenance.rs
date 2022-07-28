@@ -21,7 +21,7 @@ use std::fmt::Debug;
 use timely::progress::Timestamp;
 use tokio::task::JoinHandle;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LeaseExpiration {
     pub(crate) readers: Vec<ReaderId>,
     pub(crate) writers: Vec<WriterId>,
@@ -38,7 +38,7 @@ pub struct LeaseExpiration {
 /// Operations that run regularly once a handle is registered, such
 /// as heartbeats, are expected to always perform maintenance.
 #[must_use]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RoutineMaintenance {
     pub(crate) garbage_collection: Option<GcReq>,
     pub(crate) lease_expiration: Option<LeaseExpiration>,
@@ -110,7 +110,7 @@ impl RoutineMaintenance {
                 join_handles.push(mz_ore::task::spawn(
                     || "persist::automatic_write_expiration",
                     async move {
-                        let _ = machine.expire_writer(&expired).await;
+                        machine.expire_writer(&expired).await;
                     },
                 ));
             }
@@ -124,7 +124,7 @@ impl RoutineMaintenance {
 /// routine maintenance common to all handles. It is expected that
 /// writers always perform maintenance.
 #[must_use]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WriterMaintenance<T> {
     pub(crate) routine: RoutineMaintenance,
     pub(crate) compaction: Vec<CompactReq<T>>,

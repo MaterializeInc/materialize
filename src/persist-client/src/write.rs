@@ -544,8 +544,7 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
         trace!("WriteHandle::expire");
-        let (_seq_no, maintenance) = self.machine.expire_writer(&self.writer_id).await;
-        maintenance.perform(&self.machine, &self.gc);
+        self.machine.expire_writer(&self.writer_id).await;
         self.explicitly_expired = true;
     }
 
@@ -625,7 +624,6 @@ where
             }
         };
         let mut machine = self.machine.clone();
-        let gc = self.gc.clone();
         let writer_id = self.writer_id.clone();
         // Spawn a best-effort task to expire this write handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
@@ -637,8 +635,7 @@ where
             || format!("WriteHandle::expire ({})", self.writer_id),
             async move {
                 trace!("WriteHandle::expire");
-                let (_, maintenance) = machine.expire_writer(&writer_id).await;
-                maintenance.perform(&machine, &gc);
+                machine.expire_writer(&writer_id).await;
             }
             .instrument(expire_span),
         );

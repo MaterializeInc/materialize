@@ -157,12 +157,10 @@ where
                 // collection of blobs.
                 None => {
                     trace!("SnapshotIter::expire");
-                    let (_, maintenance) = self
-                        .handle
+                    self.handle
                         .machine
                         .expire_reader(&self.handle.reader_id)
                         .await;
-                    maintenance.perform(&self.handle.machine, &self.handle.gc);
                     self.handle.explicitly_expired = true;
                     return None;
                 }
@@ -755,8 +753,7 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
         trace!("ReadHandle::expire");
-        let (_, maintenance) = self.machine.expire_reader(&self.reader_id).await;
-        maintenance.perform(&self.machine, &self.gc);
+        self.machine.expire_reader(&self.reader_id).await;
         self.explicitly_expired = true;
     }
 
@@ -799,7 +796,6 @@ where
             }
         };
         let mut machine = self.machine.clone();
-        let gc = self.gc.clone();
         let reader_id = self.reader_id.clone();
         // Spawn a best-effort task to expire this read handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
@@ -811,8 +807,7 @@ where
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
                 trace!("ReadHandle::expire");
-                let (_, maintenance) = machine.expire_reader(&reader_id).await;
-                maintenance.perform(&machine, &gc);
+                machine.expire_reader(&reader_id).await;
             }
             .instrument(expire_span),
         );
