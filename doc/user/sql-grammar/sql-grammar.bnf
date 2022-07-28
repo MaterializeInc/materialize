@@ -147,6 +147,8 @@ drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
+drop_secret ::=
+    'DROP' 'SECRET' ('IF EXISTS')? secret_name ('CASCADE' | 'RESTRICT')?
 drop_schema ::=
     'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')?
 drop_sink ::=
