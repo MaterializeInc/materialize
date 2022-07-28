@@ -37,10 +37,12 @@ use crate::r#impl::state::{
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
 use crate::write::WriterId;
-use crate::ShardId;
+use crate::{PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
+    // TODO: Remove cfg after we remove the read lease expiry hack.
+    cfg: PersistConfig,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
     gc: GarbageCollector,
@@ -52,6 +54,7 @@ pub struct Machine<K, V, T, D> {
 impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
+            cfg: self.cfg.clone(),
             consensus: Arc::clone(&self.consensus),
             metrics: Arc::clone(&self.metrics),
             state: self.state.clone(),
@@ -68,6 +71,7 @@ where
     D: Semigroup + Codec64,
 {
     pub async fn new(
+        cfg: PersistConfig,
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
@@ -83,6 +87,7 @@ where
             })
             .await?;
         Ok(Machine {
+            cfg,
             consensus,
             metrics,
             state,
@@ -162,6 +167,8 @@ where
                     state.compare_and_append(batch, writer_id)
                 })
                 .await?;
+            // TODO: This is not a great place to hook this in.
+            self.maybe_expire_readers();
 
             match res {
                 Ok(merge_reqs) => {
@@ -363,7 +370,11 @@ where
         loop {
             match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
                 Ok((seqno, x)) => match x {
-                    Ok(x) => return (seqno, x),
+                    Ok(x) => {
+                        // TODO: This is not a great place to hook this in.
+                        self.maybe_expire_readers();
+                        return (seqno, x);
+                    }
                     Err(infallible) => match infallible {},
                 },
                 Err(err) => {
@@ -474,6 +485,20 @@ where
             }
         })
         .await
+    }
+
+    // HACK: Temporary impl of read lease expiry because otherwise gc can't work
+    // after a restart (the unexpired reader that is never coming back holds
+    // back the seqno cap forever) and we leak data like crazy.
+    fn maybe_expire_readers(&self) {
+        let readers_needing_expiration = self.state.readers_needing_expiration((self.cfg.now)());
+        for reader_needing_expiration in readers_needing_expiration {
+            self.metrics.lease.timeout_read.inc();
+            let mut machine = self.clone();
+            let _ = mz_ore::task::spawn(|| "persist::automatic_read_expiration", async move {
+                machine.expire_reader(&reader_needing_expiration).await
+            });
+        }
     }
 
     async fn maybe_init_state(

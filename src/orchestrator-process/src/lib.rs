@@ -23,7 +23,7 @@ use chrono::Utc;
 use futures::stream::BoxStream;
 use itertools::Itertools;
 use scopeguard::defer;
-use sysinfo::{ProcessExt, ProcessStatus, SystemExt};
+use sysinfo::{ProcessExt, ProcessStatus, RefreshKind, SystemExt};
 use tokio::fs;
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
@@ -165,7 +165,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let mut processes = vec![];
         let mut handles = vec![];
 
-        let system = sysinfo::System::new_all();
+        let mut system = None;
 
         // Decide on port mappings, and detect any non-dead processes that still exist.
         // Any such processes will be left alone; any others will be (re-)created.
@@ -181,6 +181,11 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             port_metadata_file_locations[i] = Some(port_metadata_file_location.clone());
 
             if pid_file_location.exists() && port_metadata_file_location.exists() {
+                let system = system.get_or_insert_with(|| {
+                    sysinfo::System::new_with_specifics(
+                        RefreshKind::new().with_processes(Default::default()),
+                    )
+                });
                 let pid = PidFile::read(&pid_file_location)?;
                 let port_metadata = PortMetadataFile::read(&port_metadata_file_location)?;
                 if let Some(process) = system.process(pid.into()) {

@@ -198,7 +198,7 @@ pub struct ServiceAssignments<'a> {
 }
 
 /// Describes a limit on memory.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialOrd, Eq, Ord, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
 
 impl<'de> Deserialize<'de> for MemoryLimit {

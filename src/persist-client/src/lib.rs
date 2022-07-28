@@ -355,6 +355,7 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         );
         let mut machine = Machine::new(
+            self.cfg.clone(),
             shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
@@ -400,6 +401,7 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         );
         let mut machine = Machine::new(
+            self.cfg.clone(),
             shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
