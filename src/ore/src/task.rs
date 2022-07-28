@@ -184,7 +184,7 @@ pub trait RuntimeExt {
         Fut::Output: Send + 'static;
 }
 
-impl RuntimeExt for Arc<Runtime> {
+impl RuntimeExt for &Runtime {
     fn spawn_blocking_named<Function, Output, Name, NameClosure>(
         &self,
         nc: NameClosure,
@@ -213,6 +213,36 @@ impl RuntimeExt for Arc<Runtime> {
     {
         let _g = self.enter();
         spawn(nc, future)
+    }
+}
+
+impl RuntimeExt for Arc<Runtime> {
+    fn spawn_blocking_named<Function, Output, Name, NameClosure>(
+        &self,
+        nc: NameClosure,
+        function: Function,
+    ) -> JoinHandle<Output>
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Function: FnOnce() -> Output + Send + 'static,
+        Output: Send + 'static,
+    {
+        (&**self).spawn_blocking_named(nc, function)
+    }
+
+    fn spawn_named<Fut, Name, NameClosure>(
+        &self,
+        nc: NameClosure,
+        future: Fut,
+    ) -> JoinHandle<Fut::Output>
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Fut: Future + Send + 'static,
+        Fut::Output: Send + 'static,
+    {
+        (&**self).spawn_named(nc, future)
     }
 }
 
