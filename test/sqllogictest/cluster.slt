@@ -149,6 +149,10 @@ bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primar
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  1  worker  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  2  slept_for  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  3  requested  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  1  dataflow  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  2  source  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  3  worker  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  4  delay_ns  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  1  global_id  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  2  worker  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  3  time  NULL  false
@@ -301,7 +305,7 @@ DROP CLUSTER foo, foo2, foo3 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 1;
 ----
-17
+18
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 1;
@@ -314,7 +318,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-34
+36
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -322,7 +326,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-17
+18
 
 statement error nvalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;
