@@ -131,3 +131,18 @@ contains:Cannot call function current_schemas(): arguments cannot be implicitly 
 
 > SELECT current_schemas(false)
 {public}
+
+> SHOW COLUMNS FROM pg_authid
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ rolname            false       text
+ rolsuper           false       boolean
+ rolinherit         false       boolean
+ rolcreaterole      false       boolean
+ rolcreatedb        false       boolean
+ rolcanlogin        false       boolean
+ rolreplication     false       boolean
+ rolbypassrls       false       boolean
+ rolpassword        true        text
+ rolvaliduntil      true        "timestamp with time zone"

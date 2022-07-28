@@ -590,6 +590,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
   * [`pg_views`](https://www.postgresql.org/docs/current/view-pg-views.html)
+  * [`pg_authid`](https://www.postgresql.org/docs/current/catalog-pg-authid.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in PostgreSQL, or if they do include the column the result set

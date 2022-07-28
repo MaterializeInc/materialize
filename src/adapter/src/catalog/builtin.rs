@@ -2042,6 +2042,38 @@ AS SELECT
 WHERE false",
 };
 
+pub const PG_AUTHID: BuiltinView = BuiltinView {
+    name: "pg_authid",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_authid
+AS SELECT
+    r.oid AS oid,
+    r.name AS rolname,
+    CASE
+        WHEN r.name = 'mz_system' THEN true
+        ELSE false
+    END AS rolsuper,
+    -- MZ doesn't have role inheritence
+    false AS rolinherit,
+    -- All roles can create other roles
+    true AS rolcreaterole,
+    -- All roles can create other dbs
+    true AS rolcreatedb,
+    -- All roles can login
+    true AS rolcanlogin,
+    -- MZ doesn't support replication in the same way Postgres does
+    false AS rolreplication,
+    -- MZ doesn't how row level security
+    false AS rolbypassrls,
+    -- TODO(jkosh44) purposely left out rolconnlimit for upgrade testing (MZ doesn't have a connection limit)
+    -- false AS rolconnlimit,
+    -- MZ doesn't have role passwords
+    NULL::pg_catalog.text AS rolpassword,
+    -- MZ doesn't have role passwords
+    NULL::pg_catalog.timestamptz AS rolvaliduntil
+FROM mz_catalog.mz_roles r",
+};
+
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
     id: 0,
@@ -2218,6 +2250,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
+        Builtin::View(&PG_AUTHID),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
