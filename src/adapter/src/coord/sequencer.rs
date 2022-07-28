@@ -1454,7 +1454,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let replica_id = instance.replica_id_by_name[&replica_name];
 
             // Determine from the replica which additional items to drop. This is the set
-            // of items depend on the introspection sources. The sources
+            // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
             for log_id in instance
                 .replicas_by_id
