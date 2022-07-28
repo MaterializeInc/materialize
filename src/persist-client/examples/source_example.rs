@@ -29,6 +29,7 @@ use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use mz_ore::metrics::MetricsRegistry;
+use tokio::runtime::Handle;
 use tracing::{error, trace};
 
 use mz_ore::now::SYSTEM_TIME;
@@ -196,7 +197,7 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
         Arc::new(UnreliableBlob::new(blob, unreliable.clone())) as Arc<dyn Blob + Send + Sync>;
     let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
         as Arc<dyn Consensus + Send + Sync>;
-    PersistClient::new(config, blob, consensus, metrics).await
+    PersistClient::new(config, blob, consensus, metrics, Handle::current()).await
 }
 
 mod api {

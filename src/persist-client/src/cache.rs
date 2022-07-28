@@ -16,6 +16,7 @@ use std::sync::Arc;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
+use tokio::runtime::Handle;
 use tracing::debug;
 
 use crate::r#impl::machine::retry_external;
@@ -34,16 +35,18 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) blocking_runtime: Handle,
     blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
 }
 
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
-    pub fn new(cfg: PersistConfig, registry: &MetricsRegistry) -> Self {
+    pub fn new(cfg: PersistConfig, registry: &MetricsRegistry, blocking_runtime: Handle) -> Self {
         PersistClientCache {
             cfg,
             metrics: Arc::new(Metrics::new(registry)),
+            blocking_runtime,
             blob_by_uri: HashMap::new(),
             consensus_by_uri: HashMap::new(),
         }
@@ -56,7 +59,7 @@ impl PersistClientCache {
         use mz_ore::now::SYSTEM_TIME;
 
         let cfg = PersistConfig::new(SYSTEM_TIME.clone());
-        Self::new(cfg, &MetricsRegistry::new())
+        Self::new(cfg, &MetricsRegistry::new(), Handle::current())
     }
 
     /// Returns a new [PersistClient] for interfacing with persist shards made
@@ -90,7 +93,14 @@ impl PersistClientCache {
         };
         let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)))
             as Arc<dyn Consensus + Send + Sync>;
-        PersistClient::new(self.cfg.clone(), blob, consensus, Arc::clone(&self.metrics)).await
+        PersistClient::new(
+            self.cfg.clone(),
+            blob,
+            consensus,
+            Arc::clone(&self.metrics),
+            self.blocking_runtime.clone(),
+        )
+        .await
     }
 
     pub(crate) async fn open_blob(
@@ -126,6 +136,7 @@ mod tests {
         let mut cache = PersistClientCache::new(
             PersistConfig::new(SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
+            Handle::current(),
         );
         assert_eq!(cache.blob_by_uri.len(), 0);
         assert_eq!(cache.consensus_by_uri.len(), 0);

@@ -20,7 +20,7 @@ use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
 use postgres::{NoTls, Socket};
 use tempfile::TempDir;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::Mutex;
 use tower_http::cors::AllowOrigin;
 
@@ -159,9 +159,12 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             command_wrapper: vec![],
         }))?,
     );
+    // WIP actually create a second runtime for this.
+    let blocking_runtime = Handle::current();
     let persist_clients = PersistClientCache::new(
         PersistConfig::new_for_test(config.now.clone()),
         &metrics_registry,
+        blocking_runtime,
     );
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {

@@ -64,6 +64,7 @@ pub struct Compactor {
     cfg: PersistConfig,
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
+    blocking_runtime: Handle,
     writer_id: WriterId,
 }
 
@@ -72,12 +73,14 @@ impl Compactor {
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
+        blocking_runtime: Handle,
         writer_id: WriterId,
     ) -> Self {
         Compactor {
             cfg,
             blob,
             metrics,
+            blocking_runtime,
             writer_id,
         }
     }
@@ -110,6 +113,7 @@ impl Compactor {
         let cfg = self.cfg.clone();
         let blob = Arc::clone(&self.blob);
         let metrics = Arc::clone(&self.metrics);
+        let blocking_runtime = self.blocking_runtime.clone();
         let mut machine = machine.clone();
         let writer_id = self.writer_id.clone();
 
@@ -126,7 +130,7 @@ impl Compactor {
                 let start = Instant::now();
                 let res = Self::compact::<T, D>(
                     cfg,
-                    Handle::current(),
+                    blocking_runtime,
                     blob,
                     Arc::clone(&metrics),
                     req,
@@ -161,7 +165,7 @@ impl Compactor {
 
     pub async fn compact<T, D>(
         cfg: PersistConfig,
-        handle: Handle,
+        blocking_runtime: Handle,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         req: CompactReq<T>,
@@ -177,6 +181,7 @@ impl Compactor {
             let mut parts = BatchParts::new(
                 cfg.batch_builder_max_outstanding_parts,
                 Arc::clone(&metrics),
+                blocking_runtime.clone(),
                 req.shard_id,
                 writer_id,
                 req.desc.lower().clone(),
@@ -192,7 +197,7 @@ impl Compactor {
             let mut updates = Vec::new();
             for part in req.inputs.iter() {
                 for key in part.keys.iter() {
-                    handle.block_on(fetch_batch_part(
+                    blocking_runtime.block_on(fetch_batch_part(
                         &req.shard_id,
                         blob.as_ref(),
                         &metrics,
@@ -215,7 +220,7 @@ impl Compactor {
 
                 // Flush out filled parts as we go to keep bounded memory use.
                 for chunk in builder.take_filled() {
-                    handle.block_on(parts.write(
+                    blocking_runtime.block_on(parts.write(
                         chunk,
                         req.desc.upper().clone(),
                         req.desc.since().clone(),
@@ -223,13 +228,13 @@ impl Compactor {
                 }
             }
             for chunk in builder.finish() {
-                handle.block_on(parts.write(
+                blocking_runtime.block_on(parts.write(
                     chunk,
                     req.desc.upper().clone(),
                     req.desc.since().clone(),
                 ));
             }
-            let keys = handle.block_on(parts.finish());
+            let keys = blocking_runtime.block_on(parts.finish());
 
             Ok(CompactRes {
                 output: HollowBatch {

@@ -20,12 +20,14 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
+use mz_ore::task::RuntimeExt;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 
@@ -194,6 +196,7 @@ where
     pub(crate) fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
+        blocking_runtime: Handle,
         size_hint: usize,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
@@ -203,6 +206,7 @@ where
         let parts = BatchParts::new(
             cfg.batch_builder_max_outstanding_parts,
             Arc::clone(&metrics),
+            blocking_runtime,
             shard_id,
             writer_id,
             lower.clone(),
@@ -334,6 +338,7 @@ where
 pub(crate) struct BatchParts<T> {
     max_outstanding: usize,
     metrics: Arc<Metrics>,
+    blocking_runtime: Handle,
     shard_id: ShardId,
     writer_id: WriterId,
     lower: Antichain<T>,
@@ -347,6 +352,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) fn new(
         max_outstanding: usize,
         metrics: Arc<Metrics>,
+        blocking_runtime: Handle,
         shard_id: ShardId,
         writer_id: WriterId,
         lower: Antichain<T>,
@@ -356,6 +362,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         BatchParts {
             max_outstanding,
             metrics,
+            blocking_runtime,
             shard_id,
             writer_id,
             lower,
@@ -374,6 +381,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let metrics = Arc::clone(&self.metrics);
+        let blocking_runtime = self.blocking_runtime.clone();
         let blob = Arc::clone(&self.blob);
         let batch_metrics = self.batch_metrics.clone();
         let partial_key = PartialBlobKey::new(&self.writer_id, &PartId::new());
@@ -417,20 +425,21 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 };
 
                 let start = Instant::now();
-                let buf = mz_ore::task::spawn_blocking(
-                    || "batch::encode_part",
-                    move || {
-                        let mut buf = Vec::new();
-                        batch.encode(&mut buf);
+                let buf = blocking_runtime
+                    .spawn_blocking_named(
+                        || "batch::encode_part",
+                        move || {
+                            let mut buf = Vec::new();
+                            batch.encode(&mut buf);
 
-                        // Drop batch as soon as we can to reclaim its memory.
-                        drop(batch);
-                        Bytes::from(buf)
-                    },
-                )
-                .instrument(debug_span!("batch::encode_part"))
-                .await
-                .expect("part encode task failed");
+                            // Drop batch as soon as we can to reclaim its memory.
+                            drop(batch);
+                            Bytes::from(buf)
+                        },
+                    )
+                    .instrument(debug_span!("batch::encode_part"))
+                    .await
+                    .expect("part encode task failed");
                 // Can't use the `CodecMetrics::encode` helper because of async.
                 metrics.codecs.batch.encode_count.inc();
                 metrics

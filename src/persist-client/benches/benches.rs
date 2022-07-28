@@ -15,7 +15,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use tempfile::TempDir;
 use timely::progress::{Antichain, Timestamp};
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 
 use mz_persist::file::{FileBlob, FileBlobConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -104,6 +104,7 @@ async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
         blob,
         consensus,
         metrics,
+        Handle::current(),
     )
     .await
 }
@@ -126,6 +127,7 @@ async fn create_file_pg_client(
         blob,
         consensus,
         metrics,
+        Handle::current(),
     )
     .await?;
     Ok(Some((postgres_consensus, client, dir)))
@@ -151,6 +153,7 @@ async fn create_s3_pg_client(
         blob,
         consensus,
         metrics,
+        Handle::current(),
     )
     .await?;
     Ok(Some((postgres_consensus, client)))

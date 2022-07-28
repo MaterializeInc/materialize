@@ -20,6 +20,7 @@ use timely::communication::Allocate;
 use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use mz_compute_client::command::ComputeCommand;
@@ -92,9 +93,12 @@ pub fn serve(
     let (builders, other) =
         initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
 
+    // WIP actually create a second runtime for this.
+    let blocking_runtime = Handle::current();
     let persist_clients = PersistClientCache::new(
         PersistConfig::new(config.now.clone()),
         &config.metrics_registry,
+        blocking_runtime,
     );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
 

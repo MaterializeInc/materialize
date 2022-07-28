@@ -746,6 +746,7 @@ mod tests {
                             let mut builder = BatchBuilder::new(
                                 cfg,
                                 Arc::clone(&client.metrics),
+                                Handle::current(),
                                 0,
                                 Antichain::from_elem(lower),
                                 Arc::clone(&client.blob),

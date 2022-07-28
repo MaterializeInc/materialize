@@ -49,7 +49,7 @@ use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{oneshot, Mutex};
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
@@ -601,8 +601,13 @@ impl Runner {
         );
         let now = SYSTEM_TIME.clone();
         let metrics_registry = MetricsRegistry::new();
-        let persist_clients =
-            PersistClientCache::new(PersistConfig::new(now.clone()), &metrics_registry);
+        // WIP actually create a second runtime for this.
+        let blocking_runtime = Handle::current();
+        let persist_clients = PersistClientCache::new(
+            PersistConfig::new(now.clone()),
+            &metrics_registry,
+            blocking_runtime,
+        );
         let persist_clients = Arc::new(Mutex::new(persist_clients));
         let server_config = mz_environmentd::Config {
             adapter_stash_url,

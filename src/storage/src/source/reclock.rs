@@ -507,6 +507,12 @@ mod tests {
         Arc::new(Mutex::new(PersistClientCache::new(
             PersistConfig::new(SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .handle()
+                .clone(),
         )))
     });
 

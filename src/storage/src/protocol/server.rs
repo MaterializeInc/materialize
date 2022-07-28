@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use mz_ore::metrics::MetricsRegistry;
@@ -68,8 +69,13 @@ pub fn serve(
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
-    let persist_clients =
-        PersistClientCache::new(PersistConfig::new(now.clone()), &config.metrics_registry);
+    // WIP actually create a second runtime for this.
+    let blocking_runtime = Handle::current();
+    let persist_clients = PersistClientCache::new(
+        PersistConfig::new(now.clone()),
+        &config.metrics_registry,
+        blocking_runtime,
+    );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {

@@ -455,7 +455,14 @@ impl Service for TransactorService {
 
         // Wire up the TransactorService.
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-        let client = PersistClient::new(config, blob, consensus, metrics).await?;
+        let client = PersistClient::new(
+            config,
+            blob,
+            consensus,
+            metrics,
+            tokio::runtime::Handle::current(),
+        )
+        .await?;
         let transactor = Transactor::new(&client, shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)

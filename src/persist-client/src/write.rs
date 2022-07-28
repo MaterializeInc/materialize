@@ -91,6 +91,7 @@ where
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) blocking_runtime: Handle,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) compact: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
@@ -488,6 +489,7 @@ where
         BatchBuilder::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
+            self.blocking_runtime.clone(),
             size_hint,
             lower,
             Arc::clone(&self.blob),

@@ -20,6 +20,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use prometheus::Encoder;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
 use tokio::task::JoinHandle;
@@ -126,10 +127,13 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
     };
-    let persist =
-        PersistClientCache::new(PersistConfig::new(SYSTEM_TIME.clone()), &metrics_registry)
-            .open(location)
-            .await?;
+    let persist = PersistClientCache::new(
+        PersistConfig::new(SYSTEM_TIME.clone()),
+        &metrics_registry,
+        Handle::current(),
+    )
+    .open(location)
+    .await?;
 
     let shard_id = match args.shard_id.clone() {
         Some(shard_id) => ShardId::from_str(&shard_id).map_err(anyhow::Error::msg)?,

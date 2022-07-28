@@ -30,6 +30,7 @@ use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
+use tokio::runtime::Handle;
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
@@ -277,6 +278,7 @@ pub struct PersistClient {
     blob: Arc<dyn Blob + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
+    blocking_runtime: Handle,
 }
 
 impl PersistClient {
@@ -290,6 +292,7 @@ impl PersistClient {
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
+        blocking_runtime: Handle,
     ) -> Result<Self, ExternalError> {
         trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
@@ -299,6 +302,7 @@ impl PersistClient {
             blob,
             consensus,
             metrics,
+            blocking_runtime,
         })
     }
 
@@ -412,6 +416,7 @@ impl PersistClient {
                 self.cfg.clone(),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.metrics),
+                self.blocking_runtime.clone(),
                 writer_id.clone(),
             )
         });
@@ -419,6 +424,7 @@ impl PersistClient {
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
+            blocking_runtime: self.blocking_runtime.clone(),
             writer_id,
             machine,
             compact,
