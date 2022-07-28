@@ -102,6 +102,10 @@ CREATE VIEW introspection_view AS SELECT * FROM mz_materializations
 query error log source reads must target a replica
 SELECT * FROM introspection_view
 
+# Verify that the logic does not apply to persisted logs
+statement ok
+SELECT * FROM mz_peek_active_1
+
 # Verify that untargeted introspection queries on unreplicated clusters are
 # allowed.
 

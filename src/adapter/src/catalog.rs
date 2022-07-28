@@ -184,24 +184,35 @@ impl CatalogState {
 
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
-    pub fn log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn active_log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
         let mut out = Vec::new();
-        self.log_dependencies_inner(id, &mut out);
-        out
+        self.active_log_dependencies_inner(id, &mut out);
+
+        // Filter out persisted logs
+        let mut persisted_logs = HashSet::new();
+        for instance in self.compute_instances_by_id.values() {
+            for replica in instance.replicas_by_id.values() {
+                persisted_logs.extend(replica.config.persisted_logs.get_log_ids());
+            }
+        }
+
+        out.into_iter()
+            .filter(|x| !persisted_logs.contains(x))
+            .collect()
     }
 
-    fn log_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+    fn active_log_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
                 for id in item.uses() {
-                    self.log_dependencies_inner(*id, out);
+                    self.active_log_dependencies_inner(*id, out);
                 }
             }
-            CatalogItem::Sink(sink) => self.log_dependencies_inner(sink.from, out),
-            CatalogItem::Index(idx) => self.log_dependencies_inner(idx.on, out),
+            CatalogItem::Sink(sink) => self.active_log_dependencies_inner(sink.from, out),
+            CatalogItem::Index(idx) => self.active_log_dependencies_inner(idx.on, out),
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
@@ -3631,9 +3642,9 @@ impl<S: Append> Catalog<S> {
         self.state.uses_tables(id)
     }
 
-    /// Return the names of all log sources the given object depends on.
-    pub fn log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
-        self.state.log_dependencies(id)
+    /// Return the ids of all active log sources the given object depends on.
+    pub fn active_log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+        self.state.active_log_dependencies(id)
     }
 
     /// Serializes the catalog's in-memory state.

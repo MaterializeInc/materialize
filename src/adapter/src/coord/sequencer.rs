@@ -1175,7 +1175,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // are replaced with persist-based ones.
         let log_names = depends_on
             .iter()
-            .flat_map(|id| self.catalog.log_dependencies(*id))
+            .flat_map(|id| self.catalog.active_log_dependencies(*id))
             .map(|id| self.catalog.get_entry(&id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
@@ -1682,7 +1682,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ) -> Result<(), AdapterError> {
             let log_names = source_ids
                 .iter()
-                .flat_map(|id| catalog.log_dependencies(*id))
+                .flat_map(|id| catalog.active_log_dependencies(*id))
                 .map(|id| catalog.get_entry(&id).name().item.clone())
                 .collect::<Vec<_>>();
 
