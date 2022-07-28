@@ -55,7 +55,7 @@ CREATE CLUSTER test
   REPLICA replica_b (SIZE '2');
 SET cluster = test;
 SET cluster_replica = replica_a;
-SELECT * from mz_materializations;rmissions that must be reviewed by an App Manager before you can inst
+SELECT * FROM mz_materializations;
 ```
 
 Setting this variable will have an effect on all queries, not only those that target introspection sources.
@@ -118,12 +118,12 @@ of writing into the logging sources as fast as persist allows, thus the queried 
 The big drawback of this approach is that it is not idiomatic SQL, which makes it hard to construct aggregates over the replicas (”what is the average response time over all replicas?” type of queries). Also, the user can still create an aggregate view over these sources (as shown below), which then would expose the same lag problem as if we provide a naively unionized view. The user has to understand the implications of doing this somehow.
 
 ```sql
-CREATE VIEW mz_replica_cpu_usage AS
-  SELECT * FROM mz_catalog.mz_replica_cpu_usage_cluster_1_replica_1
+CREATE VIEW mz_peek_active AS
+  SELECT * FROM mz_catalog.mz_peek_active_1
   UNION ALL
-  SELECT * FROM mz_catalog.mz_replica_cpu_usage_cluster_1_replica_2
+  SELECT * FROM mz_catalog.mz_peek_active_2
   UNION ALL
-  SELECT * FROM mz_catalog.mz_replica_cpu_usage_cluster_2_replica_1
+  SELECT * FROM mz_catalog.mz_peek_active_3
 ```
 
 In general, we drop these sources with the replica. The behavior is that the sources
