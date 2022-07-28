@@ -93,6 +93,10 @@ where
 
         let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
+        // Report initial progress so we can already downgrade our capability before potentially
+        // having to wait for the snapshot.
+        yield ListenEvent::Progress(as_of.clone());
+
         let mut subscription = read
             .subscribe(as_of)
             .await
