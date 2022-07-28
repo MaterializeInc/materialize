@@ -71,7 +71,11 @@ use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
-use mz_sql::ast::Statement;
+use mz_sql::ast::{Expr, Raw, Statement};
+use mz_sql_parser::{
+    ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
+    parser,
+};
 use mz_storage::types::connections::ConnectionContext;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
@@ -306,6 +310,7 @@ pub(crate) struct Runner {
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
     clients: HashMap<String, tokio_postgres::Client>,
+    auto_index_tables: bool,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
@@ -682,6 +687,7 @@ impl Runner {
             _temp_dir: temp_dir,
             client,
             clients: HashMap::new(),
+            auto_index_tables: config.auto_index_tables,
         })
     }
 
@@ -700,7 +706,15 @@ impl Runner {
                     .run_statement(*expected_error, *rows_affected, sql, location.clone())
                     .await?
                 {
-                    Outcome::Success => Ok(Outcome::Success),
+                    Outcome::Success => {
+                        if self.auto_index_tables {
+                            let additional = mutate(sql);
+                            for stmt in additional {
+                                self.client.execute(&stmt, &[]).await?;
+                            }
+                        }
+                        Ok(Outcome::Success)
+                    }
                     other => {
                         if expected_error.is_some() {
                             Ok(other)
@@ -1055,6 +1069,7 @@ pub struct RunConfig<'a> {
     pub postgres_url: String,
     pub no_fail: bool,
     pub fail_fast: bool,
+    pub auto_index_tables: bool,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
@@ -1287,5 +1302,56 @@ impl<'a> RewriteBuffer<'a> {
     fn finish(mut self) -> String {
         self.flush_to(self.input.len());
         self.output
+    }
+}
+
+/// Returns extra statements to execute after `stmt` is executed.
+fn mutate(sql: &str) -> Vec<String> {
+    let stmts = parser::parse_statements(&sql).unwrap_or_default();
+    let mut additional = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            AstStatement::CreateTable(stmt) => additional.push(
+                // CREATE TABLE -> CREATE INDEX. Specify all columns manually in case CREATE
+                // DEFAULT INDEX ever goes away.
+                AstStatement::<Raw>::CreateIndex(CreateIndexStatement {
+                    name: None,
+                    in_cluster: None,
+                    on_name: RawObjectName::Name(stmt.name.clone()),
+                    key_parts: Some(
+                        stmt.columns
+                            .iter()
+                            .map(|def| Expr::Identifier(vec![def.name.clone()]))
+                            .collect(),
+                    ),
+                    with_options: Vec::new(),
+                    if_not_exists: false,
+                })
+                .to_ast_string_stable(),
+            ),
+            _ => {}
+        }
+    }
+    additional
+}
+
+#[test]
+fn test_mutate() {
+    let cases = vec![
+        ("CREATE TABLE t ()", vec![r#"CREATE INDEX ON "t" ()"#]),
+        (
+            "CREATE TABLE t (a INT)",
+            vec![r#"CREATE INDEX ON "t" ("a")"#],
+        ),
+        (
+            "CREATE TABLE t (a INT, b TEXT)",
+            vec![r#"CREATE INDEX ON "t" ("a", "b")"#],
+        ),
+        // Invalid syntax works, just returns nothing.
+        ("BAD SYNTAX", Vec::new()),
+    ];
+    for (sql, expected) in cases {
+        let stmts = mutate(sql);
+        assert_eq!(expected, stmts, "sql: {sql}");
     }
 }
