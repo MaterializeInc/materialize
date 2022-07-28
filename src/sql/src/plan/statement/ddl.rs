@@ -2465,7 +2465,7 @@ pub fn plan_create_index(
         }
     };
 
-    let options = plan_index_options(with_options.clone())?;
+    let options = plan_index_options(scx, with_options.clone())?;
     let compute_instance = match in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
         Some(in_cluster) => in_cluster.id,
@@ -3535,6 +3535,7 @@ pub fn describe_alter_index_options(
 generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalInterval));
 
 fn plan_index_options(
+    scx: &StatementContext,
     with_opts: Vec<IndexOption<Aug>>,
 ) -> Result<Vec<crate::plan::IndexOption>, PlanError> {
     let IndexOptionExtracted {
@@ -3545,6 +3546,7 @@ fn plan_index_options(
     let mut out = Vec::with_capacity(1);
 
     if let Some(OptionalInterval(lcw)) = logical_compaction_window {
+        scx.require_unsafe_mode("LOGICAL COMPACTION WINDOW")?;
         out.push(crate::plan::IndexOption::LogicalCompactionWindow(
             lcw.map(|interval| interval.duration()).transpose()?,
         ))
@@ -3592,7 +3594,7 @@ pub fn plan_alter_index_options(
         AlterIndexAction::SetOptions(options) => {
             Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
                 id,
-                options: plan_index_options(options)?,
+                options: plan_index_options(scx, options)?,
             }))
         }
     }

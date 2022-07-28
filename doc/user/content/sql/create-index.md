@@ -52,12 +52,6 @@ _col&lowbar;expr_**...** | The expressions to use as the key for the index.
 _field_ | The name of the option you want to set.
 _val_ | The value for the option.
 
-### `WITH` options
-
-The following option is valid within the `WITH` clause:
-
-{{% index-with-options %}}
-
 ## Details
 
 ### Restrictions
