@@ -510,7 +510,7 @@ impl Stash for Sqlite {
         Ok(upper)
     }
 
-    async fn check_leadership(&mut self) -> Result<(), StashError> {
+    async fn confirm_leadership(&mut self) -> Result<(), StashError> {
         // SQLite doesn't have a concept of leadership
         Ok(())
     }

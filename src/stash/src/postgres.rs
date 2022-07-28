@@ -704,7 +704,7 @@ impl Stash for Postgres {
             .await
     }
 
-    async fn check_leadership(&mut self) -> Result<(), StashError> {
+    async fn confirm_leadership(&mut self) -> Result<(), StashError> {
         self.transact(|_| Box::pin(async { Ok(()) })).await
     }
 }

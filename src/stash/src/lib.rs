@@ -396,7 +396,7 @@ pub trait Stash: std::fmt::Debug + Send {
         K: Data,
         V: Data;
 
-    async fn check_leadership(&mut self) -> Result<(), StashError>;
+    async fn confirm_leadership(&mut self) -> Result<(), StashError>;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the

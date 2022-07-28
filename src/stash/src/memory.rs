@@ -293,8 +293,8 @@ impl<S: Stash> Stash for Memory<S> {
         })
     }
 
-    async fn check_leadership(&mut self) -> Result<(), StashError> {
-        self.stash.check_leadership().await
+    async fn confirm_leadership(&mut self) -> Result<(), StashError> {
+        self.stash.confirm_leadership().await
     }
 }
 
