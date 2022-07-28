@@ -147,31 +147,6 @@ pub fn build_compute_dataflow<A: Allocate>(
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<Plan, CollectionMetadata>,
 ) {
-    fn intercept_source_instantiation_frontiers<G>(
-        source_instantiation: &Stream<G, (Row, mz_repr::Timestamp, Diff)>,
-        logger: &Logger,
-        source_id: &GlobalId,
-        index_ids: &Vec<GlobalId>,
-        sink_ids: &Vec<GlobalId>,
-    ) -> Stream<G, (Row, mz_repr::Timestamp, Diff)>
-    where
-        G: Scope<Timestamp = mz_repr::Timestamp>,
-    {
-        let logger = logger.clone();
-        let source_id = *source_id;
-        let mut dataflow_ids = index_ids.clone();
-        dataflow_ids.extend(sink_ids);
-        source_instantiation.inspect_container(move |event| {
-            if let Err(frontier) = event {
-                for time in frontier.iter() {
-                    for dataflow_id in dataflow_ids.iter() {
-                        logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, *time));
-                    }
-                }
-            }
-        })
-    }
-
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
 
@@ -202,10 +177,9 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
                 // time of the frontier advancement for each dataflow as early as possible.
                 if let Some(logger) = compute_state.compute_logger.as_ref() {
-                    let index_ids = dataflow.index_exports.keys().cloned().collect::<Vec<_>>();
-                    let sink_ids = dataflow.sink_exports.keys().cloned().collect::<Vec<_>>();
+                    let export_ids = dataflow.export_ids().collect();
                     ok_stream = intercept_source_instantiation_frontiers(
-                        &ok_stream, logger, source_id, &index_ids, &sink_ids,
+                        &ok_stream, logger.clone(), *source_id, export_ids,
                     );
                 }
 
@@ -262,6 +236,28 @@ pub fn build_compute_dataflow<A: Allocate>(
                 context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
             }
         });
+    })
+}
+
+// This helper function adds an operator to track source instantiation frontier advancements
+// in a dataflow. The tracking supports instrospection sources populated by compute logging.
+fn intercept_source_instantiation_frontiers<G>(
+    source_instantiation: &Stream<G, (Row, mz_repr::Timestamp, Diff)>,
+    logger: Logger,
+    source_id: GlobalId,
+    dataflow_ids: Vec<GlobalId>,
+) -> Stream<G, (Row, mz_repr::Timestamp, Diff)>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+{
+    source_instantiation.inspect_container(move |event| {
+        if let Err(frontier) = event {
+            if let Some(time) = frontier.get(0) {
+                for dataflow_id in dataflow_ids.iter() {
+                    logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, *time));
+                }
+            }    
+        }
     })
 }
 

@@ -178,8 +178,7 @@ pub fn construct<A: Allocate>(
                                     // dataflow may or may not be associated to a storage
                                     // source instantiation. Report removal if so.
                                     if let Some(source_map) = storage_sources.remove(key) {
-                                        for (source_id, time_entry) in source_map.into_iter() {
-                                            let delay_map = time_entry.1;
+                                        for (source_id, (_, delay_map)) in source_map {
                                             for (delay_ns, delay_count) in delay_map {
                                                 frontier_delay_session.give((
                                                     (id, source_id, worker, delay_ns),
@@ -222,14 +221,13 @@ pub fn construct<A: Allocate>(
                                     let dataflow_key = (name, worker);
                                     if let Some(source_map) = storage_sources.get_mut(&dataflow_key)
                                     {
-                                        for (source_id, time_entry) in source_map {
-                                            let time_deque = &mut time_entry.0;
+                                        for (source_id, (time_deque, delay_map)) in source_map {
                                             while let Some(current_front) = time_deque.pop_front() {
-                                                if logical >= current_front.0 {
+                                                let source_logical = current_front.0;
+                                                if logical >= source_logical {
                                                     let elapsed_ns =
                                                         time.as_nanos() - current_front.1;
                                                     let delay_ns = elapsed_ns.next_power_of_two();
-                                                    let delay_map = &mut time_entry.1;
                                                     let delay_count =
                                                         delay_map.entry(delay_ns).or_insert(0);
                                                     *delay_count += 1;
