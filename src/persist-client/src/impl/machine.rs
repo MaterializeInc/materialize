@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
 
@@ -29,7 +30,7 @@ use mz_persist_types::{Codec, Codec64};
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::r#impl::compact::CompactReq;
 use crate::r#impl::gc::GcReq;
-use crate::r#impl::maintenance::{RoutineMaintenance, WriterMaintenance};
+use crate::r#impl::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
@@ -39,7 +40,7 @@ use crate::r#impl::state::{
 use crate::r#impl::trace::FueledMergeRes;
 use crate::read::ReaderId;
 use crate::write::WriterId;
-use crate::ShardId;
+use crate::{PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
@@ -165,8 +166,6 @@ where
                     state.compare_and_append(batch, writer_id)
                 })
                 .await?;
-            // TODO: This is not a great place to hook this in.
-            self.maybe_expire_readers();
 
             match res {
                 Ok(merge_reqs) => {
@@ -383,12 +382,6 @@ where
             match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
                 Ok((seqno, x, maintenance)) => match x {
                     Ok(x) => return (seqno, x, maintenance),
-                Ok((seqno, x)) => match x {
-                    Ok(x) => {
-                        // TODO: This is not a great place to hook this in.
-                        self.maybe_expire_readers();
-                        return (seqno, x);
-                    }
                     Err(infallible) => match infallible {},
                 },
                 Err(err) => {
@@ -471,14 +464,31 @@ where
                         // history.
                         let old_seqno_since = self.state.seqno_since();
                         let new_seqno_since = new_state.seqno_since();
-                        let mut maintenance = RoutineMaintenance::default();
-                        if old_seqno_since != new_seqno_since {
-                            maintenance.garbage_collection = Some(GcReq {
+                        let garbage_collection = if old_seqno_since != new_seqno_since {
+                            Some(GcReq {
                                 shard_id: self.shard_id(),
                                 old_seqno_since,
                                 new_seqno_since,
-                            });
-                        }
+                            })
+                        } else {
+                            None
+                        };
+
+                        let expired_readers =
+                            self.state.readers_needing_expiration((self.cfg.now)());
+                        self.metrics
+                            .lease
+                            .timeout_read
+                            .inc_by(u64::cast_from(expired_readers.len()));
+                        let lease_expiration = Some(LeaseExpiration {
+                            readers: expired_readers,
+                            ..Default::default()
+                        });
+
+                        let maintenance = RoutineMaintenance {
+                            garbage_collection,
+                            lease_expiration,
+                        };
 
                         self.state = new_state;
                         return Ok((self.state.seqno(), Ok(work_ret), maintenance));
@@ -502,20 +512,6 @@ where
             }
         })
         .await
-    }
-
-    // HACK: Temporary impl of read lease expiry because otherwise gc can't work
-    // after a restart (the unexpired reader that is never coming back holds
-    // back the seqno cap forever) and we leak data like crazy.
-    fn maybe_expire_readers(&self) {
-        let readers_needing_expiration = self.state.readers_needing_expiration((self.cfg.now)());
-        for reader_needing_expiration in readers_needing_expiration {
-            self.metrics.lease.timeout_read.inc();
-            let mut machine = self.clone();
-            let _ = mz_ore::task::spawn(|| "persist::automatic_read_expiration", async move {
-                machine.expire_reader(&reader_needing_expiration).await
-            });
-        }
     }
 
     async fn maybe_init_state(
@@ -1013,6 +1009,10 @@ mod tests {
         // passes, giving up and failing the test if that takes "too much" time.
         let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
+            let consensus_entries = consensus
+                .scan(&key, SeqNo::minimum())
+                .await
+                .expect("scan failed");
             if consensus_entries.len() <= max_entries {
                 break;
             }

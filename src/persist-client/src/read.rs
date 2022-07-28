@@ -162,7 +162,7 @@ where
                         .machine
                         .expire_reader(&self.handle.reader_id)
                         .await;
-                    maintenance.perform(&self.handle.gc);
+                    maintenance.perform(&self.handle.machine, &self.handle.gc);
                     self.handle.explicitly_expired = true;
                     return None;
                 }
@@ -519,7 +519,7 @@ where
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
         self.last_heartbeat = Instant::now();
-        maintenance.perform(&self.gc);
+        maintenance.perform(&self.machine, &self.gc);
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -740,7 +740,7 @@ where
                 .heartbeat_reader(&self.reader_id, (self.cfg.now)())
                 .await;
             self.last_heartbeat = Instant::now();
-            maintenance.perform(&self.gc);
+            maintenance.perform(&self.machine, &self.gc);
         }
     }
 
@@ -756,7 +756,7 @@ where
     pub async fn expire(mut self) {
         trace!("ReadHandle::expire");
         let (_, maintenance) = self.machine.expire_reader(&self.reader_id).await;
-        maintenance.perform(&self.gc);
+        maintenance.perform(&self.machine, &self.gc);
         self.explicitly_expired = true;
     }
 
@@ -812,7 +812,7 @@ where
             async move {
                 trace!("ReadHandle::expire");
                 let (_, maintenance) = machine.expire_reader(&reader_id).await;
-                maintenance.perform(&gc);
+                maintenance.perform(&machine, &gc);
             }
             .instrument(expire_span),
         );

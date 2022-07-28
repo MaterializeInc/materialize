@@ -13,16 +13,18 @@
 
 use crate::r#impl::compact::CompactReq;
 use crate::r#impl::gc::GcReq;
-use crate::{Compactor, GarbageCollector, Machine};
+use crate::{Compactor, GarbageCollector, Machine, ReaderId, WriterId};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist_types::{Codec, Codec64};
 use std::fmt::Debug;
 use timely::progress::Timestamp;
 
-/// TODO: Actually implement lease expiration as a routine maintenance task
-#[derive(Debug)]
-pub struct LeaseExpiration;
+#[derive(Debug, Default)]
+pub struct LeaseExpiration {
+    pub(crate) readers: Vec<ReaderId>,
+    pub(crate) writers: Vec<WriterId>,
+}
 
 /// Every handle to this shard may be occasionally asked to perform
 /// routine maintenance after a successful compare_and_set operation.
@@ -42,13 +44,30 @@ pub struct RoutineMaintenance {
 }
 
 impl RoutineMaintenance {
-    pub(crate) fn perform(self, gc: &GarbageCollector) {
+    pub(crate) fn perform<K, V, T, D>(self, machine: &Machine<K, V, T, D>, gc: &GarbageCollector)
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
         if let Some(gc_req) = self.garbage_collection {
             gc.gc_and_truncate_background(gc_req);
         }
 
-        if let Some(_lease_expiration) = self.lease_expiration {
-            unimplemented!("lease expiration coming soon");
+        if let Some(lease_expiration) = self.lease_expiration {
+            for expired in lease_expiration.readers {
+                let mut machine = machine.clone();
+                let _ = mz_ore::task::spawn(|| "persist::automatic_read_expiration", async move {
+                    machine.expire_reader(&expired).await
+                });
+            }
+            for expired in lease_expiration.writers {
+                let mut machine = machine.clone();
+                let _ = mz_ore::task::spawn(|| "persist::automatic_write_expiration", async move {
+                    machine.expire_writer(&expired).await
+                });
+            }
         }
     }
 }
@@ -77,7 +96,7 @@ where
         V: Debug + Codec,
         D: Semigroup + Codec64,
     {
-        self.routine.perform(gc);
+        self.routine.perform(machine, gc);
 
         if let Some(compactor) = compactor {
             for req in self.compaction {

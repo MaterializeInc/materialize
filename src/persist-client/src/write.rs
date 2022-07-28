@@ -545,7 +545,7 @@ where
     pub async fn expire(mut self) {
         trace!("WriteHandle::expire");
         let (_seq_no, maintenance) = self.machine.expire_writer(&self.writer_id).await;
-        maintenance.perform(&self.gc);
+        maintenance.perform(&self.machine, &self.gc);
         self.explicitly_expired = true;
     }
 
@@ -638,7 +638,7 @@ where
             async move {
                 trace!("WriteHandle::expire");
                 let (_, maintenance) = machine.expire_writer(&writer_id).await;
-                maintenance.perform(&gc);
+                maintenance.perform(&machine, &gc);
             }
             .instrument(expire_span),
         );
