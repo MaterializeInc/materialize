@@ -144,5 +144,6 @@ name                nullable    type
  rolcanlogin        false       boolean
  rolreplication     false       boolean
  rolbypassrls       false       boolean
+ rolconnlimit       false       integer
  rolpassword        true        text
  rolvaliduntil      true        "timestamp with time zone"
