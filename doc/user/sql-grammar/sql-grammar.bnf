@@ -299,7 +299,7 @@ show_create_table ::=
 show_create_view ::=
   'SHOW' 'CREATE' 'VIEW' view_name
 show_databases ::=
-    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)
+    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
 show_index ::=
     'SHOW' 'EXTENDED'? ('INDEX' | 'INDEXES' | 'KEYS')
     (('FROM' | 'IN') on_name)?
@@ -307,6 +307,8 @@ show_index ::=
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
     'SHOW' 'FULL'? 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
+show_secrets ::=
+    'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
