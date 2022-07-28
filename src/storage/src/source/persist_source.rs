@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use differential_dataflow::Hashable;
 use futures_util::Stream as FuturesStream;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -27,7 +28,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::{ListenEvent, ReaderEnrichedHollowBatch};
-use mz_repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -42,6 +43,7 @@ use crate::types::sources::SourceData;
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G>(
     scope: &G,
+    source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
     as_of: Antichain<Timestamp>,
@@ -55,6 +57,7 @@ where
 {
     let worker_index = scope.index();
     let peers = scope.peers();
+    let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
 
     let persist_clients_stream = Arc::<Mutex<PersistClientCache>>::clone(&persist_clients);
     let persist_location_stream = metadata.persist_location.clone();
@@ -72,9 +75,12 @@ where
     // This is a generator that sets up an async `Stream` that can be continously polled to get the
     // values that are `yield`-ed from it's body.
     let async_stream = async_stream::try_stream!({
-        // Worker 0 is responsible for distributing splits from listen
-        if worker_index != 0 {
-            trace!("We are not worker 0, exiting...");
+        // Only one worker is responsible for distributing batches
+        if worker_index != chosen_worker {
+            trace!(
+                "We are not the chosen worker ({}), exiting...",
+                chosen_worker
+            );
             return;
         }
 
@@ -110,7 +116,7 @@ where
             move |cap_set, output| {
                 let mut context = Context::from_waker(&waker);
 
-                let mut i = 0;
+                let mut i = chosen_worker;
 
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
