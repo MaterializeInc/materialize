@@ -123,7 +123,7 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 Let
-  Filter (Exists(Get l1) && Exists(Get l2))
+  Filter (Exists(Get l1) AND Exists(Get l2))
     Get materialize.public.t
   Where
     l1 =
@@ -193,7 +193,7 @@ FROM
 WHERE t1.b = t2.b AND t2.b = t3.b
 ----
 Project #0, #2
-  Filter ((#1 = #3) && (#3 = #5))
+  Filter ((#1 = #3) AND (#3 = #5))
     CrossJoin
       CrossJoin
         Get materialize.public.t
@@ -307,7 +307,7 @@ CrossJoin
           Reduce aggregates=[max((#^0 * #0))]
             Get materialize.public.t
   Let
-    Filter ((#0 != #^0) || ((#0) IS NOT NULL && (#^0) IS NULL))
+    Filter ((#0 != #^0) OR ((#0) IS NOT NULL AND (#^0) IS NULL))
       Get l0
     Where
       l0 =
@@ -350,7 +350,7 @@ CrossJoin
       CrossJoin
         Get l0
         Let
-          Filter ((#^^0 = #^0) && (#0 > 5))
+          Filter ((#^^0 = #^0) AND (#0 > 5))
             Get l1
           Where
             l1 =

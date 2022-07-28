@@ -297,7 +297,7 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM 
 %9 =
 | Join %7 %8 %6
 | | implementation = Differential %6 %7.() %8.()
-| Filter ((#0 = #2) || (#1 = #3))
+| Filter ((#0 = #2) OR (#1 = #3))
 | Project (#0, #1)
 
 EOF
@@ -938,7 +938,7 @@ SELECT * FROM t1 WHERE f1 = 1 OR f1 = 2
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Filter ((#0 = 1) || (#0 = 2))
+| Filter ((#0 = 1) OR (#0 = 2))
 
 %1 =
 | Union %0 %0

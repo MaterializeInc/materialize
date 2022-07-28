@@ -571,7 +571,7 @@ ORDER BY
 %5 =
 | Join %1 %2 %3 %4 %0 %0 (= #0 #4) (= #1 #22) (= #2 #18) (= #19 #20) (= #21 #24)
 | | implementation = Differential %2.(#2) %1.(#0) %3.(#0) %4.(#0) %0.(#0) %0.(#0)
-| Filter (#12 <= 1996-12-31), (#12 >= 1995-01-01), (((#23 = "FRANCE") && (#25 = "GERMANY")) || ((#23 = "GERMANY") && (#25 = "FRANCE")))
+| Filter (#12 <= 1996-12-31), (#12 >= 1995-01-01), (((#23 = "FRANCE") AND (#25 = "GERMANY")) OR ((#23 = "GERMANY") AND (#25 = "FRANCE")))
 | Project (#7, #8, #12, #23, #25)
 | Reduce group=(#3, #4, extract_year_d(#2))
 | | agg sum((#0 * (1 - #1)))
@@ -956,11 +956,11 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| Filter (#14 >= 1994-01-01), (#12 < #13), (#13 < #14), (date_to_timestamp(#14) < 1995-01-01 00:00:00), ((#16 = "MAIL") || (#16 = "SHIP"))
+| Filter (#14 >= 1994-01-01), (#12 < #13), (#13 < #14), (date_to_timestamp(#14) < 1995-01-01 00:00:00), ((#16 = "MAIL") OR (#16 = "SHIP"))
 | Project (#1, #16)
 | Reduce group=(#1)
-| | agg sum(if ((#0 = "2-HIGH") || (#0 = "1-URGENT")) then {1} else {0})
-| | agg sum(if ((#0 != "2-HIGH") && (#0 != "1-URGENT")) then {1} else {0})
+| | agg sum(if ((#0 = "2-HIGH") OR (#0 = "1-URGENT")) then {1} else {0})
+| | agg sum(if ((#0 != "2-HIGH") AND (#0 != "1-URGENT")) then {1} else {0})
 
 Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#2)
 
@@ -1202,7 +1202,7 @@ ORDER BY
     p_size
 ----
 Source materialize.public.part (u4):
-| Filter NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), (#3 != "Brand#45"), ((#5 = 3) || (#5 = 9) || (#5 = 14) || (#5 = 19) || (#5 = 23) || (#5 = 36) || (#5 = 45) || (#5 = 49))
+| Filter NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), (#3 != "Brand#45"), ((#5 = 3) OR (#5 = 9) OR (#5 = 14) OR (#5 = 19) OR (#5 = 23) OR (#5 = 36) OR (#5 = 45) OR (#5 = 49))
 | Project (#0, #3..=#5)
 
 Query:
@@ -1212,7 +1212,7 @@ Query:
 
 %1 =
 | Get materialize.public.part (u4)
-| Filter (#3 != "Brand#45"), NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), ((#5 = 3) || (#5 = 9) || (#5 = 14) || (#5 = 19) || (#5 = 23) || (#5 = 36) || (#5 = 45) || (#5 = 49))
+| Filter (#3 != "Brand#45"), NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), ((#5 = 3) OR (#5 = 9) OR (#5 = 14) OR (#5 = 19) OR (#5 = 23) OR (#5 = 36) OR (#5 = 45) OR (#5 = 49))
 | Project (#0, #3..=#5)
 | ArrangeBy (#0)
 
@@ -1490,7 +1490,7 @@ Query:
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#1)
-| Filter (#13 = "DELIVER IN PERSON"), ((#14 = "AIR") || (#14 = "AIR REG")), (((#17 = "Brand#12") && (#4 <= 11) && (#18 <= 5) && (#4 >= 1) && ((#19 = "SM BOX") || (#19 = "SM PKG") || (#19 = "SM CASE") || (#19 = "SM PACK"))) || ((#17 = "Brand#23") && (#4 <= 20) && (#18 <= 10) && (#4 >= 10) && ((#19 = "MED BAG") || (#19 = "MED BOX") || (#19 = "MED PKG") || (#19 = "MED PACK"))) || ((#17 = "Brand#34") && (#4 <= 30) && (#18 <= 15) && (#4 >= 20) && ((#19 = "LG BOX") || (#19 = "LG PKG") || (#19 = "LG CASE") || (#19 = "LG PACK"))))
+| Filter (#13 = "DELIVER IN PERSON"), ((#14 = "AIR") OR (#14 = "AIR REG")), (((#17 = "Brand#12") AND (#4 <= 11) AND (#18 <= 5) AND (#4 >= 1) AND ((#19 = "SM BOX") OR (#19 = "SM PKG") OR (#19 = "SM CASE") OR (#19 = "SM PACK"))) OR ((#17 = "Brand#23") AND (#4 <= 20) AND (#18 <= 10) AND (#4 >= 10) AND ((#19 = "MED BAG") OR (#19 = "MED BOX") OR (#19 = "MED PKG") OR (#19 = "MED PACK"))) OR ((#17 = "Brand#34") AND (#4 <= 30) AND (#18 <= 15) AND (#4 >= 20) AND ((#19 = "LG BOX") OR (#19 = "LG PKG") OR (#19 = "LG CASE") OR (#19 = "LG PACK"))))
 | Project (#5, #6)
 | Reduce group=()
 | | agg sum((#0 * (1 - #1)))
@@ -1818,12 +1818,12 @@ ORDER BY
 
 %1 =
 | Get %0 (l0)
-| Filter ((#8 = "13") || (#8 = "17") || (#8 = "18") || (#8 = "23") || (#8 = "29") || (#8 = "30") || (#8 = "31"))
+| Filter ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31"))
 | Project (#0, #4, #5)
 
 %2 =
 | Get %0 (l0)
-| Filter (#5 > 0), ((#8 = "13") || (#8 = "17") || (#8 = "18") || (#8 = "23") || (#8 = "29") || (#8 = "30") || (#8 = "31"))
+| Filter (#5 > 0), ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31"))
 | Project (#5)
 | Reduce group=()
 | | agg sum(#0)
@@ -1923,28 +1923,28 @@ ORDER BY
 
 %2 =
 | InnerJoin %0 %1 on true
-| Filter ((select(%3) && (#3 = #7)) && (#8 = text_to_char("CANADA")))
+| Filter ((select(%3) AND (#3 = #7)) AND (#8 = text_to_char("CANADA")))
 | |
 | | %3 =
 | | | Get materialize.public.partsupp (u7)
-| | | Filter (select(%4) && (integer_to_numeric(#2) > select(%5)))
+| | | Filter (select(%4) AND (integer_to_numeric(#2) > select(%5)))
 | | | |
 | | | | %4 =
 | | | | | Get materialize.public.part (u4)
 | | | | | Filter (varchar_to_text(#1) like "forest%")
 | | | | | Project (#0)
-| | | | | Reduce group=() any(((#^0 = #0) && true))
+| | | | | Reduce group=() any(((#^0 = #0) AND true))
 | | | |
 | | | |
 | | | | %5 =
 | | | | | Get materialize.public.lineitem (u14)
-| | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= text_to_date("1995-01-01"))) && (date_to_timestamp(#10) < (text_to_date("1995-01-01") + 1 year)))
+| | | | | Filter ((((#1 = #^0) AND (#2 = #^1)) AND (#10 >= text_to_date("1995-01-01"))) AND (date_to_timestamp(#10) < (text_to_date("1995-01-01") + 1 year)))
 | | | | | Reduce group=() sum(#4)
 | | | | | Map (0.5 * #0)
 | | | | | Project (#1)
 | | | |
 | | | Project (#1)
-| | | Reduce group=() any(((#^0 = #0) && true))
+| | | Reduce group=() any(((#^0 = #0) AND true))
 | |
 | Project (#1, #2)
 

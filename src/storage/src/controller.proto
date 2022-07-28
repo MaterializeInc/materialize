@@ -18,7 +18,7 @@ message ProtoCollectionMetadata {
     string consensus_uri = 2;
     string data_shard = 3;
     string remap_shard = 4;
-    string status_shard = 5;
+    optional string status_shard = 5;
 }
 
 message ProtoDurableCollectionMetadata {

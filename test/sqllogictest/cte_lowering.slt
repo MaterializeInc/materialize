@@ -34,7 +34,7 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 | Filter (#0 < 3)
 
 %1 =
-| InnerJoin %0 %0 on (true && (#0 = #1))
+| InnerJoin %0 %0 on (true AND (#0 = #1))
 | Project (#0)
 
 EOF
@@ -80,7 +80,7 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 | Join %2 %2
 | | implementation = Unimplemented
 | Project (#0, #1)
-| Filter (true && (#0 = #1))
+| Filter (true AND (#0 = #1))
 
 %4 =
 | Get %3 (l2)

@@ -46,6 +46,7 @@ class CreateView(Action):
                 potential_froms, min(len(potential_froms), random.randint(1, 5))
             )
 
+            self.has_index = random.choice([True, False])
             self.view = this_view
             assert len(self.view.froms) > 0
         elif len(existing_views) == 1:
@@ -63,6 +64,8 @@ class CreateView(Action):
             f"JOIN {f.name} USING (f1)" for f in self.view.froms[1:]
         )
 
+        index = f"> CREATE DEFAULT INDEX ON {self.view.name}" if self.has_index else ""
+
         c.testdrive(
             f"""
 > CREATE MATERIALIZED VIEW {self.view.name} AS
@@ -73,6 +76,8 @@ class CreateView(Action):
     COUNT(DISTINCT {some_from.name}.f1) AS c2
   FROM {self.view.froms[0].name}
   {outer_join};
+
+{index}
 """
         )
 

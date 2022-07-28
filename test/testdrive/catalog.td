@@ -381,6 +381,8 @@ mz_scheduling_histogram_internal_1
 mz_scheduling_parks_internal
 mz_scheduling_parks_internal_1
 mz_source_status_history
+mz_worker_materialization_delays
+mz_worker_materialization_delays_1
 mz_worker_materialization_frontiers
 mz_worker_materialization_frontiers_1
 
@@ -420,6 +422,8 @@ mz_scheduling_histogram_internal_1            system log
 mz_scheduling_parks_internal                  system log
 mz_scheduling_parks_internal_1                system log
 mz_source_status_history                      system "storage collection"
+mz_worker_materialization_delays              system log
+mz_worker_materialization_delays_1            system log
 mz_worker_materialization_frontiers           system log
 mz_worker_materialization_frontiers_1         system log
 
@@ -565,7 +569,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-17
+18
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing
