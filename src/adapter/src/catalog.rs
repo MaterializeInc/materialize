@@ -2953,15 +2953,15 @@ impl<S: Append> Catalog<S> {
                         introspection_source_index_ids,
                     }]
                 }
-                Op::DropComputeInstanceReplica { name, compute_id } => {
-                    tx.remove_compute_instance_replica(&name, compute_id)?;
+                Op::DropComputeInstanceReplica { name, compute_name } => {
+                    let instance = self.resolve_compute_instance(&compute_name)?;
+                    tx.remove_compute_instance_replica(&name, instance.id)?;
 
-                    let instance = &self.state.compute_instances_by_id[&compute_id];
                     let replica_id = instance.replica_id_by_name[&name];
                     let replica = &instance.replicas_by_id[&replica_id];
                     for process_id in replica.process_status.keys() {
                         let update = self.state.pack_compute_instance_status_update(
-                            compute_id,
+                            instance.id,
                             replica_id,
                             *process_id,
                             -1,
@@ -2969,10 +2969,11 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.push(update);
                     }
 
-                    builtin_table_updates.push(
-                        self.state
-                            .pack_compute_instance_replica_update(compute_id, &name, -1),
-                    );
+                    builtin_table_updates.push(self.state.pack_compute_instance_replica_update(
+                        instance.id,
+                        &name,
+                        -1,
+                    ));
 
                     let details = EventDetails::DropComputeInstanceReplicaV1(
                         mz_audit_log::DropComputeInstanceReplicaV1 {
@@ -2989,7 +2990,10 @@ impl<S: Append> Catalog<S> {
                         details,
                     )?;
 
-                    vec![Action::DropComputeInstanceReplica { name, compute_id }]
+                    vec![Action::DropComputeInstanceReplica {
+                        name,
+                        compute_id: instance.id,
+                    }]
                 }
                 Op::DropItem(id) => {
                     let entry = self.get_entry(&id);
@@ -3673,7 +3677,7 @@ pub enum Op {
     },
     DropComputeInstanceReplica {
         name: String,
-        compute_id: ComputeInstanceId,
+        compute_name: String,
     },
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules

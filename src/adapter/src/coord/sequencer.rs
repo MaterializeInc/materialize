@@ -1394,13 +1394,13 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::new();
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
-        for name in plan.names {
-            let instance = self.catalog.resolve_compute_instance(&name)?;
+        for compute_name in plan.names {
+            let instance = self.catalog.resolve_compute_instance(&compute_name)?;
             instance_replica_drop_sets.push((instance.id, instance.replicas_by_id.clone()));
             for replica_name in instance.replica_id_by_name.keys() {
                 ops.push(catalog::Op::DropComputeInstanceReplica {
                     name: replica_name.to_string(),
-                    compute_id: instance.id,
+                    compute_name: compute_name.clone(),
                 });
             }
 
@@ -1417,7 +1417,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
-            ops.push(catalog::Op::DropComputeInstance { name });
+            ops.push(catalog::Op::DropComputeInstance { name: compute_name });
         }
 
         self.catalog_transact(Some(session), ops, |_| Ok(()))
@@ -1449,7 +1449,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let instance = self.catalog.resolve_compute_instance(&instance_name)?;
             ops.push(catalog::Op::DropComputeInstanceReplica {
                 name: replica_name.clone(),
-                compute_id: instance.id,
+                compute_name: instance_name.clone(),
             });
             let replica_id = instance.replica_id_by_name[&replica_name];
 
