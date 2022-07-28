@@ -122,7 +122,7 @@ fn install_desired_into_persist<G>(
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
-    _as_of: Antichain<Timestamp>,
+    as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> Option<Rc<dyn Any>>
 where
@@ -137,13 +137,9 @@ where
     let operator_name = format!("persist_sink({})", shard_id);
     let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
 
-    // We might want a lower bound on when we should start writing, especially as the
-    // dataflow is only valid from an `as_of` onward. However, if the sink's shard's
-    // `upper` is not initially beyond that frontier we should do *something*.
-    // Writing here allows the sink to advance the shard using the empty collection,
-    // but it should perhaps be considered a bug when this happens, as we are writing
-    // "junk data" which is a serious smell.
-    let mut write_lower_bound = Antichain::from_elem(TimelyTimestamp::minimum());
+    // Only attempt to write from this frontier onward, as our data are not necessarily
+    // correct for times not greater or equal to this frontier.
+    let mut write_lower_bound = as_of;
 
     // TODO(mcsherry): this is shardable, eventually. But for now use a single writer.
     let hashed_id = sink_id.hashed();
@@ -197,6 +193,17 @@ where
                 .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
                 .await
                 .expect("could not open persist shard");
+
+            // Advance the persist shard's upper to at least our write lower bound.
+            let current_upper = write.upper().clone();
+            if PartialOrder::less_than(&current_upper, &write_lower_bound) {
+                let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
+                write
+                    .append(empty_updates, current_upper, write_lower_bound.clone())
+                    .await
+                    .expect("invalid usage")
+                    .expect("unexpected upper");
+            }
 
             while scheduler.notified().await {
 
