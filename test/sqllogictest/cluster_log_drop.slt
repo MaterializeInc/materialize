@@ -11,8 +11,6 @@
 
 mode cockroach
 
-## REAL starts here
-
 # The default cluster also has log sources, thus we should have one set active at boot
 query T rowsort
 select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
@@ -35,7 +33,7 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 ----
 2
 
-statement error
+statement error cannot drop cluster with active indexes.*
 DROP CLUSTER c1;
 
 statement ok
@@ -60,19 +58,19 @@ CREATE VIEW v1 AS SELECT * FROM mz_catalog.mz_peek_active_4;
 statement ok
 CREATE VIEW v2 AS SELECT * FROM v1;
 
-statement error
+statement error cannot drop replica "r1" of cluster "c1".*
 DROP CLUSTER REPLICA c1.r1;
 
-statement error
+statement error cannot drop cluster with active indexes.*
 DROP CLUSTER c1;
 
 statement ok
 DROP CLUSTER c1 CASCADE;
 
-statement error
+query error unknown catalog item 'v1'
 SELECT * FROM v1;
 
-statement error
+query error unknown catalog item 'v2'
 SELECT * FROM v2;
 
 query T rowsort
