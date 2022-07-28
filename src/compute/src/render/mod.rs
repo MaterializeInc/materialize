@@ -176,11 +176,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
                 // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
                 // time of the frontier advancement for each dataflow as early as possible.
-                if let Some(logger) = compute_state.compute_logger.as_ref() {
+                if let Some(logger) = compute_state.compute_logger.clone() {
                     let export_ids = dataflow.export_ids().collect();
                     ok_stream = intercept_source_instantiation_frontiers(
                         &ok_stream,
-                        logger.clone(),
+                        logger,
                         *source_id,
                         export_ids,
                     );
