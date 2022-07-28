@@ -168,6 +168,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
                 let (mut ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
+                    *source_id,
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
