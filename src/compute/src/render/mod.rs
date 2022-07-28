@@ -179,7 +179,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                 if let Some(logger) = compute_state.compute_logger.as_ref() {
                     let export_ids = dataflow.export_ids().collect();
                     ok_stream = intercept_source_instantiation_frontiers(
-                        &ok_stream, logger.clone(), *source_id, export_ids,
+                        &ok_stream,
+                        logger.clone(),
+                        *source_id,
+                        export_ids,
                     );
                 }
 
@@ -256,7 +259,7 @@ where
                 for dataflow_id in dataflow_ids.iter() {
                     logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, *time));
                 }
-            }    
+            }
         }
     })
 }
