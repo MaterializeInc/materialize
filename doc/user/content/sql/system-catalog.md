@@ -560,7 +560,7 @@ advancements at the dataflow layer and the advancements of the corresponding
 Field       | Type       | Meaning
 ------------|------------|--------
 `dataflow` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
-`source`   | [`text`]   | The ID of the input source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables).
+`source`   | [`text`]   | The ID of the input source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `delay_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`    | [`bigint`] | The (noncumulative) count of delay measurements in this bucket.
