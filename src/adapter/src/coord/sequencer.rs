@@ -1407,7 +1407,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let mut ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
 
             // Determine from the replica which additional items to drop. This is the set
-            // of items depend on the introspection sources. The sources
+            // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
             for replica in instance.replicas_by_id.values() {
                 let log_ids = replica.config.persisted_logs.get_log_ids();
