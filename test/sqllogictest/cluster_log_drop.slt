@@ -56,10 +56,25 @@ statement ok
 CREATE VIEW v1 AS SELECT * FROM mz_catalog.mz_peek_active_4;
 
 statement ok
-CREATE VIEW v2 AS SELECT * FROM v1;
+CREATE VIEW v11 AS SELECT * FROM v1;
+
+statement ok
+CREATE VIEW v2 AS SELECT * FROM mz_catalog.mz_peek_active_5;
+
+statement ok
+CREATE VIEW v21 AS SELECT * FROM v2;
 
 statement error cannot drop replica "r1" of cluster "c1".*
 DROP CLUSTER REPLICA c1.r1;
+
+statement ok
+DROP CLUSTER REPLICA c1.r1 CASCADE;
+
+query error unknown catalog item 'v1'
+SELECT * FROM v1;
+
+query error unknown catalog item 'v11'
+SELECT * FROM v11;
 
 statement error cannot drop cluster with active indexes.*
 DROP CLUSTER c1;
@@ -67,11 +82,11 @@ DROP CLUSTER c1;
 statement ok
 DROP CLUSTER c1 CASCADE;
 
-query error unknown catalog item 'v1'
-SELECT * FROM v1;
-
 query error unknown catalog item 'v2'
 SELECT * FROM v2;
+
+query error unknown catalog item 'v21'
+SELECT * FROM v21;
 
 query T rowsort
 select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';

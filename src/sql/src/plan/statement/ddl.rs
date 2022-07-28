@@ -3397,7 +3397,11 @@ pub fn describe_drop_cluster_replica(
 
 pub fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
+    DropClusterReplicasStatement {
+        if_exists,
+        names,
+        cascade,
+    }: DropClusterReplicasStatement,
 ) -> Result<Plan, PlanError> {
     let mut names_out = Vec::with_capacity(names.len());
     for QualifiedReplica { cluster, replica } in names {
@@ -3410,18 +3414,20 @@ pub fn plan_drop_cluster_replica(
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
             // Check if we have an item that depends on the replica's logs
-            let log_ids = instance.replica_logs(&replica_name).unwrap();
-            for id in log_ids {
-                let log_item = scx.catalog.get_item(&id);
-                for id in log_item.used_by() {
-                    let dep = scx.catalog.get_item(id);
-                    if dependency_prevents_drop(ObjectType::Source, dep) {
-                        sql_bail!(
-                            "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
-                            replica_name.quoted(),
-                            instance.name().quoted(),
-                            scx.catalog.resolve_full_name(dep.name())
-                        );
+            if !cascade {
+                let log_ids = instance.replica_logs(&replica_name).unwrap();
+                for id in log_ids {
+                    let log_item = scx.catalog.get_item(&id);
+                    for id in log_item.used_by() {
+                        let dep = scx.catalog.get_item(id);
+                        if dependency_prevents_drop(ObjectType::Source, dep) {
+                            sql_bail!(
+                                "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
+                                replica_name.quoted(),
+                                instance.name().quoted(),
+                                scx.catalog.resolve_full_name(dep.name())
+                            );
+                        }
                     }
                 }
             }
