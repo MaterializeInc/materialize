@@ -17,6 +17,7 @@ use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, 
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{Hook, HookError, HookErrorCause, ManagerConfig, RecyclingMethod};
 use deadpool_postgres::{Manager, Pool};
+use mz_ore::cast::CastFrom;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
@@ -366,7 +367,7 @@ impl Consensus for PostgresConsensus {
         }
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let q = "DELETE FROM consensus
                 WHERE shard = $1 AND sequence_number < $2 AND
                 EXISTS(
@@ -398,7 +399,7 @@ impl Consensus for PostgresConsensus {
             }
         }
 
-        Ok(())
+        Ok(usize::cast_from(result))
     }
 }
 

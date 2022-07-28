@@ -156,9 +156,9 @@ impl Consensus for MaelstromConsensus {
         unimplemented!("not yet used")
     }
 
-    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<(), ExternalError> {
+    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
         // No-op until we implement `scan`.
-        Ok(())
+        Ok(0)
     }
 }
 

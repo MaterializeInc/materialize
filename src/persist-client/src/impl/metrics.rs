@@ -99,6 +99,7 @@ struct MetricsVecs {
     external_op_failed: IntCounterVec,
     external_op_bytes: IntCounterVec,
     external_op_seconds: CounterVec,
+    external_consensus_truncated_count: IntCounter,
 
     retry_started: IntCounterVec,
     retry_finished: IntCounterVec,
@@ -164,6 +165,10 @@ impl MetricsVecs {
                 name: "mz_persist_external_seconds",
                 help: "time spent in external service calls",
                 var_labels: ["op"],
+            )),
+            external_consensus_truncated_count: registry.register(metric!(
+                name: "mz_persist_external_consensus_truncated_count",
+                help: "count of versions deleted by consensus truncate calls",
             )),
 
             retry_started: registry.register(metric!(
@@ -304,6 +309,7 @@ impl MetricsVecs {
             compare_and_set: self.external_op_metrics("consensus_cas"),
             scan: self.external_op_metrics("consensus_scan"),
             truncate: self.external_op_metrics("consensus_truncate"),
+            truncated_count: self.external_consensus_truncated_count.clone(),
         }
     }
 
@@ -730,6 +736,7 @@ pub struct ConsensusMetrics {
     compare_and_set: ExternalOpMetrics,
     scan: ExternalOpMetrics,
     truncate: ExternalOpMetrics,
+    truncated_count: IntCounter,
 }
 
 #[derive(Debug)]
@@ -804,11 +811,17 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
-        self.metrics
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        let deleted = self
+            .metrics
             .consensus
             .truncate
             .run_op(|| self.consensus.truncate(key, seqno))
-            .await
+            .await?;
+        self.metrics
+            .consensus
+            .truncated_count
+            .inc_by(u64::cast_from(deleted));
+        Ok(deleted)
     }
 }
