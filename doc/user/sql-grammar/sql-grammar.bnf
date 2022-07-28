@@ -2,13 +2,7 @@ aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE
 alter_rename ::=
   'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
-  'ALTER' 'INDEX' name (
-    'SET' (
-      'ENABLED'
-      | '(' field '=' val ( ',' field '=' val )* ')'
-    )
-    | 'RESET' '(' field ( ',' field )* ')'
-  )
+  'ALTER' 'INDEX' name 'SET' 'ENABLED'
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
@@ -52,7 +46,6 @@ create_index ::=
         'INDEX' index_name 'ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
         | 'DEFAULT INDEX ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)?
     )
-    ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
