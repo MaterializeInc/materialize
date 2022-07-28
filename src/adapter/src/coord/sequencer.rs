@@ -387,6 +387,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
         let source_oid = self.catalog.allocate_oid().await?;
+        let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
             source_desc: plan.source.source_desc,
@@ -394,6 +395,7 @@ impl<S: Append + 'static> Coordinator<S> {
             timeline: plan.timeline,
             depends_on,
             remote_addr: plan.remote,
+            host_config,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,
@@ -434,9 +436,9 @@ impl<S: Append + 'static> Coordinator<S> {
                         CollectionDescription {
                             desc: source.desc.clone(),
                             ingestion: Some(ingestion),
-                            remote_addr: source.remote_addr,
                             since: None,
                             status_collection_id: Some(source_status_collection_id),
+                            host_config: Some(source.host_config),
                         },
                     )])
                     .await
@@ -1173,7 +1175,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // are replaced with persist-based ones.
         let log_names = depends_on
             .iter()
-            .flat_map(|id| self.catalog.log_dependencies(*id))
+            .flat_map(|id| self.catalog.active_log_dependencies(*id))
             .map(|id| self.catalog.get_entry(&id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
@@ -1238,9 +1240,9 @@ impl<S: Append + 'static> Coordinator<S> {
                         CollectionDescription {
                             desc,
                             ingestion: None,
-                            remote_addr: None,
                             since: Some(as_of),
                             status_collection_id: None,
+                            host_config: None,
                         },
                     )])
                     .await
@@ -1394,18 +1396,30 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::new();
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
-        for name in plan.names {
-            let instance = self.catalog.resolve_compute_instance(&name)?;
+        for compute_name in plan.names {
+            let instance = self.catalog.resolve_compute_instance(&compute_name)?;
             instance_replica_drop_sets.push((instance.id, instance.replicas_by_id.clone()));
             for replica_name in instance.replica_id_by_name.keys() {
                 ops.push(catalog::Op::DropComputeInstanceReplica {
                     name: replica_name.to_string(),
-                    compute_id: instance.id,
+                    compute_name: compute_name.clone(),
                 });
             }
-            let ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
+
+            let mut ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items that depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeInstanceReplica.
+            for replica in instance.replicas_by_id.values() {
+                let log_ids = replica.config.persisted_logs.get_log_ids();
+                for log_id in log_ids {
+                    ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                }
+            }
+
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
-            ops.push(catalog::Op::DropComputeInstance { name });
+            ops.push(catalog::Op::DropComputeInstance { name: compute_name });
         }
 
         self.catalog_transact(Some(session), ops, |_| Ok(()))
@@ -1432,13 +1446,28 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         let mut ops = Vec::with_capacity(names.len());
         let mut replicas_to_drop = Vec::with_capacity(names.len());
+        let mut ids_to_drop = vec![];
         for (instance_name, replica_name) in names {
             let instance = self.catalog.resolve_compute_instance(&instance_name)?;
             ops.push(catalog::Op::DropComputeInstanceReplica {
                 name: replica_name.clone(),
-                compute_id: instance.id,
+                compute_name: instance_name.clone(),
             });
             let replica_id = instance.replica_id_by_name[&replica_name];
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items that depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeInstanceReplica.
+            for log_id in instance
+                .replicas_by_id
+                .get(&replica_id)
+                .unwrap()
+                .config
+                .persisted_logs
+                .get_log_ids()
+            {
+                ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+            }
 
             replicas_to_drop.push((
                 instance.id,
@@ -1446,6 +1475,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 instance.replicas_by_id[&replica_id].clone(),
             ));
         }
+
+        ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
 
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
@@ -1651,7 +1682,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ) -> Result<(), AdapterError> {
             let log_names = source_ids
                 .iter()
-                .flat_map(|id| catalog.log_dependencies(*id))
+                .flat_map(|id| catalog.active_log_dependencies(*id))
                 .map(|id| catalog.get_entry(&id).name().item.clone())
                 .collect::<Vec<_>>();
 

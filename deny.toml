@@ -24,6 +24,7 @@ name = "strum-macros"
 [[bans.deny]]
 name = "log"
 wrappers = [
+    "deadpool-postgres",
     "env_logger",
     "fail",
     "globset",
@@ -35,8 +36,6 @@ wrappers = [
     "postgres",
     "pprof",
     "prost-build",
-    "pubnub-core",
-    "pubnub-hyper",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
     "reqwest",
@@ -131,9 +130,6 @@ allow-git = [
     # See: https://github.com/BurntSushi/rust-csv/issues/271
     "https://github.com/BurntSushi/rust-csv.git",
 
-    # Waiting on chrono-tz v0.6.2, which bumps to phf v0.11.
-    "https://github.com/chronotope/chrono-tz",
-
     # Waiting on criterion v0.4, which upgrades to clap v3.
     "https://github.com/MaterializeInc/criterion.rs.git",
 
@@ -146,9 +142,6 @@ allow-git = [
 
     # Works around https://github.com/tokio-rs/prost/issues/653.
     "https://github.com/MaterializeInc/prost.git",
-
-    # Waiting on several PRs to a mostly-abandoned upstream library.
-    "https://github.com/MaterializeInc/pubnub-rust.git",
 
     # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
     "https://github.com/MaterializeInc/rust-postgres.git",

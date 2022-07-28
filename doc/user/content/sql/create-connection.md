@@ -1,77 +1,155 @@
 ---
 title: "CREATE CONNECTION"
-description: "Creating connections to external data sources"
+description: "`CREATE CONNECTION` describes how to connect and authenticate to an external system in Materialize"
 menu:
   main:
     parent: 'commands'
 
 ---
 
-A connection in Materialize describes how to connect and authenticate to an external source.
-Multiple [`CREATE SOURCE`](/sql/create-source) commands can use the same connection so that authentication and other common parameters are defined in a single place.
+A connection describes how to connect and authenticate to an external system you want Materialize to read data from. Once created, a connection is **reusable** across multiple [`CREATE SOURCE`](/sql/create-source) statements.
+
+[//]: # "TODO(morsapaes) Adapt once sinks are wired up to use connections."
 
 ## Syntax
 
 {{< diagram "create-connection.svg" >}}
 
-{{< tabs tabID="1" >}}
-{{< tab "Kafka">}}
+## Kafka
 
-Connect to a Kafka server.
+### SSL {#kafka-ssl}
 
-Field | Value | Description
--|-|-
-`BROKER`                    | `text`           | Kafka broker. Exclusive with `BROKERS`.
-`BROKERS`                   | `text[]`         | Kafka brokers. Exclusive with `BROKER`.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` | Optional. Root certificate. Defaults to system.
-`SSL CERTIFICATE`           | secret or `text` | Optional. Client SSL certificate.
-`SSL KEY`                   | secret           | Optional. Client SSL key.
-`SASL MECHANISMS`           | `text`           | Optional. SASL mechanisms.
-`SASL PASSWORD`             | secret           | Optional. SASL password.
-`SASL USERNAME`             | secret or `text` | Optional. SASL username.
+To connect to a Kafka broker that requires [SSL authentication](https://docs.confluent.io/platform/current/kafka/authentication_ssl.html), use the provided options.
 
-{{< /tab >}}
-{{< tab "Confluent Schema Registry">}}
+#### SSL options
 
-Connect to a Confluent Schema Registry.
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:|------------------
+`BROKER`                    | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
+`BROKERS`                   | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate. Required for SSL client authentication.
+`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key. Required for SSL client authentication.
 
-Field | Value | Description
--|-|-
-`URL`                       | `text`           | Schema registry URL.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` | Optional. Root certificate. Defaults to system.
-`SSL CERTIFICATE`           | secret or `text` | Optional. Client SSL certificate.
-`SSL KEY`                   | secret           | Optional. Client SSL key.
-`PASSWORD`                  | secret           | Optional. HTTP password.
-`USERNAME`                  | secret or `text` | Optional. HTTP username.
+##### Example
 
-{{< /tab >}}
-{{< tab "Postgres">}}
+```sql
+CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
+CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 
-Connect to a Postgres server.
+CREATE CONNECTION kafka_connection
+  FOR KAFKA
+    BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
+    SSL KEY = SECRET kafka_ssl_key,
+    SSL CERTIFICATE = SECRET kafka_ssl_crt;
+```
 
-Field | Value | Description
--|-|-
-`DATABASE`                  | `text`           | Target database.
-`HOST`                      | `text`           | Database hostname.
-`PORT`                      | `int4`           | Optional. Database port. Defaults to `5432`.
-`PASSWORD`                  | secret           | Optional. Password for the connection
-`SSH TUNNEL`                | `text`           | `SSH TUNNEL` connection name.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` | Optional. Root certificate. Defaults to system.
-`SSL MODE`                  | `text`           | Optional. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`. Defaults to `disable`.
-`SSL CERTIFICATE`           | secret or `text` | Optional. Client SSL certificate.
-`SSL KEY`                   | secret           | Optional. Client SSL key.
-`USER`                      | `text`           | Database username.
+#### Confluent Schema Registry SSL options {#csr-ssl}
 
-{{< /tab >}}
-{{< tab "SSH tunnel">}}
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:| ------------
+`URL`                       | `text`           | ✓        | The schema registry URL.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate. Required for SSL client authentication.
+`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key. Required for SSL client authentication.
+`PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
+`USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 
-Connect to a SSH bastion host.
+##### Example
 
-Field | Value | Description
--|-|-
-`HOST` | `text` | Hostname for the connection
-`PORT` | `int4` | Port for the connection.
-`USER` | `text` | Username for the connection.
+```sql
+CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
+CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
+CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
-{{< /tab >}}
-{{< /tabs >}}
+CREATE CONNECTION csr_ssl
+  FOR CONFLUENT SCHEMA REGISTRY
+    URL 'rp-f00000bar.data.vectorized.cloud:30993',
+    SSL KEY = SECRET csr_ssl_key,
+    SSL CERTIFICATE = SECRET csr_ssl_crt,
+    USERNAME = 'foo',
+    PASSWORD = SECRET csr_password;
+```
+
+### SASL {#kafka-sasl}
+
+To create a connection to a Kafka broker that requires [SASL authentication](https://docs.confluent.io/platform/current/kafka/authentication_sasl/auth-sasl-overview.html), use the provided options.
+
+#### SASL options
+
+Field                                   | Value            | Required | Description
+----------------------------------------|------------------|:--------:|-------------------------------
+`BROKER`                                | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
+`BROKERS`                               | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
+`SASL MECHANISMS`                       | `text`           | ✓        | The SASL mechanism to use for authentication. Supported: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
+`SASL USERNAME`                         | secret or `text` | ✓        | Your SASL username, if any. Required if `SASL MECHANISMS` is `PLAIN`.
+`SASL PASSWORD`                         | secret           | ✓        | Your SASL password, if any. Required if `SASL MECHANISMS` is `PLAIN`.
+`SSL CERTIFICATE AUTHORITY`             | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+
+##### Example
+
+```sql
+CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
+
+CREATE CONNECTION kafka_connection
+  FOR KAFKA
+    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    SASL MECHANISMS = 'SCRAM-SHA-256',
+    SASL USERNAME = 'foo',
+    SASL PASSWORD = SECRET kafka_password;
+```
+
+## Postgres
+
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:|-----------------------------
+`DATABASE`                  | `text`           | ✓        | Target database.
+`HOST`                      | `text`           | ✓        | Database hostname.
+`PORT`                      | `int4`           |          | Default: `5432`. Port number to connect to at the server host.
+`PASSWORD`                  | secret           |          | Password for the connection
+`SSH TUNNEL`                | `text`           |          | `SSH TUNNEL` connection name. See [SSH tunneling](#postgres-ssh).
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL MODE`                  | `text`           |          | Default: `disable`. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
+`SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate.
+`SSL KEY`                   | secret           |          | Client SSL key.
+`USER`                      | `text`           | ✓        | Database username.
+
+##### Example
+
+```sql
+CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
+
+CREATE CONNECTION pg_connection
+  FOR POSTGRES
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 5432,
+    USER 'postgres',
+    PASSWORD SECRET pgpass,
+    SSL MODE 'require',
+    DATABASE 'postgres';
+```
+
+### SSH tunneling {#postgres-ssh}
+
+If your PostgreSQL instance is running in a Virtual Private Cloud (VPC), you can securely connect via an SSH bastion host.
+
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:|------------------------------
+`HOST`                      | `text`           | ✓        | Hostname for the connection
+`PORT`                      | `int4`           | ✓        | Port for the connection.
+`USER`                      | `text`           | ✓        | Username for the connection.
+
+##### Example
+
+```sql
+CREAT CONNECTION ssh_connection
+  FOR SSH TUNNEL
+    HOST '<SSH_BASTION_HOST>',
+    USER '<SSH_BASTION_USER>',
+    PORT 1;
+```
+
+## Related pages
+
+- `CREATE SECRET`
+- [`CREATE SOURCE`](/sql/create-source)

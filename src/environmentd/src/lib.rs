@@ -28,7 +28,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
-use mz_adapter::catalog::ClusterReplicaSizeMap;
+use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
 use mz_build_info::{build_info, BuildInfo};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -96,6 +96,10 @@ pub struct Config {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
+    /// A map from size name to resource allocations for storage hosts.
+    pub storage_host_sizes: StorageHostSizeMap,
+    /// Default storage host size, should be a key from storage_host_sizes.
+    pub default_storage_host_size: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -192,6 +196,22 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let sql_local_addr = sql_listener.local_addr()?;
     let http_local_addr = http_listener.local_addr()?;
 
+    // Listen on the internal HTTP API port.
+    let internal_http_local_addr = {
+        let metrics_registry = config.metrics_registry.clone();
+        let server = http::InternalServer::new(metrics_registry, config.otel_enable_callback);
+        let bound_server = server.bind(config.internal_http_listen_addr);
+        let internal_http_local_addr = bound_server.local_addr();
+        task::spawn(|| "internal_http_server", {
+            async move {
+                if let Err(err) = bound_server.await {
+                    error!("error serving metrics endpoint: {}", err);
+                }
+            }
+        });
+        internal_http_local_addr
+    };
+
     // Load the adapter catalog from disk.
     if !config
         .cluster_replica_sizes
@@ -228,26 +248,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         now: config.now,
         secrets_controller: config.secrets_controller,
         cluster_replica_sizes: config.cluster_replica_sizes,
+        storage_host_sizes: config.storage_host_sizes,
+        default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
     })
     .await?;
-
-    // Listen on the internal HTTP API port.
-    let internal_http_local_addr = {
-        let metrics_registry = config.metrics_registry.clone();
-        let server = http::InternalServer::new(metrics_registry, config.otel_enable_callback);
-        let bound_server = server.bind(config.internal_http_listen_addr);
-        let internal_http_local_addr = bound_server.local_addr();
-        task::spawn(|| "internal_http_server", {
-            async move {
-                if let Err(err) = bound_server.await {
-                    error!("error serving metrics endpoint: {}", err);
-                }
-            }
-        });
-        internal_http_local_addr
-    };
 
     // TODO(benesch): replace both `TCPListenerStream`s below with
     // `<type>_listener.incoming()` if that is

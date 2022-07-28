@@ -160,9 +160,7 @@ conn.autocommit = True
 cur = conn.cursor()
 
 with conn.cursor() as cur:
-    cur.execute("CREATE SOURCE market_orders_raw_2 FROM PUBNUB " \
-            "SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe' " \
-            "CHANNEL 'pubnub-market-orders'")
+    cur.execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;")
 
 with conn.cursor() as cur:
     cur.execute("SHOW SOURCES")

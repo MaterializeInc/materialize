@@ -56,9 +56,11 @@ use mz_sql::plan::{
     ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    StorageHostConfig as PlanStorageHostConfig,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
+use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
@@ -82,7 +84,7 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{ClusterReplicaSizeMap, Config};
+pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::client::ConnectionId;
 use crate::util::index_sql;
@@ -146,6 +148,8 @@ pub struct CatalogState {
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    storage_host_sizes: StorageHostSizeMap,
+    default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
 }
 
@@ -181,24 +185,35 @@ impl CatalogState {
 
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
-    pub fn log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn active_log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
         let mut out = Vec::new();
-        self.log_dependencies_inner(id, &mut out);
-        out
+        self.active_log_dependencies_inner(id, &mut out);
+
+        // Filter out persisted logs
+        let mut persisted_logs = HashSet::new();
+        for instance in self.compute_instances_by_id.values() {
+            for replica in instance.replicas_by_id.values() {
+                persisted_logs.extend(replica.config.persisted_logs.get_log_ids());
+            }
+        }
+
+        out.into_iter()
+            .filter(|x| !persisted_logs.contains(x))
+            .collect()
     }
 
-    fn log_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+    fn active_log_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
                 for id in item.uses() {
-                    self.log_dependencies_inner(*id, out);
+                    self.active_log_dependencies_inner(*id, out);
                 }
             }
-            CatalogItem::Sink(sink) => self.log_dependencies_inner(sink.from, out),
-            CatalogItem::Index(idx) => self.log_dependencies_inner(idx.on, out),
+            CatalogItem::Sink(sink) => self.active_log_dependencies_inner(sink.from, out),
+            CatalogItem::Index(idx) => self.active_log_dependencies_inner(idx.on, out),
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
@@ -926,6 +941,33 @@ impl CatalogState {
     pub fn availability_zones(&self) -> &[String] {
         &self.availability_zones
     }
+
+    /// Returns the default storage host size
+    ///
+    /// If a default size was given as configuration, it is always used, otherwise the
+    /// smallest host size is used instead.
+    pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
+        match &self.default_storage_host_size {
+            Some(default_storage_host_size) => {
+                // The default is guaranteed to be in the size map during startup
+                let allocation = self
+                    .storage_host_sizes
+                    .0
+                    .get(default_storage_host_size)
+                    .expect("default storage host size must exist in size map");
+                (default_storage_host_size.clone(), allocation.clone())
+            }
+            None => {
+                let (size, allocation) = self
+                    .storage_host_sizes
+                    .0
+                    .iter()
+                    .min_by_key(|(_, a)| (a.workers, a.memory_limit))
+                    .expect("should have at least one valid storage instance size");
+                (size.clone(), allocation.clone())
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1090,6 +1132,7 @@ pub struct Source {
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
     pub remote_addr: Option<String>,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1414,6 +1457,11 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Table(_))
     }
 
+    /// Reports whether this catalog entry is a storage collection.
+    pub fn is_storage_collection(&self) -> bool {
+        matches!(self.item(), CatalogItem::StorageCollection(_))
+    }
+
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {
@@ -1593,6 +1641,8 @@ impl<S: Append> Catalog<S> {
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
+                storage_host_sizes: config.storage_host_sizes,
+                default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
             },
             transient_revision: 0,
@@ -2377,6 +2427,8 @@ impl<S: Append> Catalog<S> {
             skip_migrations: true,
             metrics_registry,
             cluster_replica_sizes: Default::default(),
+            storage_host_sizes: Default::default(),
+            default_storage_host_size: None,
             availability_zones: vec![],
         })
         .await?;
@@ -2899,6 +2951,46 @@ impl<S: Append> Catalog<S> {
         Ok(location)
     }
 
+    pub fn resolve_storage_host_config(
+        &self,
+        storage_host_config: PlanStorageHostConfig,
+    ) -> Result<StorageHostConfig, AdapterError> {
+        let host_sizes = &self.state.storage_host_sizes;
+        let storage_host_config = match storage_host_config {
+            PlanStorageHostConfig::Remote { addr } => StorageHostConfig::Remote { addr },
+            PlanStorageHostConfig::Managed { size } => {
+                let allocation = host_sizes.0.get(&size).ok_or_else(|| {
+                    let mut entries = host_sizes.0.iter().collect::<Vec<_>>();
+                    entries.sort_by_key(
+                        |(
+                            _name,
+                            StorageHostResourceAllocation {
+                                workers,
+                                memory_limit,
+                                ..
+                            },
+                        )| (workers, memory_limit),
+                    );
+                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
+                    AdapterError::InvalidStorageHostSize {
+                        size: size.clone(),
+                        expected,
+                    }
+                })?;
+
+                StorageHostConfig::Managed {
+                    allocation: allocation.clone(),
+                    size,
+                }
+            }
+            PlanStorageHostConfig::Undefined => {
+                let (size, allocation) = self.state.default_storage_host_size();
+                StorageHostConfig::Managed { allocation, size }
+            }
+        };
+        Ok(storage_host_config)
+    }
+
     pub async fn transact<F, T>(
         &mut self,
         session: Option<&Session>,
@@ -3236,15 +3328,15 @@ impl<S: Append> Catalog<S> {
                         introspection_source_index_ids,
                     }]
                 }
-                Op::DropComputeInstanceReplica { name, compute_id } => {
-                    tx.remove_compute_instance_replica(&name, compute_id)?;
+                Op::DropComputeInstanceReplica { name, compute_name } => {
+                    let instance = self.resolve_compute_instance(&compute_name)?;
+                    tx.remove_compute_instance_replica(&name, instance.id)?;
 
-                    let instance = &self.state.compute_instances_by_id[&compute_id];
                     let replica_id = instance.replica_id_by_name[&name];
                     let replica = &instance.replicas_by_id[&replica_id];
                     for process_id in replica.process_status.keys() {
                         let update = self.state.pack_compute_instance_status_update(
-                            compute_id,
+                            instance.id,
                             replica_id,
                             *process_id,
                             -1,
@@ -3252,10 +3344,11 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.push(update);
                     }
 
-                    builtin_table_updates.push(
-                        self.state
-                            .pack_compute_instance_replica_update(compute_id, &name, -1),
-                    );
+                    builtin_table_updates.push(self.state.pack_compute_instance_replica_update(
+                        instance.id,
+                        &name,
+                        -1,
+                    ));
 
                     let details = EventDetails::DropComputeInstanceReplicaV1(
                         mz_audit_log::DropComputeInstanceReplicaV1 {
@@ -3272,7 +3365,10 @@ impl<S: Append> Catalog<S> {
                         details,
                     )?;
 
-                    vec![Action::DropComputeInstanceReplica { name, compute_id }]
+                    vec![Action::DropComputeInstanceReplica {
+                        name,
+                        compute_id: instance.id,
+                    }]
                 }
                 Op::DropItem(id) => {
                     let entry = self.get_entry(&id);
@@ -3599,8 +3695,14 @@ impl<S: Append> Catalog<S> {
                         .get_mut(&compute_id)
                         .expect("can only drop replicas from known instances");
                     let replica_id = instance.replica_id_by_name.remove(&name).unwrap();
-                    assert!(instance.replicas_by_id.remove(&replica_id).is_some());
+                    let replica = instance.replicas_by_id.remove(&replica_id).unwrap();
+                    let persisted_log_ids = replica.config.persisted_logs.get_log_ids();
                     assert!(instance.replica_id_by_name.len() == instance.replicas_by_id.len());
+
+                    for id in persisted_log_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, -1));
+                        state.drop_item(id);
+                    }
                 }
 
                 Action::DropItem(id) => {
@@ -3744,6 +3846,7 @@ impl<S: Append> Catalog<S> {
                 source,
                 remote,
                 timeline,
+                host_config,
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
@@ -3752,6 +3855,7 @@ impl<S: Append> Catalog<S> {
                 timeline,
                 depends_on,
                 remote_addr: remote,
+                host_config: self.resolve_storage_host_config(host_config)?,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
@@ -3826,9 +3930,9 @@ impl<S: Append> Catalog<S> {
         self.state.uses_tables(id)
     }
 
-    /// Return the names of all log sources the given object depends on.
-    pub fn log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
-        self.state.log_dependencies(id)
+    /// Return the ids of all active log sources the given object depends on.
+    pub fn active_log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+        self.state.active_log_dependencies(id)
     }
 
     /// Serializes the catalog's in-memory state.
@@ -3950,7 +4054,7 @@ pub enum Op {
     },
     DropComputeInstanceReplica {
         name: String,
-        compute_id: ComputeInstanceId,
+        compute_name: String,
     },
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
@@ -4409,6 +4513,13 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
 
     fn replica_names(&self) -> HashSet<&String> {
         self.replica_id_by_name.keys().collect::<HashSet<_>>()
+    }
+
+    fn replica_logs(&self, name: &String) -> Option<Vec<GlobalId>> {
+        let replica = self
+            .replicas_by_id
+            .get(self.replica_id_by_name.get(name)?)?;
+        Some(replica.config.persisted_logs.get_log_ids())
     }
 }
 

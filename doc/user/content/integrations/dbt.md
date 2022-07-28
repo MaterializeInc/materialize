@@ -136,9 +136,7 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
     {% endset %}
 
     CREATE SOURCE {{ source_name }}
-    FROM PUBNUB
-    SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
-    CHANNEL 'pubnub-market-orders'
+    FROM LOAD GENERATOR COUNTER;
     ```
 
     The `mz_generate_name` [macro](https://docs.getdbt.com/docs/building-a-dbt-project/jinja-macros/#macros) allows you to generate a fully-qualified name from a base object name. Here, `source_name` would be compiled to `materialize.public.market_orders_raw`.

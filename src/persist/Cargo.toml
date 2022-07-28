@@ -29,6 +29,7 @@ aws-types = { version = "0.46.0", features = ["hardcoded-credentials"] }
 base64 = "0.13.0"
 bytes = "1.2.0"
 crossbeam-channel = "0.5.6"
+deadpool-postgres = "0.10.2"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures-util = "0.3.19"

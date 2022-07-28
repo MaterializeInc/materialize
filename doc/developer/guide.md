@@ -196,8 +196,8 @@ UI which defaults to `localhost:9021`.
 
 ## Web UI
 
-Materialize embeds a web UI, which it serves from port 6875. If you're running
-Materialize locally, you can view the web UI at http://localhost:6875.
+Materialize embeds a web UI, which it serves from port 6876. If you're running
+Materialize locally, you can view the web UI at http://localhost:6876.
 
 Developing the web UI can be painful, as by default the HTML, CSS, and JS source
 code for the UI gets baked into the binary, and so making a change requires a

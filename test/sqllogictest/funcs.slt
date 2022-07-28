@@ -764,7 +764,7 @@ Source materialize.public.t (u7):
 Query:
 %0 =
 | Get materialize.public.t (u7)
-| Map ((integer_to_boolean(#0) && integer_to_boolean(#1))) IS NULL
+| Map ((integer_to_boolean(#0) AND integer_to_boolean(#1))) IS NULL
 | Project (#2)
 
 EOF

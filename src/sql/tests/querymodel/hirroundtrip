@@ -140,7 +140,7 @@ select coalesce(x.b, 0) from x full join y on x.a = y.a and x.c is not null;
 | Get ? (u1)
 
 %2 =
-| FullOuterJoin %0 %1 on ((#0 = #3) && (#2) IS NOT NULL)
+| FullOuterJoin %0 %1 on ((#0 = #3) AND (#2) IS NOT NULL)
 | Map coalesce(#1, integer_to_bigint(0))
 | Project (#6)
 ----
@@ -174,7 +174,7 @@ select * from x inner join y using(a);
 
 %2 =
 | InnerJoin %0 %1 on true
-| Filter (true && (#0 = #3))
+| Filter (true AND (#0 = #3))
 | Project (#0..=#2, #4, #5)
 ----
 ----
@@ -324,5 +324,5 @@ where
 | | | Filter (#0 != 5)
 | | | Project (#0, #1)
 | |
-| Filter (#3 && #4)
+| Filter (#3 AND #4)
 | Project (#0..=#2)
