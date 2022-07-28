@@ -179,10 +179,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 if let Some(logger) = compute_state.compute_logger.clone() {
                     let export_ids = dataflow.export_ids().collect();
                     ok_stream = intercept_source_instantiation_frontiers(
-                        &ok_stream,
-                        logger,
-                        *source_id,
-                        export_ids,
+                        &ok_stream, logger, *source_id, export_ids,
                     );
                 }
 
