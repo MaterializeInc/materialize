@@ -1642,4 +1642,6 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
         .unwrap();
 
     Ok(())
+
+    // Force cargo test to run
 }

@@ -20,4 +20,5 @@ hba_file = '/share/conf/pg_hba.conf'
 wal_level = logical
 max_wal_senders = 20
 max_replication_slots = 20
+max_connections = 1000
 EOCONF
