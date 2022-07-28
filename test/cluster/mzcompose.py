@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import time
+from textwrap import dedent
 
 from pg8000.dbapi import ProgrammingError
 
@@ -71,6 +72,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-12251",
         "test-remote-storaged",
         "test-drop-default-cluster",
+        "test-schema-migration",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -152,7 +154,7 @@ def workflow_test_github_12251(c: Composition) -> None:
         assert "statement timeout" in e.args[0]["M"], e
         # Ensure the statemenet_timeout setting is ~honored
         assert (
-            time.process_time() - start_time < 2
+                time.process_time() - start_time < 2
         ), "idle_in_transaction_session_timeout not respected"
     else:
         assert False, "unexpected success in test_github_12251"
@@ -167,14 +169,14 @@ def workflow_test_remote_storaged(c: Composition) -> None:
     c.down(destroy_volumes=True)
 
     with c.override(
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-        # Use a separate PostgreSQL service for persist rather than the one in
-        # the `Materialized` service, so that crashing `environmentd` does not
-        # also take down PostgreSQL.
-        Postgres(),
-        Materialized(
-            options="--persist-consensus-url=postgres://postgres:postgres@postgres"
-        ),
+            Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+            # Use a separate PostgreSQL service for persist rather than the one in
+            # the `Materialized` service, so that crashing `environmentd` does not
+            # also take down PostgreSQL.
+            Postgres(),
+            Materialized(
+                options="--persist-consensus-url=postgres://postgres:postgres@postgres"
+            ),
     ):
         dependencies = [
             "materialized",
@@ -210,3 +212,54 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
 
     c.sql("DROP CLUSTER default CASCADE")
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
+
+
+def workflow_test_builtin_migration(c: Composition) -> None:
+    """Exercise the builtin object migration code by upgrading between two versions
+    that will have a migration triggered between them. Create a materialized view
+    over the affected builtin object to confirm that the migration was successful
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+            Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+    ):
+        c.up("testdrive", persistent=True)
+
+        with c.override(
+                Materialized(
+                    image="materialize/materialized:devel-ce016efcfd04931e95a2ce6fd90431f68c84804d"
+                )
+        ):
+            c.up("materialized")
+
+            c.testdrive(
+                input=dedent(
+                    """
+            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) > 0 FROM pg_authid;
+            > CREATE DEFAULT INDEX ON v1;
+        """
+                )
+            )
+
+            c.kill("materialized")
+
+        with c.override(
+                Materialized(
+                    image="materialize/materialized:devel-d5328ec05cd391e6b8f16c2e4724f91a15eaa095"
+                )
+        ):
+            c.up("materialized")
+
+            c.testdrive(
+                input=dedent(
+                    """
+       > SELECT * FROM v1;
+       true
+
+       # This column is new after the migration
+       > SELECT DISTINCT rolconnlimit FROM pg_authid;
+       -1
+    """
+                )
+            )
