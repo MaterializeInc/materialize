@@ -42,12 +42,14 @@ def workflow_default(c: Composition) -> None:
     c.wait_for_materialized("materialized1", port=6875)
 
     c.sql("CREATE VIEW v AS SELECT 1;", service="materialized1")
+    c.sql("CREATE TABLE t(a INT);", service="materialized1")
     view = c.sql_query("SELECT * FROM v;", service="materialized1")
     assert view[0][0] == 1
     c.sql("DROP CLUSTER default CASCADE;", service="materialized1")
 
     c.up("materialized2")
-    c.wait_for_materialized("materialized2", port=15721, query="CREATE CLUSTER default REPLICAS (r1 (size '1'))", expected="any")
+    c.wait_for_materialized("materialized2", port=15721, query="CREATE CLUSTER default REPLICAS (r1 (size '1'))",
+                            expected="any")
 
     c.sql("DROP VIEW v;", service="materialized2")
     c.sql("CREATE VIEW v AS SELECT 2;", service="materialized2")
@@ -56,5 +58,7 @@ def workflow_default(c: Composition) -> None:
     c.sql("DROP CLUSTER default CASCADE;", service="materialized2")
 
     c.sql("CREATE CLUSTER default REPLICAS (r1 (size '1'))", service="materialized1")
+    c.sql("INSErT INTO t VALUES (42);", service="materialized1")
     view = c.sql_query("SELECT * FROM v;", service="materialized1")
+    print(view)
     assert view[0][0] != 1
