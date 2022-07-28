@@ -90,7 +90,7 @@ pub(crate) enum HollowBatchReaderMetadata<T> {
     into = "SerdeReaderEnrichedHollowBatch",
     from = "SerdeReaderEnrichedHollowBatch"
 )]
-/// An exchangeable struct with sufficient metadata to fetch [`HollowBatch`]es.
+/// An exchangeable struct with sufficient metadata to fetch `HollowBatch`es.
 pub struct ReaderEnrichedHollowBatch<T> {
     pub(crate) shard_id: ShardId,
     pub(crate) reader_metadata: HollowBatchReaderMetadata<T>,
@@ -406,16 +406,13 @@ where
                     shard_id: self.handle.machine.shard_id(),
                     reader_metadata: HollowBatchReaderMetadata::Listen {
                         as_of: self.as_of.clone(),
-                        // The HollowBatch should be read until the upper of
-                        // the _last_ batch. Ideally this would instead be
-                        // new_frontier - 1, but that isn't directly computable
-                        // as noted above.
                         until: self.frontier.clone(),
                     },
                     batch,
                 };
 
                 self.frontier = new_frontier;
+
                 self.handle.maybe_downgrade_since(&self.since).await;
 
                 batch
@@ -889,6 +886,75 @@ where
 
         let () = self.machine.verify_listen(&as_of).await?;
         Ok(Subscribe::new(self, as_of).await)
+    }
+
+    /// Trade in an exchange-able [ReaderEnrichedHollowBatch] for the data it
+    /// represents.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn fetch_batch(
+        &self,
+        batch: ReaderEnrichedHollowBatch<T>,
+    ) -> Result<Vec<ListenEvent<K, V, T, D>>, InvalidUsage<T>> {
+        trace!("ReadHandle::fetch_batch");
+        if batch.shard_id != self.machine.shard_id() {
+            return Err(InvalidUsage::SnapshotNotFromThisShard {
+                snapshot_shard: batch.shard_id,
+                handle_shard: self.machine.shard_id(),
+            });
+        }
+
+        let mut ret = Vec::with_capacity(batch.batch.keys.len() * 2 + 1);
+
+        let mut updates = Vec::new();
+        for key in batch.batch.keys.iter() {
+            fetch_batch_part(
+                &batch.shard_id,
+                self.blob.as_ref(),
+                &self.metrics,
+                &key,
+                &batch.batch.desc.clone(),
+                |k, v, mut t, d| {
+                    match &batch.reader_metadata {
+                        HollowBatchReaderMetadata::Listen { as_of, until } => {
+                            // This time is covered by a snapshot
+                            if !as_of.less_than(&t) {
+                                return;
+                            }
+
+                            // Because of compaction, the next batch we get might also
+                            // contain updates we've already emitted. For example, we
+                            // emitted `[1, 2)` and then compaction combined that batch
+                            // with a `[2, 3)` batch into a new `[1, 3)` batch. If this
+                            // happens, we just need to filter out anything < the
+                            // frontier. This frontier was the upper of the last batch
+                            // (and thus exclusive) so for the == case, we still emit.
+                            if !until.less_equal(&t) {
+                                return;
+                            }
+                        }
+                        HollowBatchReaderMetadata::Snapshot { as_of } => {
+                            // This time is covered by a listen
+                            if as_of.less_than(&t) {
+                                return;
+                            }
+                            t.advance_by(as_of.borrow())
+                        }
+                    }
+
+                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
+                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
+                    let d = D::decode(d);
+                    updates.push(((k, v), t, d));
+                },
+            )
+            .await;
+        }
+
+        if !updates.is_empty() {
+            ret.push(ListenEvent::Updates(updates));
+        }
+
+        Ok(ret)
     }
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
