@@ -268,8 +268,11 @@ pub trait CatalogComputeInstance<'a> {
     /// views) of this cluster.
     fn exports(&self) -> &std::collections::HashSet<GlobalId>;
 
-    /// Returns the set of non-transient indexes on this cluster.
+    /// Returns the set of replicas of this cluster.
     fn replica_names(&self) -> HashSet<&String>;
+
+    /// Returns the set of persisted logs of replica `name` of this cluster.
+    fn replica_logs(&self, name: &String) -> Option<Vec<GlobalId>>;
 }
 
 /// An item in a [`SessionCatalog`].

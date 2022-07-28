@@ -3409,7 +3409,24 @@ pub fn plan_drop_cluster_replica(
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
-            names_out.push((instance.name().to_string(), replica_name))
+            // Check if we have an item that depends on the replica's logs
+            let log_ids = instance.replica_logs(&replica_name).unwrap();
+            for id in log_ids {
+                let log_item = scx.catalog.get_item(&id);
+                for id in log_item.used_by() {
+                    let dep = scx.catalog.get_item(id);
+                    if dependency_prevents_drop(ObjectType::Source, dep) {
+                        sql_bail!(
+                            "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
+                            replica_name.quoted(),
+                            instance.name().quoted(),
+                            scx.catalog.resolve_full_name(dep.name())
+                        );
+                    }
+                }
+            }
+
+            names_out.push((instance.name().to_string(), replica_name));
         } else {
             // If "IF EXISTS" supplied, names allowed to be missing,
             // otherwise error.
@@ -3477,34 +3494,35 @@ pub fn plan_drop_item(
     if !cascade {
         for id in catalog_entry.used_by() {
             let dep = scx.catalog.get_item(id);
-            match object_type {
-                ObjectType::Type => sql_bail!(
+            if dependency_prevents_drop(object_type, dep) {
+                sql_bail!(
                     "cannot drop {}: still depended upon by catalog item '{}'",
                     scx.catalog.resolve_full_name(catalog_entry.name()),
                     scx.catalog.resolve_full_name(dep.name())
-                ),
-                _ => match dep.item_type() {
-                    CatalogItemType::Func
-                    | CatalogItemType::Table
-                    | CatalogItemType::Source
-                    | CatalogItemType::View
-                    | CatalogItemType::MaterializedView
-                    | CatalogItemType::Sink
-                    | CatalogItemType::Type
-                    | CatalogItemType::Secret
-                    | CatalogItemType::Connection => {
-                        sql_bail!(
-                            "cannot drop {}: still depended upon by catalog item '{}'",
-                            scx.catalog.resolve_full_name(catalog_entry.name()),
-                            scx.catalog.resolve_full_name(dep.name())
-                        );
-                    }
-                    CatalogItemType::Index => (),
-                },
+                );
             }
         }
     }
     Ok(Some(catalog_entry.id()))
+}
+
+/// Does the dependency `dep` prevent a drop of a non-cascade query?
+fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> bool {
+    match object_type {
+        ObjectType::Type => true,
+        _ => match dep.item_type() {
+            CatalogItemType::Func
+            | CatalogItemType::Table
+            | CatalogItemType::Source
+            | CatalogItemType::View
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::Sink
+            | CatalogItemType::Type
+            | CatalogItemType::Secret
+            | CatalogItemType::Connection => true,
+            CatalogItemType::Index => false,
+        },
+    }
 }
 
 pub fn describe_alter_index_options(

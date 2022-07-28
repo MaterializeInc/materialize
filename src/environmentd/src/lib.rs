@@ -196,6 +196,22 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let sql_local_addr = sql_listener.local_addr()?;
     let http_local_addr = http_listener.local_addr()?;
 
+    // Listen on the internal HTTP API port.
+    let internal_http_local_addr = {
+        let metrics_registry = config.metrics_registry.clone();
+        let server = http::InternalServer::new(metrics_registry, config.otel_enable_callback);
+        let bound_server = server.bind(config.internal_http_listen_addr);
+        let internal_http_local_addr = bound_server.local_addr();
+        task::spawn(|| "internal_http_server", {
+            async move {
+                if let Err(err) = bound_server.await {
+                    error!("error serving metrics endpoint: {}", err);
+                }
+            }
+        });
+        internal_http_local_addr
+    };
+
     // Load the adapter catalog from disk.
     if !config
         .cluster_replica_sizes
@@ -238,22 +254,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: config.connection_context,
     })
     .await?;
-
-    // Listen on the internal HTTP API port.
-    let internal_http_local_addr = {
-        let metrics_registry = config.metrics_registry.clone();
-        let server = http::InternalServer::new(metrics_registry, config.otel_enable_callback);
-        let bound_server = server.bind(config.internal_http_listen_addr);
-        let internal_http_local_addr = bound_server.local_addr();
-        task::spawn(|| "internal_http_server", {
-            async move {
-                if let Err(err) = bound_server.await {
-                    error!("error serving metrics endpoint: {}", err);
-                }
-            }
-        });
-        internal_http_local_addr
-    };
 
     // TODO(benesch): replace both `TCPListenerStream`s below with
     // `<type>_listener.incoming()` if that is

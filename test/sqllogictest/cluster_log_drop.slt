@@ -1,0 +1,79 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Ensure correct log creation and destruction on `CREATE CLUSTER`, `DROP CLUSTER` DDL statements.
+
+mode cockroach
+
+# The default cluster also has log sources, thus we should have one set active at boot
+query T rowsort
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+1
+
+statement ok
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'));
+
+query T rowsort
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+3
+
+statement ok
+DROP CLUSTER REPLICA c1.r1;
+
+query T rowsort
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+2
+
+statement error cannot drop cluster with active indexes.*
+DROP CLUSTER c1;
+
+statement ok
+DROP CLUSTER c1 CASCADE;
+
+query T rowsort
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+1
+
+
+# Now create a view and ensure CASCADE works as intended
+
+statement ok
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
+
+
+# We have to guess the identifier 4 here, it should match c1.r1 at this point
+statement ok
+CREATE VIEW v1 AS SELECT * FROM mz_catalog.mz_peek_active_4;
+
+statement ok
+CREATE VIEW v2 AS SELECT * FROM v1;
+
+statement error cannot drop replica "r1" of cluster "c1".*
+DROP CLUSTER REPLICA c1.r1;
+
+statement error cannot drop cluster with active indexes.*
+DROP CLUSTER c1;
+
+statement ok
+DROP CLUSTER c1 CASCADE;
+
+query error unknown catalog item 'v1'
+SELECT * FROM v1;
+
+query error unknown catalog item 'v2'
+SELECT * FROM v2;
+
+query T rowsort
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+1
