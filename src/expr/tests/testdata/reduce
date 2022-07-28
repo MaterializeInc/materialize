@@ -41,12 +41,12 @@ reduce
 reduce
 (call_unary is_null (call_binary add_int_32 #1 #0)) [(int32 false) (int32 false)]
 ----
-((#0) IS NULL || (#1) IS NULL)
+((#0) IS NULL OR (#1) IS NULL)
 
 reduce
 (call_unary is_null (call_variadic and [#1 #0])) [(bool false) (bool false)]
 ----
-((#0 && #1)) IS NULL
+((#0 AND #1)) IS NULL
 
 reduce
 (call_unary is_null
@@ -105,7 +105,7 @@ reduce
 )
 [int32 int32 int32]
 ----
-((#0) IS NULL || (#1) IS NULL || (#2) IS NULL)
+((#0) IS NULL OR (#1) IS NULL OR (#2) IS NULL)
 
 # Null-propagating UnaryFunc around BinaryFunc
 reduce
@@ -116,7 +116,7 @@ reduce
 )
 [(int32 false) (int32 false)]
 ----
-((#0) IS NULL || (#1) IS NULL)
+((#0) IS NULL OR (#1) IS NULL)
 
 # Non-null-propagating UnaryFunc around BinaryFunc
 reduce
@@ -148,7 +148,7 @@ reduce
 )
 [string bool]
 ----
-(((#1) IS NULL || text_to_boolean(#0))) IS NULL
+(((#1) IS NULL OR text_to_boolean(#0))) IS NULL
 
 # outer is_null needs to be resolved in a second round.
 
@@ -194,7 +194,7 @@ reduce
 )
 [(int32 false) (int32 false)]
 ----
-((#0) IS NOT NULL && (#1) IS NOT NULL)
+((#0) IS NOT NULL AND (#1) IS NOT NULL)
 
 canonicalize
 [(call_unary not
@@ -216,7 +216,7 @@ reduce
 )
 [(int32 false) (int32 false) (int32 false)]
 ----
-((#1 <= #0) || (#1 >= #2))
+((#1 <= #0) OR (#1 >= #2))
 
 reduce
 (
@@ -229,7 +229,7 @@ reduce
 )
 [(bool) (int32 false) (int32 false)]
 ----
-(#0 || (#1 >= NOT(#2)))
+(#0 OR (#1 >= NOT(#2)))
 
 reduce
 (
@@ -242,7 +242,7 @@ reduce
 )
 [bool bool bool]
 ----
-(#0 || (#2 && NOT(#1)))
+(#0 OR (#2 AND NOT(#1)))
 
 # undistribute_and_or
 
@@ -253,7 +253,7 @@ reduce
         (call_variadic and [(call_unary not #1) #2])])
 [bool bool bool]
 ----
-(NOT(#1) && (#0 || #2))
+(NOT(#1) AND (#0 OR #2))
 
 reduce
 (call_unary not
@@ -262,7 +262,7 @@ reduce
         (call_variadic and [#1 #2])]))
 [bool bool bool]
 ----
-(NOT(#1) || (NOT(#0) && NOT(#2)))
+(NOT(#1) OR (NOT(#0) AND NOT(#2)))
 
 reduce
 (call_unary not (call_variadic and [
@@ -270,7 +270,7 @@ reduce
         (call_variadic or [#1 #2])]))
 [bool bool bool]
 ----
-(NOT(#1) && (NOT(#0) || NOT(#2)))
+(NOT(#1) AND (NOT(#0) OR NOT(#2)))
 
 reduce
 (call_variadic and [
@@ -279,10 +279,10 @@ reduce
 )
 [int64 int32 int32]
 ----
-((#0) IS NULL || ((#1) IS NULL && (#2) IS NULL))
+((#0) IS NULL OR ((#1) IS NULL AND (#2) IS NULL))
 
 # flatten_and_or + undistribute_and_or
-# ((#0 || #1) || (#2 > 2)) && (#0 || ((#2 < 3) || #1))
+# ((#0 OR #1) OR (#2 > 2)) AND (#0 OR ((#2 < 3) OR #1))
 reduce
 (call_variadic and [
     (call_variadic or [(call_variadic or [#0 #1]) (call_binary gt #2 2)])
@@ -290,10 +290,10 @@ reduce
 ])
 [bool bool int32]
 ----
-(#0 || #1 || ((#2 < 3) && (#2 > 2)))
+(#0 OR #1 OR ((#2 < 3) AND (#2 > 2)))
 
 # undistribute_and_or with more than 2 args at the top level
-# (#0 || #1 || (#2 > 2)) && (#0 || (#2 < 3) || #1) && (#1 || (#5 < 7) || #0)
+# (#0 OR #1 OR (#2 > 2)) AND (#0 OR (#2 < 3) OR #1) AND (#1 OR (#5 < 7) OR #0)
 reduce
 (call_variadic and [
     (call_variadic or [#0 #1 (call_binary gt #2 2)])
@@ -302,7 +302,7 @@ reduce
 ])
 [bool bool int32 int32 int32 int32]
 ----
-(#0 || #1 || ((#2 < 3) && (#5 < 7) && (#2 > 2)))
+(#0 OR #1 OR ((#2 < 3) AND (#5 < 7) AND (#2 > 2)))
 
 ## a | (a & b)
 
@@ -320,7 +320,7 @@ reduce
     (call_variadic or [#0 (call_variadic or [(call_binary lt #2 3) #1])])])
 [bool bool int32]
 ----
-(#0 || #1)
+(#0 OR #1)
 
 ## Record get/create optimizations
 
@@ -361,13 +361,13 @@ reduce
 (if (call_binary gt #0 #1) false true)
 [int32 int32]
 ----
-((#0) IS NULL || (#1) IS NULL || (#0 <= #1))
+((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1))
 
 reduce
 (if (call_binary gt #0 #1) false (null bool))
 [int32 int32]
 ----
-(null && ((#0) IS NULL || (#1) IS NULL || (#0 <= #1)))
+(null AND ((#0) IS NULL OR (#1) IS NULL OR (#0 <= #1)))
 
 reduce
 (if (call_binary gt #0 #1) false false)
@@ -386,20 +386,20 @@ reduce
 (if (call_binary gt #0 #1) (null bool) false)
 [int32 int32]
 ----
-(null && (#0) IS NOT NULL && (#1) IS NOT NULL && (#0 > #1))
+(null AND (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#0 > #1))
 
 # non-literal expression in the THEN clause
 reduce
 (if (call_binary gt #0 #1) true false)
 [int32 int32]
 ----
-((#0) IS NOT NULL && (#1) IS NOT NULL && (#0 > #1))
+((#0) IS NOT NULL AND (#1) IS NOT NULL AND (#0 > #1))
 
 reduce
 (if (call_binary gt #0 #1) true (null bool))
 [int32 int32]
 ----
-(null || ((#0) IS NOT NULL && (#1) IS NOT NULL && (#0 > #1)))
+(null OR ((#0) IS NOT NULL AND (#1) IS NOT NULL AND (#0 > #1)))
 
 reduce
 (if (call_binary gt #0 #1) (call_binary eq #0 (1 int32)) true)
@@ -411,7 +411,7 @@ reduce
 (if (call_binary gt #0 #1) (null bool) true)
 [int32 int32]
 ----
-(null || (#0) IS NULL || (#1) IS NULL || (#0 <= #1))
+(null OR (#0) IS NULL OR (#1) IS NULL OR (#0 <= #1))
 
 reduce
 (if (call_binary gt #0 #1) true true)
@@ -577,7 +577,7 @@ canonicalize
 [float64 float64 float64 float64]
 ----
 (#1) IS NOT NULL
-((#3) IS NOT NULL || (#0 < #2))
+((#3) IS NOT NULL OR (#0 < #2))
 
 canonicalize
 [(call_variadic or
@@ -588,7 +588,7 @@ canonicalize
 [float64 float64 float64 float64]
 ----
 (#1) IS NOT NULL
-((#3) IS NOT NULL || (#0 < #2))
+((#3) IS NOT NULL OR (#0 < #2))
 
 # expressions in equivalence classes only become simpler.
 
@@ -600,7 +600,7 @@ canonicalize-join
 ]]
 [int32]
 ----
-[(#0 + #0) (#0 + (#0 + #0)) (#0 && (#0 + #0))]
+[(#0 + #0) (#0 + (#0 + #0)) (#0 AND (#0 + #0))]
 
 canonicalize-join
 [
@@ -772,8 +772,8 @@ canonicalize-join
 ]
 [bool bool bool bool bool]
 ----
-[#0 (#2 && (#3 || #4))]
-[coalesce(#0, #1, #2, false) (#2 && #3)]
+[#0 (#2 AND (#3 OR #4))]
+[coalesce(#0, #1, #2, false) (#2 AND #3)]
 
 ## decompose is_null
 
@@ -784,7 +784,7 @@ canonicalize-join
 ]
 [int32 int32 int32 int32]
 ----
-[#0 ((#2) IS NULL || (#3) IS NULL)]
+[#0 ((#2) IS NULL OR (#3) IS NULL)]
 [(#2 + #3) coalesce(#0, #1, false)]
 
 # impossible condition detection during predicate canonicalization produces

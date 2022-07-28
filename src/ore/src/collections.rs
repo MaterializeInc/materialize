@@ -15,6 +15,7 @@
 
 //! Collection utilities.
 
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 
 /// Extension methods for collections.
@@ -63,5 +64,40 @@ where
             (Some(el), None) => el,
             _ => panic!("{}", msg),
         }
+    }
+}
+
+/// Extension methods for associative collections.
+pub trait AssociativeExt<K, V> {
+    /// Inserts a key and value, panicking with
+    /// a given message if a true
+    /// insert (as opposed to an update) cannot be done
+    /// because the key already existed in the collection.
+    fn expect_insert(&mut self, k: K, v: V, msg: &str);
+    /// Inserts a key and value, panicking if a true
+    /// insert (as opposed to an update) cannot be done
+    /// because the key already existed in the collection.
+    fn unwrap_insert(&mut self, k: K, v: V) {
+        self.expect_insert(k, v, "called `unwrap_insert` for an already-existing key")
+    }
+}
+
+impl<K, V> AssociativeExt<K, V> for HashMap<K, V>
+where
+    K: Eq + std::hash::Hash,
+{
+    fn expect_insert(&mut self, k: K, v: V, msg: &str) {
+        let old = self.insert(k, v);
+        assert!(old.is_none(), "{}", msg)
+    }
+}
+
+impl<K, V> AssociativeExt<K, V> for BTreeMap<K, V>
+where
+    K: Ord,
+{
+    fn expect_insert(&mut self, k: K, v: V, msg: &str) {
+        let old = self.insert(k, v);
+        assert!(old.is_none(), "{}", msg)
     }
 }

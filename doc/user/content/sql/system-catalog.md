@@ -550,6 +550,21 @@ Field       | Type       | Meaning
 `worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`bigint`] | The next timestamp at which the dataflow may change.
 
+### `mz_worker_materialization_delays`
+
+The `mz_worker_materialization_delays` source provides, for each worker,
+a histogram of wall-clock delays between observations of source frontier
+advancements at the dataflow layer and the advancements of the corresponding
+[dataflow] frontiers.
+
+Field       | Type       | Meaning
+------------|------------|--------
+`dataflow` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
+`source`   | [`text`]   | The ID of the input source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`delay_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
+`count`    | [`bigint`] | The (noncumulative) count of delay measurements in this bucket.
+
 ## `pg_catalog`
 
 Materialize has compatibility shims for the following relations from [PostgreSQL's
@@ -575,6 +590,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
   * [`pg_views`](https://www.postgresql.org/docs/current/view-pg-views.html)
+  * [`pg_authid`](https://www.postgresql.org/docs/current/catalog-pg-authid.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in PostgreSQL, or if they do include the column the result set

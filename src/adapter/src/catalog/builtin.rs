@@ -897,6 +897,12 @@ pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
 };
 
+pub const MZ_WORKER_MATERIALIZATION_DELAYS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_materialization_delays",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::FrontierDelay),
+};
+
 pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
     name: "mz_peek_active",
     schema: MZ_CATALOG_SCHEMA,
@@ -2036,6 +2042,38 @@ AS SELECT
 WHERE false",
 };
 
+pub const PG_AUTHID: BuiltinView = BuiltinView {
+    name: "pg_authid",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_authid
+AS SELECT
+    r.oid AS oid,
+    r.name AS rolname,
+    CASE
+        WHEN r.name = 'mz_system' THEN true
+        ELSE false
+    END AS rolsuper,
+    -- MZ doesn't have role inheritence
+    false AS rolinherit,
+    -- All roles can create other roles
+    true AS rolcreaterole,
+    -- All roles can create other dbs
+    true AS rolcreatedb,
+    -- All roles can login
+    true AS rolcanlogin,
+    -- MZ doesn't support replication in the same way Postgres does
+    false AS rolreplication,
+    -- MZ doesn't how row level security
+    false AS rolbypassrls,
+    -- TODO(jkosh44) purposely left out rolconnlimit for upgrade testing (MZ doesn't have a connection limit)
+    -- false AS rolconnlimit,
+    -- MZ doesn't have role passwords
+    NULL::pg_catalog.text AS rolpassword,
+    -- MZ doesn't have role passwords
+    NULL::pg_catalog.timestamptz AS rolvaliduntil
+FROM mz_catalog.mz_roles r",
+};
+
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
     id: 0,
@@ -2140,6 +2178,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
         Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
+        Builtin::Log(&MZ_WORKER_MATERIALIZATION_DELAYS),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
@@ -2211,6 +2250,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
+        Builtin::View(&PG_AUTHID),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),

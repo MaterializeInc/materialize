@@ -204,7 +204,7 @@ impl GarbageCollector {
 
         // Now that we've deleted the eligible blobs, "commit" this info by
         // truncating the state versions that referenced them.
-        let () = retry_external(&metrics.retries.external.gc_truncate, || async {
+        let _deleted_count = retry_external(&metrics.retries.external.gc_truncate, || async {
             consensus.truncate(&path, req.new_seqno_since).await
         })
         .instrument(debug_span!("gc::truncate"))

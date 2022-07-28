@@ -221,7 +221,7 @@ WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 | Map #3
 | Project (#0..=#2, #4)
 | Project (#0, #3)
-| Filter ((integer_to_bigint(#0) = #1) && true)
+| Filter ((integer_to_bigint(#0) = #1) AND true)
 | Distinct group=(#0)
 
 %8 =

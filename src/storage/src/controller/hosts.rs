@@ -24,13 +24,12 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use bytesize::ByteSize;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 use tracing::info;
 
 use mz_build_info::BuildInfo;
-use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceConfig, ServicePort};
+use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
 use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
 use mz_repr::GlobalId;
@@ -39,6 +38,7 @@ use crate::controller::rehydration::RehydratingStorageClient;
 use crate::protocol::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
+use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 
 /// The network address of a storage host.
 pub type StorageHostAddr = String;
@@ -69,6 +69,8 @@ pub struct StorageHosts<T> {
     hosts: HashMap<StorageHostAddr, StorageHost<T>>,
     /// The assignment of storage objects to storage hosts.
     objects: HashMap<GlobalId, StorageHostAddr>,
+    /// Set to `true` once `initialization_complete` has been called.
+    initialized: bool,
 }
 
 /// Metadata about a single storage host.
@@ -82,7 +84,12 @@ struct StorageHost<T> {
     orchestrated: bool,
 }
 
-impl<T> StorageHosts<T> {
+impl<T> StorageHosts<T>
+where
+    T: Timestamp + Lattice,
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
+{
     /// Constructs a new [`StorageHosts`] from its configuration.
     pub fn new(config: StorageHostsConfig) -> StorageHosts<T> {
         StorageHosts {
@@ -91,6 +98,20 @@ impl<T> StorageHosts<T> {
             storaged_image: config.storaged_image,
             objects: HashMap::new(),
             hosts: HashMap::new(),
+            initialized: false,
+        }
+    }
+
+    /// Marks the end of any initialization commands.
+    ///
+    /// The implementor may wait for this method to be called before
+    /// implementing prior commands, and so it is important for a user to invoke
+    /// this method as soon as it is comfortable. This method can be invoked
+    /// immediately, at the potential expense of performance.
+    pub fn initialization_complete(&mut self) {
+        self.initialized = true;
+        for client in self.clients() {
+            client.send(StorageCommand::InitializationComplete);
         }
     }
 
@@ -112,16 +133,18 @@ impl<T> StorageHosts<T> {
     pub async fn provision(
         &mut self,
         id: GlobalId,
-        host_addr: Option<StorageHostAddr>,
+        host_config: StorageHostConfig,
     ) -> Result<&mut RehydratingStorageClient<T>, anyhow::Error>
     where
         T: Timestamp + Lattice,
         StorageCommand<T>: RustType<ProtoStorageCommand>,
         StorageResponse<T>: RustType<ProtoStorageResponse>,
     {
-        let (host_addr, orchestrated) = match host_addr {
-            Some(host_addr) => (host_addr, false),
-            None => (self.start_storage_host(id).await?, true),
+        let (host_addr, orchestrated) = match host_config {
+            StorageHostConfig::Remote { addr } => (addr, false),
+            StorageHostConfig::Managed { allocation, .. } => {
+                (self.start_storage_host(id, allocation).await?, true)
+            }
         };
         let existed = self.objects.insert(id, host_addr.clone());
         assert!(
@@ -131,7 +154,10 @@ impl<T> StorageHosts<T> {
         info!("assigned storage object {id} to storage host {host_addr}");
         match self.hosts.entry(host_addr.clone()) {
             Entry::Vacant(entry) => {
-                let client = RehydratingStorageClient::new(host_addr, self.build_info);
+                let mut client = RehydratingStorageClient::new(host_addr, self.build_info);
+                if self.initialized {
+                    client.send(StorageCommand::InitializationComplete);
+                }
                 let host = entry.insert(StorageHost {
                     client,
                     objects: HashSet::from_iter([id]),
@@ -204,7 +230,11 @@ impl<T> StorageHosts<T> {
     }
 
     /// Starts a orchestrated storage host for the specified ID.
-    async fn start_storage_host(&self, id: GlobalId) -> Result<StorageHostAddr, anyhow::Error> {
+    async fn start_storage_host(
+        &self,
+        id: GlobalId,
+        allocation: StorageHostResourceAllocation,
+    ) -> Result<StorageHostAddr, anyhow::Error> {
         let storage_service = self
             .orchestrator
             .ensure_service(
@@ -235,10 +265,8 @@ impl<T> StorageHosts<T> {
                             port_hint: 6878,
                         },
                     ],
-                    // TODO(andrioni): placeholder CPU and memory limits while we work on #13125
-                    // Values coming from the xsmall replica size
-                    cpu_limit: Some(CpuLimit::from_millicpus(2000)),
-                    memory_limit: Some(MemoryLimit(ByteSize::gib(16))),
+                    cpu_limit: allocation.cpu_limit,
+                    memory_limit: allocation.memory_limit,
                     scale: NonZeroUsize::new(1).unwrap(),
                     labels: HashMap::new(),
                     availability_zone: None,

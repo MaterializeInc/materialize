@@ -642,7 +642,7 @@ EXPLAIN RAW PLAN FOR SELECT la, l.lb, big_l.lb FROM l JOIN big_l USING (la)
 | Get materialize.public.big_l (u8)
 
 %2 =
-| InnerJoin %0 %1 on (true && (integer_to_bigint(#0) = #2))
+| InnerJoin %0 %1 on (true AND (integer_to_bigint(#0) = #2))
 | Project (#0, #1, #3)
 
 EOF

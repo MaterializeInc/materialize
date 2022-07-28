@@ -52,7 +52,7 @@ Unlike the `sqllogictest` driver, `testdrive` will fail the test at the first di
 
 ## As a fully containerized, self-sufficient test via mzcompose
 
-The easiest way to run testdrive tests is via mzcompose.
+The easiest way to run testdrive tests is via [mzcompose](mzcompose.md).
 
 The mzcompose configuration will automatically set up all of testdrive's
 dependencies, including Zookeeper, Kafka, the Confluent Schema Registry, and
@@ -64,7 +64,7 @@ Platform in Docker is nearly unusably slow because it runs under QEMU emulation.
 provide ARM images.) As a workaround, run tests using Redpanda instead of the
 Confluent Platform, or run tests locally without mzcompose.
 
-For full reference documentation on the available mzcompose optoins, consult the
+For full reference documentation on the available mzcompose options, consult the
 help text:
 
 ```
@@ -106,7 +106,7 @@ testdrive script, you'll need two terminal windows open. In the first terminal,
 run Materialize:
 
 ```shell
-$ bin/materialized --release
+$ ./bin/environmentd --release
 ```
 
 In the second terminal, run testdrive:

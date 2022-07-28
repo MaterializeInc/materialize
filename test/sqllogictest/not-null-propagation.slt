@@ -328,7 +328,7 @@ Query:
 | Get materialize.public.bool_table (u2)
 | | types = (boolean?, boolean)
 | | keys = ()
-| Map (#0 && #1), (#0 || #1)
+| Map (#0 AND #1), (#0 OR #1)
 | | types = (boolean?, boolean, boolean?, boolean?)
 | | keys = ()
 | Project (#2, #3)

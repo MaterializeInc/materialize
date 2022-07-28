@@ -120,7 +120,7 @@ build apply=CanonicalizeMfp
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
-| Filter (#0) IS NOT NULL, ((#0 = 5) || (#0 = 1337))
+| Filter (#0) IS NOT NULL, ((#0 = 5) OR (#0 = 1337))
 | Project (#0)
 ----
 ----
@@ -158,7 +158,7 @@ build apply=CanonicalizeMfp
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
 | Map (#0 + #1)
-| Filter (#0) IS NOT NULL, ((#4 = 5) || (#4 = 9))
+| Filter (#0) IS NOT NULL, ((#4 = 5) OR (#4 = 9))
 | Project (#0)
 ----
 ----
@@ -202,7 +202,7 @@ build apply=CanonicalizeMfp
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
-| Filter (#0) IS NOT NULL, ((#0 = 5) || (#0 = 1337))
+| Filter (#0) IS NOT NULL, ((#0 = 5) OR (#0 = 1337))
 | Project (#0, #3)
 ----
 ----
@@ -235,7 +235,7 @@ build apply=CanonicalizeMfp
 | Join %0 %1 (= #0 #2)
 | | implementation = Unimplemented
 | Map (#0 + #2)
-| Filter (#0) IS NOT NULL, ((#0 = 5) || (#0 = 1337))
+| Filter (#0) IS NOT NULL, ((#0 = 5) OR (#0 = 1337))
 | Project (#4)
 ----
 ----

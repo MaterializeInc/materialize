@@ -1142,6 +1142,38 @@ impl AstDisplay for KeyConstraint {
 }
 impl_display!(KeyConstraint);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateSourceOptionName {
+    Size,
+}
+
+impl AstDisplay for CreateSourceOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CreateSourceOptionName::Size => "SIZE",
+        })
+    }
+}
+impl_display!(CreateSourceOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE SOURCE...` statement.
+pub struct CreateSourceOption<T: AstInfo> {
+    pub name: CreateSourceOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSourceOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(CreateSourceOption);
+
 /// SQL column definition
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnDef<T: AstInfo> {

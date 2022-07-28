@@ -53,7 +53,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Nested OR/disjunction
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL OR col_not_null = 5);
-"%0 =| Get t1| Filter ((#0) IS NULL || (#1 = 5))"
+"%0 =| Get t1| Filter ((#0) IS NULL OR (#1 = 5))"
 
 # A more complex expression
 
@@ -73,7 +73,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # The common expression contains an OR/disjunction
 
 > EXPLAIN SELECT * FROM t1 WHERE ((col_not_null > 3) OR (col_not_null < 5)) OR ((col_not_null > 3) OR (col_not_null < 5));
-"%0 =| Get t1| Filter ((#1 < 5) || (#1 > 3))"
+"%0 =| Get t1| Filter ((#1 < 5) OR (#1 > 3))"
 
 # Use of a deterministic function
 
@@ -98,15 +98,15 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # IN list inside the expression
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (2, 3);
-"%0 =| Get t1| Filter ((#1 = 2) || (#1 = 3))"
+"%0 =| Get t1| Filter ((#1 = 2) OR (#1 = 3))"
 
 # Partial matches are not optimized
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (3, 4);
-"%0 =| Get t1| Filter ((#1 = 3) || ((#1 = 2) && (#1 = 4)))"
+"%0 =| Get t1| Filter ((#1 = 3) OR ((#1 = 2) AND (#1 = 4)))"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (4, 5);
-"%0 =| Get t1| Filter ((#1 = 2) || (#1 = 3)), ((#1 = 4) || (#1 = 5))"
+"%0 =| Get t1| Filter ((#1 = 2) OR (#1 = 3)), ((#1 = 4) OR (#1 = 5))"
 
 # Expression inside an IN list
 
@@ -118,4 +118,4 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Not optimized in OR/disjunctions
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 OR TRUE IN (col_not_null = 1, col_not_null = 2)
-"%0 =| Get t1| Map (#1 = 1)| Filter (#2 || (#2 = true) || (true = (#1 = 2)))| Project (#0, #1)"
+"%0 =| Get t1| Map (#1 = 1)| Filter (#2 OR (#2 = true) OR (true = (#1 = 2)))| Project (#0, #1)"
