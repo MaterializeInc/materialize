@@ -15,9 +15,17 @@ from materialize.cloudtest.wait import wait
 
 class Minio(K8sResource):
     def create(self) -> None:
-        subprocess.check_call(
-            ["kubectl", "delete", "persistentvolumeclaim", "minio-pv-claim"]
-        )
+        # Clear any existing volume claims, but don't crash if we fail to delete
+        # because none can be found!
+        try:
+            subprocess.run(
+                ["kubectl", "delete", "persistentvolumeclaim", "minio-pv-claim"],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            if b"(NotFound)" not in e.stderr:
+                raise
 
         for yaml in [
             "minio-standalone-pvc",
