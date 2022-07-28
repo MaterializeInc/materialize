@@ -989,8 +989,18 @@ mod tests {
         // live entries in consensus.
         const NUM_BATCHES: u64 = 100;
         for idx in 0..NUM_BATCHES {
-            write
-                .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+            let batch = write
+                .expect_batch(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                .await;
+            let (_, writer_maintenance) = write
+                .machine
+                .compare_and_append(&batch.into_hollow_batch(), &write.writer_id)
+                .await
+                .expect("external durability failed")
+                .expect("invalid usage")
+                .expect("unexpected upper");
+            writer_maintenance
+                .perform_awaitable(&write.machine, &write.gc, write.compact.as_ref())
                 .await;
         }
         let key = write.machine.shard_id().to_string();
@@ -1004,27 +1014,6 @@ mod tests {
         // out a tighter bound than this, but the point is only that it's
         // bounded).
         let max_entries = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
-
-        // The truncation is done in the background, so wait until the assertion
-        // passes, giving up and failing the test if that takes "too much" time.
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
-        loop {
-            let consensus_entries = consensus
-                .scan(&key, SeqNo::minimum())
-                .await
-                .expect("scan failed");
-            if consensus_entries.len() <= max_entries {
-                break;
-            }
-            info!(
-                "expected at most {} entries got {}",
-                max_entries,
-                consensus_entries.len()
-            );
-            if retry.next_sleep() > Duration::from_secs(10) {
-                panic!("did not converge in time");
-            }
-            retry = retry.sleep().await;
-        }
+        assert!(consensus_entries.len() < max_entries);
     }
 }

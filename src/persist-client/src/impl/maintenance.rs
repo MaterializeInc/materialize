@@ -19,6 +19,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_persist_types::{Codec, Codec64};
 use std::fmt::Debug;
 use timely::progress::Timestamp;
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Default)]
 pub struct LeaseExpiration {
@@ -44,6 +45,7 @@ pub struct RoutineMaintenance {
 }
 
 impl RoutineMaintenance {
+    /// Initiates any routine maintenance necessary in background tasks
     pub(crate) fn perform<K, V, T, D>(self, machine: &Machine<K, V, T, D>, gc: &GarbageCollector)
     where
         K: Debug + Codec,
@@ -51,24 +53,70 @@ impl RoutineMaintenance {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
+        let _ = self.perform_in_background(machine, gc);
+    }
+
+    /// Performs any routine maintenance necessary in background tasks. Can be awaited
+    /// to ensure all background work has completed.
+    ///
+    /// Used for testing maintenance-related state transitions deterministically
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) async fn perform_awaitable<K, V, T, D>(
+        self,
+        machine: &Machine<K, V, T, D>,
+        gc: &GarbageCollector,
+    ) where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        for handle in self.perform_in_background(machine, gc) {
+            let _ = handle.await;
+        }
+    }
+
+    fn perform_in_background<K, V, T, D>(
+        self,
+        machine: &Machine<K, V, T, D>,
+        gc: &GarbageCollector,
+    ) -> Vec<JoinHandle<()>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        let mut join_handles = vec![];
         if let Some(gc_req) = self.garbage_collection {
-            gc.gc_and_truncate_background(gc_req);
+            if let Some(join) = gc.gc_and_truncate_background(gc_req) {
+                join_handles.push(join);
+            }
         }
 
         if let Some(lease_expiration) = self.lease_expiration {
             for expired in lease_expiration.readers {
                 let mut machine = machine.clone();
-                let _ = mz_ore::task::spawn(|| "persist::automatic_read_expiration", async move {
-                    machine.expire_reader(&expired).await
-                });
+                join_handles.push(mz_ore::task::spawn(
+                    || "persist::automatic_read_expiration",
+                    async move {
+                        let _ = machine.expire_reader(&expired).await;
+                    },
+                ));
             }
             for expired in lease_expiration.writers {
                 let mut machine = machine.clone();
-                let _ = mz_ore::task::spawn(|| "persist::automatic_write_expiration", async move {
-                    machine.expire_writer(&expired).await
-                });
+                join_handles.push(mz_ore::task::spawn(
+                    || "persist::automatic_write_expiration",
+                    async move {
+                        let _ = machine.expire_writer(&expired).await;
+                    },
+                ));
             }
         }
+
+        join_handles
     }
 }
 
@@ -86,6 +134,7 @@ impl<T> WriterMaintenance<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    /// Initiates any writer maintenance necessary in background tasks
     pub(crate) fn perform<K, V, D>(
         self,
         machine: &Machine<K, V, T, D>,
@@ -96,12 +145,50 @@ where
         V: Debug + Codec,
         D: Semigroup + Codec64,
     {
-        self.routine.perform(machine, gc);
+        let _ = self.perform_in_background(machine, gc, compactor);
+    }
+
+    /// Performs any writer maintenance necessary in background tasks. Can be awaited
+    /// to ensure all background work has completed.
+    ///
+    /// Used for testing maintenance-related state transitions deterministically
+    #[cfg(test)]
+    pub(crate) async fn perform_awaitable<K, V, D>(
+        self,
+        machine: &Machine<K, V, T, D>,
+        gc: &GarbageCollector,
+        compactor: Option<&Compactor>,
+    ) where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        D: Semigroup + Codec64,
+    {
+        for handle in self.perform_in_background(machine, gc, compactor) {
+            let _ = handle.await;
+        }
+    }
+
+    fn perform_in_background<K, V, D>(
+        self,
+        machine: &Machine<K, V, T, D>,
+        gc: &GarbageCollector,
+        compactor: Option<&Compactor>,
+    ) -> Vec<JoinHandle<()>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        D: Semigroup + Codec64,
+    {
+        let mut handles = self.routine.perform_in_background(machine, gc);
 
         if let Some(compactor) = compactor {
             for req in self.compaction {
-                compactor.compact_and_apply_background(machine, req);
+                if let Some(handle) = compactor.compact_and_apply_background(machine, req) {
+                    handles.push(handle);
+                }
             }
         }
+
+        handles
     }
 }
