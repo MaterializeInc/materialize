@@ -2042,7 +2042,7 @@ pub const PG_AUTHID: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_authid
 AS SELECT
     r.oid AS oid,
-    r.name AS name,
+    r.name AS rolname,
     CASE
         WHEN r.name = 'mz_system' THEN true
         ELSE false
