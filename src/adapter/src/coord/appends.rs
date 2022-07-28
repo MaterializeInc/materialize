@@ -9,9 +9,9 @@
 
 //! Logic and types for all appends executed by the [`Coordinator`].
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use derivative::Derivative;
 use tokio::sync::OwnedMutexGuard;
@@ -24,7 +24,7 @@ use mz_storage::protocol::client::Update;
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::{CoordTimestamp, Coordinator, Message, PendingTxn};
+use crate::coord::{Coordinator, Message, PendingTxn};
 use crate::session::{Session, WriteOp};
 use crate::util::ClientTransmitter;
 use crate::ExecuteResponse;
@@ -33,80 +33,6 @@ use crate::ExecuteResponse;
 pub struct AdvanceLocalInput<T> {
     advance_to: T,
     ids: Vec<GlobalId>,
-}
-
-/// Holds tables needing advancement.
-pub(crate) struct AdvanceTables<T> {
-    /// The current number of tables to advance in a single batch.
-    batch_size: usize,
-    /// The set of tables to advance.
-    set: HashSet<GlobalId>,
-    /// An ordered set of work to ensure fairness. Elements may be duplicated here,
-    /// so there's no guarantee that there is a corresponding element in `set`.
-    work: VecDeque<GlobalId>,
-    /// Timestamp at which to advance the tables.
-    advance_to: T,
-}
-
-impl<T: CoordTimestamp> AdvanceTables<T> {
-    pub(crate) fn new() -> Self {
-        Self {
-            batch_size: 1,
-            set: HashSet::new(),
-            work: VecDeque::new(),
-            advance_to: T::minimum(),
-        }
-    }
-
-    // Inserts ids to be advanced to ts.
-    fn insert<I: Iterator<Item = GlobalId>>(&mut self, ts: T, ids: I) {
-        assert!(self.advance_to.less_than(&ts));
-        self.advance_to = ts;
-        let ids = ids.collect::<Vec<_>>();
-        self.set.extend(&ids);
-        self.work.extend(ids);
-    }
-
-    /// Returns the set of tables to advance. Blocks forever if there are none.
-    ///
-    /// This method is cancel-safe because there are no await points when the set is non-empty.
-    pub(crate) async fn recv(&mut self) -> AdvanceLocalInput<T> {
-        if self.set.is_empty() {
-            futures::future::pending::<()>().await;
-        }
-        let mut remaining = self.batch_size;
-        let mut inputs = AdvanceLocalInput {
-            advance_to: self.advance_to.clone(),
-            ids: Vec::new(),
-        };
-        // Fetch out of the work queue to ensure that no table is starved from
-        // advancement in the case that the periodic advancement interval is less than
-        // the total time to advance all tables.
-        while let Some(id) = self.work.pop_front() {
-            // Items can be duplicated in work, so there's no guarantee that they will
-            // always apper in set.
-            if self.set.remove(&id) {
-                inputs.ids.push(id);
-                remaining -= 1;
-                if remaining == 0 {
-                    break;
-                }
-            }
-        }
-        inputs
-    }
-
-    // Decreases the batch size to return from insert.
-    fn decrease_batch(&mut self) {
-        if self.batch_size > 1 {
-            self.batch_size = self.batch_size.saturating_sub(1);
-        }
-    }
-
-    // Increases the batch size to return from insert.
-    fn increase_batch(&mut self) {
-        self.batch_size = self.batch_size.saturating_add(1);
-    }
 }
 
 /// An operation that is deferred while waiting for a lock.
@@ -360,21 +286,24 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Enqueue requests to advance all local inputs (tables) to the current wall
     /// clock or at least a time greater than any previous table read (if wall
-    /// clock has gone backward). These are not processed in a single append call
-    /// because they currently processed serially by persist. In order to allow
-    /// other coordinator messages to be processed (like user queries), split up the
-    /// processing of this work.
+    /// clock has gone backward).
     pub(crate) async fn queue_local_input_advances(&mut self, advance_to: mz_repr::Timestamp) {
-        self.advance_tables.insert(
-            advance_to,
-            self.catalog.entries().filter_map(|e| {
-                if e.is_table() || e.is_storage_collection() {
-                    Some(e.id())
-                } else {
-                    None
-                }
-            }),
-        );
+        self.internal_cmd_tx
+            .send(Message::AdvanceLocalInput(AdvanceLocalInput {
+                advance_to,
+                ids: self
+                    .catalog
+                    .entries()
+                    .filter_map(|e| {
+                        if e.is_table() || e.is_storage_collection() {
+                            Some(e.id())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            }))
+            .expect("sending to internal_cmd_tx cannot fail");
     }
 
     /// Advance a local input (table). This downgrades the capability of a table,
@@ -384,28 +313,6 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         inputs: AdvanceLocalInput<mz_repr::Timestamp>,
     ) {
-        // We split up table advancement into batches of requests so that user queries
-        // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
-        // maximum amount of time we are willing to block user queries for. We could
-        // process tables one at a time, but that increases the overall processing time
-        // because we miss out on batching the requests to the postgres server. To
-        // balance these two goals (not blocking user queries, minimizing time to
-        // advance tables), we record how long a batch takes to process, and will
-        // adjust the size of the next batch up or down based on the response time.
-        //
-        // On one extreme, should we ever be able to advance all tables in less time
-        // than MAX_WAIT (probably due to connection pools or other actual parallelism
-        // on the persist side), great, we've minimized the total processing time
-        // without blocking user queries for more than our target. On the other extreme
-        // where we can only process one table at a time (probably due to the postgres
-        // server being over used or some other cloud/network slowdown inbetween), the
-        // AdvanceTables struct will gracefully attempt to close tables in a bounded
-        // and fair manner.
-        const MAX_WAIT: Duration = Duration::from_millis(50);
-        // Advancement that occurs within WINDOW from MAX_WAIT is fine, and won't
-        // change the batch size.
-        const WINDOW: Duration = Duration::from_millis(10);
-        let start = Instant::now();
         let storage = self.controller.storage();
         let appends = inputs
             .ids
@@ -428,21 +335,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             })
             .collect::<Vec<_>>();
-        let num_updates = appends.len();
         // Note: Do not await the result; let it drop (as we don't need to block on completion)
         // The error that could be return
         self.controller
             .storage_mut()
             .append(appends)
             .expect("Empty updates cannot be invalid");
-        let elapsed = start.elapsed();
-        if elapsed > (MAX_WAIT + WINDOW) {
-            self.advance_tables.decrease_batch();
-        } else if elapsed < (MAX_WAIT - WINDOW) && num_updates == self.advance_tables.batch_size {
-            // Only increase the batch size if it completed under the window and the batch
-            // was full.
-            self.advance_tables.increase_batch();
-        }
     }
 
     /// Defers executing `deferred` until the write lock becomes available; waiting
