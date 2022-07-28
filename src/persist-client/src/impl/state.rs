@@ -11,9 +11,11 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -24,7 +26,7 @@ use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::write::WriterId;
-use crate::ShardId;
+use crate::{PersistConfig, ShardId};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -376,6 +378,25 @@ where
                 ret = Some(b.clone());
             }
         });
+        ret
+    }
+
+    pub fn readers_needing_expiration(&self, now_ms: EpochMillis) -> Vec<ReaderId> {
+        // TODO: Give lots of extra leeway in this temporary hack version of
+        // automatic expiry.
+        let read_lease_duration = PersistConfig::FAKE_READ_LEASE_DURATION * 15;
+
+        let mut ret = Vec::new();
+        for (reader, state) in self.collections.readers.iter() {
+            // TODO: We likely want to store the lease duration in state, so the
+            // answer to which readers are considered expired doesn't depend on
+            // the version of the code running.
+            let time_since_last_heartbeat_ms =
+                now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
+            if Duration::from_millis(time_since_last_heartbeat_ms) > read_lease_duration {
+                ret.push(reader.clone());
+            }
+        }
         ret
     }
 }

@@ -26,6 +26,10 @@ sqllogictest \
     -v "$@" \
     test/sqllogictest/*.slt \
     test/sqllogictest/explain/*.slt \
-    test/sqllogictest/sqlite/test \
     test/sqllogictest/transform/*.slt \
+    | tee -a target/slt.log
+
+sqllogictest --auto-index-tables \
+    -v "$@" \
+    test/sqllogictest/sqlite/test \
     | tee -a target/slt.log

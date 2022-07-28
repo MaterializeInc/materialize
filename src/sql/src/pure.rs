@@ -68,7 +68,7 @@ pub async fn purify_create_source(
         connection,
         format,
         envelope,
-        with_options,
+        legacy_with_options: with_options,
         include_metadata: _,
         ..
     } = &mut stmt;

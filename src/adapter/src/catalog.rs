@@ -56,9 +56,11 @@ use mz_sql::plan::{
     ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    StorageHostConfig as PlanStorageHostConfig,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
+use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
@@ -82,7 +84,7 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{ClusterReplicaSizeMap, Config};
+pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::client::ConnectionId;
 use crate::util::index_sql;
@@ -145,6 +147,8 @@ pub struct CatalogState {
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    storage_host_sizes: StorageHostSizeMap,
+    default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
 }
 
@@ -924,6 +928,33 @@ impl CatalogState {
     pub fn availability_zones(&self) -> &[String] {
         &self.availability_zones
     }
+
+    /// Returns the default storage host size
+    ///
+    /// If a default size was given as configuration, it is always used, otherwise the
+    /// smallest host size is used instead.
+    pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
+        match &self.default_storage_host_size {
+            Some(default_storage_host_size) => {
+                // The default is guaranteed to be in the size map during startup
+                let allocation = self
+                    .storage_host_sizes
+                    .0
+                    .get(default_storage_host_size)
+                    .expect("default storage host size must exist in size map");
+                (default_storage_host_size.clone(), allocation.clone())
+            }
+            None => {
+                let (size, allocation) = self
+                    .storage_host_sizes
+                    .0
+                    .iter()
+                    .min_by_key(|(_, a)| (a.workers, a.memory_limit))
+                    .expect("should have at least one valid storage instance size");
+                (size.clone(), allocation.clone())
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1089,6 +1120,7 @@ pub struct Source {
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
     pub remote_addr: Option<String>,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1521,6 +1553,8 @@ impl<S: Append> Catalog<S> {
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
+                storage_host_sizes: config.storage_host_sizes,
+                default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
             },
             transient_revision: 0,
@@ -2094,6 +2128,8 @@ impl<S: Append> Catalog<S> {
             skip_migrations: true,
             metrics_registry,
             cluster_replica_sizes: Default::default(),
+            storage_host_sizes: Default::default(),
+            default_storage_host_size: None,
             availability_zones: vec![],
         })
         .await?;
@@ -2614,6 +2650,46 @@ impl<S: Append> Catalog<S> {
             }
         };
         Ok(location)
+    }
+
+    pub fn resolve_storage_host_config(
+        &self,
+        storage_host_config: PlanStorageHostConfig,
+    ) -> Result<StorageHostConfig, AdapterError> {
+        let host_sizes = &self.state.storage_host_sizes;
+        let storage_host_config = match storage_host_config {
+            PlanStorageHostConfig::Remote { addr } => StorageHostConfig::Remote { addr },
+            PlanStorageHostConfig::Managed { size } => {
+                let allocation = host_sizes.0.get(&size).ok_or_else(|| {
+                    let mut entries = host_sizes.0.iter().collect::<Vec<_>>();
+                    entries.sort_by_key(
+                        |(
+                            _name,
+                            StorageHostResourceAllocation {
+                                workers,
+                                memory_limit,
+                                ..
+                            },
+                        )| (workers, memory_limit),
+                    );
+                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
+                    AdapterError::InvalidStorageHostSize {
+                        size: size.clone(),
+                        expected,
+                    }
+                })?;
+
+                StorageHostConfig::Managed {
+                    allocation: allocation.clone(),
+                    size,
+                }
+            }
+            PlanStorageHostConfig::Undefined => {
+                let (size, allocation) = self.state.default_storage_host_size();
+                StorageHostConfig::Managed { allocation, size }
+            }
+        };
+        Ok(storage_host_config)
     }
 
     pub async fn transact<F, T>(
@@ -3461,6 +3537,7 @@ impl<S: Append> Catalog<S> {
                 source,
                 remote,
                 timeline,
+                host_config,
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
@@ -3469,6 +3546,7 @@ impl<S: Append> Catalog<S> {
                 timeline,
                 depends_on,
                 remote_addr: remote,
+                host_config: self.resolve_storage_host_config(host_config)?,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();

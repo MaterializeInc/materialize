@@ -40,6 +40,10 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM count_frontiers;
 1
 
+> CREATE VIEW count_frontier_delays AS SELECT count(*) FROM mz_worker_materialization_delays;
+> SELECT count(*) FROM count_frontier_delays;
+1
+
 > CREATE VIEW count_peeks AS SELECT count(*) FROM mz_peek_active;
 > SELECT count(*) FROM count_peeks;
 1
@@ -57,6 +61,9 @@ contains:cannot drop schema mz_catalog because it is required by the database sy
 
 ! DROP VIEW mz_peek_durations
 contains:cannot drop item mz_catalog.mz_peek_durations because it is required by the database system
+
+! DROP SOURCE mz_worker_materialization_delays
+contains:cannot drop item mz_catalog.mz_worker_materialization_delays because it is required by the database system
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
@@ -135,3 +142,15 @@ id      name        position    type
 SID   operator    1           bigint
 SID   worker      2           bigint
 SID   count       3           bigint
+
+> SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
+  FROM mz_sources JOIN mz_columns USING (id)
+  WHERE mz_sources.name = 'mz_worker_materialization_delays'
+  ORDER BY position
+id      name        position    type
+--------------------------------------
+SID   dataflow    1           text
+SID   source      2           text
+SID   worker      3           bigint
+SID   delay_ns    4           bigint
+SID   count       5           bigint

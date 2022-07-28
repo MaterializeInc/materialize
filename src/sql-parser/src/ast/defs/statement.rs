@@ -23,9 +23,9 @@ use std::fmt;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SelectItem,
-    SourceIncludeMetadata, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateSourceFormat, CreateSourceOption, Envelope, Expr, Format, Ident, KeyConstraint, Query,
+    SelectItem, SourceIncludeMetadata, TableAlias, TableConstraint, TableWithJoins,
+    UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -461,13 +461,14 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
     pub connection: CreateSourceConnection<T>,
-    pub with_options: Vec<WithOption<T>>,
+    pub legacy_with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
     pub envelope: Option<Envelope<T>>,
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub remote: Option<String>,
+    pub with_options: Vec<CreateSourceOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -493,9 +494,9 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         }
         f.write_str("FROM ");
         f.write_node(&self.connection);
-        if !self.with_options.is_empty() {
+        if !self.legacy_with_options.is_empty() {
             f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_node(&display::comma_separated(&self.legacy_with_options));
             f.write_str(")");
         }
         f.write_node(&self.format);
@@ -516,6 +517,12 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_str(" REMOTE '");
             f.write_node(&display::escape_single_quote_string(remote));
             f.write_str("'");
+        }
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
         }
     }
 }

@@ -205,7 +205,7 @@ WHERE l_quantity = 24
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| Filter ((#4 = 24) || ((#3 = 6) && (#4 <= 4) && (#4 >= 3)))
+| Filter ((#4 = 24) OR ((#3 = 6) AND (#4 <= 4) AND (#4 >= 3)))
 | Project (#0, #2)
 
 EOF
@@ -424,7 +424,7 @@ WHERE l_commitDATE >= '1998-03-22'
 
 %3 = Let l1 =
 | Get materialize.public.lineitem (u7)
-| Filter (null || ((#0 <= 100) && (#0 >= 59) && (#11 >= 1998-03-22)))
+| Filter (null OR ((#0 <= 100) AND (#0 >= 59) AND (#11 >= 1998-03-22)))
 
 %4 =
 | Get %3 (l1)
@@ -453,7 +453,7 @@ WHERE l_commitDATE >= '1998-03-22'
 
 %9 =
 | Get %2 (l0)
-| Filter ((#2 = #3) || ((#0 <= 100) && (#0 >= 59) && (#2 >= 1998-03-22)))
+| Filter ((#2 = #3) OR ((#0 <= 100) AND (#0 >= 59) AND (#2 >= 1998-03-22)))
 | Project (#4, #1)
 
 %10 =
@@ -503,7 +503,7 @@ WHERE l_quantity = 17
 %3 =
 | Join %0 %1 %2 (= #0 #2)
 | | implementation = Differential %2 %0.() %1.(#0)
-| Filter (#12 <= #5), ((#1 = 7) || (#1 = 33) || ((#1 = 17) && (#13 <= "x") && (#13 >= "s")))
+| Filter (#12 <= #5), ((#1 = 7) OR (#1 = 33) OR ((#1 = 17) AND (#13 <= "x") AND (#13 >= "s")))
 | Project (#11, #3)
 
 EOF

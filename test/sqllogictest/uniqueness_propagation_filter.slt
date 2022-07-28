@@ -158,7 +158,7 @@ EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
 ----
 %0 =
 | Get materialize.public.v1 (u2)
-| Filter ((#0 = #1) || (#0 = #2))
+| Filter ((#0 = #1) OR (#0 = #2))
 | Project (#1, #2)
 | Distinct group=(#0, #1)
 
