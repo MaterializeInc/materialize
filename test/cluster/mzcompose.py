@@ -250,8 +250,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             c.kill("materialized")
 
         with c.override(
-                # This commit added the missing column rolconnlimit to pg_authid
-                Materialized(image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921")
+                # If this ever stops working, add the following argument:
+                # image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921"
+                # That commit added the missing column rolconnlimit to pg_authid
+                Materialized()
         ):
             c.up("materialized")
 
