@@ -8,7 +8,7 @@ menu:
 
 `ALTER ... RENAME` renames an item, albeit with some [limitations](#details).
 
-Note that renaming schemas and databases are in development. {{% gh 3680 %}}
+Note that renaming schemas and databases are in development {{% gh 3680 %}}.
 
 ## Syntax
 
@@ -118,9 +118,10 @@ SHOW VIEWS;
  v2
 ```
 
-## See also
+## Related pages
 
 - [`SHOW CREATE VIEW`](/sql/show-create-view)
 - [`SHOW VIEWS`](/sql/show-views)
 - [`SHOW SOURCES`](/sql/show-sources)
 - [`SHOW INDEXES`](/sql/show-indexes)
+- [`SHOW SECRETS`](/sql/show-secrets)
