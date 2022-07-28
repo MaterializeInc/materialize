@@ -19,7 +19,7 @@ use std::{collections::HashMap, num::NonZeroUsize};
 use futures::{FutureExt, StreamExt};
 use mz_expr::explain::Indices;
 use mz_ore::str::{bracketed, separated};
-use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, RenderingContext, ExprHumanizer};
+use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, ExprHumanizer, RenderingContext};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -30,7 +30,7 @@ use mz_compute_client::response::PeekResponse;
 use mz_expr::{EvalError, Id, MirScalarExpr};
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, RelationType, Row};
 use mz_stash::Append;
 
 use crate::client::ConnectionId;
@@ -65,16 +65,16 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
 #[derive(Debug)]
 pub enum FastPathPlan<T = mz_repr::Timestamp> {
     /// The view evaluates to a constant result that can be returned.
-    Constant(Result<Vec<(Row, T, Diff)>, EvalError>),
+    ///
+    /// The [RelationType] is unnecessary for evaluating the constant result but
+    /// may be helpful when printing out an explanation.
+    Constant(Result<Vec<(Row, T, Diff)>, EvalError>, RelationType),
     /// The view can be read out of an existing arrangement.
     PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
 }
 
 impl FastPathPlan {
-    pub fn explain_old<'a>(
-        &self,
-        humanizer: &'a dyn ExprHumanizer,
-    ) -> String {
+    pub fn explain_old<'a>(&self, humanizer: &'a dyn ExprHumanizer, typed: bool) -> String {
         let mut explanation = String::new();
         use std::fmt::Write;
         match self {
@@ -96,11 +96,7 @@ impl FastPathPlan {
                         writeln!(&mut explanation, "| Map {}", separated(", ", &map)).unwrap();
                     }
                     if !filter.is_empty() {
-                        writeln!(
-                            &mut explanation,
-                            "| Filter {}",
-                            separated(", ", filter)
-                        ).unwrap();
+                        writeln!(&mut explanation, "| Filter {}", separated(", ", filter)).unwrap();
                     }
                     if project.len() != mfp.input_arity + map.len()
                         || project.iter().enumerate().any(|(i, p)| i != *p)
@@ -109,11 +105,13 @@ impl FastPathPlan {
                             &mut explanation,
                             "| Project {}",
                             bracketed("(", ")", Indices(&project))
-                        ).unwrap();
+                        )
+                        .unwrap();
                     }
                 }
             }
-            FastPathPlan::Constant(rows) => {
+            FastPathPlan::Constant(rows, typ) => {
+                // Copied from mz_expr::explain
                 write!(&mut explanation, "%0 =\n| Constant").unwrap();
                 match rows {
                     Ok(rows) if !rows.is_empty() => writeln!(
@@ -127,10 +125,39 @@ impl FastPathPlan {
                                 format!("({row} x {count})")
                             })
                         )
-                    ).unwrap(),
+                    )
+                    .unwrap(),
                     Ok(_) => writeln!(&mut explanation).unwrap(),
-                    Err(e) => writeln!(&mut explanation, " Err({})", e.to_string().quoted()).unwrap(),
+                    Err(e) => {
+                        writeln!(&mut explanation, " Err({})", e.to_string().quoted()).unwrap()
+                    }
                 };
+                // The `typed` support is just to prevent changes to some
+                // constant test queries; there are no plans to add `typed`
+                // to the PeekExisting branch since the function will soon be
+                // deprecated.
+                if typed {
+                    let column_types: Vec<_> = typ
+                        .column_types
+                        .iter()
+                        .map(|c| humanizer.humanize_column_type(c))
+                        .collect();
+                    writeln!(
+                        &mut explanation,
+                        "| | types = ({})",
+                        separated(", ", column_types)
+                    )
+                    .unwrap();
+                    writeln!(
+                        &mut explanation,
+                        "| | keys = ({})",
+                        separated(
+                            ", ",
+                            typ.keys.iter().map(|key| bracketed("(", ")", Indices(key)))
+                        )
+                    )
+                    .unwrap()
+                }
             }
         }
         explanation
@@ -139,13 +166,14 @@ impl FastPathPlan {
 
 impl<'a, T> DisplayText<RenderingContext<'a>> for FastPathPlan<T> {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut RenderingContext<'a>) -> fmt::Result {
+        // TODO: (#13299) print out types?
         match self {
-            FastPathPlan::Constant(Ok(rows)) => fmt_text_constant_rows(
+            FastPathPlan::Constant(Ok(rows), _) => fmt_text_constant_rows(
                 f,
                 rows.iter().map(|(row, _, diff)| (row, diff)),
                 &mut ctx.indent,
             ),
-            FastPathPlan::Constant(Err(err)) => {
+            FastPathPlan::Constant(Err(err), _) => {
                 writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())
             }
             FastPathPlan::PeekExisting(id, lookup, mfp) => {
@@ -241,13 +269,15 @@ pub fn create_plan<T: timely::progress::Timestamp>(
         let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let mz_expr::MirRelationExpr::Constant { rows, .. } = mir {
             // In the case of a constant, we can return the result now.
-            return Ok(Plan::FastPath(FastPathPlan::Constant(rows.clone().map(
-                |rows| {
+            return Ok(Plan::FastPath(FastPathPlan::Constant(
+                rows.clone().map(|rows| {
                     rows.into_iter()
                         .map(|(row, diff)| (row, T::minimum(), diff))
                         .collect()
-                },
-            ))));
+                }),
+                // For best accuracy, we need to recalculate typ.
+                mir.typ(),
+            )));
         } else {
             // In the case of a linear operator around an indexed view, we
             // can skip creating a dataflow and instead pull all the rows in
@@ -331,7 +361,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         target_replica: Option<ReplicaId>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
-        if let Plan::FastPath(FastPathPlan::Constant(rows)) = fast_path {
+        if let Plan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
             let mut rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
@@ -577,13 +607,19 @@ mod tests {
     use mz_ore::str::Indent;
     use mz_repr::{
         explain_new::{text_string_at, DummyHumanizer},
-        Datum,
+        ColumnType, Datum, ScalarType,
     };
 
     #[test]
     fn test_fast_path_plan_as_text() {
-        let constant_err =
-            FastPathPlan::<mz_repr::Timestamp>::Constant(Err(EvalError::DivisionByZero));
+        let typ = RelationType::new(vec![ColumnType {
+            scalar_type: ScalarType::String,
+            nullable: false,
+        }]);
+        let constant_err = FastPathPlan::<mz_repr::Timestamp>::Constant(
+            Err(EvalError::DivisionByZero),
+            typ.clone(),
+        );
         let no_lookup = FastPathPlan::<mz_repr::Timestamp>::PeekExisting(
             GlobalId::User(10),
             None,
@@ -627,7 +663,10 @@ mod tests {
         let constant_exp1 =
             "Constant\n  - (\"hello\")\n  - ((\"world\") x 2)\n  - ((\"star\") x 500)\n";
         assert_eq!(
-            text_string_at(&FastPathPlan::Constant(Ok(constant_rows.clone())), ctx_gen),
+            text_string_at(
+                &FastPathPlan::Constant(Ok(constant_rows.clone()), typ.clone()),
+                ctx_gen
+            ),
             constant_exp1
         );
         constant_rows
@@ -638,7 +677,7 @@ mod tests {
         \n    - (\"7\")\n    - (\"8\")\n    - (\"9\")\n    - (\"10\")\n    - (\"11\")\
         \n    - (\"12\")\n    - (\"13\")\n    - (\"14\")\n    - (\"15\")\n    - (\"16\")\n";
         assert_eq!(
-            text_string_at(&FastPathPlan::Constant(Ok(constant_rows)), ctx_gen),
+            text_string_at(&FastPathPlan::Constant(Ok(constant_rows), typ), ctx_gen),
             constant_exp2
         );
     }

@@ -1945,7 +1945,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if when == QueryWhen::Immediately
             && (!matches!(
                 fast_path,
-                peek::Plan::FastPath(peek::FastPathPlan::Constant(_))
+                peek::Plan::FastPath(peek::FastPathPlan::Constant(_, _))
             ) || !timestamp_independent)
         {
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
@@ -2367,12 +2367,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 let mut explanation = explanation.to_string();
                 if view_id == GlobalId::Explain {
-                    let fast_path_plan = peek::create_plan(&mut dataflow, view_id).expect("Fast path planning failed; unrecoverable error");
+                    let fast_path_plan = peek::create_plan(&mut dataflow, view_id)
+                        .expect("Fast path planning failed; unrecoverable error");
                     if let peek::Plan::FastPath(fast_path_plan) = fast_path_plan {
-                        explanation = fast_path_plan.explain_old(&catalog);
+                        explanation = fast_path_plan.explain_old(&catalog, options.typed);
                     }
                 }
-                explanation.to_string()
+                explanation
             }
             ExplainStageOld::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
