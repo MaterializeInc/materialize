@@ -209,7 +209,7 @@ pub struct RowArena {
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DatumList<'a> {
     /// Points at the serialized datums
     data: &'a [u8],
@@ -234,7 +234,7 @@ impl PartialOrd for DatumList<'_> {
 }
 
 /// A mapping from string keys to Datums
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct DatumMap<'a> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],

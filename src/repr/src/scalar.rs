@@ -46,7 +46,7 @@ pub use crate::relation_and_scalar::ProtoScalarType;
 ///
 /// Note that `Datum` must always derive [`Eq`] to enforce equality with
 /// `repr::Row`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum Datum<'a> {
     /// The `false` boolean value.
     False,

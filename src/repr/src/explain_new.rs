@@ -33,6 +33,7 @@
 use std::{collections::HashSet, fmt};
 
 use mz_ore::{stack::RecursionLimitError, str::Indent, str::IndentLike};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{ColumnType, GlobalId, Row, ScalarType};
 
@@ -522,6 +523,35 @@ impl<'a> AsMut<Indent> for RenderingContext<'a> {
 impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
     fn as_ref(&self) -> &&'a dyn ExprHumanizer {
         &self.humanizer
+    }
+}
+
+#[derive(Debug)]
+pub struct JSONRow(Row);
+
+impl JSONRow {
+    pub fn new(row: Row) -> Self {
+        Self(row)
+    }
+}
+
+impl Serialize for JSONRow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let row = self.0.unpack();
+        row.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for JSONRow {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let vec: Vec<crate::Datum> = serde::Deserialize::deserialize(deserializer)?;
+        Ok(JSONRow(Row::pack(vec.into_iter())))
     }
 }
 

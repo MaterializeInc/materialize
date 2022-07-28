@@ -28,11 +28,13 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
 pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
 
 /// A variable-length multi-dimensional array.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Array<'a> {
     /// The elements in the array.
+    #[serde(borrow)]
     pub(crate) elements: DatumList<'a>,
     /// The dimensions of the array.
+    #[serde(borrow)]
     pub(crate) dims: ArrayDimensions<'a>,
 }
 
@@ -49,8 +51,9 @@ impl<'a> Array<'a> {
 }
 
 /// The dimensions of an [`Array`].
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ArrayDimensions<'a> {
+    #[serde(borrow)]
     pub(crate) data: &'a [u8],
 }
 
