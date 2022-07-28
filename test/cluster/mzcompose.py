@@ -68,11 +68,11 @@ SERVICES = [
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
-        "test-cluster",
-        "test-github-12251",
-        "test-remote-storaged",
-        "test-drop-default-cluster",
-        "test-schema-migration",
+        # "test-cluster",
+        # "test-github-12251",
+        # "test-remote-storaged",
+        # "test-drop-default-cluster",
+        "test-builtin-migration",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -214,6 +214,7 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
 
 
+# TODO(jkosh44) Update commit hashes once the PRs are merged
 def workflow_test_builtin_migration(c: Composition) -> None:
     """Exercise the builtin object migration code by upgrading between two versions
     that will have a migration triggered between them. Create a materialized view
@@ -227,8 +228,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         c.up("testdrive", persistent=True)
 
         with c.override(
+                # This commit introduced the pg_authid builtin view with a missing column. The column was added in a
+                # later commit
                 Materialized(
-                    image="materialize/materialized:devel-ce016efcfd04931e95a2ce6fd90431f68c84804d"
+                    image="materialize/materialized:devel-4a26e59ac9da694d21b60c8d4d4a7b67c8b3b78d"
                 )
         ):
             c.up("materialized")
@@ -236,8 +239,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             c.testdrive(
                 input=dedent(
                     """
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) > 0 FROM pg_authid;
+            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM pg_authid;
             > CREATE DEFAULT INDEX ON v1;
+            > SELECT * FROM v1;
+            2
         """
                 )
             )
@@ -245,9 +250,8 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             c.kill("materialized")
 
         with c.override(
-                Materialized(
-                    image="materialize/materialized:devel-d5328ec05cd391e6b8f16c2e4724f91a15eaa095"
-                )
+                # This commit added the missing column rolconnlimit to pg_authid
+                Materialized(image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921")
         ):
             c.up("materialized")
 
@@ -255,7 +259,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
                 input=dedent(
                     """
        > SELECT * FROM v1;
-       true
+       2
 
        # This column is new after the migration
        > SELECT DISTINCT rolconnlimit FROM pg_authid;
