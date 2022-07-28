@@ -2065,8 +2065,8 @@ AS SELECT
     false AS rolreplication,
     -- MZ doesn't how row level security
     false AS rolbypassrls,
-    -- TODO(jkosh44) purposely left out rolconnlimit for upgrade testing (MZ doesn't have a connection limit)
-    -- false AS rolconnlimit,
+    -- MZ doesn't have a connection limit
+    -1 AS rolconnlimit,
     -- MZ doesn't have role passwords
     NULL::pg_catalog.text AS rolpassword,
     -- MZ doesn't have role passwords
