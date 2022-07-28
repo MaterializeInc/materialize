@@ -150,7 +150,8 @@ id price
 
 > DECLARE c CURSOR FOR TAIL data_schema_inline WITH (SNAPSHOT = FALSE, PROGRESS = TRUE);
 
-> FETCH 1 FROM c WITH (timeout = '60s')
+> FETCH 2 FROM c WITH (timeout = '60s')
+14 true <null> <null> <null>
 15 true <null> <null> <null>
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=6

@@ -87,18 +87,21 @@ where
             .await
             .expect("could not open persist shard");
 
+        // Report initial progress so we can already downgrade our capability before potentially
+        // having to wait for the snapshot.
+        yield ListenEvent::Progress(as_of.clone());
+
         let mut snapshot_iter = read
             .snapshot(as_of.clone())
             .await
             .expect("cannot serve requested as_of");
 
-        // First, yield all the updates from the snapshot.
+        // Yield all the updates from the snapshot.
         while let Some(next) = snapshot_iter.next().await {
             yield ListenEvent::Updates(next);
         }
 
-        // Then, listen continuously and yield any new updates. This loop is expected to never
-        // finish.
+        // Listen continuously and yield any new updates. This loop is expected to never finish.
         let mut listen = read
             .listen(as_of)
             .await
