@@ -33,6 +33,8 @@ class Testdrive(K8sPod):
         subprocess.run(
             [
                 "kubectl",
+                "--context",
+                self.context(),
                 "exec",
                 "-it",
                 "testdrive",

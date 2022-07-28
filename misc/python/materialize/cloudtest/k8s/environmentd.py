@@ -7,12 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import subprocess
 import urllib.parse
-from typing import Any, Tuple
 
-import pg8000
-import sqlparse
 from kubernetes.client import (
     V1Container,
     V1ContainerPort,
@@ -33,7 +29,6 @@ from kubernetes.client import (
     V1StatefulSetSpec,
     V1VolumeMount,
 )
-from pg8000 import Cursor
 
 from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
 
@@ -50,45 +45,9 @@ class EnvironmentdService(K8sService):
             ),
         )
 
-    def host_port(self) -> Tuple[str, str]:
-        url = subprocess.check_output(
-            ["minikube", "service", "environmentd", "--url"]
-        ).decode("ascii")
-        parts = str(url).split(":")
-        host = parts[1][2:]
-        port = parts[2].strip()
-        return (host, port)
-
-    def host(self) -> str:
-        return self.host_port()[0]
-
-    def port(self) -> int:
-        return int(self.host_port()[1])
-
-    def sql_cursor(self) -> Cursor:
-        """Get a cursor to run SQL queries against the environmentd stateful set."""
-        conn = pg8000.connect(host=self.host(), port=self.port(), user="materialize")
-        conn.autocommit = True
-        return conn.cursor()
-
-    def sql(self, sql: str) -> None:
-        """Run a batch of SQL statements against the environmentd stateful set."""
-        with self.sql_cursor() as cursor:
-            for statement in sqlparse.split(sql):
-                print(f"> {statement}")
-                cursor.execute(statement)
-
-    def sql_query(self, sql: str) -> Any:
-        """Execute a SQL query against the environmentd statefule set and return results."""
-        with self.sql_cursor() as cursor:
-            print(f"> {sql}")
-            cursor.execute(sql)
-            return cursor.fetchall()
-
 
 class EnvironmentdStatefulSet(K8sStatefulSet):
     def __init__(self) -> None:
-
         metadata = V1ObjectMeta(name="environmentd", labels={"app": "environmentd"})
         label_selector = V1LabelSelector(match_labels={"app": "environmentd"})
 

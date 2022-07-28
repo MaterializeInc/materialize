@@ -7,16 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import subprocess
-
 from materialize.cloudtest.k8s import K8sResource
 from materialize.cloudtest.wait import wait
 
 
 class Minio(K8sResource):
     def create(self) -> None:
-        subprocess.check_call(
-            ["kubectl", "delete", "persistentvolumeclaim", "minio-pv-claim"]
+        self.kubectl(
+            "delete",
+            "persistentvolumeclaim",
+            "minio-pv-claim",
+            "--ignore-not-found",
+            "true",
         )
 
         for yaml in [
@@ -24,13 +26,10 @@ class Minio(K8sResource):
             "minio-standalone-deployment",
             "minio-standalone-service",
         ]:
-            subprocess.check_call(
-                [
-                    "kubectl",
-                    "create",
-                    "-f",
-                    f"https://raw.githubusercontent.com/kubernetes/examples/master/staging/storage/minio/{yaml}.yaml",
-                ]
+            self.kubectl(
+                "create",
+                "-f",
+                f"https://raw.githubusercontent.com/kubernetes/examples/master/staging/storage/minio/{yaml}.yaml",
             )
 
         wait(
@@ -38,23 +37,20 @@ class Minio(K8sResource):
             condition="condition=Available=True",
         )
 
-        subprocess.check_call(
-            [
-                "kubectl",
-                "run",
-                "minio",
-                "--image=minio/mc",
-                "--restart=Never",
-                "--command",
-                "/bin/sh",
-                "--",
-                "-c",
-                ";".join(
-                    [
-                        "mc config host add myminio http://minio-service.default:9000 minio minio123",
-                        "mc rm -r --force myminio/test",
-                        "mc mb myminio/test",
-                    ]
-                ),
-            ]
+        self.kubectl(
+            "run",
+            "minio",
+            "--image=minio/mc",
+            "--restart=Never",
+            "--command",
+            "/bin/sh",
+            "--",
+            "-c",
+            ";".join(
+                [
+                    "mc config host add myminio http://minio-service.default:9000 minio minio123",
+                    "mc rm -r --force myminio/test",
+                    "mc mb myminio/test",
+                ]
+            ),
         )
