@@ -33,7 +33,6 @@ You can use `TAIL` to:
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | _object_name_          | The name of the source, table, or view that you want to tail.                                                                            |
 | _select_stmt_          | The [`SELECT` statement](../select) whose output you want to tail.                                                                       |
-| _timestamp_expression_ | The logical time at which the `TAIL` begins. See [`AS OF`](/sql/as-of). |
 
 ### `WITH` options
 
@@ -133,14 +132,13 @@ See the [examples](#examples) for details.
 
 By default, a `TAIL` begins by emitting a snapshot of the tailed relation, which
 consists of a series of updates describing the contents of the relation at its
-[`AS OF`](/sql/as-of) timestamp. After the snapshot, `TAIL` emits further updates as
+initial timestamp. After the snapshot, `TAIL` emits further updates as
 they occur.
 
-For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the
-`AS OF` timestamp. For example, `TAIL ... AS OF 21` would present an insert that
-occurred at time 15 as if it occurred at time 21.
+For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the initial timestamp.
+For example, an insert that occurred before the `TAIL` began would appear in the snapshot.
 
-To see only updates after the `AS OF` timestamp, specify `WITH (SNAPSHOT = false)`.
+To see only updates after the initial timestamp, specify `WITH (SNAPSHOT = false)`.
 
 ### `PROGRESS`
 
