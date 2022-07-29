@@ -21,6 +21,7 @@ use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
+use mz_ore::collections::AssociativeExt;
 use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
 
@@ -132,17 +133,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::InitializationComplete => (),
+            StorageCommand::InitializationComplete => panic!("received unexpected initialization complete command"),
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
                     // Remember the ingestion description to facilitate possible
                     // reconciliation later.
                     self.storage_state
                         .ingestions
-                        .insert(ingestion.id, ingestion.description.clone());
+                        .unwrap_insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier tracking.
-                    self.storage_state.source_uppers.insert(
+                    self.storage_state.source_uppers.unwrap_insert(
                         ingestion.id,
                         Rc::new(RefCell::new(Antichain::from_elem(
                             mz_repr::Timestamp::minimum(),
@@ -157,7 +158,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ingestion.resume_upper,
                     );
 
-                    self.storage_state.reported_frontiers.insert(
+                    self.storage_state.reported_frontiers.unwrap_insert(
                         ingestion.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
