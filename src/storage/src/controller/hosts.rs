@@ -69,8 +69,6 @@ pub struct StorageHosts<T> {
     hosts: HashMap<StorageHostAddr, StorageHost<T>>,
     /// The assignment of storage objects to storage hosts.
     objects: HashMap<GlobalId, StorageHostAddr>,
-    /// Set to `true` once `initialization_complete` has been called.
-    initialized: bool,
 }
 
 /// Metadata about a single storage host.
@@ -84,12 +82,7 @@ struct StorageHost<T> {
     orchestrated: bool,
 }
 
-impl<T> StorageHosts<T>
-where
-    T: Timestamp + Lattice,
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
-{
+impl<T> StorageHosts<T> {
     /// Constructs a new [`StorageHosts`] from its configuration.
     pub fn new(config: StorageHostsConfig) -> StorageHosts<T> {
         StorageHosts {
@@ -98,20 +91,6 @@ where
             storaged_image: config.storaged_image,
             objects: HashMap::new(),
             hosts: HashMap::new(),
-            initialized: false,
-        }
-    }
-
-    /// Marks the end of any initialization commands.
-    ///
-    /// The implementor may wait for this method to be called before
-    /// implementing prior commands, and so it is important for a user to invoke
-    /// this method as soon as it is comfortable. This method can be invoked
-    /// immediately, at the potential expense of performance.
-    pub fn initialization_complete(&mut self) {
-        self.initialized = true;
-        for client in self.clients() {
-            client.send(StorageCommand::InitializationComplete);
         }
     }
 
@@ -154,10 +133,7 @@ where
         info!("assigned storage object {id} to storage host {host_addr}");
         match self.hosts.entry(host_addr.clone()) {
             Entry::Vacant(entry) => {
-                let mut client = RehydratingStorageClient::new(host_addr, self.build_info);
-                if self.initialized {
-                    client.send(StorageCommand::InitializationComplete);
-                }
+                let client = RehydratingStorageClient::new(host_addr, self.build_info);
                 let host = entry.insert(StorageHost {
                     client,
                     objects: HashSet::from_iter([id]),
