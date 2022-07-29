@@ -16,7 +16,7 @@ Detail | Info
 
 ## Details
 
-`oid` types in Materialize are provided for compatibility with PostgreSQL . You
+`oid` types in Materialize are provided for compatibility with PostgreSQL. You
 typically will not interact with the `oid` type unless you are working with a
 tool that was developed for PostgreSQL.
 
