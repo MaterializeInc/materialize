@@ -587,7 +587,7 @@ impl<S: Append> Connection<S> {
 
     /// Persist mapping from system objects to global IDs and fingerprints.
     ///
-    /// Panics if provided id is not a system id
+    /// Panics if provided id is not a system id.
     pub async fn set_system_object_mapping(
         &mut self,
         mappings: Vec<SystemObjectMapping>,
@@ -1153,7 +1153,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     /// Updates persisted mapping from system objects to global IDs and fingerprints. Each element
     /// of `mappings` should be (old-global-id, new-system-object-mapping).
     ///
-    /// Panics if provided id is not a system id
+    /// Panics if provided id is not a system id.
     pub fn update_system_object_mappings(
         &mut self,
         mappings: &HashMap<GlobalId, SystemObjectMapping>,

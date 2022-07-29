@@ -484,7 +484,7 @@ where
     ///     Therefore this method is for dropping sinks that we know to have been previously
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
-    ///     `drop_sinks`
+    ///     `drop_sinks`.
     pub async fn drop_sinks_unvalidated(
         &mut self,
         identifiers: Vec<GlobalId>,
@@ -517,7 +517,7 @@ where
     ///     Therefore this method is for dropping indexes that we know to have been previously
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
-    ///     `drop_sinks`
+    ///     `drop_indexes`.
     pub async fn drop_indexes_unvalidated(
         &mut self,
         identifiers: Vec<GlobalId>,
@@ -616,7 +616,7 @@ where
     ///     Therefore this method is for allowing compaction on objects that we know to have been
     ///     previously created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
-    ///     `allow_compaction`
+    ///     `allow_compaction`.
     async fn allow_compaction_unvalidated(
         &mut self,
         frontiers: Vec<(GlobalId, Antichain<T>)>,

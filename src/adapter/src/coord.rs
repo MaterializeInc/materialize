@@ -363,7 +363,7 @@ impl<S: Append + 'static> Coordinator<S> {
         )
         .await;
 
-        // Migrate builtin objects
+        // Migrate builtin objects.
         for (compute_id, sink_ids) in builtin_migration_metadata.previous_sink_ids {
             self.controller
                 .compute_mut(compute_id)

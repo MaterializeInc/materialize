@@ -163,7 +163,7 @@ pub trait StorageController: Debug + Send {
     ///     Therefore this method is for dropping sources that we know to have been previously
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
-    ///     `drop_sources`
+    ///     `drop_sources`.
     async fn drop_sources_unvalidated(
         &mut self,
         identifiers: Vec<GlobalId>,
