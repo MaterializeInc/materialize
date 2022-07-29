@@ -892,7 +892,10 @@ mod impls {
             self.write.fetch_recent_upper().await
         }
 
-        async fn snapshot(&self, as_of: Antichain<T>) -> Result<Vec<((K, V), T)>, Antichain<T>> {
+        async fn snapshot(
+            &mut self,
+            as_of: Antichain<T>,
+        ) -> Result<Vec<((K, V), T)>, Antichain<T>> {
             if PartialOrder::less_equal(&as_of, &Antichain::from_elem(T::minimum())) {
                 // Early exit, because snapshot errors if we try and do this.
                 return Ok(vec![]);

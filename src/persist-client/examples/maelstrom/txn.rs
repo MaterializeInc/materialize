@@ -195,7 +195,7 @@ impl Transactor {
         }
     }
 
-    async fn read(&self) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
+    async fn read(&mut self) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
         // We're reading as of read_ts, but we can split the read between the
         // snapshot and listen at any ts in `[since_ts, read_ts]`. Intentionally
         // pick one that uses a combination of both to get coverage.
