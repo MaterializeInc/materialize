@@ -68,10 +68,10 @@ SERVICES = [
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
-        # "test-cluster",
-        # "test-github-12251",
-        # "test-remote-storaged",
-        # "test-drop-default-cluster",
+        "test-cluster",
+        "test-github-12251",
+        "test-remote-storaged",
+        "test-drop-default-cluster",
         "test-builtin-migration",
     ]:
         with c.test_case(name):
@@ -214,7 +214,6 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
 
 
-# TODO(jkosh44) Update commit hashes once the PRs are merged
 def workflow_test_builtin_migration(c: Composition) -> None:
     """Exercise the builtin object migration code by upgrading between two versions
     that will have a migration triggered between them. Create a materialized view
@@ -229,7 +228,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
         with c.override(
             # This commit introduced the pg_authid builtin view with a missing column. The column was added in a
-            # later commit
+            # later commit.
             Materialized(
                 image="materialize/materialized:devel-4a26e59ac9da694d21b60c8d4d4a7b67c8b3b78d"
             )
@@ -252,7 +251,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         with c.override(
             # If this ever stops working, add the following argument:
             # image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921"
-            # That commit added the missing column rolconnlimit to pg_authid
+            # That commit added the missing column rolconnlimit to pg_authid.
             Materialized()
         ):
             c.up("materialized")
