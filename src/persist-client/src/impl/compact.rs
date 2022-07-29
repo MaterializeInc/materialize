@@ -25,7 +25,7 @@ use tracing::{debug_span, warn, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
-use crate::r#impl::machine::Machine;
+use crate::r#impl::machine::{retry_external, Machine};
 use crate::r#impl::state::HollowBatch;
 use crate::r#impl::trace::FueledMergeRes;
 use crate::read::fetch_batch_part;
@@ -130,7 +130,7 @@ impl Compactor {
                 let start = Instant::now();
                 let res = Self::compact::<T, D>(
                     cfg,
-                    blob,
+                    Arc::clone(&blob),
                     Arc::clone(&metrics),
                     Arc::clone(&cpu_heavy_runtime),
                     req,
@@ -150,13 +150,19 @@ impl Compactor {
                         return;
                     }
                 };
-                let applied = machine
-                    .merge_res(FueledMergeRes { output: res.output })
-                    .await;
+                let res = FueledMergeRes { output: res.output };
+                let applied = machine.merge_res(&res).await;
                 if applied {
                     metrics.compaction.applied.inc();
                 } else {
                     metrics.compaction.noop.inc();
+                    for key in res.output.keys {
+                        let key = key.complete(&machine.shard_id());
+                        retry_external(&metrics.retries.external.compaction_noop_delete, || {
+                            blob.delete(&key)
+                        })
+                        .await;
+                    }
                 }
             }
             .instrument(compact_span),

@@ -10,7 +10,7 @@
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -91,6 +91,7 @@ use crate::util::index_sql;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 const SYSTEM_USER: &str = "mz_system";
+const CREATE_SQL_TODO: &str = "TODO";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -428,6 +429,7 @@ impl CatalogState {
         self.entry_by_id.insert(entry.id, entry.clone());
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     fn drop_item(&mut self, id: GlobalId) {
         let metadata = self.entry_by_id.remove(&id).unwrap();
         if !metadata.item.is_placeholder() {
@@ -971,7 +973,6 @@ impl CatalogState {
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
     state: Cow<'a, CatalogState>,
-    //TODO(jkosh44) usages
     conn_id: ConnectionId,
     compute_instance: String,
     database: Option<DatabaseId>,
@@ -1502,7 +1503,75 @@ impl CatalogEntry {
 struct AllocatedBuiltinSystemIds<T> {
     all_builtins: Vec<(T, GlobalId)>,
     new_builtins: Vec<(T, GlobalId)>,
-    migrated_builtins: Vec<(T, GlobalId)>,
+    migrated_builtins: Vec<(GlobalId, u64)>,
+}
+
+pub struct SystemObjectMapping {
+    schema_name: String,
+    object_name: String,
+    id: GlobalId,
+    fingerprint: u64,
+}
+
+pub enum CatalogItemRebuilder {
+    SystemTable(CatalogItem),
+    Object(String),
+}
+
+impl CatalogItemRebuilder {
+    fn new(entry: &CatalogEntry, id: GlobalId, ancestor_ids: &HashMap<GlobalId, GlobalId>) -> Self {
+        if id.is_system() && entry.is_table() {
+            Self::SystemTable(entry.item().clone())
+        } else {
+            let create_sql = entry.create_sql().to_string();
+            assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
+            let mut create_stmt = mz_sql::parse::parse(&create_sql).unwrap().into_element();
+            mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, &ancestor_ids);
+            Self::Object(create_stmt.to_ast_string_stable())
+        }
+    }
+
+    fn build<S: Append>(self, catalog: &Catalog<S>) -> CatalogItem {
+        match self {
+            Self::SystemTable(item) => item,
+            Self::Object(create_sql) => catalog
+                .parse_item(create_sql.clone(), None)
+                .unwrap_or_else(|_| panic!("invalid persisted create sql: {create_sql}")),
+        }
+    }
+}
+
+pub struct BuiltinMigrationMetadata {
+    // Used to drop objects on COMPUTE and STORAGE nodes
+    pub previous_index_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_sink_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_materialized_view_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_source_ids: Vec<GlobalId>,
+    // Used to update in memory catalog state
+    pub all_drop_ops: Vec<GlobalId>,
+    pub all_create_ops: Vec<(GlobalId, u32, QualifiedObjectName, CatalogItemRebuilder)>,
+    pub introspection_source_index_updates: HashMap<ComputeInstanceId, Vec<(LogVariant, GlobalId)>>,
+    // Used to update persisted on disk catalog state
+    pub migrated_system_table_mappings: HashMap<GlobalId, SystemObjectMapping>,
+    pub user_drop_ops: Vec<GlobalId>,
+    pub user_create_ops: Vec<(GlobalId, SchemaId, String)>,
+}
+
+impl BuiltinMigrationMetadata {
+    fn new() -> BuiltinMigrationMetadata {
+        BuiltinMigrationMetadata {
+            previous_index_ids: HashMap::new(),
+            previous_sink_ids: HashMap::new(),
+            previous_materialized_view_ids: HashMap::new(),
+            previous_source_ids: Vec::new(),
+            all_drop_ops: Vec::new(),
+            all_create_ops: Vec::new(),
+            introspection_source_index_updates: HashMap::new(),
+            migrated_system_table_mappings: HashMap::new(),
+            user_drop_ops: Vec::new(),
+            user_create_ops: Vec::new(),
+        }
+    }
 }
 
 impl Catalog<Sqlite> {
@@ -1535,11 +1604,19 @@ impl Catalog<Postgres> {
 impl<S: Append> Catalog<S> {
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// Returns the catalog and a list of updates to builtin tables that
-    /// describe the initial state of the catalog.
+    /// Returns the catalog, metadata about builtin objects that have
+    /// changed schemas since last restart, and a list of updates to builtin
+    /// tables that describe the initial state of the catalog.
     pub async fn open(
         config: Config<'_, S>,
-    ) -> Result<(Catalog<S>, Vec<BuiltinTableUpdate>), AdapterError> {
+    ) -> Result<
+        (
+            Catalog<S>,
+            BuiltinMigrationMetadata,
+            Vec<BuiltinTableUpdate>,
+        ),
+        AdapterError,
+    > {
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -1689,7 +1766,7 @@ impl<S: Append> Catalog<S> {
                         oid,
                         name.clone(),
                         CatalogItem::Table(Table {
-                            create_sql: "TODO".to_string(),
+                            create_sql: CREATE_SQL_TODO.to_string(),
                             desc: table.desc.clone(),
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
@@ -1743,23 +1820,17 @@ impl<S: Append> Catalog<S> {
         }
         let new_system_id_mappings = new_builtins
             .iter()
-            .map(|(builtin, id)| (builtin.schema(), builtin.name(), *id, builtin.fingerprint()))
+            .map(|(builtin, id)| SystemObjectMapping {
+                schema_name: builtin.schema().to_string(),
+                object_name: builtin.name().to_string(),
+                id: *id,
+                fingerprint: builtin.fingerprint(),
+            })
             .collect();
         catalog
             .storage()
             .await
-            .set_system_gids(new_system_id_mappings)
-            .await?;
-
-        // TODO(jkosh44) actually migrate builtins
-        let migrated_system_id_mappings = migrated_builtins
-            .iter()
-            .map(|(builtin, id)| (builtin.schema(), builtin.name(), *id, builtin.fingerprint()))
-            .collect();
-        catalog
-            .storage()
-            .await
-            .set_system_gids(migrated_system_id_mappings)
+            .set_system_object_mapping(new_system_id_mappings)
             .await?;
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
@@ -1865,10 +1936,21 @@ impl<S: Append> Catalog<S> {
                 .await?;
         }
 
-        let mut storage = catalog.storage().await;
-        let mut tx = storage.transaction().await?;
-        let catalog = Self::load_catalog_items(&mut tx, &catalog).await?;
-        tx.commit().await?;
+        let mut catalog = {
+            let mut storage = catalog.storage().await;
+            let mut tx = storage.transaction().await?;
+            let catalog = Self::load_catalog_items(&mut tx, &catalog).await?;
+            tx.commit().await?;
+            catalog
+        };
+
+        let mut builtin_migration_metadata = catalog
+            .generate_builtin_migration_metadata(migrated_builtins)
+            .await?;
+        catalog.apply_in_memory_builtin_migration(&mut builtin_migration_metadata)?;
+        catalog
+            .apply_persisted_builtin_migration(&mut builtin_migration_metadata)
+            .await?;
 
         let mut builtin_table_updates = vec![];
         for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
@@ -1909,13 +1991,13 @@ impl<S: Append> Catalog<S> {
                 ));
             }
         }
-        let audit_logs = storage.load_audit_log().await?;
+        let audit_logs = catalog.storage().await.load_audit_log().await?;
         for event in audit_logs {
             let event = VersionedEvent::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
-        Ok((catalog, builtin_table_updates))
+        Ok((catalog, builtin_migration_metadata, builtin_table_updates))
     }
 
     /// Loads built-in system types into the catalog.
@@ -1988,11 +2070,16 @@ impl<S: Append> Catalog<S> {
 
         let new_system_id_mappings = new_builtins
             .iter()
-            .map(|(typ, id)| (typ.schema, typ.name, *id, typ.fingerprint()))
+            .map(|(typ, id)| SystemObjectMapping {
+                schema_name: typ.schema.to_string(),
+                object_name: typ.name.to_string(),
+                id: *id,
+                fingerprint: typ.fingerprint(),
+            })
             .collect();
         self.storage()
             .await
-            .set_system_gids(new_system_id_mappings)
+            .set_system_object_mapping(new_system_id_mappings)
             .await?;
 
         Ok(())
@@ -2060,6 +2147,207 @@ impl<S: Append> Catalog<S> {
                 typ,
             },
         }
+    }
+
+    /// The objects in the catalog form one or more DAGs (directed acyclic graph) via object
+    /// dependencies. To migrate a builtin object we must drop that object along with all of its
+    /// descendants, and then recreate that object along with all of its descendants using new
+    /// GlobalId`s. To achieve this we perform a BFS (breadth first search) on the catalog items
+    /// starting with the nodes that correspond to builtin objects that have changed schemas.
+    ///
+    /// Objects need to be dropped starting from the leafs of the DAG going up towards the roots,
+    /// and they need to be recreated starting at the root of the DAG and going towards the leafs.
+    async fn generate_builtin_migration_metadata(
+        &mut self,
+        migrated_ids: Vec<(GlobalId, u64)>,
+    ) -> Result<BuiltinMigrationMetadata, Error> {
+        let mut migration_metadata = BuiltinMigrationMetadata::new();
+
+        let mut object_queue: VecDeque<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
+        let mut visited_set: HashSet<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
+        let mut ancestor_ids = HashMap::new();
+
+        let id_fingerprint_map: HashMap<GlobalId, u64> = migrated_ids.into_iter().collect();
+
+        while !object_queue.is_empty() {
+            let id = object_queue.pop_front().unwrap();
+            let entry = self.get_entry(&id);
+
+            let new_id = match id {
+                GlobalId::System(_) => self
+                    .storage()
+                    .await
+                    .allocate_system_ids(1)
+                    .await?
+                    .into_element(),
+                GlobalId::User(_) => self.storage().await.allocate_user_id().await?,
+                _ => unreachable!("can't migrate id: {id}"),
+            };
+
+            // Generate value to update fingerprint and global ID persisted mapping.
+            if let Some(fingerprint) = id_fingerprint_map.get(&id) {
+                let schema_name = self
+                    .get_schema(
+                        &entry.name.qualifiers.database_spec,
+                        &entry.name.qualifiers.schema_spec,
+                        entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
+                    )
+                    .name
+                    .schema
+                    .as_str();
+                migration_metadata.migrated_system_table_mappings.insert(
+                    id,
+                    SystemObjectMapping {
+                        schema_name: schema_name.to_string(),
+                        object_name: entry.name.item.clone(),
+                        id: new_id,
+                        fingerprint: *fingerprint,
+                    },
+                );
+            }
+
+            // Push drop commands.
+            match entry.item() {
+                CatalogItem::Table(_) | CatalogItem::Source(_) => {
+                    migration_metadata.previous_source_ids.push(id)
+                }
+                CatalogItem::Sink(sink) => migration_metadata
+                    .previous_sink_ids
+                    .entry(sink.compute_instance)
+                    .or_default()
+                    .push(id),
+                CatalogItem::Index(index) => migration_metadata
+                    .previous_index_ids
+                    .entry(index.compute_instance)
+                    .or_default()
+                    .push(id),
+                CatalogItem::MaterializedView(mview) => migration_metadata
+                    .previous_materialized_view_ids
+                    .entry(mview.compute_instance)
+                    .or_default()
+                    .push(id),
+                // TODO(jkosh44) Implement log migration
+                CatalogItem::Log(_) => {
+                    panic!("Log migration is unimplemented")
+                }
+                // TODO(jkosh44) Implement storage collection migration
+                CatalogItem::StorageCollection(_) => {
+                    panic!("Storage collection migration is unimplemented")
+                }
+                CatalogItem::View(_) => {
+                    // Views don't have any objects in STORAGE/COMPUTE to drop.
+                }
+                CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connection(_) => unreachable!(
+                    "impossible to migrate schema for builtin {}",
+                    entry.item().typ()
+                ),
+            }
+            if id.is_user() {
+                migration_metadata.user_drop_ops.push(id);
+            }
+            migration_metadata.all_drop_ops.push(id);
+
+            // Push create commands.
+            let name = entry.name.clone();
+            if id.is_user() {
+                let schema_id = name.qualifiers.schema_spec.clone().into();
+                migration_metadata
+                    .user_create_ops
+                    .push((new_id, schema_id, name.item.clone()));
+            }
+            let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
+            migration_metadata
+                .all_create_ops
+                .push((new_id, entry.oid, name, item_rebuilder));
+
+            ancestor_ids.insert(id, new_id);
+
+            // Add children to queue.
+            for dependant in &entry.used_by {
+                if !visited_set.contains(&dependant) {
+                    object_queue.push_back(*dependant);
+                    visited_set.insert(*dependant);
+                }
+            }
+        }
+
+        // Reverse drop commands.
+        for (_, index_ids) in &mut migration_metadata.previous_index_ids {
+            index_ids.reverse();
+        }
+        for (_, sink_ids) in &mut migration_metadata.previous_sink_ids {
+            sink_ids.reverse();
+        }
+        migration_metadata.previous_source_ids.reverse();
+        migration_metadata.all_drop_ops.reverse();
+        migration_metadata.user_drop_ops.reverse();
+
+        Ok(migration_metadata)
+    }
+
+    pub fn apply_in_memory_builtin_migration(
+        &mut self,
+        migration_metadata: &mut BuiltinMigrationMetadata,
+    ) -> Result<(), Error> {
+        assert_eq!(
+            migration_metadata.all_drop_ops.len(),
+            migration_metadata.all_create_ops.len(),
+            "we should be re-creating every dropped object"
+        );
+        for id in migration_metadata.all_drop_ops.drain(..) {
+            self.state.drop_item(id);
+        }
+        for (id, oid, name, item_rebuilder) in migration_metadata.all_create_ops.drain(..) {
+            let item = item_rebuilder.build(&self);
+            self.state.insert_item(id, oid, name, item);
+        }
+        for (compute_instance, updates) in migration_metadata
+            .introspection_source_index_updates
+            .drain()
+        {
+            let config = self
+                .state
+                .compute_instances_by_id
+                .get_mut(&compute_instance)
+                .expect("invalid compute instance {compute_instance}")
+                .logging
+                .as_mut()
+                .expect("invalid log update");
+            for (variant, new_id) in updates {
+                config.active_logs.remove(&variant);
+                config.active_logs.insert(variant, new_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn apply_persisted_builtin_migration(
+        &mut self,
+        migration_metadata: &mut BuiltinMigrationMetadata,
+    ) -> Result<(), Error> {
+        let mut storage = self.storage().await;
+        let mut tx = storage.transaction().await?;
+        for id in migration_metadata.user_drop_ops.drain(..) {
+            tx.remove_item(id)?;
+        }
+        for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
+            let item = self.get_entry(&id).item();
+            let serialized_item = self.serialize_item(item);
+            tx.insert_item(id, schema_id, &name, &serialized_item)?;
+        }
+        tx.update_system_object_mappings(
+            &migration_metadata
+                .migrated_system_table_mappings
+                .drain()
+                .collect(),
+        )?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Returns the catalog's transient revision, which starts at 1 and is
@@ -2131,7 +2419,7 @@ impl<S: Append> Catalog<S> {
             },
         )
         .await?;
-        let (catalog, _) = Catalog::open(Config {
+        let (catalog, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
             build_info: &DUMMY_BUILD_INFO,
@@ -2232,7 +2520,7 @@ impl<S: Append> Catalog<S> {
                 Some((id, fingerprint)) => {
                     all_builtins.push((*builtin, id));
                     if fingerprint != builtin.fingerprint() {
-                        migrated_builtins.push((*builtin, id));
+                        migrated_builtins.push((id, builtin.fingerprint()));
                     }
                 }
                 None => {

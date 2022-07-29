@@ -14,6 +14,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 use tokio::sync::oneshot;
 
+use mz_compute_client::controller::ComputeError;
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -21,6 +22,7 @@ use mz_repr::explain_new::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
 use mz_sql::query_model::QGMError;
+use mz_storage::controller::StorageError;
 use mz_transform::TransformError;
 
 use crate::catalog;
@@ -157,6 +159,10 @@ pub enum AdapterError {
     WriteOnlyTransaction,
     /// The transaction only supports single table writes
     MultiTableWriteTransaction,
+    /// An error occurred in the storage layer
+    Storage(mz_storage::controller::StorageError),
+    /// An error occurred in the compute layer
+    Compute(mz_compute_client::controller::ComputeError),
 }
 
 impl AdapterError {
@@ -392,6 +398,8 @@ impl fmt::Display for AdapterError {
             AdapterError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
             }
+            AdapterError::Storage(e) => e.fmt(f),
+            AdapterError::Compute(e) => e.fmt(f),
         }
     }
 }
@@ -474,6 +482,18 @@ impl From<RecursionLimitError> for AdapterError {
 impl From<oneshot::error::RecvError> for AdapterError {
     fn from(e: oneshot::error::RecvError) -> AdapterError {
         AdapterError::Unstructured(e.into())
+    }
+}
+
+impl From<StorageError> for AdapterError {
+    fn from(e: StorageError) -> Self {
+        AdapterError::Storage(e)
+    }
+}
+
+impl From<ComputeError> for AdapterError {
+    fn from(e: ComputeError) -> Self {
+        AdapterError::Compute(e)
     }
 }
 

@@ -200,7 +200,7 @@ where
         }
     }
 
-    pub async fn merge_res(&mut self, res: FueledMergeRes<T>) -> bool {
+    pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> bool {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, applied) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
@@ -948,7 +948,7 @@ mod tests {
                                 .expect("invalid shard types");
                             let applied = write
                                 .machine
-                                .merge_res(FueledMergeRes {
+                                .merge_res(&FueledMergeRes {
                                     output: batch.clone(),
                                 })
                                 .await;
