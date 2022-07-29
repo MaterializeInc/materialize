@@ -458,14 +458,15 @@ impl<S: Append + 'static> Coordinator<S> {
             if let Some(idx) = self
                 .pending_writes
                 .iter()
-                .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
+                .position(|pending_write_txn| matches!(pending_write_txn, PendingWriteTxn::User {session, ..} if session.conn_id() == conn_id))
             {
-                let PendingWriteTxn {
+                if let PendingWriteTxn::User {
                     client_transmitter,
                     session,
                     ..
-                } = self.pending_writes.remove(idx);
-                let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                } = self.pending_writes.remove(idx) {
+                    let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                }
             }
 
             // Cancel deferred writes. There is at most one deferred write per session.

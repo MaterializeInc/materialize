@@ -1618,7 +1618,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let (response, action) = match result {
             Ok((Some(writes), _)) if writes.is_empty() => (response, action),
             Ok((Some(writes), write_lock_guard)) => {
-                self.submit_write(PendingWriteTxn {
+                self.submit_write(PendingWriteTxn::User {
                     writes,
                     client_transmitter: tx,
                     response,
