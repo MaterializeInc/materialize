@@ -169,6 +169,7 @@ where
         TB: Borrow<T>,
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
+        D: Send + Sync,
     {
         trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
         let batch = self.batch(updates, lower.clone(), upper.clone()).await?;
@@ -224,6 +225,7 @@ where
         TB: Borrow<T>,
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
+        D: Send + Sync,
     {
         trace!(
             "WriteHandle::compare_and_append expected_upper={:?} new_upper={:?}",
@@ -286,7 +288,10 @@ where
         mut batch: Batch<K, V, T, D>,
         mut lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>> {
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
+    where
+        D: Send + Sync,
+    {
         trace!("Batch::append lower={:?} upper={:?}", lower, upper);
 
         let mut retry = self
@@ -406,7 +411,10 @@ where
         batch: &mut Batch<K, V, T, D>,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate> {
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate>
+    where
+        D: Send + Sync,
+    {
         trace!(
             "Batch::compare_and_append expected_upper={:?} new_upper={:?}",
             expected_upper,
@@ -556,6 +564,7 @@ where
     where
         L: Into<Antichain<T>>,
         U: Into<Antichain<T>>,
+        D: Send + Sync,
     {
         self.append(updates.iter(), lower.into(), new_upper.into())
             .await
@@ -572,7 +581,9 @@ where
         updates: &[((K, V), T, D)],
         expected_upper: T,
         new_upper: T,
-    ) {
+    ) where
+        D: Send + Sync,
+    {
         self.compare_and_append(
             updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
             Antichain::from_elem(expected_upper),

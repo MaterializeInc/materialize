@@ -15,8 +15,10 @@
 
 //! Collection utilities.
 
+use std::collections::btree_map::Entry as BEntry;
+use std::collections::hash_map::Entry as HEntry;
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 /// Extension methods for collections.
 pub trait CollectionExt<T>: Sized
@@ -84,20 +86,46 @@ pub trait AssociativeExt<K, V> {
 
 impl<K, V> AssociativeExt<K, V> for HashMap<K, V>
 where
-    K: Eq + std::hash::Hash,
+    K: Eq + std::hash::Hash + Debug,
+    V: Debug,
 {
     fn expect_insert(&mut self, k: K, v: V, msg: &str) {
-        let old = self.insert(k, v);
-        assert!(old.is_none(), "{}", msg)
+        match self.entry(k) {
+            HEntry::Vacant(e) => {
+                e.insert(v);
+            }
+            HEntry::Occupied(e) => {
+                panic!(
+                    "{} (key: {:?}, old value: {:?}, new value: {:?})",
+                    msg,
+                    e.key(),
+                    e.get(),
+                    v
+                )
+            }
+        }
     }
 }
 
 impl<K, V> AssociativeExt<K, V> for BTreeMap<K, V>
 where
-    K: Ord,
+    K: Ord + Debug,
+    V: Debug,
 {
     fn expect_insert(&mut self, k: K, v: V, msg: &str) {
-        let old = self.insert(k, v);
-        assert!(old.is_none(), "{}", msg)
+        match self.entry(k) {
+            BEntry::Vacant(e) => {
+                e.insert(v);
+            }
+            BEntry::Occupied(e) => {
+                panic!(
+                    "{} (key: {:?}, old value: {:?}, new value: {:?})",
+                    msg,
+                    e.key(),
+                    e.get(),
+                    v
+                )
+            }
+        }
     }
 }

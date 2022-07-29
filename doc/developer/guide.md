@@ -66,6 +66,17 @@ latter to work, you may need to create a new database with `createdb`. If you
 issue `createdb` without any arguments, a database with your username will be
 created.
 
+To also run `bin/cargo-test`, you'll need to add the following to your
+Postgres config (e.g., `/var/lib/postgres/data/postgresql.conf`),
+and then restart Postgres:
+
+```
+wal_level=logical
+max_wal_senders=20
+max_replication_slots=20
+max_connections = 5000
+```
+
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
@@ -139,6 +150,9 @@ On other Linux variants, you'll need to make your own way through [Confluent's
 installation instructions][confluent-install]. Note that, at the time of
 writing, only Java 8 and 11 are supported.
 
+Arch Linux: the AUR package didn't work for me, so I installed from the
+tar ball instead.
+
 ## Building Materialize
 
 First, clone this repository:
@@ -193,6 +207,12 @@ manually.
 
 When the confluent local services are running, they can be examined via a web
 UI which defaults to `localhost:9021`.
+
+It might happen that the start script says that it failed to start
+zookeeper/kafka/schema-registry, but it actually starts them successfully, it
+just can't detect them for some reason. In this case, you can just run
+`confluent local services schema-registry start` 3 times, and then everything
+is up.
 
 ## Web UI
 
