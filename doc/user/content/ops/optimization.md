@@ -19,7 +19,7 @@ In this operational guide you will find ways to optimize Materialize for:
 
 ## Speedup
 
-Indexes are one of the fastest ways to optimize query speed. The following sections will display different index implementations in familiar scenarios that suit many everyday use cases.
+Indexes are one of the fastest ways to optimize Materialize query speed. The following sections will display different indexes for everyday use cases in familiar scenarios.
 
 Before continuing, consider the following example, a simple table with contacts data:
 
@@ -32,7 +32,11 @@ CREATE TABLE contacts (
 );
 
 -- Data sample:
-INSERT INTO contacts SELECT 'random_name', 'random_last_name', generate_series(0, 100000), 1;
+INSERT INTO contacts
+SELECT 'Charlie' as first_name,
+      'Jones' as last_name,
+      generate_series(1, 1000000) as phone,
+      1 as prefix;
 ```
 
 <!-- This will be removed till the PR makes it into production and is available to everyone -->
@@ -58,39 +62,55 @@ that the query is scanning the whole table resulting in slower results. -->
 
 ### WHERE
 
-The filtering clause is one of the most used in any database. Set up an index over the columns that a query filters by to increase the speed.
+The filtering clause is one of the most used. Setting up an index on the filtered columns will increases the query speed.
 
 #### Literal Values
 
-Filtering by literal values is a typical case. An index over the filtered column will do the work.
+Filtering by literal values is a typical case. An index over the filtered column will do the work for any literal value.
 
-Back to the example, creating an index over the `first_name` column will improve the speed to retrieve the contacts with a particular first name (the literal value):
+Back to the example, creating an index over the `phone` column will improve the speed of retrieving the contacts with a particular phone number (the literal value, `234722` in the example):
 
 ```sql
-CREATE INDEX contacts_first_name_idx ON contacts (first_name);
+CREATE INDEX contacts_phone_idx ON contacts (phone);
 
-SELECT * FROM contacts WHERE first_name = 'Charlie';
+-- Query performance improvement like:
+SELECT *
+FROM contacts
+WHERE phone = 234722;
 ```
 
 #### Expressions
 
-Expressions can also be part of the index. Materialize will calculate them faster using an index instead of calculating them on the fly for every query.
+Expressions can also be part of the index. Rather than calculating an expression's value on the fly in every query request, Materialize can store the expression result in the index and look it up, improving the query's performance.
 
-E.g., Since contact names are probably not always correctly written, using a function to upper case the name is helpful. An index over the column with the `upper()` expression will speed up the query.
+E.g., Formatting a text is a common practice to match a particular search, like using a function to upper case the names. An index over the column with the `upper()` expression will speed up the query.
 
 ```sql
 CREATE INDEX contacts_upper_first_name_idx ON contacts (upper(first_name));
 
-SELECT * FROM contacts WHERE upper(first_name) = 'CHARLIE';
+SELECT *
+FROM contacts
+WHERE upper(first_name) = 'CHARLIE';
 ```
 
-An _expression_ goes beyond a function. It could be a mathematical expression that is present in the filtering
+An _expression_ goes beyond a function. It could be a mathematical expression that is present in the filtering clause:
 
 ```sql
-CREATE INDEX contacts_upper_first_name_idx ON contacts (prefix - 1 = 0);
+CREATE INDEX contacts_multiples_idx ON contacts (phone % 10000);
 
-SELECT * FROM contacts WHERE prefix - 1 = 0;
+SELECT *
+FROM contacts
+WHERE phone % 100000 = 0;
+
+-- A more complex expressions (Concat first name and phone):
+CREATE INDEX contacts_complex_idx ON contacts (upper(first_name) || '-' || phone);
+
+SELECT *
+FROM contacts
+WHERE upper(first_name) || '-' || phone = 'CHARLIE-1';
 ```
+
+[Unmaterialized functions](/sql/functions/#unmaterializable-functions), like `now()` or `current_user()`, are not possible to use in an index due to their external dependencies.
 
 
 #### Literal Values and Expressions
@@ -100,26 +120,33 @@ Creating a multi-column index makes it possible to combine both worlds, literal 
 ```sql
 CREATE INDEX contacts_upper_first_name_phone_idx ON contacts (upper(first_name), phone);
 
-SELECT * FROM contacts WHERE first_name = 'CHARLIE' AND phone = 873090;
+SELECT *
+FROM contacts
+WHERE upper(first_name) = 'CHARLIE' AND phone = 873090;
 ```
 
 #### Multi-column index
 
-When using a multi-columns index, an index over all the columns doesn't mean that all
-all the queries will be faster. Only the ones that use all the columns will receive an improvement.
+When using a multi-column index, consider that only the queries using all the columns from the index will receive most of the improvement.
 
-E.g., There is indecision about what to index by, and someone decides to create a multi-column index.
+E.g., There is indecision about what to index by, and someone decides to create an index over all the columns.
 
 ```sql
 -- Shorthand for: CREATE INDEX contacts_all_index ON contacts(first_name, last_name, phone, prefix);
 CREATE DEFAULT INDEX ON contacts;
 
--- NO improvement over this query:
-SELECT * FROM contacts WHERE first_name = 'CHARLIE' AND phone = 873090;
-
--- Improvement over this query:
-SELECT * FROM contacts WHERE first_name = 'CHARLIE' AND last_name = 'EILR' AND phone = 873090 AND prefix = 1;
+-- Improves a query using all the fields.
+SELECT *
+FROM contacts
+WHERE first_name = 'Charlie' AND last_name = 'Jones' AND phone = 87309 AND prefix = 1;
 ```
+
+<!-- Info: -->
+<!-- Slack thread: https://materializeinc.slack.com/archives/C01BE3RN82F/p1658422234896599 -->
+<!-- Join physical optimization: https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/join_implementation.rs -->
+<!-- Filtering physical optimization: https://github.com/MaterializeInc/materialize/blob/e94f1a02faa83014a23fcc801da28c3cbf61ce3a/src/compute-client/src/plan/mod.rs#L59 -->
+
+The field order doesn't need to match the index.
 
 ### JOIN
 
@@ -131,12 +158,15 @@ E.g., We want to know very fast from which country a prefix is:
 ```sql
 CREATE TABLE geo (country TEXT, prefix INT);
 
+INSERT INTO geo SELECT 'Country', generate_series(1, 1000000);
+
 CREATE INDEX contacts_prefix_idx ON contacts (prefix);
 CREATE INDEX geo_prefix_idx ON geo (prefix);
 
-SELECT phone, prefix, country
-FROM geo
-JOIN contacts ON contacts.prefix = geo.prefix;
+SELECT phone, country, G.prefix
+FROM geo G
+JOIN contacts C ON C.prefix = G.prefix
+WHERE phone = 442233;
 ```
 
 In the above example, the index `contacts_prefix_idx`...
@@ -148,27 +178,17 @@ In the above example, the index `contacts_prefix_idx`...
     optimizer will choose to use `contacts_prefix_idx` rather than build
     and maintain a private copy of the index just for this query.
 
-<!-- -   Obeys our restrictions by containing only a subset of columns in the result
-    set. -->
+-   Obeys the [restrictions](/sql/create-index/#restrictions) by containing only a subset of columns in the result
+    set.
 
-<!-- ## Temporal Filters [Research pending] -->
+In the above example, the index `contacts_prefix_idx`...
 
-<!-- The index pattern can be a good one to add into the SQL patterns (Maybe in Manual materialization) -->
+-   Helps because it contains a key the the query can
+    use to look up values for the join condition (`contacts.prefix`).
 
-<!-- ## The Index Pattern
-
-Creating an index using expressions is an alternative pattern to avoid building downstream views that only apply a function like the one used in the last example: `upper(first_name)`. Take into account that aggregations like `count()` and other non-materializable functions are not possible to use as expressions. -->
-
-
-
-
-<!-- ## Temporal Filters [Research pending] -->
-
-<!-- The index pattern can be a good one to add into the SQL patterns (Maybe in Manual materialization) -->
-
-<!-- ## The Index Pattern
-
-Creating an index using expressions is an alternative pattern to avoid building downstream views that only apply a function like the one used in the last example: `upper(first_name)`. Take into account that aggregations like `count()` and other non-materializable functions are not possible to use as expressions. -->
+    Because this index is exactly what the query requires, the Materialize
+    optimizer will choose to use `contacts_prefix_idx` rather than build
+    and maintain a private copy of the index just for this query. -->
 
 ## Memory
 
@@ -254,6 +274,18 @@ By default, a container has no [resource
 constraints](https://docs.docker.com/config/containers/resource_constraints/)
 and can use as much memory and swap as the host allows, unless you have
 overridden this with the `--memory` or the `--memory-swap` flags.
+
+E.g., setting 8GB of memory and 20GB of swap:
+
+```shell
+docker run -p 6875:6875 --memory='8g' --memory-swap '28g' materialize/materialized:{{< version >}} --workers 1
+```
+
+While Materialize starts up, it will show the available amount of memory and swap:
+```shell
+memory: 10434412KB total, 1067521KB used, 8388608KiB limit
+swap: 2147479KB total, 204931KB used, 20971520KiB limit
+```
 
 ### Linux
 
