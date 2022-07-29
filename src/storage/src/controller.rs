@@ -425,6 +425,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + Unpin> {
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
     persist_client: PersistClient,
+    /// Set to `true` once `initialization_complete` has been called.
+    initialized: bool,
 }
 
 #[derive(Debug)]
@@ -550,7 +552,10 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
-        self.hosts.initialization_complete();
+        self.initialized = true;
+        for client in self.hosts.clients() {
+            client.send(StorageCommand::InitializationComplete);
+        }
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, StorageError> {
@@ -705,7 +710,12 @@ where
                         ),
                     )
                     .await?;
+
                 client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
+
+                if self.initialized {
+                    client.send(StorageCommand::InitializationComplete);
+                }
             }
         }
 
@@ -1005,6 +1015,7 @@ where
             internal_response_queue: rx,
             persist_location,
             persist_client,
+            initialized: false,
         }
     }
 
