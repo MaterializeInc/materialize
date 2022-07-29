@@ -194,7 +194,7 @@ where
         trace!("SnapshotIter::next");
 
         loop {
-            let (key, desc) = match self.batches.pop() {
+            let batch = match self.batches.pop() {
                 Some(x) => {
                     // Periodically heartbeat so the batches we're iterating
                     // don't get garbage collected.
@@ -214,31 +214,15 @@ where
                 }
             };
 
-            let mut updates = Vec::new();
-            fetch_batch_part(
-                &self.handle.machine.shard_id(),
-                self.handle.blob.as_ref(),
-                &self.handle.metrics,
-                &key,
-                &desc,
-                |k, v, mut t, d| {
-                    // This would get covered by a listen started at the same as_of.
-                    if self.as_of.less_than(&t) {
-                        return;
-                    }
-                    t.advance_by(self.as_of.borrow());
-                    let k = self.handle.metrics.codecs.key.decode(|| K::decode(k));
-                    let v = self.handle.metrics.codecs.val.decode(|| V::decode(v));
-                    let d = D::decode(d);
-                    updates.push(((k, v), t, d));
-                },
-            )
-            .await;
-            if updates.is_empty() {
-                // We might have filtered everything.
-                continue;
+            let updates = self
+                .handle
+                .fetch_batch(batch)
+                .await
+                .expect("cannot fail on SnapshotIter derived from ReadHandle");
+
+            if !updates.is_empty() {
+                return Some(updates);
             }
-            return Some(updates);
         }
     }
 
@@ -894,7 +878,7 @@ where
     pub async fn fetch_batch(
         &self,
         batch: ReaderEnrichedHollowBatch<T>,
-    ) -> Result<Vec<ListenEvent<K, V, T, D>>, InvalidUsage<T>> {
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
         trace!("ReadHandle::fetch_batch");
         if batch.shard_id != self.machine.shard_id() {
             return Err(InvalidUsage::SnapshotNotFromThisShard {
@@ -902,8 +886,6 @@ where
                 handle_shard: self.machine.shard_id(),
             });
         }
-
-        let mut ret = Vec::with_capacity(batch.batch.keys.len() * 2 + 1);
 
         let mut updates = Vec::new();
         for key in batch.batch.keys.iter() {
@@ -950,11 +932,7 @@ where
             .await;
         }
 
-        if !updates.is_empty() {
-            ret.push(ListenEvent::Updates(updates));
-        }
-
-        Ok(ret)
+        Ok(updates)
     }
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same

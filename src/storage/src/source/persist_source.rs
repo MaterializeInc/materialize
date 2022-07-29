@@ -27,7 +27,7 @@ use tracing::trace;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::{ListenEvent, ReaderEnrichedHollowBatch};
+use mz_persist_client::read::ReaderEnrichedHollowBatch;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -113,10 +113,14 @@ where
 
             let mut current_ts = 0;
 
+            // `i` gets used to round-robin distribution of hollow batches. We
+            // start at a different worker for each source, so as to prevent
+            // sources started at the same time from distributing sources in
+            // lock step with one another.
+            let mut i = usize::cast_from(source_id.hashed()) % peers;
+
             move |cap_set, output| {
                 let mut context = Context::from_waker(&waker);
-
-                let mut i = chosen_worker;
 
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
@@ -190,7 +194,7 @@ where
             while let Some((cap, data)) = input.next() {
                 let cap = cap.retain();
                 for (_idx, batch) in data.iter() {
-                    for update in read
+                    let mut updates = read
                         .fetch_batch(batch.clone())
                         .await
                         .expect("shard_id generated for sources must match across all workers");
