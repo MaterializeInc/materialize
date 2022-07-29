@@ -420,6 +420,7 @@ impl ErrorResponse {
             // code, so it's probably the best choice.
             AdapterError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::Storage(_) | AdapterError::Compute(_) => SqlState::INTERNAL_ERROR,
         };
         ErrorResponse {
             severity,

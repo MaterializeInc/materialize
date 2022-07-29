@@ -154,6 +154,21 @@ pub trait StorageController: Debug + Send {
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
+    /// Drops the read capability for the sources and allows their resources to be reclaimed.
+    ///
+    /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
+    ///     controller starts/restarts it has no durable state. That means that it has no way of
+    ///     remembering any past commands sent. In the future we plan on persisting state for the
+    ///     controller so that it is aware of past commands.
+    ///     Therefore this method is for dropping sources that we know to have been previously
+    ///     created, but have been forgotten by the controller due to a restart.
+    ///     Once command history becomes durable we can remove this method and use the normal
+    ///     `drop_sources`.
+    async fn drop_sources_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError>;
+
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
     /// The method returns a oneshot that can be awaited to indicate completion of the write.
@@ -772,6 +787,18 @@ where
 
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_ids(identifiers.iter().cloned())?;
+        let policies = identifiers
+            .into_iter()
+            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
+            .collect();
+        self.set_read_policy(policies).await?;
+        Ok(())
+    }
+
+    async fn drop_sources_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError> {
         let policies = identifiers
             .into_iter()
             .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))

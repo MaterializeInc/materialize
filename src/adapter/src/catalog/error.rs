@@ -73,6 +73,8 @@ pub enum ErrorKind {
         this_version: &'static str,
         cause: String,
     },
+    #[error("failed to migrate schema of builtin objects: {0}")]
+    FailedBuiltinSchemaMigration(String),
     #[error("failpoint {0} reached)")]
     FailpointReached(String),
     #[error("{0}")]
