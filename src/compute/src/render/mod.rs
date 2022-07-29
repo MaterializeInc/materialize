@@ -255,10 +255,20 @@ where
         if let Err(frontier) = event {
             for dataflow_id in dataflow_ids.iter() {
                 if let Some(previous) = previous_time {
-                    logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, previous, -1));
+                    logger.log(ComputeEvent::SourceFrontier(
+                        *dataflow_id,
+                        source_id,
+                        previous,
+                        -1,
+                    ));
                 }
                 if let Some(time) = frontier.get(0) {
-                    logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, *time, 1));
+                    logger.log(ComputeEvent::SourceFrontier(
+                        *dataflow_id,
+                        source_id,
+                        *time,
+                        1,
+                    ));
                     previous_time = Some(*time);
                 }
             }

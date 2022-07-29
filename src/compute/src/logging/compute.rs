@@ -260,7 +260,6 @@ pub fn construct<A: Allocate>(
                                     time_ms,
                                     delta,
                                 ));
-                                
                                 if delta > 0 {
                                     // record source instantiation frontier event time to enable
                                     // subsequent dataflow-source delay histogram calculations

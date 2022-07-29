@@ -1349,6 +1349,15 @@ FROM mz_catalog.mz_worker_materialization_frontiers
 GROUP BY global_id",
 };
 
+pub const MZ_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_materialization_source_frontiers",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_catalog.mz_materialization_source_frontiers AS SELECT
+    dataflow, source, pg_catalog.min(time) AS time
+FROM mz_catalog.mz_worker_materialization_source_frontiers
+GROUP BY dataflow, source",
+};
+
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_operator",
     schema: MZ_CATALOG_SCHEMA,
@@ -2225,6 +2234,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICAS),
         Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
+        Builtin::View(&MZ_MATERIALIZATION_SOURCE_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
         Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
         Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
