@@ -245,7 +245,7 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        let _write_lock_guard = if let Some(guard) = self
+        let (_write_lock_guard, pending_writes) = if let Some(guard) = self
             .pending_writes
             .iter_mut()
             .filter_map(|write| write.take_write_lock())
@@ -253,10 +253,10 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             // If some pending transaction already holds the write lock, then we can execute a group
             // commit.
-            guard
+            (Some(guard), self.pending_writes.drain(..).collect())
         } else if let Ok(guard) = Arc::clone(&self.write_lock).try_lock_owned() {
             // If no pending transaction holds the write lock, then we need to acquire it.
-            guard
+            (Some(guard), self.pending_writes.drain(..).collect())
         } else {
             // If some running transaction already holds the write lock, then one of the
             // following things will happen:
@@ -266,7 +266,23 @@ impl<S: Append + 'static> Coordinator<S> {
             //   2. The transaction will complete without submitting a write (abort,
             //      empty writes, etc) which will drop the lock. The deferred group
             //      commit will then acquire the lock and execute a group commit.
-            return self.defer_write(Deferred::GroupCommit);
+            self.defer_write(Deferred::GroupCommit);
+
+            // Without the write lock we can only apply writes to system tables.
+            // TODO(jkosh44) replace with drain_filter when it's stable.
+            let mut pending_writes = Vec::new();
+            let mut i = 0;
+            while i < self.pending_writes.len() {
+                if matches!(&self.pending_writes[i], PendingWriteTxn::System(_)) {
+                    pending_writes.push(self.pending_writes.remove(i));
+                } else {
+                    i += 1;
+                }
+            }
+            if pending_writes.is_empty() {
+                return;
+            }
+            (None, pending_writes)
         };
 
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
@@ -281,7 +297,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut appends: HashMap<GlobalId, Vec<(Row, Diff)>> =
             HashMap::with_capacity(self.pending_writes.len());
         let mut responses = Vec::with_capacity(self.pending_writes.len());
-        for pending_write_txn in self.pending_writes.drain(..) {
+        for pending_write_txn in pending_writes {
             match pending_write_txn {
                 PendingWriteTxn::User {
                     writes,
@@ -298,14 +314,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         // concurrent. Therefore, we are free to order the write before the delete without
                         // violating any consistency guarantees.
                         if self.catalog.try_get_entry(&id).is_some() {
-                            /*let updates = rows
-                            .into_iter()
-                            .map(|(row, diff)| Update {
-                                row,
-                                diff,
-                                timestamp,
-                            })
-                            .collect::<Vec<_>>();*/
                             appends.entry(id).or_default().extend(rows);
                         }
                     }
