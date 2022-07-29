@@ -41,35 +41,6 @@ a b
 statement ok
 SELECT * FROM mz_materializations
 
-# Verify that we are always hitting the same replica.
-# We check that the number of peeks in mz_peek_durations (which is a
-# replica-specific introspection source) increases by one with every query.
-# We sleep between checks to give dataflow logging time to catch up.
-
-statement ok
-SELECT mz_internal.mz_sleep(1.1)
-
-query I
-SELECT sum(count) FROM mz_peek_durations
-----
-2
-
-statement ok
-SELECT mz_internal.mz_sleep(1.1)
-
-query I
-SELECT sum(count) FROM mz_peek_durations
-----
-3
-
-statement ok
-SELECT mz_internal.mz_sleep(1.1)
-
-query I
-SELECT sum(count) FROM mz_peek_durations
-----
-4
-
 # Verify that we see no prior peeks when targeting another replica.
 
 statement ok
