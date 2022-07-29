@@ -161,7 +161,7 @@ impl Blob for UnreliableBlob {
             .await
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         self.handle.run_op("delete", || self.blob.delete(key)).await
     }
 }

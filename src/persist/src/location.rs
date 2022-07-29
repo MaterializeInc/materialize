@@ -395,8 +395,9 @@ pub trait Blob: std::fmt::Debug {
 
     /// Remove a key from the map.
     ///
-    /// Succeeds if the key does not exist.
-    async fn delete(&self, key: &str) -> Result<(), ExternalError>;
+    /// Returns Some and the size of the deleted blob if if exists. Succeeds and
+    /// returns None if it does not exist.
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError>;
 }
 
 #[cfg(test)]
@@ -500,14 +501,18 @@ pub mod tests {
         assert_eq!(blob1.get("k0a").await?, Some(values[1].clone()));
 
         // Can delete a key.
-        blob0.delete(&k0).await?;
+        assert_eq!(blob0.delete(&k0).await, Ok(Some(2)));
         // Can no longer get a deleted key.
         assert_eq!(blob0.get(&k0).await?, None);
         assert_eq!(blob1.get(&k0).await?, None);
-        // Double deleting a key succeeds.
-        assert_eq!(blob0.delete(&k0).await, Ok(()));
+        // Double deleting a key succeeds but indicates that it did no work.
+        assert_eq!(blob0.delete(&k0).await, Ok(None));
         // Deleting a key that does not exist succeeds.
-        assert_eq!(blob0.delete("nope").await, Ok(()));
+        assert_eq!(blob0.delete("nope").await, Ok(None));
+        // Deleting a key with an empty value indicates it did work but deleted
+        // no bytes.
+        blob0.set(&"empty", Bytes::new(), AllowNonAtomic).await?;
+        assert_eq!(blob0.delete("empty").await, Ok(Some(0)));
 
         // Empty blob contains no keys.
         blob0.delete("k0a").await?;
