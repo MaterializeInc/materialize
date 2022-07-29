@@ -127,7 +127,7 @@ WHERE upper(first_name) = 'CHARLIE' AND phone = 873090;
 
 #### Multi-column index
 
-When using a multi-column index, consider that only the queries using all the columns from the index will receive most of the improvement.
+When using a multi-column index, consider that only the queries using all the columns from the index concatenated by an `AND` operator will improve.
 
 E.g., There is indecision about what to index by, and someone decides to create an index over all the columns.
 
@@ -180,15 +180,6 @@ In the above example, the index `contacts_prefix_idx`...
 
 -   Obeys the [restrictions](/sql/create-index/#restrictions) by containing only a subset of columns in the result
     set.
-
-In the above example, the index `contacts_prefix_idx`...
-
--   Helps because it contains a key the the query can
-    use to look up values for the join condition (`contacts.prefix`).
-
-    Because this index is exactly what the query requires, the Materialize
-    optimizer will choose to use `contacts_prefix_idx` rather than build
-    and maintain a private copy of the index just for this query. -->
 
 ## Memory
 

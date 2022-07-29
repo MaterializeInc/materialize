@@ -139,4 +139,4 @@ row's indexed columns _and_ a copy of the entire row.)
 
 -   [`SHOW INDEX`](../show-index)
 -   [`DROP INDEX`](../drop-index)
--   [`Optimization`](../ops/optimization)
+-   [`Optimization`](/ops/optimization)
