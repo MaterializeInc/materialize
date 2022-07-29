@@ -54,7 +54,7 @@ pub enum ComputeEvent {
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
     // Available frontier information for source instantiations.
-    SourceFrontier(GlobalId, GlobalId, Timestamp),
+    SourceFrontier(GlobalId, GlobalId, Timestamp, i64),
 }
 
 /// A logged peek event.
@@ -110,6 +110,7 @@ pub fn construct<A: Allocate>(
         let (mut dataflow_out, dataflow) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
+        let (mut source_frontier_out, source_frontier) = demux.new_output();
         let (mut frontier_delay_out, frontier_delay) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut peek_duration_out, peek_duration) = demux.new_output();
@@ -126,6 +127,7 @@ pub fn construct<A: Allocate>(
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
+                let mut source_frontier = source_frontier_out.activate();
                 let mut frontier_delay = frontier_delay_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
@@ -136,6 +138,7 @@ pub fn construct<A: Allocate>(
                     let mut dataflow_session = dataflow.session(&time);
                     let mut dependency_session = dependency.session(&time);
                     let mut frontier_session = frontier.session(&time);
+                    let mut source_frontier_session = source_frontier.session(&time);
                     let mut frontier_delay_session = frontier_delay.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut peek_duration_session = peek_duration.session(&time);
@@ -245,17 +248,33 @@ pub fn construct<A: Allocate>(
                                     }
                                 }
                             }
-                            ComputeEvent::SourceFrontier(dataflow, source_id, logical) => {
-                                let dataflow_key = (dataflow, worker);
-                                debug_assert_ne!(active_dataflows.get(&dataflow_key), None);
-                                let source_map = storage_sources
-                                    .entry(dataflow_key)
-                                    .or_insert_with(HashMap::new);
-                                let time_entry = source_map
-                                    .entry(source_id)
-                                    .or_insert((VecDeque::new(), HashMap::new()));
-                                let time_deque = &mut time_entry.0;
-                                time_deque.push_back((logical, time.as_nanos()));
+                            ComputeEvent::SourceFrontier(dataflow, source_id, logical, delta) => {
+                                // report source instantiation frontier advancement
+                                source_frontier_session.give((
+                                    Row::pack_slice(&[
+                                        Datum::String(&dataflow.to_string()),
+                                        Datum::String(&source_id.to_string()),
+                                        Datum::Int64(worker as i64),
+                                        Datum::Int64(logical as i64),
+                                    ]),
+                                    time_ms,
+                                    delta,
+                                ));
+                                
+                                if delta > 0 {
+                                    // record source instantiation frontier event time to enable
+                                    // subsequent dataflow-source delay histogram calculations
+                                    let dataflow_key = (dataflow, worker);
+                                    debug_assert_ne!(active_dataflows.get(&dataflow_key), None);
+                                    let source_map = storage_sources
+                                        .entry(dataflow_key)
+                                        .or_insert_with(HashMap::new);
+                                    let time_entry = source_map
+                                        .entry(source_id)
+                                        .or_insert((VecDeque::new(), HashMap::new()));
+                                    let time_deque = &mut time_entry.0;
+                                    time_deque.push_back((logical, time.as_nanos()));
+                                }
                             }
                             ComputeEvent::Peek(peek, is_install) => {
                                 let key = (worker, peek.uuid);
@@ -314,6 +333,8 @@ pub fn construct<A: Allocate>(
 
         let frontier_current = frontier.as_collection();
 
+        let source_frontier_current = source_frontier.as_collection();
+
         let frontier_delay = frontier_delay
             .as_collection()
             .count_total_core::<i64>()
@@ -363,6 +384,10 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Compute(ComputeLog::FrontierCurrent),
                 frontier_current,
+            ),
+            (
+                LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
+                source_frontier_current,
             ),
             (
                 LogVariant::Compute(ComputeLog::FrontierDelay),

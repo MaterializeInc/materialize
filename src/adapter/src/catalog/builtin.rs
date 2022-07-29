@@ -897,6 +897,12 @@ pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
 };
 
+pub const MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_materialization_source_frontiers",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
+};
+
 pub const MZ_WORKER_MATERIALIZATION_DELAYS: BuiltinLog = BuiltinLog {
     name: "mz_worker_materialization_delays",
     schema: MZ_CATALOG_SCHEMA,
@@ -2178,6 +2184,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
         Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
+        Builtin::Log(&MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS),
         Builtin::Log(&MZ_WORKER_MATERIALIZATION_DELAYS),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
