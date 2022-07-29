@@ -906,48 +906,6 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     let mut client_interactive = server.connect(postgres::NoTls)?;
     let mut client_tail = server.connect(postgres::NoTls)?;
 
-    let verify_rw_pair = move |mut rows: &[Row], expected_data: &str| -> bool {
-        // Clear progress rows that may appear after row 2.
-        for i in (2..rows.len()).rev() {
-            if rows[i].get::<_, bool>("mz_progressed") {
-                rows = &rows[..i];
-            }
-        }
-
-        for (i, row) in rows.iter().enumerate() {
-            match row.get::<_, Option<String>>("data") {
-                // Only verify if all rows have expected data
-                Some(inner) => {
-                    if &inner != expected_data {
-                        return false;
-                    }
-                }
-                // Only verify if row without data is last row
-                None => {
-                    if i + 1 != rows.len() {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        if rows.len() != 2 {
-            return false;
-        }
-
-        // First row reflects write. Written rows have not progressed, and all
-        // writes occur at the same timestamp.
-        assert_eq!(rows[0].get::<_, Option<bool>>("mz_progressed"), Some(false));
-        // Two writes with the same data have their diffs compacted
-        assert_eq!(rows[0].get::<_, Option<i64>>("mz_diff"), Some(2));
-
-        // Second row reflects closing timestamp, manufactured by the read
-        assert_eq!(rows[1].get::<_, Option<bool>>("mz_progressed"), Some(true));
-        assert_eq!(rows[1].get::<_, Option<i64>>("mz_diff"), None);
-
-        true
-    };
-
     client_interactive.batch_execute("CREATE TABLE t1 (data text)")?;
 
     client_tail.batch_execute(
@@ -955,51 +913,52 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
          DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
     )?;
 
-    // Keep trying until you either panic or are able to verify the expected behavior.
-    loop {
-        client_interactive.execute("BEGIN", &[])?;
-        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
-        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
-        client_interactive.execute("COMMIT", &[])?;
-        let _ = client_interactive.query("SELECT * FROM T1", &[])?;
-        client_interactive.execute("BEGIN", &[])?;
-        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
-        client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
-        client_interactive.execute("COMMIT", &[])?;
+    client_interactive.execute("BEGIN", &[]).unwrap();
+    client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
+    client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
+    client_interactive.execute("COMMIT", &[])?;
+    let _ = client_interactive.query("SELECT * FROM T1", &[])?;
+    client_interactive.execute("BEGIN", &[])?;
+    client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
+    client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
+    client_interactive.execute("COMMIT", &[])?;
+    let _ = client_interactive.query("SELECT * FROM T1", &[])?;
 
-        let first_rows = client_tail.query("FETCH ALL c1", &[])?;
-        let first_rows_verified = verify_rw_pair(&first_rows, "first");
+    let rows = client_tail.query("FETCH ALL c1", &[])?;
+    client_tail.batch_execute("COMMIT;")?;
+    let mut first_write_ts = None;
+    let mut second_write_ts = None;
+    let mut seen_first = false;
+    let mut seen_second = false;
+    for row in rows.iter() {
+        let mz_timestamp = row.get::<_, MzTimestamp>("mz_timestamp");
+        let mz_progressed = row.get::<_, Option<bool>>("mz_progressed").unwrap();
+        let mz_diff = row.get::<_, Option<i64>>("mz_diff");
+        let data = row.get::<_, Option<String>>("data");
 
-        let _ = client_interactive.query("SELECT * FROM t1", &[])?;
-
-        let second_rows = client_tail.query("FETCH ALL c1", &[])?;
-        let second_rows_verified = verify_rw_pair(&second_rows, "second");
-
-        if first_rows_verified && second_rows_verified {
-            let first_write_ts = first_rows[0].get::<_, MzTimestamp>("mz_timestamp");
-            let first_closed_ts = first_rows[1].get::<_, MzTimestamp>("mz_timestamp");
-            assert!(first_write_ts < first_closed_ts);
-
-            let second_write_ts = second_rows[0].get::<_, MzTimestamp>("mz_timestamp");
-            let second_closed_ts = second_rows[1].get::<_, MzTimestamp>("mz_timestamp");
-            assert!(first_closed_ts <= second_write_ts);
-            assert!(second_write_ts < second_closed_ts);
-            break;
+        if !mz_progressed {
+            // Actual data
+            let mz_diff = mz_diff.unwrap();
+            let data = data.unwrap();
+            if !seen_first {
+                assert_eq!(data, "first");
+                seen_first = true;
+                first_write_ts = Some(mz_timestamp);
+            } else {
+                assert_eq!(data, "second");
+                seen_second = true;
+                second_write_ts = Some(mz_timestamp);
+            }
+            assert_eq!(mz_diff, 2);
         }
     }
 
-    // Ensure reads don't advance timestamp.
-    loop {
-        let first_read =
-            client_interactive.query("SELECT *, mz_logical_timestamp() FROM t1", &[])?;
-        let second_read =
-            client_interactive.query("SELECT *, mz_logical_timestamp() FROM t1", &[])?;
-        if first_read[0].get::<_, MzTimestamp>("mz_logical_timestamp")
-            == second_read[0].get::<_, MzTimestamp>("mz_logical_timestamp")
-        {
-            break;
-        }
-    }
+    assert!(seen_first);
+    assert!(seen_second);
+
+    let first_write_ts = first_write_ts.unwrap();
+    let second_write_ts = second_write_ts.unwrap();
+    assert!(first_write_ts <= second_write_ts);
 
     Ok(())
 }

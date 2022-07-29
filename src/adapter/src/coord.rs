@@ -118,7 +118,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
 use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
-use crate::session::Session;
+use crate::session::{EndTransactionAction, Session};
 use crate::sink_connection;
 use crate::tail::PendingTail;
 use crate::util::ClientTransmitter;
@@ -158,6 +158,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks { conn_id: ConnectionId },
+    LinearizeReads(Vec<PendingTxn>),
 }
 
 #[derive(Derivative)]
@@ -244,6 +245,19 @@ struct TxnReads {
     read_holds: crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>,
 }
 
+#[derive(Debug)]
+/// A pending transaction waiting to be committed.
+pub struct PendingTxn {
+    /// Transmitter used to send a response back to the client.
+    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Client response for transaction.
+    response: Result<ExecuteResponse, AdapterError>,
+    /// Session of the client who initiated the transaction.
+    session: Session,
+    /// The action to take at the end of the transaction.
+    action: EndTransactionAction,
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// The controller for the storage and compute layers.
@@ -254,6 +268,9 @@ pub struct Coordinator<S> {
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
+
+    /// Channel for strict serializable reads ready to commit.
+    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingTxn>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -685,6 +702,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
+        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
         // For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
@@ -727,6 +745,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
+                    let mut pending_read_txns = vec![pending_read_txn];
+                    while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
+                        pending_read_txns.push(pending_read_txn);
+                    }
+                    Message::LinearizeReads(pending_read_txns)
+                }
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
@@ -818,6 +845,7 @@ pub async fn serve<S: Append + 'static>(
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+    let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
@@ -897,6 +925,7 @@ pub async fn serve<S: Append + 'static>(
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 internal_cmd_tx,
+                strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
                 advance_tables: AdvanceTables::new(),
                 transient_id_counter: 1,
@@ -918,7 +947,7 @@ pub async fn serve<S: Append + 'static>(
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, cmd_rx));
+                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
             }
         })
         .unwrap();

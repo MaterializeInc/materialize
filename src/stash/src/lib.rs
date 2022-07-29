@@ -395,6 +395,11 @@ pub trait Stash: std::fmt::Debug + Send {
     where
         K: Data,
         V: Data;
+
+    /// Returns `Ok` if this stash instance was the leader at some
+    /// point from the invocation of this method to the return of this
+    /// method. Otherwise, returns `Err`.
+    async fn confirm_leadership(&mut self) -> Result<(), StashError>;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the

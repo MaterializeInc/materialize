@@ -24,8 +24,8 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
 use crate::coord::timeline::TimelineState;
 use crate::coord::{
-    CoordTimestamp, Coordinator, CreateSourceStatementReady, Message, ReplicaMetadata, SendDiffs,
-    SinkConnectionReady,
+    CoordTimestamp, Coordinator, CreateSourceStatementReady, Message, PendingTxn, ReplicaMetadata,
+    SendDiffs, SinkConnectionReady,
 };
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -62,6 +62,9 @@ impl<S: Append + 'static> Coordinator<S> {
             // path that responds to the client (e.g. reporting an error).
             Message::RemovePendingPeeks { conn_id } => {
                 self.cancel_pending_peeks(conn_id).await;
+            }
+            Message::LinearizeReads(pending_read_txns) => {
+                self.message_linearize_reads(pending_read_txns).await;
             }
         }
     }
@@ -345,5 +348,23 @@ impl<S: Append + 'static> Coordinator<S> {
         )
         .await
         .expect("updating compute instance status cannot fail");
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingTxn>) {
+        self.catalog
+            .confirm_leadership()
+            .await
+            .expect("unable to confirm leadership");
+        for PendingTxn {
+            client_transmitter,
+            response,
+            mut session,
+            action,
+        } in pending_read_txns
+        {
+            session.vars_mut().end_transaction(action);
+            client_transmitter.send(response, session);
+        }
     }
 }

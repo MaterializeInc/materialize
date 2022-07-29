@@ -74,6 +74,13 @@ clock for the current time. The current time can go backwards, but timestamps as
 
 The document also allows user tables to exist in any timeline.
 
+### Stash
+
+The stash is a consistent durable storage engine that provides per key linearizability and transaction serializability.
+Every transaction in the stash includes an epoch number. If the epoch number in the transaction doesn't match the epoch
+number in the stash, then the transaction is rejected. All Coordinators will increment the epoch number in the stash
+during startup and include that new epoch in all stash transactions.
+
 ### Global Timestamp
 
 All reads to any object and all writes to user tables are assigned a timestamp by the Coordinator on a single thread.
@@ -128,9 +135,9 @@ timestamp greater than or equal to all reads and writes before the restart.
 
 Proposal: Use a [Percolator](https://storage.googleapis.com/pub-tools-public-publication-data/pdf/36726.pdf) inspired
 timestamp recovery protocol (See section 2.3 Timestamps). Periodically we durably store some value greater than the
-current global timestamp. We never allocate a timestamp larger than or equal the one durably stored, without first
-updating the durably stored timestamp. When Materialize restarts, it uses the value durably stored as the initial
-timestamp.
+current global timestamp in the stash. We never allocate a timestamp larger than or equal the one durably stored,
+without first updating the durably stored timestamp. When Materialize restarts, it uses the value durably stored as the
+initial timestamp.
 
 The properties described in this section and the [Global Timestamp](#Global Timestamp) section are sufficient to ensure
 Strict Serializability across restarts.
@@ -233,6 +240,45 @@ NOTE: There are some race conditions here such as:
 4. STORAGES receives ACK OK response from the Coordinator.
 
 This is fine and STORAGE can just ignore the ACK OK response.
+
+### Multiple Leader Robustness
+
+Due to network partitions or some other fault it's possible that there are multiple Coordinators running at the same
+time. Materialize needs to be robustness enough so that this scenario will not cause any violations to Strict
+Serializability.
+
+#### DDL
+
+All DDL involves a stash transaction, so if a new Coordinator has taken over leadership then DDL on all old Coordinators
+will fail.
+
+#### Inserts
+
+When a new Coordinator starts up, it will allocate a range of timestamps as described
+in [Global Timestamp Recovery](#Global Timestamp Recovery). This prevents all previous Coordinators from allocating any
+new timestamps.
+
+Proposal: After the new Coordinator allocates a timestamp range, but before accepting client queries, it will advance
+all tables to the bottom of it's allocated range. This prevents all previous Coordinators from being able to write to
+any table.
+
+#### Reads
+
+Proposal: After receiving a read query but before committing it, the Coordinator will check the stash and make sure that
+the epoch hasn't changed.
+
+There is a small race condition here where a new Coordinator takes leadership after the previous Coordinator confirms
+its leadership, but before the previous Coordinator has returned a result. The scenario would look like the following:
+
+1. Coordinator 1 is the leader.
+2. Coordinator 1 receives read query A.
+3. Coordinator 1 confirms that the epoch hasn't changed.
+4. Coordinator 2 becomes the leader and increments the epoch.
+5. Coordinator 2 receives and completes read query B.
+6. Coordinator 1 completes read query A.
+
+In this scenario the queries A and B are concurrent, and we can order them however we want without violating Strict
+Serializability.
 
 ## Alternatives
 

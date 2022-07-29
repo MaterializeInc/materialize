@@ -30,6 +30,7 @@ use crate::session::Session;
 use crate::{ExecuteResponse, PeekResponseUnary};
 
 /// Handles responding to clients.
+#[derive(Debug)]
 pub struct ClientTransmitter<T> {
     tx: Option<oneshot::Sender<Response<T>>>,
     internal_cmd_tx: UnboundedSender<Message>,

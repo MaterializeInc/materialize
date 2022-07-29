@@ -703,6 +703,10 @@ impl Stash for Postgres {
         self.transact(|tx| Box::pin(Self::upper_tx(tx, collection.id)))
             .await
     }
+
+    async fn confirm_leadership(&mut self) -> Result<(), StashError> {
+        self.transact(|_| Box::pin(async { Ok(()) })).await
+    }
 }
 
 impl From<tokio_postgres::Error> for StashError {
