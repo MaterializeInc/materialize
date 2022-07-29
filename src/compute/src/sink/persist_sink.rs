@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -189,10 +190,15 @@ where
                 .await
                 .expect("could not open persist client");
 
-            let mut write = persist_client
-                .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
+            let (mut write, read) = persist_client
+                .open::<SourceData, (), Timestamp, Diff>(shard_id)
                 .await
                 .expect("could not open persist shard");
+
+            // Our write lower bound must be at least the persist shard's since, otherwise we
+            // wouldn't be able to read back the data we have written.
+            write_lower_bound = write_lower_bound.join(read.since());
+            read.expire().await;
 
             // Advance the persist shard's upper to at least our write lower bound.
             let current_upper = write.upper().clone();
@@ -240,7 +246,6 @@ where
 
                         // Advance all updates to `persist`'s frontier.
                         for (_, time, _) in correction.iter_mut() {
-                            use differential_dataflow::lattice::Lattice;
                             time.advance_by(persist_frontier.borrow());
                         }
                         // Consolidate updates within.
