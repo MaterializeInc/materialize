@@ -154,7 +154,7 @@ def workflow_test_github_12251(c: Composition) -> None:
         assert "statement timeout" in e.args[0]["M"], e
         # Ensure the statemenet_timeout setting is ~honored
         assert (
-                time.process_time() - start_time < 2
+            time.process_time() - start_time < 2
         ), "idle_in_transaction_session_timeout not respected"
     else:
         assert False, "unexpected success in test_github_12251"
@@ -169,14 +169,14 @@ def workflow_test_remote_storaged(c: Composition) -> None:
     c.down(destroy_volumes=True)
 
     with c.override(
-            Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-            # Use a separate PostgreSQL service for persist rather than the one in
-            # the `Materialized` service, so that crashing `environmentd` does not
-            # also take down PostgreSQL.
-            Postgres(),
-            Materialized(
-                options="--persist-consensus-url=postgres://postgres:postgres@postgres"
-            ),
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+        # Use a separate PostgreSQL service for persist rather than the one in
+        # the `Materialized` service, so that crashing `environmentd` does not
+        # also take down PostgreSQL.
+        Postgres(),
+        Materialized(
+            options="--persist-consensus-url=postgres://postgres:postgres@postgres"
+        ),
     ):
         dependencies = [
             "materialized",
@@ -223,16 +223,16 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-            Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
         c.up("testdrive", persistent=True)
 
         with c.override(
-                # This commit introduced the pg_authid builtin view with a missing column. The column was added in a
-                # later commit
-                Materialized(
-                    image="materialize/materialized:devel-4a26e59ac9da694d21b60c8d4d4a7b67c8b3b78d"
-                )
+            # This commit introduced the pg_authid builtin view with a missing column. The column was added in a
+            # later commit
+            Materialized(
+                image="materialize/materialized:devel-4a26e59ac9da694d21b60c8d4d4a7b67c8b3b78d"
+            )
         ):
             c.up("materialized")
 
@@ -250,10 +250,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             c.kill("materialized")
 
         with c.override(
-                # If this ever stops working, add the following argument:
-                # image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921"
-                # That commit added the missing column rolconnlimit to pg_authid
-                Materialized()
+            # If this ever stops working, add the following argument:
+            # image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921"
+            # That commit added the missing column rolconnlimit to pg_authid
+            Materialized()
         ):
             c.up("materialized")
 
