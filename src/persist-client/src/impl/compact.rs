@@ -21,7 +21,6 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
-use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, warn, Instrument, Span};
 

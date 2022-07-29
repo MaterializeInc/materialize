@@ -330,7 +330,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         trace!("Client::open shard_id={:?}", shard_id);
         Ok((
@@ -352,7 +352,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         trace!("Client::open_reader shard_id={:?}", shard_id);
         let gc = GarbageCollector::new(
@@ -398,7 +398,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         trace!("Client::open_writer shard_id={:?}", shard_id);
         let gc = GarbageCollector::new(
@@ -449,7 +449,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         self.open(shard_id).await.expect("codec mismatch")
     }

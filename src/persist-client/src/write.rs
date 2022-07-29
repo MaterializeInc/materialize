@@ -87,7 +87,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
@@ -106,7 +106,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     /// This handle's `upper` frontier.
     ///
@@ -610,7 +610,7 @@ where
     T: Timestamp + Lattice + Codec64,
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {

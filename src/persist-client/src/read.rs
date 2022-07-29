@@ -95,7 +95,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
     as_of: Antichain<T>,
@@ -109,7 +109,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn new(handle: ReadHandle<K, V, T, D>, split: SnapshotSplit<T>) -> Self {
         debug_assert_eq!(handle.reader_id, split.reader_id);
@@ -212,7 +212,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + Lattice + Codec64 + Ord,
-    D: Semigroup + Codec64 + Ord,
+    D: Semigroup + Codec64 + Ord + Send + Sync,
 {
     /// Test helper to read all data in the snapshot and return it sorted.
     #[cfg(test)]
@@ -247,7 +247,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
     as_of: Antichain<T>,
@@ -261,7 +261,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     async fn new(handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
         let mut ret = Listen {
@@ -469,7 +469,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
@@ -488,7 +488,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     /// This handle's `since` frontier.
     ///
@@ -782,7 +782,7 @@ where
     // These are only here so we can use them in this auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {

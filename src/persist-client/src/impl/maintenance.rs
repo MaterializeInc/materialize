@@ -38,7 +38,7 @@ pub struct LeaseExpiration {
 /// Operations that run regularly once a handle is registered, such
 /// as heartbeats, are expected to always perform maintenance.
 #[must_use]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RoutineMaintenance {
     pub(crate) garbage_collection: Option<GcReq>,
     pub(crate) lease_expiration: Option<LeaseExpiration>,
@@ -51,7 +51,7 @@ impl RoutineMaintenance {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         let _ = self.perform_in_background(machine, gc);
     }
@@ -70,7 +70,7 @@ impl RoutineMaintenance {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         for handle in self.perform_in_background(machine, gc) {
             let _ = handle.await;
@@ -86,7 +86,7 @@ impl RoutineMaintenance {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         let mut join_handles = vec![];
         if let Some(gc_req) = self.garbage_collection {
@@ -124,7 +124,7 @@ impl RoutineMaintenance {
 /// routine maintenance common to all handles. It is expected that
 /// writers always perform maintenance.
 #[must_use]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct WriterMaintenance<T> {
     pub(crate) routine: RoutineMaintenance,
     pub(crate) compaction: Vec<CompactReq<T>>,
@@ -143,7 +143,7 @@ where
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         let _ = self.perform_in_background(machine, gc, compactor);
     }
@@ -161,7 +161,7 @@ where
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         for handle in self.perform_in_background(machine, gc, compactor) {
             let _ = handle.await;
@@ -177,7 +177,7 @@ where
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         let mut handles = self.routine.perform_in_background(machine, gc);
 
