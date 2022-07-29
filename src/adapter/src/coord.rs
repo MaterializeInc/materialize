@@ -107,8 +107,8 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, ClusterReplicaSizeMap, Sink,
-    SinkConnectionState, StorageHostSizeMap,
+    self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
+    ClusterReplicaSizeMap, Sink, SinkConnectionState, StorageHostSizeMap,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -323,6 +323,7 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn bootstrap(
         &mut self,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         let mut persisted_log_ids = vec![];
@@ -361,6 +362,39 @@ impl<S: Append + 'static> Coordinator<S> {
             DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
         )
         .await;
+
+        // Migrate builtin objects.
+        for (compute_id, sink_ids) in builtin_migration_metadata.previous_sink_ids {
+            self.controller
+                .compute_mut(compute_id)
+                .unwrap()
+                .drop_sinks_unvalidated(sink_ids)
+                .await?;
+        }
+        for (compute_id, index_ids) in builtin_migration_metadata.previous_index_ids {
+            self.controller
+                .compute_mut(compute_id)
+                .unwrap()
+                .drop_indexes_unvalidated(index_ids)
+                .await?;
+        }
+        for (compute_id, recorded_view_ids) in
+            builtin_migration_metadata.previous_materialized_view_ids
+        {
+            self.controller
+                .compute_mut(compute_id)
+                .unwrap()
+                .drop_sinks_unvalidated(recorded_view_ids.clone())
+                .await?;
+            self.controller
+                .storage_mut()
+                .drop_sources_unvalidated(recorded_view_ids)
+                .await?;
+        }
+        self.controller
+            .storage_mut()
+            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
+            .await?;
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
         // Topologically sort entries based on the used_by relationship
@@ -799,19 +833,20 @@ pub async fn serve<S: Append + 'static>(
     // Coordinator::sequence_create_compute_instance_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
-    let (mut catalog, builtin_table_updates) = Catalog::open(catalog::Config {
-        storage,
-        unsafe_mode,
-        build_info,
-        now: now.clone(),
-        skip_migrations: false,
-        metrics_registry: &metrics_registry,
-        cluster_replica_sizes,
-        storage_host_sizes,
-        default_storage_host_size,
-        availability_zones,
-    })
-    .await?;
+    let (mut catalog, builtin_migration_metadata, builtin_table_updates) =
+        Catalog::open(catalog::Config {
+            storage,
+            unsafe_mode,
+            build_info,
+            now: now.clone(),
+            skip_migrations: false,
+            metrics_registry: &metrics_registry,
+            cluster_replica_sizes,
+            storage_host_sizes,
+            default_storage_host_size,
+            availability_zones,
+        })
+        .await?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
@@ -878,7 +913,8 @@ pub async fn serve<S: Append + 'static>(
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
             };
-            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
+            let bootstrap =
+                handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {

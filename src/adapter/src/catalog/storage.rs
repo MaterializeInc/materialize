@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::iter::once;
 
 use bytes::BufMut;
-use itertools::max;
+use itertools::{max, Itertools};
 use prost::{self, Message};
 use serde_json::json;
 use timely::progress::Timestamp;
@@ -41,6 +41,7 @@ use mz_storage::types::sources::Timeline;
 use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::SerializedComputeInstanceReplicaConfig;
+use crate::catalog::SystemObjectMapping;
 
 const USER_VERSION: &str = "user_version";
 
@@ -584,21 +585,24 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
-    /// Persist mapping from system objects to global IDs. Each element of `mappings` should be
-    /// (schema-name, object-name, global-id).
+    /// Persist mapping from system objects to global IDs and fingerprints.
     ///
-    /// Panics if provided id is not a system id
-    pub async fn set_system_gids(
+    /// Panics if provided id is not a system id.
+    pub async fn set_system_object_mapping(
         &mut self,
-        mappings: Vec<(&str, &str, GlobalId, u64)>,
+        mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), Error> {
         if mappings.is_empty() {
             return Ok(());
         }
 
-        let mappings = mappings
-            .into_iter()
-            .map(|(schema_name, object_name, id, fingerprint)| {
+        let mappings = mappings.into_iter().map(
+            |SystemObjectMapping {
+                 schema_name,
+                 object_name,
+                 id,
+                 fingerprint,
+             }| {
                 let id = if let GlobalId::System(id) = id {
                     id
                 } else {
@@ -606,12 +610,13 @@ impl<S: Append> Connection<S> {
                 };
                 (
                     GidMappingKey {
-                        schema_name: schema_name.to_string(),
-                        object_name: object_name.to_string(),
+                        schema_name,
+                        object_name,
                     },
                     GidMappingValue { id, fingerprint },
                 )
-            });
+            },
+        );
         COLLECTION_SYSTEM_GID_MAPPING
             .upsert(&mut self.stash, mappings)
             .await
@@ -1142,6 +1147,40 @@ impl<'a, S: Append> Transaction<'a, S> {
             }
         })?;
         assert_eq!(n, 1);
+        Ok(())
+    }
+
+    /// Updates persisted mapping from system objects to global IDs and fingerprints. Each element
+    /// of `mappings` should be (old-global-id, new-system-object-mapping).
+    ///
+    /// Panics if provided id is not a system id.
+    pub fn update_system_object_mappings(
+        &mut self,
+        mappings: &HashMap<GlobalId, SystemObjectMapping>,
+    ) -> Result<(), Error> {
+        let n = self.system_gid_mapping.update(|_k, v| {
+            if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
+                let id = if let GlobalId::System(id) = mapping.id {
+                    id
+                } else {
+                    panic!("non-system id provided")
+                };
+                Some(GidMappingValue {
+                    id,
+                    fingerprint: mapping.fingerprint,
+                })
+            } else {
+                None
+            }
+        })?;
+
+        if usize::try_from(n).expect("update diff should fit into usize") != mappings.len() {
+            let id_str = mappings.keys().map(|id| id.to_string()).join(",");
+            return Err(Error {
+                kind: ErrorKind::FailedBuiltinSchemaMigration(id_str),
+            });
+        }
+
         Ok(())
     }
 
