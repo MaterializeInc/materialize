@@ -13,7 +13,7 @@ SERVICES = [
     Service(
         "jaeger",
         {
-            "image": "jaegertracing/all-in-one:latest",
+            "image": "jaegertracing/all-in-one:1.36",
             "ports": ["16686:16686", 14268, 14250],
             "allow_host_ports": True,
         },
@@ -21,7 +21,7 @@ SERVICES = [
     Service(
         "otel-collector",
         {
-            "image": "otel/opentelemetry-collector:latest",
+            "image": "otel/opentelemetry-collector:0.56.0",
             "command": "--config=/etc/otel-collector-config.yaml",
             "ports": [
                 1888,  # pprof
