@@ -76,10 +76,10 @@ The document also allows user tables to exist in any timeline.
 
 ### Stash
 
-The stash is a consistent durable storage engine that provides ACID transactions. Every transaction in the stash
-includes an epoch number. If the epoch number in the transaction doesn't match the epoch number in the stash, then the
-transaction is rejected. All Coordinators will increment the epoch number in the stash during startup and include that
-new epoch in all stash transactions.
+The stash is a consistent durable storage engine that provides per key linearizability and transaction serializability.
+Every transaction in the stash includes an epoch number. If the epoch number in the transaction doesn't match the epoch
+number in the stash, then the transaction is rejected. All Coordinators will increment the epoch number in the stash
+during startup and include that new epoch in all stash transactions.
 
 ### Global Timestamp
 
