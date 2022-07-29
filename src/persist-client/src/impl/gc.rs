@@ -16,6 +16,7 @@ use std::time::Instant;
 use tracing::{debug, debug_span, Instrument, Span};
 
 use crate::r#impl::machine::retry_external;
+use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::ProtoStateRollup;
 use crate::{Metrics, ShardId};
 
@@ -195,6 +196,7 @@ impl GarbageCollector {
         // concurrently, but this requires a bunch of Arc cloning, so wait to
         // see if it's worth it.
         for key in deleteable_blobs {
+            let key = PartialBlobKey(key).complete(&req.shard_id);
             retry_external(&metrics.retries.external.gc_delete, || async {
                 blob.delete(&key).await
             })
