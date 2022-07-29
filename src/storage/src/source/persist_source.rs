@@ -175,7 +175,7 @@ where
     builder.build_async(
         scope.clone(),
         async_op!(|initial_capabilities, _frontiers| {
-            let read = persist_clients
+            let mut read = persist_clients
                 .lock()
                 .await
                 .open(metadata.persist_location.clone())

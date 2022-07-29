@@ -222,7 +222,7 @@ where
 }
 
 async fn truncate_persist_shard(shard_id: ShardId, persist_client: &PersistClient) {
-    let (mut write, read) = persist_client
+    let (mut write, mut read) = persist_client
         .open::<SourceData, (), Timestamp, Diff>(shard_id)
         .await
         .expect("could not open persist shard");

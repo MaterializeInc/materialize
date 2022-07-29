@@ -70,6 +70,7 @@ message ProtoHollowBatchReaderMetadata {
     message ProtoHollowBatchReaderMetadataListen {
         ProtoU64Antichain as_of = 1;
         ProtoU64Antichain until = 2;
+        ProtoU64Antichain since = 3;
     }
 
     oneof kind {
