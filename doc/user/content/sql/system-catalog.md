@@ -264,13 +264,14 @@ Field           | Type       | Meaning
 
 ### `mz_materialization_dependencies`
 
-The `mz_materialization_dependencies` source describes the sources that each
-[dataflow] depends on.
+The `mz_materialization_dependencies` source describes the dependency structure between each [dataflow] and
+the sources of their data. To create a complete dependency structure, the source column includes also
+other dataflows.
 
 Field      | Type       | Meaning
 -----------|------------|--------
-`dataflow` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes).
-`source`   | [`text`]   | The ID of the source. Corresponds to [`mz_sources.id`](#mz_sources).
+`dataflow` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
+`source`   | [`text`]   | The ID of the source. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views) or [`mz_indexes.id`](#mz_indexes).
 `worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
 
 ### `mz_materialization_frontiers`
@@ -285,17 +286,17 @@ For per-worker frontier information, see
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`global_id` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes).
+`global_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
 `time`      | [`bigint`] | The next timestamp at which the materialization may change.
 
 ### `mz_materializations`
 
-The `mz_materializations` source describes the indexes in the system.
+The `mz_materializations` source describes the indexes and materialized views in the system.
 
 Field    | Type       | Meaning
 ---------|------------|--------
-`name`   | [`text`]   | The ID of the index. (`name` is a misnomer.)
-`worker` | [`bigint`] | The ID of the worker thread hosting the index.
+`name`   | [`text`]   | The ID of the index or materialized view. (`name` is a misnomer.)
+`worker` | [`bigint`] | The ID of the worker thread managing the corresponding [dataflow].
 
 ### `mz_materialized_views`
 
@@ -546,7 +547,7 @@ For frontier information aggregated across all workers, see
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`global_id` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes).
+`global_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`bigint`] | The next timestamp at which the dataflow may change.
 
