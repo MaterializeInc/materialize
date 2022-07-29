@@ -18,6 +18,7 @@ use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use tracing::debug;
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::r#impl::machine::retry_external;
 use crate::r#impl::metrics::{Metrics, MetricsBlob, MetricsConsensus};
 use crate::{PersistClient, PersistConfig, PersistLocation};
@@ -36,6 +37,7 @@ pub struct PersistClientCache {
     pub(crate) metrics: Arc<Metrics>,
     blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
+    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
 }
 
 impl PersistClientCache {
@@ -46,6 +48,7 @@ impl PersistClientCache {
             metrics: Arc::new(Metrics::new(registry)),
             blob_by_uri: HashMap::new(),
             consensus_by_uri: HashMap::new(),
+            cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
         }
     }
 
@@ -90,7 +93,14 @@ impl PersistClientCache {
         };
         let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)))
             as Arc<dyn Consensus + Send + Sync>;
-        PersistClient::new(self.cfg.clone(), blob, consensus, Arc::clone(&self.metrics)).await
+        PersistClient::new(
+            self.cfg.clone(),
+            blob,
+            consensus,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.cpu_heavy_runtime),
+        )
+        .await
     }
 
     pub(crate) async fn open_blob(

@@ -688,9 +688,9 @@ mod tests {
 
     use differential_dataflow::trace::Description;
     use mz_ore::cast::CastFrom;
-    use tokio::runtime::Handle;
     use tokio::sync::Mutex;
 
+    use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::r#impl::compact::{CompactReq, Compactor};
     use crate::read::{fetch_batch_part, Listen, ListenEvent};
@@ -732,11 +732,13 @@ mod tests {
                 PersistConfig::new(client.cfg.now.clone()).blob_target_size;
 
             let state = Arc::new(Mutex::new(DatadrivenState::default()));
+            let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
 
             f.run_async(move |tc| {
                 let shard_id = shard_id.clone();
                 let client = client.clone();
                 let state = Arc::clone(&state);
+                let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
                 async move {
                     let mut state = state.lock().await;
                     match tc.directive.as_str() {
@@ -864,9 +866,9 @@ mod tests {
                             };
                             let res = Compactor::compact::<u64, i64>(
                                 cfg,
-                                Handle::current(),
                                 Arc::clone(&client.blob),
                                 Arc::clone(&client.metrics),
+                                Arc::clone(&cpu_heavy_runtime),
                                 req,
                                 WriterId::new(),
                             )
