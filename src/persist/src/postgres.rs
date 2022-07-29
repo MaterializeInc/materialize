@@ -393,14 +393,21 @@ impl Consensus for PostgresConsensus {
         }
     }
 
-    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
-             ORDER BY sequence_number";
+             ORDER BY sequence_number ASC LIMIT $3";
         let rows = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client.query(&statement, &[&key, &from]).await?
+            client
+                .query(&statement, &[&key, &from, &i64::cast_from(limit as isize)])
+                .await?
         };
         let mut results = Vec::with_capacity(rows.len());
 
@@ -426,7 +433,7 @@ impl Consensus for PostgresConsensus {
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let q = "DELETE FROM consensus
                 WHERE shard = $1 AND sequence_number < $2 AND
-                EXISTS(
+                EXISTS (
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
 

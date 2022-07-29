@@ -21,6 +21,9 @@ use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::ProtoStateRollup;
 use crate::{Metrics, ShardId};
 
+/// Maximum number of states that get GC'd together in a single pass
+const GC_BATCH_SIZE: usize = 20;
+
 #[derive(Debug, Clone)]
 pub struct GcReq {
     pub shard_id: ShardId,
@@ -130,72 +133,94 @@ impl GarbageCollector {
         // already gc'd and truncated past new_seqno_since.
 
         let path = req.shard_id.to_string();
-        let state_versions = retry_external(&metrics.retries.external.gc_scan, || async {
-            consensus.scan(&path, SeqNo::minimum()).await
+
+        // pull down the state for new_seqno_since, which contains the blobs we must keep.
+        let new_seqno_data = retry_external(&metrics.retries.external.gc_scan, || async {
+            let mut new_seqno_data = consensus.scan(&path, req.new_seqno_since, 1).await?;
+            if new_seqno_data.len() != 1 {
+                // this is fine, someone else beat us to gc'ing through this seqno
+                Ok(None)
+            } else {
+                Ok(Some(new_seqno_data.swap_remove(0)))
+            }
         })
         .await;
 
-        debug!(
-            "gc {} for [{},{}) got {} versions from scan",
-            req.shard_id,
-            req.old_seqno_since,
-            req.new_seqno_since,
-            state_versions.len()
-        );
+        let new_seqno_data = match new_seqno_data {
+            Some(data) => data,
+            None => return,
+        };
+        assert_eq!(req.new_seqno_since, new_seqno_data.seqno);
 
-        // It'd be minor-ly more efficient to reverse the order and first build
-        // up non_deleteable_blobs, and then check all state_versions with seqno
-        // < new_seqno_since so our hashmap grows to O(non_deleteable) rather
-        // than O(deleteable+non_deleteable). This version of the code reads
-        // slightly more obviously, so hold off on that until/if we see it be a
-        // problem in practice.
-        let mut deleteable_blobs = HashSet::new();
-        for state_version in state_versions {
-            if state_version.seqno < req.new_seqno_since {
-                Self::for_all_keys(&state_version, |key| {
-                    // It's okay (expected) if the key already exists in
-                    // deleteable_blobs, it may have been present in previous
-                    // versions of state.
-                    deleteable_blobs.insert(key.to_owned());
-                });
-            } else if state_version.seqno == req.new_seqno_since {
-                Self::for_all_keys(&state_version, |key| {
-                    // It's okay (expected) if the key doesn't exist in
-                    // deleteable_blobs, it may have been added in this version
-                    // of state.
-                    let _ = deleteable_blobs.remove(key);
-                });
-            } else {
-                // Sanity check the loop logic.
-                assert!(state_version.seqno > req.new_seqno_since);
-                break;
-            }
-        }
+        let mut required_blobs = HashSet::new();
+        Self::for_all_keys(&new_seqno_data, |key| {
+            let _ = required_blobs.insert(key.to_owned());
+        });
 
-        // There's also a bulk delete API in s3 if the performance of this
-        // becomes an issue. Maybe make Blob::delete take a list of keys?
-        //
-        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
-        //
-        // Another idea is to use a FuturesUnordered to at least run them
-        // concurrently, but this requires a bunch of Arc cloning, so wait to
-        // see if it's worth it.
-        for key in deleteable_blobs {
-            let key = PartialBlobKey(key).complete(&req.shard_id);
-            retry_external(&metrics.retries.external.gc_delete, || async {
-                blob.delete(&key).await
+        let mut gc_seqno_progress = SeqNo::minimum();
+        while gc_seqno_progress < new_seqno_data.seqno {
+            let state_versions = retry_external(&metrics.retries.external.gc_scan, || async {
+                consensus
+                    .scan(&path, gc_seqno_progress, GC_BATCH_SIZE)
+                    .await
             })
-            .instrument(debug_span!("gc::delete"))
+            .await;
+
+            debug!(
+                "gc {} for [{},{}) got {} versions from scan",
+                req.shard_id,
+                req.old_seqno_since,
+                req.new_seqno_since,
+                state_versions.len()
+            );
+
+            let mut deleteable_blobs = HashSet::new();
+            for state_version in state_versions {
+                if state_version.seqno < req.new_seqno_since {
+                    Self::for_all_keys(&state_version, |key| {
+                        if !required_blobs.contains(key) {
+                            deleteable_blobs.insert(key.to_owned());
+                        }
+                    });
+                    gc_seqno_progress = state_version.seqno;
+                } else {
+                    // Sanity check the loop logic.
+                    assert!(state_version.seqno >= req.new_seqno_since);
+                    break;
+                }
+            }
+
+            // There's also a bulk delete API in s3 if the performance of this
+            // becomes an issue. Maybe make Blob::delete take a list of keys?
+            //
+            // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+            //
+            // Another idea is to use a FuturesUnordered to at least run them
+            // concurrently, but this requires a bunch of Arc cloning, so wait to
+            // see if it's worth it.
+            for key in deleteable_blobs {
+                let key = PartialBlobKey(key).complete(&req.shard_id);
+                retry_external(&metrics.retries.external.gc_delete, || async {
+                    blob.delete(&key).await
+                })
+                .instrument(debug_span!("gc::delete"))
+                .await;
+            }
+
+            // truncation is exclusive and scan is inclusive on `seqno`.
+            // we've observed up to `gc_seqno_progress` from this last scan,
+            // so we can increment seqno to correctly truncate everything
+            // we've seen so far and to scan the next page if needed
+            gc_seqno_progress = gc_seqno_progress.next();
+
+            // Now that we've deleted the eligible blobs, "commit" this info by
+            // truncating the state versions that referenced them.
+            let _deleted_count = retry_external(&metrics.retries.external.gc_truncate, || async {
+                consensus.truncate(&path, gc_seqno_progress).await
+            })
+            .instrument(debug_span!("gc::truncate"))
             .await;
         }
-
-        // Now that we've deleted the eligible blobs, "commit" this info by
-        // truncating the state versions that referenced them.
-        let _deleted_count = retry_external(&metrics.retries.external.gc_truncate, || async {
-            consensus.truncate(&path, req.new_seqno_since).await
-        })
-        .instrument(debug_span!("gc::truncate"))
-        .await;
     }
 
     fn for_all_keys<F: FnMut(&str)>(data: &VersionedData, mut f: F) {

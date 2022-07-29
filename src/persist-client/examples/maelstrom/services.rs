@@ -152,7 +152,12 @@ impl Consensus for MaelstromConsensus {
         }
     }
 
-    async fn scan(&self, _key: &str, _from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(
+        &self,
+        _key: &str,
+        _from: SeqNo,
+        _limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
         unimplemented!("not yet used")
     }
 

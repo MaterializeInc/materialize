@@ -998,12 +998,17 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
         let res = self
             .metrics
             .consensus
             .scan
-            .run_op(|| self.consensus.scan(key, from))
+            .run_op(|| self.consensus.scan(key, from, limit))
             .await;
         if let Ok(dataz) = res.as_ref() {
             let bytes = dataz.iter().map(|x| x.data.len()).sum();

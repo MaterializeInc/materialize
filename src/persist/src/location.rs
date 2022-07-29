@@ -341,7 +341,12 @@ pub trait Consensus: std::fmt::Debug {
     ///
     /// Returns an error if `from` is greater than the current sequence number
     /// or if there is no data at this key.
-    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError>;
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError>;
 
     /// Deletes all historical versions of the data stored at `key` that are <
     /// `seqno`, iff `seqno` <= the current sequence number.
@@ -591,7 +596,7 @@ pub mod tests {
         assert_eq!(consensus.head(&key).await, Ok(None));
 
         // Cannot scan a key that has no data.
-        assert!(consensus.scan(&key, SeqNo(0)).await.is_err());
+        assert!(consensus.scan(&key, SeqNo(0), 10).await.is_err());
 
         // Cannot truncate data from a key that doesn't have any data
         assert!(consensus.truncate(&key, SeqNo(0)).await.is_err(),);
@@ -620,18 +625,18 @@ pub mod tests {
 
         // Can scan a key that has data with a lower bound sequence number < head.
         assert_eq!(
-            consensus.scan(&key, SeqNo(0)).await,
+            consensus.scan(&key, SeqNo(0), 10).await,
             Ok(vec![state.clone()])
         );
 
         // Can scan a key that has data with a lower bound sequence number == head.
         assert_eq!(
-            consensus.scan(&key, SeqNo(5)).await,
+            consensus.scan(&key, SeqNo(5), 10).await,
             Ok(vec![state.clone()])
         );
 
         // Cannot scan a key that has data with a lower bound sequence number > head.
-        assert!(consensus.scan(&key, SeqNo(6)).await.is_err());
+        assert!(consensus.scan(&key, SeqNo(6), 10).await.is_err());
 
         // Can truncate data with an upper bound <= head, even if there is no data in the
         // range [0, upper).
@@ -704,33 +709,55 @@ pub mod tests {
         // We can observe both states in the correct order with scan if pass
         // in a suitable lower bound.
         assert_eq!(
-            consensus.scan(&key, SeqNo(5)).await,
+            consensus.scan(&key, SeqNo(5), 10).await,
             Ok(vec![state.clone(), new_state.clone()])
         );
 
         // We can observe only the most recent state if the lower bound is higher
         // than the previous insertion's sequence number.
         assert_eq!(
-            consensus.scan(&key, SeqNo(6)).await,
+            consensus.scan(&key, SeqNo(6), 10).await,
             Ok(vec![new_state.clone()])
         );
 
         // We can still observe the most recent insert as long as the provided
         // lower bound == most recent 's sequence number.
         assert_eq!(
-            consensus.scan(&key, SeqNo(10)).await,
+            consensus.scan(&key, SeqNo(10), 10).await,
             Ok(vec![new_state.clone()])
         );
 
         // We cannot scan if the provided lower bound > head's sequence number.
-        assert!(consensus.scan(&key, SeqNo(11)).await.is_err());
+        assert!(consensus.scan(&key, SeqNo(11), 10).await.is_err());
+
+        // We can scan with limits that don't cover all states
+        assert_eq!(
+            consensus.scan(&key, SeqNo::minimum(), 1).await,
+            Ok(vec![state.clone()])
+        );
+        assert_eq!(
+            consensus.scan(&key, SeqNo(5), 1).await,
+            Ok(vec![state.clone()])
+        );
+
+        // We can scan with limits to cover exactly the number of states
+        assert_eq!(
+            consensus.scan(&key, SeqNo::minimum(), 2).await,
+            Ok(vec![state.clone(), new_state.clone()])
+        );
+
+        // We can scan with a limit larger than the number of states
+        assert_eq!(
+            consensus.scan(&key, SeqNo(4), 100).await,
+            Ok(vec![state.clone(), new_state.clone()])
+        );
 
         // Can remove the previous write with the appropriate truncation.
         assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(1));
 
         // Verify that the old write is indeed deleted.
         assert_eq!(
-            consensus.scan(&key, SeqNo(0)).await,
+            consensus.scan(&key, SeqNo(0), 10).await,
             Ok(vec![new_state.clone()])
         );
 

@@ -1018,7 +1018,7 @@ mod tests {
         }
         let key = write.machine.shard_id().to_string();
         let consensus_entries = consensus
-            .scan(&key, SeqNo::minimum())
+            .scan(&key, SeqNo::minimum(), usize::cast_from(NUM_BATCHES * 10))
             .await
             .expect("scan failed");
         // Make sure we constructed the key correctly.

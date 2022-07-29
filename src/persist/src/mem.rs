@@ -206,15 +206,23 @@ impl Consensus for MemConsensus {
         Ok(Ok(()))
     }
 
-    async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
         let store = self.data.lock().map_err(Error::from)?;
         let mut results = vec![];
         if let Some(values) = store.get(key) {
             // TODO: we could instead binary search to find the first valid
             // key and then binary search the rest.
-            for value in values {
+            for value in values.iter() {
                 if value.seqno >= from {
                     results.push(value.clone());
+                    if results.len() == limit {
+                        break;
+                    }
                 }
             }
         }
