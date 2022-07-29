@@ -9,13 +9,13 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
-use mz_persist_client::{PersistClient, ShardId};
+use futures::{pin_mut, StreamExt};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
@@ -23,6 +23,9 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
 
+use mz_persist_client::read::ListenEvent;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_client::Upper;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
@@ -60,57 +63,41 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let ok_collection = sinked_collection.map(|(key, value)| {
-            assert!(key.is_none(), "persist_source does not support keys");
-            value.expect("persist_source must have values")
-        });
+        let collection = sinked_collection
+            .map(|(key, value)| {
+                assert!(key.is_none(), "persist_source does not support keys");
+                let row = value.expect("persist_source must have values");
+                Ok(row)
+            })
+            .concat(&err_collection.map(Err));
 
-        persist_sink(
-            sink_id,
-            &self.storage_metadata,
-            ok_collection,
-            err_collection,
-            compute_state,
-            false,
-        )
+        persist_sink(sink_id, &self.storage_metadata, collection, compute_state)
     }
 }
 
 pub(crate) fn persist_sink<G>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    ok_collection: Collection<G, Row, Diff>,
-    err_collection: Collection<G, DataflowError, Diff>,
+    collection: Collection<G, Result<Row, DataflowError>, Diff>,
     compute_state: &mut ComputeState,
-    truncate: bool,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let scope = ok_collection.scope();
+    let scope = collection.scope();
 
     let persist_clients = Arc::clone(&compute_state.persist_clients);
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
 
-    let operator_name = format!("persist_sink({})", shard_id);
-    let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
+    let mut op = OperatorBuilder::new("persist_sink".into(), scope.clone());
 
-    // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
-    // if other workers from replicated clusters write the same data, though. In the real
-    // implementation, we would use a storage client that transparently handles writing to
-    // multiple shards. One shard would then only be written to by one worker but we get
-    // parallelism from the sharding.
-    // TODO(aljoscha): Storage must learn to keep track of collections, which consist of
-    // multiple persist shards. Then we should set it up such that each worker can write to one
-    // shard.
+    // TODO(mcsherry): this is shardable, eventually. But for now use a single writer.
     let hashed_id = sink_id.hashed();
-    let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let active_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let mut input = op.new_input(&collection.inner, Exchange::new(move |_| hashed_id));
 
-    let mut input = persist_op.new_input(&ok_collection.inner, Exchange::new(move |_| hashed_id));
-    let mut err_input =
-        persist_op.new_input(&err_collection.inner, Exchange::new(move |_| hashed_id));
-
+    // Dropping this token signals that the operator should shut down cleanly.
     let token = Rc::new(());
     let token_weak = Rc::downgrade(&token);
 
@@ -118,7 +105,7 @@ where
     // an empty frontier. It's necessary to insert all of these into `compute_state.
     // sink_write_frontier` below so we properly clear out default frontiers of
     // non-active workers.
-    let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
+    let shared_frontier = Rc::new(RefCell::new(if active_worker {
         Antichain::from_elem(TimelyTimestamp::minimum())
     } else {
         Antichain::new()
@@ -128,16 +115,12 @@ where
         .sink_write_frontiers
         .insert(sink_id, Rc::clone(&shared_frontier));
 
-    // NOTE(aljoscha): It might be better to roll our own async operator that deals with
-    // handling multiple in-flight write futures, similar to how the persist operators in
-    // `operators/stream.rs` do it. That would allow us to have multiple write requests in
-    // flight concurrently.
-    persist_op.build_async(
+    op.build_async(
         scope,
         move |_capabilities, frontiers, scheduler| async move {
-            let mut buffer = Vec::new();
-            let mut err_buffer = Vec::new();
-            let mut stash: HashMap<_, Vec<_>> = HashMap::new();
+            if !active_worker {
+                return;
+            }
 
             // TODO(aljoscha): We need to figure out what to do with error results from these calls.
             let persist_client = persist_clients
@@ -147,73 +130,127 @@ where
                 .await
                 .expect("could not open persist client");
 
-            if truncate && active_write_worker {
-                truncate_persist_shard(shard_id, &persist_client).await;
-            }
-
-            let mut write = persist_client
-                .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
+            let (mut write, read) = persist_client
+                .open::<SourceData, (), Timestamp, Diff>(shard_id)
                 .await
                 .expect("could not open persist shard");
 
-            while scheduler.notified().await {
-                let mut input_frontier = Antichain::new();
-                for frontier in frontiers.borrow().clone() {
-                    input_frontier.extend(frontier);
-                }
+            // Invariant: since <= read_frontier <= upper
+            advance_upper_by(&mut write, read.since()).await;
 
-                if !active_write_worker
-                    || token_weak.upgrade().is_none()
-                    || shared_frontier.borrow().is_empty()
-                {
+            let upper_ts = match write.upper().get(0) {
+                Some(ts) => ts,
+                // Shard is already closed and cannot be written to anymore.
+                None => return,
+            };
+            let mut read_ts = upper_ts.saturating_sub(1);
+            read_ts.advance_by(read.since().borrow());
+            let mut read_frontier = Antichain::from_elem(read_ts);
+
+            // Share that we have finished processing all times less than the read frontier.
+            // Advancing the sink upper communicates to the storage controller that it is
+            // permitted to compact our target storage collection up to the new upper. So we
+            // must be careful to not advance the sink upper beyond our read frontier.
+            shared_frontier.borrow_mut().clone_from(&read_frontier);
+
+            let as_of = read_frontier.clone();
+            let shard_read = async_stream::stream!({
+                if !active_worker {
                     return;
                 }
 
-                input.for_each(|_cap, data| {
-                    data.swap(&mut buffer);
+                let mut snapshot = read
+                    .snapshot(as_of.clone())
+                    .await
+                    .expect("cannot serve requested as_of");
 
-                    for (row, ts, diff) in buffer.drain(..) {
-                        stash
-                            .entry(ts)
-                            .or_default()
-                            .push(((SourceData(Ok(row)), ()), ts, diff));
-                    }
-                });
-
-                err_input.for_each(|_cap, data| {
-                    data.swap(&mut err_buffer);
-
-                    for (error, ts, diff) in err_buffer.drain(..) {
-                        stash
-                            .entry(ts)
-                            .or_default()
-                            .push(((SourceData(Err(error)), ()), ts, diff));
-                    }
-                });
-
-                let mut updates = stash
-                    .iter()
-                    .filter(|(ts, _updates)| !input_frontier.less_equal(ts))
-                    .flat_map(|(_ts, updates)| updates.iter());
-
-                if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
-                    // We always append, even in case we don't have any updates, because appending
-                    // also advances the frontier.
-                    let lower = shared_frontier.borrow().clone();
-                    // TODO(aljoscha): Figure out how errors from this should be reported.
-                    write
-                        .append(updates, lower, input_frontier.clone())
-                        .await
-                        .expect("cannot append updates")
-                        .expect("invalid/outdated upper");
-
-                    *shared_frontier.borrow_mut() = input_frontier.clone();
-                } else {
-                    // We cannot have updates without the frontier advancing.
-                    assert!(updates.next().is_none());
+                while let Some(next) = snapshot.next().await {
+                    yield ListenEvent::Updates(next);
                 }
 
-                stash.retain(|ts, _updates| input_frontier.less_equal(ts));
+                let mut listen = read
+                    .listen(as_of)
+                    .await
+                    .expect("cannot serve requested as_of");
+
+                loop {
+                    for event in listen.next().await {
+                        yield event;
+                    }
+                }
+            });
+            pin_mut!(shard_read);
+
+            let mut buffer = Vec::new();
+            // Contains the diff between the input collection and persist shard contents,
+            // reflecting the updates we would like to write to the shard in order to "correct" it
+            // to track the input collection.
+            let mut correction = Vec::new();
+
+            while scheduler.notified().await {
+                if token_weak.upgrade().is_none() || shared_frontier.borrow().is_empty() {
+                    return;
+                }
+
+                // Extract input rows as positive contributions to `correction`.
+                input.for_each(|_cap, data| {
+                    data.swap(&mut buffer);
+                    correction.append(&mut buffer);
+                });
+
+                let input_frontier = frontiers.borrow()[0].clone();
+                let mut write_frontier = write.upper().clone();
+
+                loop {
+                    // Catch up with reading.
+                    while PartialOrder::less_than(&read_frontier, &write_frontier) {
+                        match shard_read.next().await.unwrap() {
+                            ListenEvent::Progress(upper) => read_frontier = upper,
+                            ListenEvent::Updates(updates) => {
+                                // Extract shard rows as negative contributions to `correction`.
+                                let updates = updates.into_iter().map(|((key, _), time, diff)| {
+                                    let data = key.expect("decoding failed");
+                                    (data.0, time, -diff)
+                                });
+                                correction.extend(updates);
+                            }
+                        }
+                    }
+
+                    shared_frontier.borrow_mut().clone_from(&read_frontier);
+
+                    if PartialOrder::less_equal(&input_frontier, &write_frontier) {
+                        // We cannot write anything new. Need to wait for input progress.
+                        break;
+                    }
+
+                    // Advance all updates to the write frontier.
+                    for (_, time, _) in correction.iter_mut() {
+                        time.advance_by(write_frontier.borrow());
+                    }
+
+                    consolidate_updates(&mut correction);
+
+                    let to_append = correction
+                        .iter()
+                        .filter(|(_, time, _)| !input_frontier.less_equal(time))
+                        .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff));
+
+                    let result = write
+                        .compare_and_append(
+                            to_append,
+                            write_frontier.clone(),
+                            input_frontier.clone(),
+                        )
+                        .await
+                        .expect("external durability failure")
+                        .expect("invalid usage");
+
+                    write_frontier = match result {
+                        Ok(()) => input_frontier.clone(),
+                        Err(Upper(upper)) => upper,
+                    };
+                }
             }
         },
     );
@@ -221,43 +258,17 @@ where
     Some(token)
 }
 
-async fn truncate_persist_shard(shard_id: ShardId, persist_client: &PersistClient) {
-    let (mut write, read) = persist_client
-        .open::<SourceData, (), Timestamp, Diff>(shard_id)
-        .await
-        .expect("could not open persist shard");
-
-    let upper = write.upper().clone();
-    let upper_ts = upper[0];
-    if let Some(ts) = upper_ts.checked_sub(1) {
-        let as_of = Antichain::from_elem(ts);
-
-        let mut snapshot_iter = read
-            .snapshot(as_of)
-            .await
-            .expect("cannot serve requested as_of");
-
-        let mut updates = Vec::new();
-        while let Some(next) = snapshot_iter.next().await {
-            updates.extend(next);
-        }
-        snapshot_iter.expire().await;
-
-        consolidate_updates(&mut updates);
-
-        let retractions = updates
-            .into_iter()
-            .map(|((k, v), _ts, diff)| ((k.unwrap(), v.unwrap()), upper_ts, diff * -1));
-
-        let new_upper = Antichain::from_elem(upper_ts + 1);
+async fn advance_upper_by(
+    write: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
+    frontier: &Antichain<Timestamp>,
+) {
+    let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
+    while PartialOrder::less_than(write.upper(), frontier) {
         write
-            .compare_and_append(retractions, upper, new_upper)
+            .compare_and_append(empty_updates, write.upper().clone(), frontier.clone())
             .await
             .expect("external durability failure")
             .expect("invalid usage")
-            .expect("unexpected upper");
+            .ok();
     }
-
-    write.expire().await;
-    read.expire().await;
 }

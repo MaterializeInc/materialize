@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use differential_dataflow::input::Input;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
@@ -21,26 +20,13 @@ pub(crate) fn persist_sink<G>(
     target_id: GlobalId,
     target: &CollectionMetadata,
     compute_state: &mut ComputeState,
-    desired_collection: Collection<G, Row, Diff>,
+    collection: Collection<G, Row, Diff>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let (_, err_collection) = desired_collection.scope().new_collection();
+    let collection = collection.map(Ok);
 
-    // The target storage collection might still contain data written by a
-    // previous incarnation of the replica. Empty it, so we don't end up with
-    // stale data that never gets retracted.
-    // TODO(teskje,lh): Remove the truncation step once/if #13740 gets merged.
-    let truncate = true;
-
-    let token = crate::sink::persist_sink(
-        target_id,
-        target,
-        desired_collection,
-        err_collection,
-        compute_state,
-        truncate,
-    );
+    let token = crate::sink::persist_sink(target_id, target, collection, compute_state);
 
     // We don't allow these dataflows to be dropped, so the tokens could
     // be stored anywhere.

@@ -3036,6 +3036,7 @@ name = "mz-compute"
 version = "0.26.1-dev"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "axum",
  "clap",
