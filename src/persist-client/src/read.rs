@@ -77,12 +77,16 @@ pub(crate) enum HollowBatchReaderMetadata<T> {
         as_of: Antichain<T>,
         /// Return all values with time leq `until`.
         until: Antichain<T>,
-        /// After reading te batch, you can downgrade the reader's `since` to
+        /// After reading the batch, you can downgrade the reader's `since` to
         /// this value.
         since: Antichain<T>,
     },
 }
 
+/// A token representing one read batch.
+///
+/// This may be exchanged (including over the network). It is tradeable via
+/// [ReadHandle::fetch_batch] for the resulting data stored in the batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "T: Timestamp + Codec64",
@@ -92,7 +96,6 @@ pub(crate) enum HollowBatchReaderMetadata<T> {
     into = "SerdeReaderEnrichedHollowBatch",
     from = "SerdeReaderEnrichedHollowBatch"
 )]
-/// An exchangeable struct with sufficient metadata to fetch `HollowBatch`es.
 pub struct ReaderEnrichedHollowBatch<T> {
     pub(crate) shard_id: ShardId,
     pub(crate) reader_metadata: HollowBatchReaderMetadata<T>,
@@ -115,6 +118,8 @@ where
 
 /// Capable of generating a snapshot of all data at `as_of`, followed by a
 /// listen of all updates.
+///
+/// For more details, see [`ReadHandle::snapshot`] and [`Listen`].
 #[derive(Debug)]
 pub struct Subscribe<K, V, T, D>
 where
@@ -145,8 +150,13 @@ where
         }
     }
 
-    /// Returns a `HollowBatch` enriched with this metadata appropriate for
-    /// snapshot-style behavior.
+    /// Returns a `HollowBatch` enriched with the proper metadata.
+    ///
+    /// First returns snapshot batches, until they're exhausted, at which point
+    /// begins returning listen batches.
+    ///
+    /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
+    /// `ReadHandle::fetch_batch`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
     pub async fn next(&mut self) -> ReaderEnrichedHollowBatch<T> {
         trace!(
