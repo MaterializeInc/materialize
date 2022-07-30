@@ -102,11 +102,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         let mut disconnected = false;
         while !disconnected {
-            // Ask Timely to execute a unit of work. If Timely decides there's
-            // nothing to do, it will park the thread. We rely on another thread
+            // Ask Timely to execute a unit of work.
+            //
+            // If there are no pending commands, we ask Timely to park the
+            // thread if there's nothing to do. We rely on another thread
             // unparking us when there's new work to be done, e.g., when sending
             // a command or when new Kafka messages have arrived.
-            self.timely_worker.step_or_park(None);
+            //
+            // It is critical that we allow Timely to park iff there are no
+            // pending commands. The command may have already been consumed by
+            // the call to `client_rx.recv`.
+            // See: https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
+            if command_rx.is_empty() {
+                self.timely_worker.step_or_park(None);
+            } else {
+                self.timely_worker.step();
+            }
 
             self.report_frontier_progress(&response_tx);
 
