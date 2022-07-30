@@ -36,7 +36,7 @@ async fn request(
         client_id,
     }): Query<BrowserAPIToken>,
 ) -> impl IntoResponse {
-    if secret != "" {
+    if !secret.is_empty() {
         let profile = Profile {
             name: String::from(DEFAULT_PROFILE_NAME),
             email,
@@ -60,9 +60,8 @@ pub(crate) async fn login_with_browser() -> Result<(), std::io::Error> {
      * Open the browser to login user
      */
     let path = WEB_LOGIN_URL;
-    match open::that(path) {
-        Err(err) => panic!("An error occurred when opening '{}': {}", path, err),
-        _ => {}
+    if let Err(err) = open::that(path) {
+        panic!("An error occurred when opening '{}': {}", path, err)
     }
 
     /*

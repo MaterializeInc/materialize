@@ -56,7 +56,7 @@ pub(crate) async fn enable_region(
 
     let headers = build_region_request_headers(authorization);
     let mut body = HashMap::new();
-    body.insert("coordd_image_ref", &"materialize/environmentd:latest");
+    body.insert("environmentd_image_ref", &"materialize/environmentd:latest");
 
     client
         .post(region_url)
@@ -122,7 +122,7 @@ pub(crate) async fn cloud_provider_region_details(
     match response.content_length() {
         Some(length) => {
             if length > 0 {
-                return Ok(Some(response.json::<Vec<Region>>().await?));
+                Ok(Some(response.json::<Vec<Region>>().await?))
             } else {
                 Ok(None)
             }

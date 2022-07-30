@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::{FronteggAuthMachine, Profile, MACHINE_AUTH_URL, PROFILES_DIR_NAME, PROFILES_FILE_NAME, DEFAULT_PROFILE_NOT_FOUND_MESSAGE};
+use crate::{
+    FronteggAuthMachine, Profile, DEFAULT_PROFILE_NAME, MACHINE_AUTH_URL, PROFILES_DIR_NAME,
+    PROFILES_FILE_NAME, PROFILES_PREFIX, PROFILE_NOT_FOUND_MESSAGE,
+};
 use dirs::home_dir;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error};
@@ -52,7 +55,7 @@ pub(crate) async fn authenticate_profile(
         .await?;
 
     if authentication_result.status() == 401 {
-        println!("Unauthorized. Please, update the credentials.");
+        println!("Unauthorized. Please, check the credentials.");
         exit(0);
     } else {
         authentication_result.json::<FronteggAuthMachine>().await
@@ -60,7 +63,7 @@ pub(crate) async fn authenticate_profile(
 }
 
 fn path_not_exist(path: PathBuf) -> bool {
-    fs::metadata(path).is_err() == true
+    fs::metadata(path).is_err()
 }
 
 fn create_profile_dir_if_not_exists() {
@@ -83,7 +86,7 @@ fn write_profile(profile: Profile) -> std::io::Result<()> {
     new_profile_table["secret"] = value(profile.secret);
     new_profile_table["client_id"] = value(profile.client_id);
     new_profile_table["region"] = value("");
-    profiles_document[format!("profiles.{}", profile.name).as_str()] = new_profile_table;
+    profiles_document[format!("{}.{}", PROFILES_PREFIX, profile.name).as_str()] = new_profile_table;
 
     fs::write(config_path, profiles_document.to_string())
 }
@@ -113,15 +116,16 @@ pub(crate) fn get_profiles() -> Option<Document> {
     }
 }
 
-pub(crate) fn get_default_profile() -> Option<Profile> {
+pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
     if let Some(profiles) = get_profiles() {
-        if !profiles.contains_key("profiles.default") {
-            return None
+        let profile_name_key = format!("{:}.{:}", PROFILES_PREFIX, profile_name);
+        if !profiles.contains_key(profile_name_key.as_str()) {
+            return None;
         }
 
-        let mut default_profile = profiles["profiles.default"].clone();
+        let mut default_profile = profiles[profile_name_key.as_str()].clone();
         if default_profile.is_table() {
-            default_profile["name"] = value("default");
+            default_profile["name"] = value(DEFAULT_PROFILE_NAME);
             let string_default_profile = default_profile.to_string();
             match toml::from_str(string_default_profile.as_str()) {
                 Ok(profile) => Some(profile),
@@ -135,16 +139,31 @@ pub(crate) fn get_default_profile() -> Option<Profile> {
     }
 }
 
-pub(crate) async fn validate_profile(client: Client) -> Option<FronteggAuthMachine> {
-    match get_default_profile() {
+fn get_default_profile() -> Option<Profile> {
+    get_profile(DEFAULT_PROFILE_NAME.to_string())
+}
+
+pub(crate) async fn validate_profile(
+    profile_arg: Option<String>,
+    client: Client,
+) -> Option<FronteggAuthMachine> {
+    match get_profile_using_args(profile_arg) {
         Some(profile) => match authenticate_profile(client, profile).await {
             Ok(frontegg_auth_machine) => {
                 return Some(frontegg_auth_machine);
             }
             Err(error) => panic!("Error authenticating profile : {:?}", error),
         },
-        None => println!("{}", DEFAULT_PROFILE_NOT_FOUND_MESSAGE),
+        None => println!("{}", PROFILE_NOT_FOUND_MESSAGE),
     }
 
     None
+}
+
+pub(crate) fn get_profile_using_args(profile_arg: Option<String>) -> Option<Profile> {
+    if let Some(profile_name) = profile_arg {
+        get_profile(profile_name)
+    } else {
+        get_default_profile()
+    }
 }

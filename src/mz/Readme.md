@@ -113,7 +113,6 @@ source ~/.bash_profile
 
 ### Future work
 #### Improvements
-- [ ]  Handle multiple profiles in .toml
 - [ ]  Make error messages standard
 - [ ]  Selecting a default region
 - [ ]  Run requests in parallel
@@ -122,9 +121,6 @@ source ~/.bash_profile
 - [ ]  `Interactive` should be a flag and not a subcommand
 - [ ]  Reduce `.unwrap` usage
 - [ ]  Add optional `—force` command to delete to avoid manual input
-- [ ]  Redirect to Materialize after success token saving
-- [ ]  Handle login and there is a profile created?
 - [ ]  Handle request errors to frontegg
 - [ ]  Handle port already taken
 - [ ]  Share config path
-- [ ]  Documentation of commands
