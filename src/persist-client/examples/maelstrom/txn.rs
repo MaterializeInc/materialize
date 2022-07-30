@@ -204,23 +204,11 @@ impl Transactor {
         let snap_ts = self.since_ts + (self.read_ts - self.since_ts) / 2;
         let snap_as_of = Antichain::from_elem(snap_ts);
 
-        let mut snap = self
-            .read
-            .snapshot(snap_as_of.clone())
-            .await
-            .map_err(|since| MaelstromError {
-                code: ErrorCode::Abort,
-                text: format!(
-                    "snapshot cannot serve requested as_of {} since is {:?}",
-                    snap_ts,
-                    since.0.as_option(),
-                ),
-            })?;
         let listen = self
             .read
             .clone()
             .await
-            .listen(snap_as_of)
+            .listen(snap_as_of.clone())
             .await
             .map_err(|since| MaelstromError {
                 code: ErrorCode::Abort,
@@ -231,10 +219,19 @@ impl Transactor {
                 ),
             })?;
 
-        let mut updates = Vec::new();
-        while let Some(mut dataz) = snap.next().await {
-            updates.append(&mut dataz);
-        }
+        let mut updates = self
+            .read
+            .snapshot_and_fetch(snap_as_of.clone())
+            .await
+            .map_err(|since| MaelstromError {
+                code: ErrorCode::Abort,
+                text: format!(
+                    "snapshot cannot serve requested as_of {} since is {:?}",
+                    snap_ts,
+                    since.0.as_option(),
+                ),
+            })?;
+
         trace!(
             "read updates from snapshot as_of {}: {:?}",
             snap_ts,
