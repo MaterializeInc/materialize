@@ -741,7 +741,7 @@ mod tests {
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, read) = new_test_client()
+        let (mut write, mut read) = new_test_client()
             .await
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
@@ -758,7 +758,7 @@ mod tests {
             (("2".to_owned(), "two".to_owned()), 2, 2),
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
-        let mut actual = read.expect_snapshot(3).await.read_all().await;
+        let mut actual = read.expect_snapshot_and_fetch(3).await;
         consolidate_updates(&mut actual);
         assert_eq!(actual, all_ok(&expected, 3));
     }

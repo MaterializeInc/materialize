@@ -83,10 +83,3 @@ message ProtoReadEnrichedHollowBatch {
     ProtoHollowBatchReaderMetadata reader_metadata = 2;
     ProtoHollowBatch batch = 3;
 }
-
-message ProtoSnapshotSplit {
-    string reader_id = 4;
-    string shard_id = 1;
-    ProtoU64Antichain as_of = 2;
-    repeated ProtoHollowBatchPart batches = 3;
-}

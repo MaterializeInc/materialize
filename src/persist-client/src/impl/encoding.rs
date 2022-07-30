@@ -24,13 +24,12 @@ use crate::error::CodecMismatch;
 use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::proto_hollow_batch_reader_metadata;
 use crate::r#impl::state::{
-    HollowBatch, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowBatchReaderMetadata,
-    ProtoReadEnrichedHollowBatch, ProtoReaderState, ProtoSnapshotSplit, ProtoStateRollup,
-    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, ReaderState, State,
-    StateCollections, WriterState,
+    HollowBatch, ProtoHollowBatch, ProtoHollowBatchReaderMetadata, ProtoReadEnrichedHollowBatch,
+    ProtoReaderState, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
+    ProtoWriterState, ReaderState, State, StateCollections, WriterState,
 };
 use crate::r#impl::trace::Trace;
-use crate::read::{HollowBatchReaderMetadata, ReaderEnrichedHollowBatch, ReaderId, SnapshotSplit};
+use crate::read::{HollowBatchReaderMetadata, ReaderEnrichedHollowBatch, ReaderId};
 use crate::{ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
@@ -429,57 +428,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoReadEnrichedHollowBatch>
             batch: proto
                 .batch
                 .into_rust_if_some("ProtoReadEnrichedHollowBatch::batch")?,
-        })
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SerdeSnapshotSplit(Vec<u8>);
-
-impl<T: Timestamp + Codec64> From<SnapshotSplit<T>> for SerdeSnapshotSplit {
-    fn from(x: SnapshotSplit<T>) -> Self {
-        SerdeSnapshotSplit(x.into_proto().encode_to_vec())
-    }
-}
-
-impl<T: Timestamp + Codec64> From<SerdeSnapshotSplit> for SnapshotSplit<T> {
-    fn from(x: SerdeSnapshotSplit) -> Self {
-        let proto = ProtoSnapshotSplit::decode(x.0.as_slice())
-            .expect("internal error: invalid snapshot split");
-        proto
-            .into_rust()
-            .expect("internal error: invalid snapshot split")
-    }
-}
-
-impl<T: Timestamp + Codec64> RustType<ProtoSnapshotSplit> for SnapshotSplit<T> {
-    fn into_proto(&self) -> ProtoSnapshotSplit {
-        ProtoSnapshotSplit {
-            reader_id: self.reader_id.into_proto(),
-            shard_id: self.shard_id.into_proto(),
-            as_of: Some(self.as_of.into_proto()),
-            batches: self
-                .batches
-                .iter()
-                .map(|(key, desc)| ProtoHollowBatchPart {
-                    desc: Some(desc.into_proto()),
-                    key: key.into_proto(),
-                })
-                .collect(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSnapshotSplit) -> Result<Self, TryFromProtoError> {
-        let mut batches = Vec::new();
-        for batch in proto.batches.into_iter() {
-            let desc = batch.desc.into_rust_if_some("desc")?;
-            batches.push((PartialBlobKey(batch.key), desc));
-        }
-        Ok(SnapshotSplit {
-            reader_id: proto.reader_id.into_rust()?,
-            shard_id: proto.shard_id.into_rust()?,
-            as_of: proto.as_of.into_rust_if_some("as_of")?,
-            batches,
         })
     }
 }

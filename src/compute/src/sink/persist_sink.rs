@@ -232,16 +232,10 @@ async fn truncate_persist_shard(shard_id: ShardId, persist_client: &PersistClien
     if let Some(ts) = upper_ts.checked_sub(1) {
         let as_of = Antichain::from_elem(ts);
 
-        let mut snapshot_iter = read
-            .snapshot(as_of)
+        let mut updates = read
+            .snapshot_and_fetch(as_of)
             .await
             .expect("cannot serve requested as_of");
-
-        let mut updates = Vec::new();
-        while let Some(next) = snapshot_iter.next().await {
-            updates.extend(next);
-        }
-        snapshot_iter.expire().await;
 
         consolidate_updates(&mut updates);
 
