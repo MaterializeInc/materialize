@@ -168,7 +168,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
 // Test that the server properly handles cancellation requests.
 #[test]
 fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
-    let config = util::Config::default();
+    let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config)?;
 
     let mut client = server.connect(postgres::NoTls)?;
@@ -200,7 +200,7 @@ fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
 fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    let config = util::Config::default();
+    let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config)?;
 
     let mut client1 = server.connect(postgres::NoTls)?;
