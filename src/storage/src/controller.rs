@@ -57,6 +57,7 @@ use crate::protocol::client::{
     StorageCommand, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
+use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use crate::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
 use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
 
@@ -65,7 +66,7 @@ mod rehydration;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.controller.rs"));
 
-static METADATA_COLLECTION: TypedCollection<GlobalId, CollectionMetadata> =
+static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
 
 /// Describes a request to create a source.
@@ -75,16 +76,14 @@ pub struct CollectionDescription<T> {
     pub desc: RelationDesc,
     /// The description of the source to ingest into this collection, if any.
     pub ingestion: Option<IngestionDescription<()>>,
-    /// The address of a `storaged` process on which to install the source.
-    ///
-    /// If `None`, the controller manages the lifetime of the `storaged`
-    /// process.
-    pub remote_addr: Option<String>,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
     /// A GlobalId to use for this collection to use for the status collection.
     /// Used to keep track of source status/error information.
     pub status_collection_id: Option<GlobalId>,
+    /// The address of a `storaged` process on which to install the source or the
+    /// settings for spinning up a controller-managed process.
+    pub host_config: Option<StorageHostConfig>,
 }
 
 impl<T> From<RelationDesc> for CollectionDescription<T> {
@@ -92,9 +91,9 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
         Self {
             desc,
             ingestion: None,
-            remote_addr: None,
             since: None,
             status_collection_id: None,
+            host_config: None,
         }
     }
 }
@@ -154,6 +153,21 @@ pub trait StorageController: Debug + Send {
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+
+    /// Drops the read capability for the sources and allows their resources to be reclaimed.
+    ///
+    /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
+    ///     controller starts/restarts it has no durable state. That means that it has no way of
+    ///     remembering any past commands sent. In the future we plan on persisting state for the
+    ///     controller so that it is aware of past commands.
+    ///     Therefore this method is for dropping sources that we know to have been previously
+    ///     created, but have been forgotten by the controller due to a restart.
+    ///     Once command history becomes durable we can remove this method and use the normal
+    ///     `drop_sources`.
+    async fn drop_sources_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
@@ -292,7 +306,7 @@ pub struct CollectionMetadata {
     /// The persist shard containing the contents of this storage collection
     pub data_shard: ShardId,
     /// The persist shard containing the status updates for this storage collection
-    pub status_shard: ShardId,
+    pub status_shard: Option<ShardId>,
 }
 
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
@@ -302,7 +316,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             consensus_uri: self.persist_location.consensus_uri.clone(),
             data_shard: self.data_shard.to_string(),
             remap_shard: self.remap_shard.to_string(),
-            status_shard: self.status_shard.to_string(),
+            status_shard: self.status_shard.map(|s| s.to_string()),
         }
     }
 
@@ -322,8 +336,8 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .map_err(TryFromProtoError::InvalidShardId)?,
             status_shard: value
                 .status_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
+                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
+                .transpose()?,
         })
     }
 }
@@ -345,6 +359,53 @@ impl Codec for CollectionMetadata {
     }
 }
 
+/// The subset of [`CollectionMetadata`] that must be durable stored.
+#[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
+pub struct DurableCollectionMetadata {
+    // See the comments on [`CollectionMetadata`].
+    pub remap_shard: ShardId,
+    pub data_shard: ShardId,
+}
+
+impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
+    fn into_proto(&self) -> ProtoDurableCollectionMetadata {
+        ProtoDurableCollectionMetadata {
+            remap_shard: self.remap_shard.to_string(),
+            data_shard: self.data_shard.to_string(),
+        }
+    }
+
+    fn from_proto(value: ProtoDurableCollectionMetadata) -> Result<Self, TryFromProtoError> {
+        Ok(DurableCollectionMetadata {
+            remap_shard: value
+                .remap_shard
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?,
+            data_shard: value
+                .data_shard
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?,
+        })
+    }
+}
+
+impl Codec for DurableCollectionMetadata {
+    fn codec_name() -> String {
+        "protobuf[DurableCollectionMetadata]".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        self.into_proto()
+            .encode(buf)
+            .expect("no required fields means no initialization errors");
+    }
+
+    fn decode(buf: &[u8]) -> Result<Self, String> {
+        let proto = ProtoDurableCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
+        proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<
@@ -362,7 +423,7 @@ pub struct StorageControllerState<
     /// Read handles for persist shards.
     ///
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
-    /// without blocknig the storage controller.
+    /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
 }
@@ -552,26 +613,36 @@ where
 
         // Install collection state for each bound description.
         for (id, description) in collections {
-            let mut metadata = CollectionMetadata {
-                persist_location: self.persist_location.clone(),
-                data_shard: ShardId::new(),
-                remap_shard: ShardId::new(),
-                status_shard: ShardId::new(),
+            let durable_metadata = METADATA_COLLECTION
+                .insert_without_overwrite(
+                    &mut self.state.stash,
+                    &id,
+                    DurableCollectionMetadata {
+                        remap_shard: ShardId::new(),
+                        data_shard: ShardId::new(),
+                    },
+                )
+                .await?;
+
+            let status_shard = if let Some(status_collection_id) = description.status_collection_id
+            {
+                Some(
+                    METADATA_COLLECTION
+                        .peek_key_one(&mut self.state.stash, &status_collection_id)
+                        .await?
+                        .ok_or(StorageError::IdentifierMissing(status_collection_id))?
+                        .data_shard,
+                )
+            } else {
+                None
             };
 
-            // Use the status shard if passed in
-            if let Some(status_collection_id) = description.status_collection_id {
-                if let Some(status_metadata) = METADATA_COLLECTION
-                    .peek_key_one(&mut self.state.stash, &status_collection_id)
-                    .await?
-                {
-                    metadata.status_shard = status_metadata.data_shard;
-                }
-            }
-
-            let metadata = METADATA_COLLECTION
-                .insert_without_overwrite(&mut self.state.stash, &id, metadata)
-                .await?;
+            let metadata = CollectionMetadata {
+                persist_location: self.persist_location.clone(),
+                remap_shard: durable_metadata.remap_shard,
+                data_shard: durable_metadata.data_shard,
+                status_shard,
+            };
 
             let (write, mut read) = self
                 .persist_client
@@ -647,7 +718,12 @@ where
                 // Provision a storage host for the ingestion.
                 let client = self
                     .hosts
-                    .provision(id, description.remote_addr.clone())
+                    .provision(
+                        id,
+                        description.host_config.clone().expect(
+                            "CollectionDescription with ingestion should have host_config set",
+                        ),
+                    )
                     .await?;
 
                 client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
@@ -693,11 +769,16 @@ where
                 // TODO(chae): derive this
                 resume_upper: Antichain::from_elem(T::minimum()),
             };
+            // TODO: allow specifying a size parameter for sinks, tracked in #13889
+            let host_config = match description.remote_addr {
+                Some(addr) => StorageHostConfig::Remote { addr },
+                None => StorageHostConfig::Managed {
+                    allocation: StorageHostResourceAllocation::temp_default_for_sinks(),
+                    size: "arbitrary".to_string(),
+                },
+            };
             // Provision a storage host for the ingestion.
-            let client = self
-                .hosts
-                .provision(id, description.remote_addr.clone())
-                .await?;
+            let client = self.hosts.provision(id, host_config).await?;
 
             client.send(StorageCommand::ExportSinks(vec![cmd]));
         }
@@ -706,6 +787,18 @@ where
 
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
         self.validate_ids(identifiers.iter().cloned())?;
+        let policies = identifiers
+            .into_iter()
+            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
+            .collect();
+        self.set_read_policy(policies).await?;
+        Ok(())
+    }
+
+    async fn drop_sources_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError> {
         let policies = identifiers
             .into_iter()
             .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))

@@ -7,16 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Types and methods for building dataflow descriptions.
+//! Types and methods for building and shipping dataflow descriptions.
 //!
 //! Dataflows are buildable from the coordinator's `catalog` and `indexes`
 //! members, which respectively describe the collection backing identifiers
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
-use timely::progress::Antichain;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use mz_compute_client::command::{BuildDesc, DataflowDesc, IndexDesc};
+use timely::progress::Antichain;
+use timely::PartialOrder;
+use tracing::warn;
+
+use mz_compute_client::command::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
 use mz_expr::visit::Visit;
 use mz_expr::{
@@ -29,11 +33,11 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
 use mz_storage::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
-use std::collections::{HashMap, HashSet};
-use tracing::warn;
 
 use crate::catalog::{CatalogItem, CatalogState, MaterializedView, View};
-use crate::coord::{CatalogTxn, Coordinator};
+use crate::coord::ddl::CatalogTxn;
+use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::AdapterError;
 
@@ -63,7 +67,7 @@ pub enum ExprPrepStyle<'a> {
     AsOf,
 }
 
-impl<S: Append> Coordinator<S> {
+impl<S: Append + 'static> Coordinator<S> {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder(
         &self,
@@ -75,6 +79,100 @@ impl<S: Append> Coordinator<S> {
             compute,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
+    }
+
+    /// Finalizes a dataflow and then broadcasts it to all workers.
+    /// Utility method for the more general [Self::ship_dataflows]
+    pub(crate) async fn ship_dataflow(
+        &mut self,
+        dataflow: DataflowDesc,
+        instance: ComputeInstanceId,
+    ) {
+        self.ship_dataflows(vec![dataflow], instance).await
+    }
+
+    /// Finalizes a list of dataflows and then broadcasts it to all workers.
+    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>, instance: ComputeInstanceId) {
+        let mut output_ids = Vec::new();
+        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
+        for dataflow in dataflows.into_iter() {
+            output_ids.extend(dataflow.export_ids());
+            dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
+        }
+        self.controller
+            .compute_mut(instance)
+            .unwrap()
+            .create_dataflows(dataflow_plans)
+            .await
+            .unwrap();
+        self.initialize_compute_read_policies(
+            output_ids,
+            instance,
+            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+        )
+        .await;
+    }
+
+    /// Finalizes a dataflow.
+    ///
+    /// Finalization includes optimization, but also validation of various
+    /// invariants such as ensuring that the `as_of` frontier is in advance of
+    /// the various `since` frontiers of participating data inputs.
+    ///
+    /// In particular, there are requirement on the `as_of` field for the dataflow
+    /// and the `since` frontiers of created arrangements, as a function of the `since`
+    /// frontiers of dataflow inputs (sources and imported arrangements).
+    ///
+    /// # Panics
+    ///
+    /// Panics if as_of is < the `since` frontiers.
+    ///
+    /// Panics if the dataflow descriptions contain an invalid plan.
+    pub(crate) fn finalize_dataflow(
+        &self,
+        mut dataflow: DataflowDesc,
+        compute_instance: ComputeInstanceId,
+    ) -> DataflowDescription<mz_compute_client::plan::Plan> {
+        // This function must succeed because catalog_transact has generally been run
+        // before calling this function. We don't have plumbing yet to rollback catalog
+        // operations if this function fails, and environmentd will be in an unsafe
+        // state if we do not correctly clean up the catalog.
+
+        let storage_ids = dataflow
+            .source_imports
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let compute_ids = dataflow
+            .index_imports
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        let compute_ids = vec![(compute_instance, compute_ids)].into_iter().collect();
+        let since = self.least_valid_read(&CollectionIdBundle {
+            storage_ids,
+            compute_ids,
+        });
+
+        // Ensure that the dataflow's `as_of` is at least `since`.
+        if let Some(as_of) = &mut dataflow.as_of {
+            // It should not be possible to request an invalid time. SINK doesn't support
+            // AS OF. TAIL and Peek check that their AS OF is >= since.
+            assert!(
+                <_ as PartialOrder>::less_equal(&since, as_of),
+                "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
+                dataflow.debug_name,
+                as_of,
+                since
+            );
+        } else {
+            // Bind the since frontier to the dataflow description.
+            dataflow.set_as_of(since);
+        }
+
+        mz_compute_client::plan::Plan::finalize_dataflow(dataflow)
+            .expect("Dataflow planning failed; unrecoverable error")
     }
 }
 
@@ -568,5 +666,29 @@ fn eval_unmaterializable_func(
             );
             pack(Datum::from(&*version))
         }
+    }
+}
+
+#[cfg(test)]
+impl<S: Append + 'static> Coordinator<S> {
+    #[allow(dead_code)]
+    async fn verify_ship_dataflow_no_error(&mut self) {
+        // ship_dataflow, ship_dataflows, and finalize_dataflow are not allowed
+        // to have a `Result` return because these functions are called after
+        // `catalog_transact`, after which no errors are allowed. This test exists to
+        // prevent us from incorrectly teaching those functions how to return errors
+        // (which has happened twice and is the motivation for this test).
+
+        // An arbitrary compute instance ID to satisfy the function calls below. Note that
+        // this only works because this function will never run.
+        let compute_instance: ComputeInstanceId = 1;
+
+        let df = DataflowDesc::new("".into());
+        let _: () = self.ship_dataflow(df.clone(), compute_instance).await;
+        let _: () = self
+            .ship_dataflows(vec![df.clone()], compute_instance)
+            .await;
+        let _: DataflowDescription<mz_compute_client::plan::Plan> =
+            self.finalize_dataflow(df, compute_instance);
     }
 }

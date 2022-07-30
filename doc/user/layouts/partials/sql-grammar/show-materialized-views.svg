@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="579" height="155">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="64" height="32" rx="10"/>
+   <rect x="31"
+         y="1"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="41" y="21">SHOW</text>
+   <rect x="137" y="35" width="54" height="32" rx="10"/>
+   <rect x="135"
+         y="33"
+         width="54"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="53">FULL</text>
+   <rect x="231" y="3" width="176" height="32" rx="10"/>
+   <rect x="229"
+         y="1"
+         width="176"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="239" y="21">MATERIALIZED VIEWS</text>
+   <rect x="45" y="121" width="60" height="32" rx="10"/>
+   <rect x="43"
+         y="119"
+         width="60"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="53" y="139">FROM</text>
+   <rect x="125" y="121" width="114" height="32"/>
+   <rect x="123" y="119" width="114" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="133" y="139">schema_name</text>
+   <rect x="299" y="121" width="104" height="32" rx="10"/>
+   <rect x="297"
+         y="119"
+         width="104"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="307" y="139">IN CLUSTER</text>
+   <rect x="423" y="121" width="108" height="32"/>
+   <rect x="421" y="119" width="108" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="431" y="139">cluster_name</text>
+   <path class="line"
+         d="m19 17 h2 m0 0 h10 m64 0 h10 m20 0 h10 m0 0 h64 m-94 0 h20 m74 0 h20 m-114 0 q10 0 10 10 m94 0 q0 -10 10 -10 m-104 10 v12 m94 0 v-12 m-94 12 q0 10 10 10 m74 0 q10 0 10 -10 m-84 10 h10 m54 0 h10 m20 -32 h10 m176 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-426 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h204 m-234 0 h20 m214 0 h20 m-254 0 q10 0 10 10 m234 0 q0 -10 10 -10 m-244 10 v12 m234 0 v-12 m-234 12 q0 10 10 10 m214 0 q10 0 10 -10 m-224 10 h10 m60 0 h10 m0 0 h10 m114 0 h10 m40 -32 h10 m0 0 h242 m-272 0 h20 m252 0 h20 m-292 0 q10 0 10 10 m272 0 q0 -10 10 -10 m-282 10 v12 m272 0 v-12 m-272 12 q0 10 10 10 m252 0 q10 0 10 -10 m-262 10 h10 m104 0 h10 m0 0 h10 m108 0 h10 m23 -32 h-3"/>
+   <polygon points="569 103 577 99 577 107"/>
+   <polygon points="569 103 561 99 561 107"/>
+</svg>

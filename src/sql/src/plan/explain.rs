@@ -504,14 +504,25 @@ impl<'a> Explanation<'a> {
                 }
             }
             CallVariadic { func, exprs } => {
-                write!(f, "{}(", func)?;
-                for (i, expr) in exprs.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
+                if func.is_infix_op() && exprs.len() > 1 {
+                    write!(f, "(")?;
+                    for (i, expr) in exprs.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, " {} ", func)?;
+                        }
+                        self.fmt_scalar_expr(f, expr)?;
                     }
-                    self.fmt_scalar_expr(f, expr)?;
+                    write!(f, ")")
+                } else {
+                    write!(f, "{}(", func)?;
+                    for (i, expr) in exprs.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        self.fmt_scalar_expr(f, expr)?;
+                    }
+                    write!(f, ")")
                 }
-                write!(f, ")")
             }
             If { cond, then, els } => {
                 write!(f, "if ")?;

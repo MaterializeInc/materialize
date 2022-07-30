@@ -75,13 +75,13 @@ Transformations in the compile-time lifecycle of a dataflow.
     * `EXPLAIN PHYSICAL PLAN` returns the result of transformations up to this point.
 * [`LIR ⇒ TDO`](https://github.com/MaterializeInc/materialize/blob/main/src/compute/src/render/mod.rs).
 
-For a one-off query, we run all the transformations until the LIR stage. Then we
+For a one-off query, we run all the transformations until the MIR stage. Then we
 determine whether we need to serve the query on the "slow path", that is,
 creating a temporary dataflow and then deleting it. If we don't need to serve
-the query on the "slow path", then we can skip the `LIR ⇒ TDO` step.
+the query on the "slow path", then we can skip the `MIR ⇒ LIR` and the `LIR ⇒ TDO` steps.
 Existing "fast paths" include:
-* [reading from an existing dataflow.](https://github.com/MaterializeInc/materialize/blob/main/src/compute/src/compute_state.rs#L689)
-* [the adapter itself spitting out a constant set of rows.](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/coord.rs#L6307)
+* [reading from an existing dataflow.](https://github.com/MaterializeInc/materialize/blob/main/src/compute/src/compute_state.rs#L704)
+* [the adapter itself spitting out a constant set of rows.](https://github.com/MaterializeInc/materialize/blob/main/src/adapter/src/coord/peek.rs#L213)
 
 Currently, the optimization team is mostly concerned with the `HIR ⇒ MIR` and `MIR ⇒ MIR` stages.
 

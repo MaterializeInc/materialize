@@ -31,7 +31,7 @@ Materialize allows you to work with streaming data from multiple external source
 
 We'll start with some sample real-time data from a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) receiving the latest market orders for a given marketplace.
 
-1. Let's create a [PubNub source](/sql/create-source/pubnub) that connects to the market orders channel with a subscribe key:
+1. Let's create a PubNub source that connects to the market orders channel with a subscribe key:
 
     ```sql
     CREATE SOURCE market_orders_raw

@@ -12,6 +12,7 @@ import subprocess
 from kubernetes.client import V1Container, V1ObjectMeta, V1Pod, V1PodSpec
 
 from materialize.cloudtest.k8s import K8sPod
+from materialize.cloudtest.wait import wait
 
 
 class Testdrive(K8sPod):
@@ -28,6 +29,7 @@ class Testdrive(K8sPod):
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
 
     def run_string(self, input: str) -> None:
+        wait(condition="condition=Ready", resource="pod/testdrive")
         subprocess.run(
             [
                 "kubectl",

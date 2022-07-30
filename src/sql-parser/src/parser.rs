@@ -2089,7 +2089,7 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connection = self.parse_create_source_connection()?;
-        let with_options = self.parse_opt_with_options()?;
+        let legacy_with_options = self.parse_opt_with_options()?;
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
                 self.expect_keyword(FORMAT)?;
@@ -2116,17 +2116,28 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // New WITH block
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_source_options)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
             connection,
-            with_options,
+            legacy_with_options,
             format,
             include_metadata,
             envelope,
             if_not_exists,
             key_constraint,
             remote,
+            with_options,
         }))
     }
 
@@ -2170,6 +2181,20 @@ impl<'a> Parser<'a> {
         } else {
             Ok(None)
         }
+    }
+
+    /// Parses the final WITH block of a CREATE SOURCE statement
+    fn parse_create_source_options(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SIZE])? {
+            SIZE => CreateSourceOptionName::Size,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(CreateSourceOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2228,18 +2253,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, PUBNUB, LOAD])? {
-            PUBNUB => {
-                self.expect_keywords(&[SUBSCRIBE, KEY])?;
-                let subscribe_key = self.parse_literal_string()?;
-                self.expect_keyword(CHANNEL)?;
-                let channel = self.parse_literal_string()?;
-
-                Ok(CreateSourceConnection::PubNub {
-                    subscribe_key,
-                    channel,
-                })
-            }
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, LOAD])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -2338,8 +2352,9 @@ impl<'a> Parser<'a> {
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
-                let generator = match self.expect_one_of_keywords(&[COUNTER])? {
+                let generator = match self.expect_one_of_keywords(&[COUNTER, AUCTION])? {
                     COUNTER => LoadGenerator::Counter,
+                    AUCTION => LoadGenerator::Auction,
                     _ => unreachable!(),
                 };
                 let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {

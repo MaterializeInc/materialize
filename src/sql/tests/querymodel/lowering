@@ -692,7 +692,7 @@ select x.a, x.b, y.a from x right join y on x.a = y.b and x.c = y.a
 | Join %2 %4
 | | implementation = Unimplemented
 | Project (#0..=#4)
-| Filter ((#0 = #4) && (#2 = #3))
+| Filter ((#0 = #4) AND (#2 = #3))
 
 %6 = Let l4 =
 | Get %5 (l3)

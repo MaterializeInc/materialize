@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use mz_repr::{Datum, RelationType, ScalarType};
 
 use crate::visit::Visit;
-use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
+use crate::{func, MirScalarExpr, UnaryFunc, VariadicFunc};
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
@@ -189,6 +189,16 @@ fn rank_complexity(expr: &MirScalarExpr) -> usize {
     non_literal_count
 }
 
+/// Applies a flat_map on a Vec, and overwrites the vec with the result.
+fn flat_map_modify<T, I, F>(v: &mut Vec<T>, f: F)
+where
+    F: FnMut(T) -> I,
+    I: IntoIterator<Item = T>,
+{
+    let mut xx = v.drain(..).flat_map(f).collect();
+    v.append(&mut xx);
+}
+
 /// Canonicalize predicates of a filter.
 ///
 /// This function reduces and canonicalizes the structure of each individual
@@ -200,28 +210,21 @@ fn rank_complexity(expr: &MirScalarExpr) -> usize {
 /// null rejecting predicate for the same sub-expression.
 pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: &RelationType) {
     // 1) Reduce each individual predicate.
-    let mut pending_predicates = predicates
-        .drain(..)
-        .map(|mut p| {
-            p.reduce(&input_type);
-            return p;
-        })
-        .collect::<Vec<MirScalarExpr>>();
+    predicates.iter_mut().for_each(|p| p.reduce(&input_type));
 
     // 2) Split "A and B" into two predicates: "A" and "B"
-    while let Some(expr) = pending_predicates.pop() {
-        if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::And,
-            expr1,
-            expr2,
-        } = expr
+    // Relies on the `reduce` above having flattened nested ANDs.
+    flat_map_modify(predicates, |p| {
+        if let MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And,
+            exprs,
+        } = p
         {
-            pending_predicates.push(*expr1);
-            pending_predicates.push(*expr2);
+            exprs
         } else {
-            predicates.push(expr);
+            vec![p]
         }
-    }
+    });
 
     // 3) Make non-null requirements explicit as predicates in order for
     // step 4) to be able to simplify AND/OR expressions with IS NULL
@@ -451,6 +454,11 @@ fn is_null_rejecting_predicate(predicate: &MirScalarExpr, operand: &MirScalarExp
 fn propagates_null_from_subexpression(expr: &MirScalarExpr, operand: &MirScalarExpr) -> bool {
     if operand == expr {
         true
+    } else if let MirScalarExpr::CallVariadic { func, exprs } = &expr {
+        func.propagates_nulls()
+            && (exprs
+                .iter()
+                .any(|e| propagates_null_from_subexpression(&e, operand)))
     } else if let MirScalarExpr::CallBinary { func, expr1, expr2 } = &expr {
         func.propagates_nulls()
             && (propagates_null_from_subexpression(&expr1, operand)

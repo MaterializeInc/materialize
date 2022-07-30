@@ -28,7 +28,8 @@ use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::client::ConnectionId;
-use crate::coord::{CoordTimestamp, PeekResponseUnary};
+use crate::coord::peek::PeekResponseUnary;
+use crate::coord::CoordTimestamp;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
 

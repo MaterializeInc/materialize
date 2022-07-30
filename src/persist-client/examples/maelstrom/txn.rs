@@ -27,6 +27,7 @@ use tracing::{debug, info, trace};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
+use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Metrics, PersistClient, PersistConfig, ShardId};
@@ -440,9 +441,10 @@ impl Service for TransactorService {
         let blob = CachingBlob::new(blob);
 
         // Construct requested Consensus.
+        let config = PersistConfig::new(SYSTEM_TIME.clone());
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
-                ConsensusConfig::try_from(consensus_uri)
+                ConsensusConfig::try_from(consensus_uri, config.consensus_connection_pool_max_size)
                     .await?
                     .open()
                     .await?
@@ -454,13 +456,9 @@ impl Service for TransactorService {
 
         // Wire up the TransactorService.
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-        let client = PersistClient::new(
-            PersistConfig::new(SYSTEM_TIME.clone()),
-            blob,
-            consensus,
-            metrics,
-        )
-        .await?;
+        let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+        let client =
+            PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime).await?;
         let transactor = Transactor::new(&client, shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)

@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::iter::once;
 
 use bytes::BufMut;
-use itertools::max;
+use itertools::{max, Itertools};
 use prost::{self, Message};
 use serde_json::json;
 use timely::progress::Timestamp;
@@ -41,6 +41,7 @@ use mz_storage::types::sources::Timeline;
 use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::SerializedComputeInstanceReplicaConfig;
+use crate::catalog::SystemObjectMapping;
 
 const USER_VERSION: &str = "user_version";
 
@@ -278,6 +279,64 @@ async fn migrate<S: Append>(
         // release, after which they must never be removed, only patched by future
         // migrations. Migrations must be transactional or idempotent (in case of
         // midway failure).
+
+        // Fill in non-optional availability zone
+        // Introduced in alpha.4
+        |txn: &mut Transaction<'_, S>, bootstrap_args| {
+            txn.compute_instance_replicas.update(|_k, v| {
+                let mut config: serde_json::Value =
+                    serde_json::de::from_str(&v.config).expect("valid JSON");
+                let managed = config
+                    .as_object_mut()
+                    .expect("compute instance replica config must be a JSON object")
+                    .get_mut("location")
+                    .expect("'location' field must exist")
+                    .as_object_mut()
+                    .expect("'location' field must be a JSON object")
+                    .get_mut("Managed")?
+                    .as_object_mut()
+                    .expect("'Managed' field's value must be a JSON object");
+                const AZ_KEY: &'static str = "availability_zone";
+                const AZ_USER_SPECIFIED_KEY: &'static str = "az_user_specified";
+                let has_az = managed
+                    .get(AZ_KEY)
+                    .map(|v| v != &serde_json::Value::Null)
+                    .unwrap_or(false);
+                let config_updated = if has_az {
+                    if !managed.contains_key(AZ_USER_SPECIFIED_KEY) {
+                        // Old version of this struct - if we contain an AZ,
+                        // it was user-specified.
+                        managed.insert(
+                            AZ_USER_SPECIFIED_KEY.to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    // Old version of this struct - there is no AZ, so choose one arbitrarily,
+                    // and record that it was arbitrary by setting az_user_specified to `false`.
+                    managed.insert(
+                        AZ_KEY.to_string(),
+                        serde_json::Value::String(bootstrap_args.default_availability_zone.clone()),
+                    );
+                    managed.insert(
+                        AZ_USER_SPECIFIED_KEY.to_string(),
+                        serde_json::Value::Bool(false),
+                    );
+                    true
+                };
+                if config_updated {
+                    let mut v = v.clone();
+                    v.config = serde_json::ser::to_string(&config).unwrap();
+                    Some(v)
+                } else {
+                    None
+                }
+            })?;
+            Ok(())
+        },
     ];
 
     let mut txn = transaction(stash).await?;
@@ -295,6 +354,7 @@ async fn migrate<S: Append>(
 
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
+    pub default_availability_zone: String,
 }
 
 #[derive(Debug)]
@@ -525,21 +585,24 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
-    /// Persist mapping from system objects to global IDs. Each element of `mappings` should be
-    /// (schema-name, object-name, global-id).
+    /// Persist mapping from system objects to global IDs and fingerprints.
     ///
-    /// Panics if provided id is not a system id
-    pub async fn set_system_gids(
+    /// Panics if provided id is not a system id.
+    pub async fn set_system_object_mapping(
         &mut self,
-        mappings: Vec<(&str, &str, GlobalId, u64)>,
+        mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), Error> {
         if mappings.is_empty() {
             return Ok(());
         }
 
-        let mappings = mappings
-            .into_iter()
-            .map(|(schema_name, object_name, id, fingerprint)| {
+        let mappings = mappings.into_iter().map(
+            |SystemObjectMapping {
+                 schema_name,
+                 object_name,
+                 id,
+                 fingerprint,
+             }| {
                 let id = if let GlobalId::System(id) = id {
                     id
                 } else {
@@ -547,12 +610,13 @@ impl<S: Append> Connection<S> {
                 };
                 (
                     GidMappingKey {
-                        schema_name: schema_name.to_string(),
-                        object_name: object_name.to_string(),
+                        schema_name,
+                        object_name,
                     },
                     GidMappingValue { id, fingerprint },
                 )
-            });
+            },
+        );
         COLLECTION_SYSTEM_GID_MAPPING
             .upsert(&mut self.stash, mappings)
             .await
@@ -690,6 +754,10 @@ impl<S: Append> Connection<S> {
 
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
         transaction(&mut self.stash).await
+    }
+
+    pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
+        Ok(self.stash.confirm_leadership().await?)
     }
 
     pub fn cluster_id(&self) -> Uuid {
@@ -1083,6 +1151,40 @@ impl<'a, S: Append> Transaction<'a, S> {
             }
         })?;
         assert_eq!(n, 1);
+        Ok(())
+    }
+
+    /// Updates persisted mapping from system objects to global IDs and fingerprints. Each element
+    /// of `mappings` should be (old-global-id, new-system-object-mapping).
+    ///
+    /// Panics if provided id is not a system id.
+    pub fn update_system_object_mappings(
+        &mut self,
+        mappings: &HashMap<GlobalId, SystemObjectMapping>,
+    ) -> Result<(), Error> {
+        let n = self.system_gid_mapping.update(|_k, v| {
+            if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
+                let id = if let GlobalId::System(id) = mapping.id {
+                    id
+                } else {
+                    panic!("non-system id provided")
+                };
+                Some(GidMappingValue {
+                    id,
+                    fingerprint: mapping.fingerprint,
+                })
+            } else {
+                None
+            }
+        })?;
+
+        if usize::try_from(n).expect("update diff should fit into usize") != mappings.len() {
+            let id_str = mappings.keys().map(|id| id.to_string()).join(",");
+            return Err(Error {
+                kind: ErrorKind::FailedBuiltinSchemaMigration(id_str),
+            });
+        }
+
         Ok(())
     }
 

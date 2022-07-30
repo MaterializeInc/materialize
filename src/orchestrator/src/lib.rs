@@ -198,7 +198,7 @@ pub struct ServiceAssignments<'a> {
 }
 
 /// Describes a limit on memory.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialOrd, Eq, Ord, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
 
 impl<'de> Deserialize<'de> for MemoryLimit {
@@ -234,7 +234,7 @@ pub struct CpuLimit {
 
 impl CpuLimit {
     /// Constructs a new CPU limit from a number of millicpus.
-    pub fn from_millicpus(&self, millicpus: usize) -> CpuLimit {
+    pub fn from_millicpus(millicpus: usize) -> CpuLimit {
         CpuLimit { millicpus }
     }
 

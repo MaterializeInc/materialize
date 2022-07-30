@@ -131,9 +131,9 @@ build apply=PredicatePushdown
     [(get x)
      (get x)]
     [])
-  [(call_binary or
-     (call_binary and (call_unary is_null #0) (call_unary is_null #2))
-     (call_binary eq #0 (call_binary add_int_64 #2 1))
+  [(call_variadic or [
+     (call_variadic and [(call_unary is_null #0) (call_unary is_null #2)])
+     (call_binary eq #0 (call_binary add_int_64 #2 1))]
     )])
 ----
 ----
@@ -155,9 +155,9 @@ build apply=PredicatePushdown
     [(get x)
      (get x)]
     [])
-  [(call_binary or
-     (call_binary and (call_unary is_null #0) (call_unary is_null (call_binary add_int_64 #2 1)))
+  [(call_variadic or [
      (call_binary eq #0 (call_binary add_int_64 #2 1))
+     (call_variadic and [(call_unary is_null #0) (call_unary is_null (call_binary add_int_64 #2 1))])]
     )])
 ----
 ----
@@ -179,9 +179,9 @@ build apply=PredicatePushdown
     [(get x)
      (get x)]
     [])
-  [(call_binary or
-     (call_binary and (call_unary is_null #0) (call_binary and (call_unary is_null #2) (call_unary is_null #0)))
-     (call_binary eq #0 #2)
+  [(call_variadic or [
+     (call_variadic and [(call_unary is_null #0) (call_variadic and [(call_unary is_null #2) (call_unary is_null #0)])])
+     (call_binary eq #0 #2)]
     )])
 ----
 ----
@@ -203,9 +203,9 @@ build apply=PredicatePushdown
     [(get x)
      (get x)]
     [])
-  [(call_binary or
-     (call_binary and (call_unary is_null #0) (call_binary and (call_unary is_null #2) (call_unary is_null #0)))
-     (call_binary eq #0 (call_binary add_int_64 #2 1))
+  [(call_variadic or [
+     (call_variadic and [(call_unary is_null #0) (call_variadic and [(call_unary is_null #2) (call_unary is_null #0)])])
+     (call_binary eq #0 (call_binary add_int_64 #2 1))]
     )])
 ----
 ----

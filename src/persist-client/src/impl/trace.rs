@@ -290,7 +290,15 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         // happen if we generate a merge req and then, before we get a res,
         // merge that batch again. See if this matters in practice before we add
         // the complexity.
-        if self.desc() != &res.output.desc {
+        //
+        // It is perfectly safe, however, if the sinces don't match, as long as
+        // Spine metadata's since is in advance of the one in the compaction
+        // result. This mismatch can happen when the Spine has to be reloaded
+        // from state (because of a compare_and_set mismatch).
+        let matches = res.output.desc.lower() == self.desc().lower()
+            && res.output.desc.upper() == self.desc().upper()
+            && PartialOrder::less_equal(res.output.desc.since(), self.desc().since());
+        if !matches {
             return false;
         }
         // Spine internally has an invariant about a batch being at some level

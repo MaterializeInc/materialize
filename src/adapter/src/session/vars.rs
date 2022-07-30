@@ -1197,11 +1197,11 @@ pub enum IsolationLevel {
 impl IsolationLevel {
     pub(super) fn as_str(&self) -> &'static str {
         match self {
-            Self::ReadUncommitted => "READ_UNCOMMITTED",
-            Self::ReadCommitted => "READ_COMMITTED",
-            Self::RepeatableRead => "REPEATABLE_READ",
-            Self::Serializable => "SERIALIZABLE",
-            Self::StrictSerializable => "STRICT_SERIALIZABLE",
+            Self::ReadUncommitted => "read uncommitted",
+            Self::ReadCommitted => "read committed",
+            Self::RepeatableRead => "repeatable read",
+            Self::Serializable => "serializable",
+            Self::StrictSerializable => "strict serializable",
         }
     }
 

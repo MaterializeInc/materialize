@@ -77,7 +77,6 @@ _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` docume
 **UNION** | Records present in `select_stmt` or `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the sum of the times it occurs in each input statement.
 **INTERSECT** | Records present in both `select_stmt` and `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the lesser of the times it occurs in each input statement.
 **EXCEPT** | Records present in `select_stmt` but not in `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the times it occurs in `select_stmt` less the times it occurs in `another_select_stmt`, or not at all if the former is greater than latter.
-**AS OF** | If provided, `SELECT` will report the results at the supplied timestamp, meaning it reflects exactly those input updates at or before this timestamp. See [`AS OF`](/sql/as-of).
 
 ## Details
 
@@ -124,9 +123,6 @@ only on queryable inputs itself.
 
 You can create a materialized view out of any query using [`CREATE MATERIALIZED
 VIEW`](../create-materialized-view), and it will always then be queryable.
-
-If you supply an [`AS OF`](/sql/as-of) to your `SELECT` query the queryable
-requirement is lifted.
 
 ### Common table expressions (CTEs)
 

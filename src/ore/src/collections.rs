@@ -15,7 +15,10 @@
 
 //! Collection utilities.
 
-use std::fmt::Display;
+use std::collections::btree_map::Entry as BEntry;
+use std::collections::hash_map::Entry as HEntry;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{Debug, Display};
 
 /// Extension methods for collections.
 pub trait CollectionExt<T>: Sized
@@ -62,6 +65,67 @@ where
         match (iter.next(), iter.next()) {
             (Some(el), None) => el,
             _ => panic!("{}", msg),
+        }
+    }
+}
+
+/// Extension methods for associative collections.
+pub trait AssociativeExt<K, V> {
+    /// Inserts a key and value, panicking with
+    /// a given message if a true
+    /// insert (as opposed to an update) cannot be done
+    /// because the key already existed in the collection.
+    fn expect_insert(&mut self, k: K, v: V, msg: &str);
+    /// Inserts a key and value, panicking if a true
+    /// insert (as opposed to an update) cannot be done
+    /// because the key already existed in the collection.
+    fn unwrap_insert(&mut self, k: K, v: V) {
+        self.expect_insert(k, v, "called `unwrap_insert` for an already-existing key")
+    }
+}
+
+impl<K, V> AssociativeExt<K, V> for HashMap<K, V>
+where
+    K: Eq + std::hash::Hash + Debug,
+    V: Debug,
+{
+    fn expect_insert(&mut self, k: K, v: V, msg: &str) {
+        match self.entry(k) {
+            HEntry::Vacant(e) => {
+                e.insert(v);
+            }
+            HEntry::Occupied(e) => {
+                panic!(
+                    "{} (key: {:?}, old value: {:?}, new value: {:?})",
+                    msg,
+                    e.key(),
+                    e.get(),
+                    v
+                )
+            }
+        }
+    }
+}
+
+impl<K, V> AssociativeExt<K, V> for BTreeMap<K, V>
+where
+    K: Ord + Debug,
+    V: Debug,
+{
+    fn expect_insert(&mut self, k: K, v: V, msg: &str) {
+        match self.entry(k) {
+            BEntry::Vacant(e) => {
+                e.insert(v);
+            }
+            BEntry::Occupied(e) => {
+                panic!(
+                    "{} (key: {:?}, old value: {:?}, new value: {:?})",
+                    msg,
+                    e.key(),
+                    e.get(),
+                    v
+                )
+            }
         }
     }
 }

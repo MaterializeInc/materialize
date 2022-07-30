@@ -24,7 +24,7 @@ use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
 
 use crate::client::ConnectionId;
-use crate::coord::PeekResponseUnary;
+use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 

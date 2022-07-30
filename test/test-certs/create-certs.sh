@@ -80,7 +80,7 @@ create_cert() {
     local ca_name=$2
     local common_name=$3
 
-    # Create key & csr
+    # Create key & CSR.
     openssl req -nodes \
         -newkey rsa:2048 \
         -keyout secrets/"$client_name".key \

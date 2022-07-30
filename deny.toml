@@ -1,31 +1,10 @@
 [bans]
 multiple-versions = "deny"
-skip = [
-    # Do not add to this list without good reason! Duplicate dependencies slow
-    # down compilation and bloat the binary.
-
-    # Waiting on https://github.com/jeromefroe/lru-rs/pull/145 to make it into
-    # a release.
-    { name = "hashbrown", version = "0.12.0" },
-
-    # Waiting on https://github.com/arcnmx/serde-value/pull/35.
-    { name = "ordered-float", version = "2.10.0" },
-
-    # Waiting for csv, http, and aws_smithy_types to upgrade to v1.0.
-    { name = "itoa", version = "0.4.1" },
-
-    # Waiting for vte to upgrade to v0.7.0.
-    { name = "arrayvec", version = "0.5.2" },
-
-    # Waiting on https://github.com/prisma/tiberius/pull/233.
-    { name = "uuid", version = "0.8.2" },
-
-    # Waiting on https://github.com/chronotope/chrono-tz/pull/100.
-    { name = "phf", version = "0.10.1" },
-    { name = "phf_codegen", version = "0.10.0" },
-    { name = "phf_generator", version = "0.10.0" },
-    { name = "phf_shared", version = "0.10.0" },
-]
+# Do not add exemptions for duplicate dependencies! Duplicate dependencies slow
+# down compilation and bloat the binary. Submit PRs upstream to remove
+# duplicated transitive dependencies. If necessary, use patch directives in the
+# root Cargo.toml to point at a Materialize-maintained fork that avoids the
+# duplicated transitive dependencies.
 
 # Use `tracing` instead.
 [[bans.deny]]
@@ -45,6 +24,7 @@ name = "strum-macros"
 [[bans.deny]]
 name = "log"
 wrappers = [
+    "deadpool-postgres",
     "env_logger",
     "fail",
     "globset",
@@ -56,8 +36,6 @@ wrappers = [
     "postgres",
     "pprof",
     "prost-build",
-    "pubnub-core",
-    "pubnub-hyper",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
     "reqwest",
@@ -144,25 +122,33 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    # Waiting on several PRs to a mostly-abandoned upstream library.
-    "https://github.com/MaterializeInc/pubnub-rust.git",
+    # Waiting for a new release of strip-ansi-escapes that avoids the indirect
+    # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
+    "https://github.com/alacritty/vte",
 
-    # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-    "https://github.com/MaterializeInc/rust-postgres.git",
-    "https://github.com/MaterializeInc/rust-postgres-array.git",
+    # Waiting for a new release that bumps to itoa v1.0.
+    # See: https://github.com/BurntSushi/rust-csv/issues/271
+    "https://github.com/BurntSushi/rust-csv.git",
 
-    # Waiting on https://github.com/bheisler/criterion.rs/pull/543.
+    # Waiting on criterion v0.4, which upgrades to clap v3.
     "https://github.com/MaterializeInc/criterion.rs.git",
-
-    # Waiting on https://github.com/AltSysrq/proptest/pull/264.
-    "https://github.com/MaterializeInc/proptest.git",
 
     # Waiting on https://github.com/open-telemetry/opentelemetry-rust/pull/783
     # to make it into a release.
     "https://github.com/MaterializeInc/opentelemetry-rust.git",
 
+    # Waiting on https://github.com/AltSysrq/proptest/pull/264.
+    "https://github.com/MaterializeInc/proptest.git",
+
     # Works around https://github.com/tokio-rs/prost/issues/653.
     "https://github.com/MaterializeInc/prost.git",
+
+    # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
+    "https://github.com/MaterializeInc/rust-postgres.git",
+    "https://github.com/MaterializeInc/rust-postgres-array.git",
+
+    # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
+    "https://github.com/MaterializeInc/serde-value.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.

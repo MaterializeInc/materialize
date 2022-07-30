@@ -30,6 +30,7 @@ use tracing::warn;
 
 use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 
@@ -45,6 +46,7 @@ use crate::protocol::client::{
 pub struct RehydratingStorageClient<T> {
     command_tx: UnboundedSender<StorageCommand<T>>,
     response_rx: UnboundedReceiverStream<StorageResponse<T>>,
+    _task: AbortOnDropHandle<()>,
 }
 
 impl<T> RehydratingStorageClient<T>
@@ -67,10 +69,11 @@ where
             uppers: HashMap::new(),
             initialized: false,
         };
-        mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
+        let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
             command_tx,
             response_rx: UnboundedReceiverStream::new(response_rx),
+            _task: task.abort_on_drop(),
         }
     }
 

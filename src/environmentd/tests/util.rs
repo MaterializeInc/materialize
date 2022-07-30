@@ -159,8 +159,11 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             command_wrapper: vec![],
         }))?,
     );
+    // Messing with the clock causes persist to expire leases, causing hangs and
+    // panics. Is it possible/desirable to put this back somehow?
+    let persist_now = SYSTEM_TIME.clone();
     let persist_clients =
-        PersistClientCache::new(PersistConfig::new(config.now.clone()), &metrics_registry);
+        PersistClientCache::new(PersistConfig::new_for_test(persist_now), &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
@@ -187,8 +190,10 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: metrics_registry.clone(),
         now: config.now,
         cors_allowed_origin: AllowOrigin::list([]),
-        replica_sizes: Default::default(),
+        cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: "1".into(),
+        storage_host_sizes: Default::default(),
+        default_storage_host_size: None,
         availability_zones: Default::default(),
         connection_context: ConnectionContext::for_tests(
             (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),

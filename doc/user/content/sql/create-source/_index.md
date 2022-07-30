@@ -23,13 +23,8 @@ Materialize bundles **native connectors** for the following external systems:
 - [Kafka](/sql/create-source/kafka)
 - [Redpanda](/sql/create-source/kafka)
 {{</ linkbox >}}
-{{< linkbox title="" >}}
-{{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
-{{</ linkbox >}}
-{{< linkbox title="Other" >}}
-- [PubNub](/sql/create-source/pubnub)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 

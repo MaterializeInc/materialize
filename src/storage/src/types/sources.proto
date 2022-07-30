@@ -164,12 +164,12 @@ message ProtoSourceDesc {
 }
 
 message ProtoSourceConnection {
+    reserved 5;
     oneof kind {
         ProtoKafkaSourceConnection kafka = 1;
         ProtoKinesisSourceConnection kinesis = 2;
         ProtoS3SourceConnection s3 = 3;
         ProtoPostgresSourceConnection postgres = 4;
-        ProtoPubNubSourceConnection pubnub = 5;
         ProtoLoadGeneratorSourceConnection loadgen = 6;
     }
 }
@@ -197,14 +197,10 @@ message ProtoPostgresSourceDetails {
     string slot = 2;
 }
 
-message ProtoPubNubSourceConnection {
-    string subscribe_key = 1;
-    string channel = 2;
-}
-
 message ProtoLoadGeneratorSourceConnection {
     oneof generator {
         google.protobuf.Empty counter = 1;
+        google.protobuf.Empty auction = 3;
     }
     optional uint64 tick_micros = 2;
 }

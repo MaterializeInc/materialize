@@ -16,7 +16,6 @@ menu:
 
 Field | Use
 ------|-----
-**MATERIALIZED**  |  Create the view as materialized. To minimize memory usage, we recommend that you first create nonmaterialized views to see tables instead of the multiplexed data stream and only materialize the views for the queries on those initial table-like views.
 **TEMP** / **TEMPORARY** | Mark the view as [temporary](#temporary-views).  |
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
 _src_name_ | The name of the [Postgres source](/sql/create-source/postgres) for which you are creating table views.

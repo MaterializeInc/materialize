@@ -46,6 +46,8 @@ pub struct Metrics {
     pub compaction: CompactionMetrics,
     /// Metrics for garbage collection.
     pub gc: GcMetrics,
+    /// Metrics for leasing and automatic lease expiry.
+    pub lease: LeaseMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
 }
@@ -63,6 +65,7 @@ impl Metrics {
             user: BatchWriteMetrics::new(registry, "user"),
             compaction: CompactionMetrics::new(registry),
             gc: GcMetrics::new(registry),
+            lease: LeaseMetrics::new(registry),
             _vecs: vecs,
         }
     }
@@ -96,6 +99,7 @@ struct MetricsVecs {
     external_op_failed: IntCounterVec,
     external_op_bytes: IntCounterVec,
     external_op_seconds: CounterVec,
+    external_consensus_truncated_count: IntCounter,
 
     retry_started: IntCounterVec,
     retry_finished: IntCounterVec,
@@ -161,6 +165,10 @@ impl MetricsVecs {
                 name: "mz_persist_external_seconds",
                 help: "time spent in external service calls",
                 var_labels: ["op"],
+            )),
+            external_consensus_truncated_count: registry.register(metric!(
+                name: "mz_persist_external_consensus_truncated_count",
+                help: "count of versions deleted by consensus truncate calls",
             )),
 
             retry_started: registry.register(metric!(
@@ -240,6 +248,7 @@ impl MetricsVecs {
             external: RetryExternal {
                 batch_set: self.retry_metrics("batch::set"),
                 blob_open: self.retry_metrics("blob::open"),
+                compaction_noop_delete: self.retry_metrics("compaction_noop::delete"),
                 consensus_open: self.retry_metrics("consensus::open"),
                 fetch_and_update_state_head: self.retry_metrics("fetch_and_update_state::head"),
                 fetch_batch_get: self.retry_metrics("fetch_batch::get"),
@@ -301,6 +310,7 @@ impl MetricsVecs {
             compare_and_set: self.external_op_metrics("consensus_cas"),
             scan: self.external_op_metrics("consensus_scan"),
             truncate: self.external_op_metrics("consensus_truncate"),
+            truncated_count: self.external_consensus_truncated_count.clone(),
         }
     }
 
@@ -384,6 +394,7 @@ pub struct RetryExternal {
     pub(crate) batch_set: RetryMetrics,
     pub(crate) blob_open: RetryMetrics,
     pub(crate) consensus_open: RetryMetrics,
+    pub(crate) compaction_noop_delete: RetryMetrics,
     pub(crate) fetch_and_update_state_head: RetryMetrics,
     pub(crate) fetch_batch_get: RetryMetrics,
     pub(crate) maybe_init_state_cas: RetryMetrics,
@@ -499,6 +510,22 @@ impl GcMetrics {
             seconds: registry.register(metric!(
                 name: "mz_persist_gc_seconds",
                 help: "time spent in garbage collections",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LeaseMetrics {
+    pub(crate) timeout_read: IntCounter,
+}
+
+impl LeaseMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        LeaseMetrics {
+            timeout_read: registry.register(metric!(
+                name: "mz_persist_lease_timeout_read",
+                help: "count of readers whose lease timed out",
             )),
         }
     }
@@ -711,6 +738,7 @@ pub struct ConsensusMetrics {
     compare_and_set: ExternalOpMetrics,
     scan: ExternalOpMetrics,
     truncate: ExternalOpMetrics,
+    truncated_count: IntCounter,
 }
 
 #[derive(Debug)]
@@ -785,11 +813,17 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
-        self.metrics
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        let deleted = self
+            .metrics
             .consensus
             .truncate
             .run_op(|| self.consensus.truncate(key, seqno))
-            .await
+            .await?;
+        self.metrics
+            .consensus
+            .truncated_count
+            .inc_by(u64::cast_from(deleted));
+        Ok(deleted)
     }
 }

@@ -88,7 +88,7 @@ Field           | Type                         | Meaning
 ----------------|------------------------------|--------
 `id  `          | [`bigint`]                   | The ordered id of the event.
 `event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, or `rename`.
-`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `index`, `sink`, `source`, or `view`.
+`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `index`, `materialized-view`, `sink`, `source`, or `view`.
 `event_details` | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
 `user`          | [`text`]                     | The user who triggered the event.
 `occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred.
@@ -297,6 +297,19 @@ Field    | Type       | Meaning
 `name`   | [`text`]   | The ID of the index. (`name` is a misnomer.)
 `worker` | [`bigint`] | The ID of the worker thread hosting the index.
 
+### `mz_materialized_views`
+
+The `mz_materialized_views` table contains a row for each materialized view in the system.
+
+Field          | Type        | Meaning
+---------------|-------------|----------
+`id`           | [`text`]    | Materialize's unique ID for the materialized view.
+`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the materialized view.
+`schema_id`    | [`bigint`]  | The ID of the schema to which the materialized view belongs.
+`name`         | [`text`]    | The name of the materialized view.
+`cluster_id`   | [`bigint`]  | The ID of the cluster maintaining the materialized view.
+`definition`   | [`text`]    | The materialized view definition (a `SELECT` query).
+
 ### `mz_map_types`
 
 The `mz_map_types` table contains a row for each map type in the system.
@@ -484,7 +497,7 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
-`type`           | [`text`]   | The type of the source: `kafka`, `postgres`, or `pubnub`.
+`type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
 
 ### `mz_tables`
 
@@ -537,6 +550,21 @@ Field       | Type       | Meaning
 `worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`bigint`] | The next timestamp at which the dataflow may change.
 
+### `mz_worker_materialization_delays`
+
+The `mz_worker_materialization_delays` source provides, for each worker,
+a histogram of wall-clock delays between observations of source frontier
+advancements at the dataflow layer and the advancements of the corresponding
+[dataflow] frontiers.
+
+Field       | Type       | Meaning
+------------|------------|--------
+`dataflow` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
+`source`   | [`text`]   | The ID of the input source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`delay_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
+`count`    | [`bigint`] | The (noncumulative) count of delay measurements in this bucket.
+
 ## `pg_catalog`
 
 Materialize has compatibility shims for the following relations from [PostgreSQL's
@@ -562,6 +590,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
   * [`pg_views`](https://www.postgresql.org/docs/current/view-pg-views.html)
+  * [`pg_authid`](https://www.postgresql.org/docs/current/catalog-pg-authid.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in PostgreSQL, or if they do include the column the result set

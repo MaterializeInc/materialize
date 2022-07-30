@@ -351,13 +351,14 @@ pub fn create_statement(
             name,
             col_names: _,
             connection: _,
-            with_options: _,
+            legacy_with_options: _,
             format: _,
             include_metadata: _,
             envelope: _,
             if_not_exists,
             key_constraint: _,
             remote: _,
+            with_options: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;

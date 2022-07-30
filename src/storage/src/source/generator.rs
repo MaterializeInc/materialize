@@ -18,11 +18,24 @@ use super::metrics::SourceBaseMetrics;
 use super::{SourceMessage, SourceMessageType};
 use crate::source::{NextMessage, SourceReader, SourceReaderError};
 use crate::types::connections::ConnectionContext;
-use crate::types::sources::Generator;
 use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
+use crate::types::sources::{Generator, LoadGenerator};
+
+mod auction;
+mod counter;
+
+pub use auction::Auction;
+pub use counter::Counter;
+
+pub fn as_generator(g: &LoadGenerator) -> Box<dyn Generator> {
+    match g {
+        LoadGenerator::Auction => Box::new(Auction {}),
+        LoadGenerator::Counter => Box::new(Counter {}),
+    }
+}
 
 pub struct LoadGeneratorSourceReader {
-    generator: Generator,
+    rows: Box<dyn Iterator<Item = Row>>,
     last: Instant,
     tick: Duration,
     offset: MzOffset,
@@ -64,13 +77,22 @@ impl SourceReader for LoadGeneratorSourceReader {
             })
             .unwrap_or_default();
 
+        let mut rows = as_generator(&connection.load_generator)
+            .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
+
+        // Skip forward to the requested offset.
+        for _ in 0..offset.offset {
+            rows.next();
+        }
+
         Ok(Self {
-            generator: connection.generator,
+            rows,
             last: Instant::now(),
             tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
             offset,
         })
     }
+
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
@@ -79,17 +101,19 @@ impl SourceReader for LoadGeneratorSourceReader {
         }
         self.last += self.tick;
         self.offset += 1;
-        let value = self.generator.by_offset(self.offset);
-        Ok(NextMessage::Ready(SourceMessageType::Finalized(
-            SourceMessage {
-                partition: PartitionId::None,
-                offset: self.offset,
-                upstream_time_millis: None,
-                key: (),
-                value,
-                headers: None,
-                specific_diff: 1,
-            },
-        )))
+        match self.rows.next() {
+            Some(value) => Ok(NextMessage::Ready(SourceMessageType::Finalized(
+                SourceMessage {
+                    partition: PartitionId::None,
+                    offset: self.offset,
+                    upstream_time_millis: None,
+                    key: (),
+                    value,
+                    headers: None,
+                    specific_diff: 1,
+                },
+            ))),
+            None => Ok(NextMessage::Finished),
+        }
     }
 }

@@ -68,7 +68,7 @@ pub async fn purify_create_source(
         connection,
         format,
         envelope,
-        with_options,
+        legacy_with_options: with_options,
         include_metadata: _,
         ..
     } = &mut stmt;
@@ -195,7 +195,6 @@ pub async fn purify_create_source(
             };
             *details_ast = Some(hex::encode(details.into_proto().encode_to_vec()));
         }
-        CreateSourceConnection::PubNub { .. } => (),
         CreateSourceConnection::LoadGenerator { .. } => (),
     }
 

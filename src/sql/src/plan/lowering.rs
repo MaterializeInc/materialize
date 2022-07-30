@@ -793,17 +793,14 @@ impl HirScalarExpr {
                                 .project((0..inner_arity).chain(Some(then_arity)).collect());
 
                             // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
-                            let mut else_inner = get_inner.filter(vec![SS::CallBinary {
-                                func: mz_expr::BinaryFunc::Or,
-                                expr1: Box::new(SS::CallBinary {
-                                    func: mz_expr::BinaryFunc::Eq,
-                                    expr1: Box::new(cond_expr.clone()),
-                                    expr2: Box::new(SS::literal_ok(Datum::False, ScalarType::Bool)),
-                                }),
-                                expr2: Box::new(SS::CallUnary {
-                                    func: mz_expr::UnaryFunc::IsNull(mz_expr::func::IsNull),
-                                    expr: Box::new(cond_expr.clone()),
-                                }),
+                            let mut else_inner = get_inner.filter(vec![SS::CallVariadic {
+                                func: mz_expr::VariadicFunc::Or,
+                                exprs: vec![
+                                    cond_expr
+                                        .clone()
+                                        .call_binary(SS::literal_false(), mz_expr::BinaryFunc::Eq),
+                                    cond_expr.clone().call_is_null(),
+                                ],
                             }]);
                             let else_expr = else_clone.applied_to(
                                 id_gen,
@@ -1732,6 +1729,7 @@ pub(crate) fn derive_equijoin_cols(
     on: Vec<mz_expr::MirScalarExpr>,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
     use mz_expr::BinaryFunc;
+    use mz_expr::VariadicFunc;
     // TODO: Replace this predicate deconstruction with
     // `mz_expr::canonicalize::canonicalize_predicates`, which will also enable
     // treating select * from lhs left join rhs on lhs.id = rhs.id and true as
@@ -1740,14 +1738,12 @@ pub(crate) fn derive_equijoin_cols(
     let mut predicates = Vec::new();
     let mut todo = on;
     while let Some(next) = todo.pop() {
-        if let mz_expr::MirScalarExpr::CallBinary {
-            expr1,
-            expr2,
-            func: BinaryFunc::And,
+        if let mz_expr::MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And,
+            exprs,
         } = next
         {
-            todo.push(*expr1);
-            todo.push(*expr2);
+            exprs.into_iter().for_each(|e| todo.push(e));
         } else {
             predicates.push(next)
         }

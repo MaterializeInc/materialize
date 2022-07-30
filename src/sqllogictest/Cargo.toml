@@ -8,9 +8,9 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-bytes = "1.1.0"
+bytes = "1.2.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.2.12", features = ["derive"] }
+clap = { version = "3.2.14", features = ["derive"] }
 fallible-iterator = "0.2.0"
 futures = "0.3.21"
 junit-report = "0.7.1"
@@ -26,6 +26,7 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage = { path = "../storage" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 regex = "1.6.0"

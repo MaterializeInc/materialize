@@ -801,12 +801,6 @@ pub enum CreateSourceConnection<T: AstInfo> {
         /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
         details: Option<String>,
     },
-    PubNub {
-        /// PubNub's subscribe key
-        subscribe_key: String,
-        /// The PubNub channel to subscribe to
-        channel: String,
-    },
     LoadGenerator {
         generator: LoadGenerator,
         options: Vec<LoadGeneratorOption<T>>,
@@ -868,16 +862,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 }
                 f.write_str("'");
             }
-            CreateSourceConnection::PubNub {
-                subscribe_key,
-                channel,
-            } => {
-                f.write_str("PUBNUB SUBSCRIBE KEY '");
-                f.write_str(&display::escape_single_quote_string(subscribe_key));
-                f.write_str("' CHANNEL '");
-                f.write_str(&display::escape_single_quote_string(channel));
-                f.write_str("'");
-            }
             CreateSourceConnection::LoadGenerator { generator, options } => {
                 f.write_str("LOAD GENERATOR ");
                 f.write_node(generator);
@@ -894,14 +878,14 @@ impl_display_t!(CreateSourceConnection);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LoadGenerator {
     Counter,
+    Auction,
 }
 
 impl AstDisplay for LoadGenerator {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Counter => {
-                f.write_str("COUNTER");
-            }
+            Self::Counter => f.write_str("COUNTER"),
+            Self::Auction => f.write_str("AUCTION"),
         }
     }
 }
@@ -1157,6 +1141,38 @@ impl AstDisplay for KeyConstraint {
     }
 }
 impl_display!(KeyConstraint);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateSourceOptionName {
+    Size,
+}
+
+impl AstDisplay for CreateSourceOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CreateSourceOptionName::Size => "SIZE",
+        })
+    }
+}
+impl_display!(CreateSourceOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE SOURCE...` statement.
+pub struct CreateSourceOption<T: AstInfo> {
+    pub name: CreateSourceOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSourceOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(CreateSourceOption);
 
 /// SQL column definition
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

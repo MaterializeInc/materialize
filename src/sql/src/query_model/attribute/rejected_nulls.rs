@@ -87,7 +87,7 @@ impl Attribute for RejectedNulls {
 /// Consequently, results returned by [`propagated_nulls`] must be
 /// included in [`rejected_nulls`].
 ///
-/// Unfortuantely, boolean functions such as "and" and "or" are not
+/// Unfortunately, boolean functions such as "and" and "or" are not
 /// propagating nulls in their inputs, but we still need to handle
 /// them here, as they are used quite frequently in predicates.
 /// The procedure for doing this is derived below.
@@ -168,17 +168,17 @@ pub(crate) fn rejected_nulls(expr: &BoxScalarExpr, set: &mut HashSet<ColumnRefer
                 HashSet::from([c.clone()])
             } else if let Some(expr) = case_not(expr) {
                 rejected_nulls(expr, !sign)
-            } else if let Some((lhs, rhs)) = case_and(expr) {
+            } else if let Some(exprs) = case_and(expr) {
                 if sign {
-                    union(rejected_nulls(lhs, sign), rejected_nulls(rhs, sign))
+                    union_variadic(exprs.iter().map(|e| rejected_nulls(e, sign)).collect())
                 } else {
-                    intersect(propagated_nulls(lhs), propagated_nulls(rhs))
+                    intersect_variadic(exprs.iter().map(propagated_nulls).collect())
                 }
-            } else if let Some((lhs, rhs)) = case_or(expr) {
+            } else if let Some(exprs) = case_or(expr) {
                 if sign {
-                    intersect(rejected_nulls(lhs, sign), rejected_nulls(rhs, sign))
+                    intersect_variadic(exprs.iter().map(|e| rejected_nulls(e, sign)).collect())
                 } else {
-                    union(propagated_nulls(lhs), propagated_nulls(rhs))
+                    union_variadic(exprs.iter().map(propagated_nulls).collect())
                 }
             } else {
                 propagated_nulls(expr)
@@ -199,6 +199,14 @@ where
     lhs
 }
 
+/// Computes the union of a vector of sets.
+fn union_variadic<T>(sets: Vec<HashSet<T>>) -> HashSet<T>
+where
+    T: Clone + Eq + std::hash::Hash,
+{
+    sets.into_iter().reduce(|s1, s2| union(s1, s2)).unwrap()
+}
+
 /// Computes the intersection of two sets, consuming both sides
 /// and mutating and returning `lhs`.
 fn intersect<T>(mut lhs: HashSet<T>, rhs: HashSet<T>) -> HashSet<T>
@@ -207,6 +215,14 @@ where
 {
     lhs.retain(|item| rhs.contains(item));
     lhs
+}
+
+/// Computes the intersection of a vector of sets.
+fn intersect_variadic<T>(sets: Vec<HashSet<T>>) -> HashSet<T>
+where
+    T: Clone + Eq + std::hash::Hash,
+{
+    sets.into_iter().reduce(|s1, s2| intersect(s1, s2)).unwrap()
 }
 
 /// Active pattern match for `NOT(ISNULL(c))` fragments.
@@ -247,33 +263,31 @@ fn case_not(expr: &BoxScalarExpr) -> Option<&BoxScalarExpr> {
     None
 }
 
-/// Active pattern match for `NOT(expr)` fragments.
-fn case_or(expr: &BoxScalarExpr) -> Option<(&BoxScalarExpr, &BoxScalarExpr)> {
+/// Active pattern match for `expr1 OR expr2 OR ...` fragments.
+fn case_or(expr: &BoxScalarExpr) -> Option<&Vec<BoxScalarExpr>> {
     use BoxScalarExpr::*;
 
-    if let CallBinary {
-        func: mz_expr::BinaryFunc::Or,
-        expr1,
-        expr2,
+    if let CallVariadic {
+        func: mz_expr::VariadicFunc::Or,
+        exprs,
     } = expr
     {
-        return Some((expr1, expr2));
+        return Some(exprs);
     }
 
     None
 }
 
-/// Active pattern match for `NOT(expr)` fragments.
-fn case_and(expr: &BoxScalarExpr) -> Option<(&BoxScalarExpr, &BoxScalarExpr)> {
+/// Active pattern match for `expr1 AND expr2 AND ...` fragments.
+fn case_and(expr: &BoxScalarExpr) -> Option<&Vec<BoxScalarExpr>> {
     use BoxScalarExpr::*;
 
-    if let CallBinary {
-        func: mz_expr::BinaryFunc::And,
-        expr1,
-        expr2,
+    if let CallVariadic {
+        func: mz_expr::VariadicFunc::And,
+        exprs,
     } = expr
     {
-        return Some((expr1, expr2));
+        return Some(exprs);
     }
 
     None

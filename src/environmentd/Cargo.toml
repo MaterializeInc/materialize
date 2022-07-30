@@ -14,9 +14,9 @@ askama = { version = "0.11.1", default-features = false, features = ["config", "
 async-trait = "0.1.56"
 axum = { version = "0.5.13", features = ["headers"] }
 base64 = "0.13.0"
-bytes = "1.1.0"
+bytes = "1.2.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.2.12", features = ["wrap_help", "env", "derive"] }
+clap = { version = "3.2.14", features = ["wrap_help", "env", "derive"] }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
 headers = "0.3.7"
@@ -55,13 +55,14 @@ openssl-sys = { version = "0.9.75", features = ["vendored"] }
 os_info = "3.4.0"
 prometheus = { version = "0.13.1", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rand = "0.8.5"
 reqwest = { version = "0.11.11", features = ["json"] }
 rlimit = "0.8.3"
-serde = { version = "1.0.139", features = ["derive"] }
+serde = { version = "1.0.140", features = ["derive"] }
 serde_json = "1.0.82"
 shell-words = "1.1.0"
 sysctl = "0.4.4"
-sysinfo = "0.24.6"
+sysinfo = "0.24.7"
 tempfile = "3.2.0"
 thiserror = "1.0.31"
 tokio = { version = "1.19.2", features = ["sync"] }
@@ -70,7 +71,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-stream = { version = "0.1.9", features = ["net"] }
 tower-http = { version = "0.3.4", features = ["cors"] }
 tracing = "0.1.35"
-tracing-subscriber = "0.3.14"
+tracing-subscriber = "0.3.15"
 url = "2.2.2"
 uuid = "1.1.2"
 
@@ -84,7 +85,7 @@ tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unpr
 
 [dev-dependencies]
 assert_cmd = "2.0.4"
-bytes = "1.1.0"
+bytes = "1.2.0"
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 itertools = "0.10.3"
@@ -98,7 +99,6 @@ postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 predicates = "2.1.1"
-rand = "0.8.5"
 regex = "1.6.0"
 reqwest = { version = "0.11.11", features = ["blocking"] }
 serde_json = "1.0.82"

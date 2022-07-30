@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::bail;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -27,7 +28,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
-use mz_adapter::catalog::ClusterReplicaSizeMap;
+use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
 use mz_build_info::{build_info, BuildInfo};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
@@ -49,6 +50,10 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 /// Configuration for an `environmentd` server.
 #[derive(Debug, Clone)]
 pub struct Config {
+    // === Special modes. ===
+    /// Whether to permit usage of unsafe features.
+    pub unsafe_mode: bool,
+
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
     pub sql_listen_addr: SocketAddr,
@@ -59,17 +64,13 @@ pub struct Config {
     pub internal_sql_listen_addr: SocketAddr,
     /// The IP address and port to serve the metrics registry from.
     pub internal_http_listen_addr: SocketAddr,
-    /// TLS encryption configuration.
-    pub tls: Option<TlsConfig>,
-    /// Materialize Cloud configuration to enable Frontegg JWT user authentication.
-    pub frontegg: Option<FronteggAuthentication>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
-
-    // === Storage options. ===
-    /// Postgres connection string for adapter's stash.
-    pub adapter_stash_url: String,
+    /// TLS encryption and authentication configuration.
+    pub tls: Option<TlsConfig>,
+    /// Frontegg JWT authentication configuration.
+    pub frontegg: Option<FronteggAuthentication>,
 
     // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
@@ -77,28 +78,38 @@ pub struct Config {
     /// sources.
     pub connection_context: ConnectionContext,
 
-    // === Platform options. ===
+    // === Controller options. ===
     /// Storage and compute controller configuration.
     pub controller: ControllerConfig,
-    /// Configuration for a secrets controller.
+    /// Secrets controller configuration.
     pub secrets_controller: Arc<dyn SecretsController>,
 
-    // === Mode switches. ===
-    /// Whether to permit usage of unsafe features.
-    pub unsafe_mode: bool,
-    /// The place where the server's metrics will be reported from.
-    pub metrics_registry: MetricsRegistry,
-    /// Now generation function.
-    pub now: NowFn,
-    /// Map of strings to corresponding compute replica sizes.
-    pub replica_sizes: ClusterReplicaSizeMap,
+    // === Adapter options. ===
+    /// The PostgreSQL URL for the adapter stash.
+    pub adapter_stash_url: String,
+
+    // === Cloud options. ===
+    /// Availability zones in which storage and compute resources may be
+    /// deployed.
+    pub availability_zones: Vec<String>,
+    /// A map from size name to resource allocations for cluster replicas.
+    pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
-    /// Availability zones compute resources may be deployed in.
-    pub availability_zones: Vec<String>,
+    /// A map from size name to resource allocations for storage hosts.
+    pub storage_host_sizes: StorageHostSizeMap,
+    /// Default storage host size, should be a key from storage_host_sizes.
+    pub default_storage_host_size: Option<String>,
 
-    /// A callback used to enable or disable the OpenTelemetry tracing collector.
+    // === Tracing options. ===
+    /// The metrics registry to use.
+    pub metrics_registry: MetricsRegistry,
+    /// A callback to enable or disable the OpenTelemetry tracing collector.
     pub otel_enable_callback: OpenTelemetryEnableCallback,
+
+    // === Testing options. ===
+    /// A now generation function for mocking time.
+    pub now: NowFn,
 }
 
 /// Configures TLS encryption for connections.
@@ -185,32 +196,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let sql_local_addr = sql_listener.local_addr()?;
     let http_local_addr = http_listener.local_addr()?;
 
-    // Load the adapter catalog from disk.
-    let adapter_storage = mz_adapter::catalog::storage::Connection::open(
-        stash,
-        &BootstrapArgs {
-            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
-        },
-    )
-    .await?;
-
-    // Initialize controller.
-    let controller = mz_controller::Controller::new(config.controller).await;
-    // Initialize adapter.
-    let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
-        dataflow_client: controller,
-        storage: adapter_storage,
-        unsafe_mode: config.unsafe_mode,
-        build_info: &BUILD_INFO,
-        metrics_registry: config.metrics_registry.clone(),
-        now: config.now,
-        secrets_controller: config.secrets_controller,
-        replica_sizes: config.replica_sizes.clone(),
-        availability_zones: config.availability_zones.clone(),
-        connection_context: config.connection_context,
-    })
-    .await?;
-
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
         let metrics_registry = config.metrics_registry.clone();
@@ -226,6 +211,49 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         });
         internal_http_local_addr
     };
+
+    // Load the adapter catalog from disk.
+    if !config
+        .cluster_replica_sizes
+        .0
+        .contains_key(&config.bootstrap_default_cluster_replica_size)
+    {
+        bail!("bootstrap default cluster replica size is unknown");
+    }
+    let adapter_storage = mz_adapter::catalog::storage::Connection::open(
+        stash,
+        &BootstrapArgs {
+            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
+            // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
+            // shipped to cloud since all clusters will have had a default
+            // availability zone installed.
+            default_availability_zone: config
+                .availability_zones
+                .first()
+                .cloned()
+                .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
+        },
+    )
+    .await?;
+
+    // Initialize controller.
+    let controller = mz_controller::Controller::new(config.controller).await;
+    // Initialize adapter.
+    let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
+        dataflow_client: controller,
+        storage: adapter_storage,
+        unsafe_mode: config.unsafe_mode,
+        build_info: &BUILD_INFO,
+        metrics_registry: config.metrics_registry.clone(),
+        now: config.now,
+        secrets_controller: config.secrets_controller,
+        cluster_replica_sizes: config.cluster_replica_sizes,
+        storage_host_sizes: config.storage_host_sizes,
+        default_storage_host_size: config.default_storage_host_size,
+        availability_zones: config.availability_zones,
+        connection_context: config.connection_context,
+    })
+    .await?;
 
     // TODO(benesch): replace both `TCPListenerStream`s below with
     // `<type>_listener.incoming()` if that is
