@@ -34,11 +34,14 @@ async fn request(
         email,
         secret,
         client_id,
+        mut name,
     }): Query<BrowserAPIToken>,
 ) -> impl IntoResponse {
     if !secret.is_empty() {
         let profile = Profile {
-            name: String::from(DEFAULT_PROFILE_NAME),
+            name: name
+                .get_or_insert(DEFAULT_PROFILE_NAME.to_string())
+                .to_string(),
             email,
             secret,
             client_id,
@@ -55,12 +58,12 @@ async fn request(
     (StatusCode::OK, "You can now close the tab.")
 }
 
-pub(crate) async fn login_with_browser() -> Result<(), std::io::Error> {
+pub(crate) async fn login_with_browser(profile_name: String) -> Result<(), std::io::Error> {
     /*
      * Open the browser to login user
      */
-    let path = WEB_LOGIN_URL;
-    if let Err(err) = open::that(path) {
+    let path = format!("{:}?profile_name={:}", WEB_LOGIN_URL, profile_name);
+    if let Err(err) = open::that(path.clone()) {
         panic!("An error occurred when opening '{}': {}", path, err)
     }
 
@@ -131,7 +134,7 @@ async fn authenticate_user(
         .await
 }
 
-pub(crate) async fn login_with_console() -> Result<(), reqwest::Error> {
+pub(crate) async fn login_with_console(profile_name: String) -> Result<(), reqwest::Error> {
     // Handle user input
     let mut email = String::new();
 
@@ -152,7 +155,7 @@ pub(crate) async fn login_with_console() -> Result<(), reqwest::Error> {
     let api_token = generate_api_token(&client, auth_user).await?;
 
     let profile = Profile {
-        name: String::from(DEFAULT_PROFILE_NAME),
+        name: profile_name,
         email: email.to_string(),
         secret: api_token.secret,
         client_id: api_token.client_id,

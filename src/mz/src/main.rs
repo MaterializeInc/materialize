@@ -137,6 +137,7 @@ struct BrowserAPIToken {
     email: String,
     client_id: String,
     secret: String,
+    name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -169,10 +170,17 @@ async fn main() {
     let profile_arg: Option<String> = args.profile;
 
     match args.command {
-        Commands::Login(login_cmd) => match login_cmd.command {
-            Some(LoginCommands::Interactive) => login_with_console().await.unwrap(),
-            _ => login_with_browser().await.unwrap(),
-        },
+        Commands::Login(login_cmd) => {
+            let mut profile_name = DEFAULT_PROFILE_NAME.to_string();
+            if let Some(some_profile_name) = profile_arg {
+                profile_name = some_profile_name;
+            }
+
+            match login_cmd.command {
+                Some(LoginCommands::Interactive) => login_with_console(profile_name).await.unwrap(),
+                _ => login_with_browser(profile_name).await.unwrap(),
+            }
+        }
 
         Commands::Regions(regions_cmd) => {
             let client = Client::new();
