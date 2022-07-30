@@ -106,7 +106,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // nothing to do, it will park the thread. We rely on another thread
             // unparking us when there's new work to be done, e.g., when sending
             // a command or when new Kafka messages have arrived.
-            self.timely_worker.step_or_park(None);
+            self.timely_worker
+                .step_or_park(Some(std::time::Duration::from_secs(1)));
 
             self.report_frontier_progress(&response_tx);
 
