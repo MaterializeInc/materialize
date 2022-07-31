@@ -9,13 +9,14 @@
 
 //! Introspection of storage utilization by persist
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{retry_external, Metrics, ShardId};
 use mz_persist::location::{Blob, ExternalError};
 
 use crate::cache::PersistClientCache;
-use crate::r#impl::paths::BlobKeyPrefix;
+use crate::r#impl::paths::{BlobKey, BlobKeyPrefix};
 
 /// Provides access to storage usage metrics for a specific Blob
 #[derive(Debug)]
@@ -40,6 +41,35 @@ impl StorageUsageClient {
         retry_external(
             &self.metrics.retries.external.storage_usage_shard_size,
             || self.size(BlobKeyPrefix::Shard(shard_id)),
+        )
+        .await
+    }
+
+    /// Returns a map of [crate::ShardId] to its size (in bytes) stored in persist,
+    /// as well as the total bytes stored for unattributable data (the map key is None)
+    /// where the shard id is unknown. This latter count _should_ always be 0, so it
+    /// being nonzero indicates either persist wrote an invalid blob key, or another
+    /// process is storing data under the same path (!)
+    pub async fn shard_sizes(&self) -> HashMap<Option<ShardId>, u64> {
+        retry_external(
+            &self.metrics.retries.external.storage_usage_shard_size,
+            || async {
+                let mut shard_sizes = HashMap::new();
+                self.blob
+                    .list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
+                        match BlobKey::parse_ids(metadata.key) {
+                            Ok((Some((shard, _writer)), _part)) => {
+                                *shard_sizes.entry(Some(shard)).or_insert(0) +=
+                                    metadata.size_in_bytes;
+                            }
+                            _ => {
+                                *shard_sizes.entry(None).or_insert(0) += metadata.size_in_bytes;
+                            }
+                        }
+                    })
+                    .await?;
+                Ok(shard_sizes)
+            },
         )
         .await
     }
@@ -140,5 +170,10 @@ mod tests {
 
         assert_eq!(usage.shard_size(&shard_id_one).await, shard_one_size);
         assert_eq!(usage.shard_size(&shard_id_two).await, shard_two_size);
+
+        let shard_sizes = usage.shard_sizes().await;
+        assert_eq!(shard_sizes.len(), 2);
+        assert_eq!(shard_sizes.get(&Some(shard_id_one)), Some(&shard_one_size));
+        assert_eq!(shard_sizes.get(&Some(shard_id_two)), Some(&shard_two_size));
     }
 }
