@@ -54,7 +54,7 @@ criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.40"
+proc-macro2 = "1.0.42"
 
 [build-dependencies]
 prost-build = { version = "0.10.3", features = ["vendored"] }
