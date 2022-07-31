@@ -7,9 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::utils::exit_with_fail_message;
 use crate::{
-    FronteggAuthMachine, Profile, DEFAULT_PROFILE_NAME, MACHINE_AUTH_URL, PROFILES_DIR_NAME,
-    PROFILES_FILE_NAME, PROFILES_PREFIX, PROFILE_NOT_FOUND_MESSAGE,
+    ExitMessage, FronteggAuthMachine, Profile, DEFAULT_PROFILE_NAME,
+    ERROR_AUTHENTICATING_PROFILE_MESSAGE, ERROR_OPENING_PROFILES_MESSAGE,
+    ERROR_PARSING_PROFILES_MESSAGE, MACHINE_AUTH_URL, PROFILES_DIR_NAME, PROFILES_FILE_NAME,
+    PROFILES_PREFIX, PROFILE_NOT_FOUND_MESSAGE,
 };
 use dirs::home_dir;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
@@ -17,7 +20,6 @@ use reqwest::{Client, Error};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::process::exit;
 
 use toml_edit::{value, Document};
 
@@ -25,23 +27,30 @@ use toml_edit::{value, Document};
 ///  Profiles handling
 /// ----------------------------
 
+/**
+ * Gets the config path from the $HOME path.
+ * It is as follows: ~/.config/mz/profiles.toml
+ */
 fn get_config_path() -> PathBuf {
     match home_dir() {
         Some(mut path) => {
             path.push(PROFILES_DIR_NAME);
             path
         }
-        None => panic!("Error finding $HOME directory."),
+        None => exit_with_fail_message(ExitMessage::Str("Error finding $HOME directory.")),
     }
 }
 
+/**
+ * Authenticates a profile with Frontegg
+ */
 pub(crate) async fn authenticate_profile(
-    client: Client,
-    profile: Profile,
+    client: &Client,
+    profile: &Profile,
 ) -> Result<FronteggAuthMachine, Error> {
     let mut access_token_request_body = HashMap::new();
-    access_token_request_body.insert("clientId", profile.client_id);
-    access_token_request_body.insert("secret", profile.secret);
+    access_token_request_body.insert("clientId", profile.client_id.as_str());
+    access_token_request_body.insert("secret", profile.secret.as_str());
 
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
@@ -55,25 +64,35 @@ pub(crate) async fn authenticate_profile(
         .await?;
 
     if authentication_result.status() == 401 {
-        println!("Unauthorized. Please, check the credentials.");
-        exit(0);
+        exit_with_fail_message(ExitMessage::Str(
+            "Unauthorized. Please, check the credentials.",
+        ));
     } else {
         authentication_result.json::<FronteggAuthMachine>().await
     }
 }
 
-fn path_not_exist(path: PathBuf) -> bool {
+/**
+ * Checks if a path does not exists.
+ */
+fn path_not_exist(path: &PathBuf) -> bool {
     fs::metadata(path).is_err()
 }
 
+/**
+ * Creates the config dir if not exists.
+ */
 fn create_profile_dir_if_not_exists() {
     let config_path = get_config_path();
 
-    if path_not_exist(config_path.clone()) {
+    if path_not_exist(&config_path) {
         fs::create_dir_all(config_path.as_path()).unwrap();
     };
 }
 
+/**
+ * Write a particular profile into the config file
+ */
 fn write_profile(profile: Profile) -> std::io::Result<()> {
     let mut config_path = get_config_path();
     config_path.push(PROFILES_FILE_NAME);
@@ -91,31 +110,46 @@ fn write_profile(profile: Profile) -> std::io::Result<()> {
     fs::write(config_path, profiles_document.to_string())
 }
 
+/**
+ * Create the config dir. and save a particular profile into the config file.
+ */
 pub(crate) fn save_profile(profile: Profile) -> std::io::Result<()> {
     create_profile_dir_if_not_exists();
 
     write_profile(profile)
 }
 
+/**
+ * Get all the profiles from the config file.
+ */
 pub(crate) fn get_profiles() -> Option<Document> {
     let mut profiles_path = get_config_path();
     profiles_path.push(PROFILES_FILE_NAME);
 
     // Check if profiles file exists
-    if path_not_exist(get_config_path()) || path_not_exist(profiles_path.clone()) {
+    if path_not_exist(&get_config_path()) || path_not_exist(&profiles_path) {
         None
     } else {
         // Return profile
         match fs::read_to_string(profiles_path.as_path()) {
             Ok(profiles_string) => match profiles_string.parse::<Document>() {
                 Ok(profiles) => Some(profiles),
-                Err(error) => panic!("Error parsing the profiles: {:?}", error),
+                Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                    "{}: {:?}",
+                    ERROR_PARSING_PROFILES_MESSAGE, error
+                ))),
             },
-            Err(error) => panic!("Error opening the profiles file: {:?}", error),
+            Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                "{:}: {:?}",
+                ERROR_OPENING_PROFILES_MESSAGE, error
+            ))),
         }
     }
 }
 
+/**
+ * Get a particular profile from the config file
+ */
 pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
     if let Some(profiles) = get_profiles() {
         let profile_name_key = format!("{:}.{:}", PROFILES_PREFIX, profile_name);
@@ -129,7 +163,10 @@ pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
             let string_default_profile = default_profile.to_string();
             match toml::from_str(string_default_profile.as_str()) {
                 Ok(profile) => Some(profile),
-                Err(error) => panic!("Error parsing the profiles: {:?}", error),
+                Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                    "{}: {:?}",
+                    ERROR_PARSING_PROFILES_MESSAGE, error
+                ))),
             }
         } else {
             None
@@ -139,20 +176,29 @@ pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
     }
 }
 
+/**
+ * Returns a default profile if there is one.
+ */
 fn get_default_profile() -> Option<Profile> {
     get_profile(DEFAULT_PROFILE_NAME.to_string())
 }
 
+/**
+ * Validate that a profile credentials USER_ID and SECRET are valid.
+ */
 pub(crate) async fn validate_profile(
     profile_arg: Option<String>,
-    client: Client,
+    client: &Client,
 ) -> Option<FronteggAuthMachine> {
     match get_profile_using_args(profile_arg) {
-        Some(profile) => match authenticate_profile(client, profile).await {
+        Some(profile) => match authenticate_profile(client, &profile).await {
             Ok(frontegg_auth_machine) => {
                 return Some(frontegg_auth_machine);
             }
-            Err(error) => panic!("Error authenticating profile : {:?}", error),
+            Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                "{:}: {:?}",
+                ERROR_AUTHENTICATING_PROFILE_MESSAGE, error
+            ))),
         },
         None => println!("{}", PROFILE_NOT_FOUND_MESSAGE),
     }
@@ -160,6 +206,9 @@ pub(crate) async fn validate_profile(
     None
 }
 
+/**
+ * Get a particular profile from config by using the user's profile argument
+ */
 pub(crate) fn get_profile_using_args(profile_arg: Option<String>) -> Option<Profile> {
     if let Some(profile_name) = profile_arg {
         get_profile(profile_name)

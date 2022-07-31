@@ -15,9 +15,9 @@ use std::time::Duration;
 use std::{collections::HashMap, io::Write};
 
 use crate::profiles::save_profile;
-use crate::utils::trim_newline;
+use crate::utils::{exit_with_fail_message, trim_newline};
 use crate::{
-    BrowserAPIToken, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL,
+    BrowserAPIToken, ExitMessage, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL,
     DEFAULT_PROFILE_NAME, USER_AUTH_URL, WEB_LOGIN_URL,
 };
 use mz_ore::task;
@@ -64,7 +64,10 @@ pub(crate) async fn login_with_browser(profile_name: String) -> Result<(), std::
      */
     let path = format!("{:}?profile_name={:}", WEB_LOGIN_URL, profile_name);
     if let Err(err) = open::that(path.clone()) {
-        panic!("An error occurred when opening '{}': {}", path, err)
+        exit_with_fail_message(ExitMessage::String(format!(
+            "An error occurred when opening '{}': {}",
+            path, err
+        )))
     }
 
     /*

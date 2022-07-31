@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use crate::regions::{cloud_provider_region_details, list_cloud_providers, list_regions};
-use crate::utils::trim_newline;
-use crate::{FronteggAuthMachine, Profile, Region};
+use crate::utils::{exit_with_fail_message, trim_newline};
+use crate::{ExitMessage, FronteggAuthMachine, Profile, Region};
 use reqwest::Client;
 use std::io::Write;
 use std::process::exit;
@@ -20,12 +20,21 @@ use subprocess::Exec;
 /// ----------------------------
 
 /**
- ** Runs psql as a subprocess command
- **/
-fn run_psql_shell(profile: Profile, region: Region) {
+ * Parse host and port from the pgwire URL
+ */
+pub(crate) fn parse_pgwire(region: &Region) -> (&str, &str) {
     let host = &region.environmentd_pgwire_address[..region.environmentd_pgwire_address.len() - 5];
     let port = &region.environmentd_pgwire_address
         [region.environmentd_pgwire_address.len() - 4..region.environmentd_pgwire_address.len()];
+
+    (host, port)
+}
+
+/**
+ ** Runs psql as a subprocess command
+ **/
+fn run_psql_shell(profile: Profile, region: &Region) {
+    let (host, port) = parse_pgwire(region);
     let email = profile.email.clone();
 
     let output = Exec::cmd("psql")
@@ -44,6 +53,30 @@ fn run_psql_shell(profile: Profile, region: Region) {
 }
 
 /**
+ ** Runs pg_isready to check if a region is healthy
+ **/
+pub(crate) fn check_region_health(profile: Profile, region: &Region) -> bool {
+    let (host, port) = parse_pgwire(region);
+    let email = profile.email.clone();
+
+    let output = Exec::cmd("pg_isready")
+        .arg("-U")
+        .arg(email)
+        .arg("-h")
+        .arg(host)
+        .arg("-p")
+        .arg(port)
+        .env("PGPASSWORD", password_from_profile(profile))
+        .arg("-d")
+        .arg("materialize")
+        .arg("-q")
+        .join()
+        .unwrap();
+
+    output.success()
+}
+
+/**
  ** Turn a profile into a Materialize cloud instance password
  **/
 fn password_from_profile(profile: Profile) -> String {
@@ -58,14 +91,10 @@ pub(crate) async fn shell(
     profile: Profile,
     frontegg_auth_machine: FronteggAuthMachine,
 ) {
-    match list_cloud_providers(client.clone(), frontegg_auth_machine.clone()).await {
+    match list_cloud_providers(&client, &frontegg_auth_machine).await {
         Ok(cloud_providers) => {
-            let regions = list_regions(
-                cloud_providers.to_vec(),
-                client.clone(),
-                frontegg_auth_machine.clone(),
-            )
-            .await;
+            let regions =
+                list_regions(&cloud_providers.to_vec(), &client, &frontegg_auth_machine).await;
 
             let cloud_provider_str = cloud_providers
                 .iter()
@@ -94,24 +123,25 @@ pub(crate) async fn shell(
                 match selected_cloud_provider_filtered {
                     Some(cloud_provider) => {
                         match cloud_provider_region_details(
-                            client.clone(),
-                            cloud_provider,
-                            frontegg_auth_machine.clone(),
+                            &client,
+                            &cloud_provider,
+                            &frontegg_auth_machine,
                         )
                         .await
                         {
                             Ok(Some(mut cloud_provider_regions)) => {
                                 match cloud_provider_regions.pop() {
-                                    Some(region) => run_psql_shell(profile, region),
+                                    Some(region) => run_psql_shell(profile, &region),
                                     None => {
                                         println!("The region is not enabled.");
                                         exit(0);
                                     }
                                 }
                             }
-                            Err(error) => {
-                                panic!("Error retrieving region details: {:?}", error);
-                            }
+                            Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                                "Error retrieving region details: {:?}",
+                                error
+                            ))),
                             _ => {}
                         }
                     }
@@ -123,6 +153,9 @@ pub(crate) async fn shell(
                 println!("There are no regions created. Please, create one to run the shell.");
             }
         }
-        Err(error) => panic!("Error retrieving cloud providers: {:?}", error),
+        Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+            "Error retrieving cloud providers: {:?}",
+            error
+        ))),
     }
 }
