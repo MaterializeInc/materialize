@@ -447,7 +447,7 @@ where
                 },
                 &self.writer_id,
             )
-            .await?;
+            .await;
 
         let merge_reqs = match res {
             Ok(Ok((_seqno, merge_reqs))) => {

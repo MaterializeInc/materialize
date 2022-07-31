@@ -32,7 +32,7 @@ use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
 use crate::r#impl::state::{
-    HollowBatch, ReaderState, Since, State, StateCollections, Upper, WriterState,
+    HollowBatch, IdempotencyToken, ReaderState, Since, State, StateCollections, Upper, WriterState,
 };
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
@@ -156,23 +156,41 @@ where
         &mut self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
-    ) -> Result<
-        Result<Result<(SeqNo, Vec<FueledMergeReq<T>>), Upper<T>>, InvalidUsage<T>>,
-        Indeterminate,
-    > {
+    ) -> Result<Result<(SeqNo, Vec<FueledMergeReq<T>>), Upper<T>>, InvalidUsage<T>> {
         let metrics = Arc::clone(&self.metrics);
+        let idempotency_token = IdempotencyToken::new();
         loop {
-            let (seqno, res) = self
+            let res = self
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
-                    state.compare_and_append(batch, writer_id)
+                    state.compare_and_append(batch, writer_id, &idempotency_token)
                 })
-                .await?;
+                .await;
             // TODO: This is not a great place to hook this in.
             self.maybe_expire_readers();
 
             match res {
-                Ok(merge_reqs) => {
-                    return Ok(Ok(Ok((seqno, merge_reqs))));
+                Ok((seqno, merge_reqs, Ok(()))) => {
+                    return Ok(Ok((seqno, merge_reqs)));
+                }
+                Ok((seqno, merge_reqs, Err(_external_err))) => {
+                    // An error occurred while applying the command. We don't
+                    // know whether it succeeded or failed.
+
+                    // Update our local view of the state.
+                    self.fetch_and_update_state().await;
+
+                    if idempotency_token
+                        == self.state.collections.writers[writer_id].last_idempotency_token
+                    {
+                        // The write definitely succeeded.
+                        return Ok(Ok((seqno, merge_reqs)));
+                    } else {
+                        // Either the CAS never hit the consensus backend, or
+                        // the CAS raced with and lost against a dropped
+                        // compare-and-append operation on this writer. Either
+                        // way our write definitely failed and we can safely
+                        // retry.
+                    }
                 }
                 Err(Ok(_current_upper)) => {
                     // If the state machine thinks that the shard upper is not
@@ -187,14 +205,14 @@ where
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
                     if &current_upper != batch.desc.lower() {
-                        return Ok(Ok(Err(Upper(current_upper))));
+                        return Ok(Err(Upper(current_upper)));
                     } else {
                         // The upper stored in state was outdated. Retry after
                         // updating.
                     }
                 }
                 Err(Err(invalid_usage)) => {
-                    return Ok(Err(invalid_usage));
+                    return Err(invalid_usage);
                 }
             }
         }
@@ -369,15 +387,12 @@ where
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
-                Ok((seqno, x)) => match x {
-                    Ok(x) => {
-                        // TODO: This is not a great place to hook this in.
-                        self.maybe_expire_readers();
-                        return (seqno, x);
-                    }
-                    Err(infallible) => match infallible {},
-                },
-                Err(err) => {
+                Ok((seqno, x, Ok(()))) => {
+                    // TODO: This is not a great place to hook this in.
+                    self.maybe_expire_readers();
+                    return (seqno, x);
+                }
+                Ok((_seqno, _x, Err(err))) => {
                     if retry.attempt() >= INFO_MIN_ATTEMPTS {
                         info!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", cmd.name, retry.next_sleep(), err);
                     } else {
@@ -386,6 +401,7 @@ where
                     retry = retry.sleep().await;
                     continue;
                 }
+                Err(infallible) => match infallible {},
             }
         }
     }
@@ -398,14 +414,14 @@ where
         &mut self,
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
-    ) -> Result<(SeqNo, Result<R, E>), Indeterminate> {
+    ) -> Result<(SeqNo, R, Result<(), Indeterminate>), E> {
         cmd.run_cmd(|cas_mismatch_metric| async move {
             let path = self.shard_id().to_string();
 
             loop {
                 let (work_ret, new_state) = match self.state.clone_apply(&mut work_fn) {
                     Continue(x) => x,
-                    Break(err) => return Ok((self.state.seqno(), Err(err))),
+                    Break(err) => return Err(err),
                 };
                 trace!(
                     "apply_unbatched_cmd {} attempting {}\n  new_state={:?}",
@@ -435,13 +451,9 @@ where
                     },
                 )
                 .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
-                .await
-                .map_err(|err| {
-                    debug!("apply_unbatched_cmd {} errored: {}", cmd.name, err);
-                    err
-                })?;
+                .await;
                 match cas_res {
-                    Ok(()) => {
+                    Ok(Ok(())) => {
                         trace!(
                             "apply_unbatched_cmd {} succeeded {}\n  new_state={:?}",
                             cmd.name,
@@ -464,9 +476,9 @@ where
                         }
 
                         self.state = new_state;
-                        return Ok((self.state.seqno(), Ok(work_ret)));
+                        return Ok((self.state.seqno(), work_ret, Ok(())));
                     }
-                    Err(current) => {
+                    Ok(Err(current)) => {
                         debug!(
                             "apply_unbatched_cmd {} {} lost the CaS race, retrying: {} vs {:?}",
                             self.shard_id(),
@@ -480,6 +492,10 @@ where
                         // Intentionally don't backoff here. It would only make
                         // starvation issues even worse.
                         continue;
+                    }
+                    Err(err) => {
+                        debug!("apply_unbatched_cmd {} errored: {}", cmd.name, err);
+                        return Ok((new_state.seqno(), work_ret, Err(err)));
                     }
                 }
             }
@@ -933,7 +949,6 @@ mod tests {
                                 .machine
                                 .compare_and_append(batch, &write.writer_id)
                                 .await
-                                .expect("indeterminate")
                                 .expect("invalid usage")
                                 .expect("upper mismatch");
                             state.merge_reqs.append(&mut merge_reqs);

@@ -23,9 +23,9 @@ use uuid::Uuid;
 use crate::error::CodecMismatch;
 use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::{
-    HollowBatch, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReaderState, ProtoSnapshotSplit,
-    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
-    ReaderState, State, StateCollections, WriterState,
+    HollowBatch, IdempotencyToken, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReaderState,
+    ProtoSnapshotSplit, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
+    ProtoWriterState, ReaderState, State, StateCollections, WriterState,
 };
 use crate::r#impl::trace::Trace;
 use crate::read::{ReaderId, SnapshotSplit};
@@ -75,6 +75,19 @@ impl RustType<String> for WriterId {
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
         match parse_id('w', "WriterId", &proto) {
             Ok(x) => Ok(WriterId(x)),
+            Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
+        }
+    }
+}
+
+impl RustType<String> for IdempotencyToken {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        match parse_id('t', "IdempotencyToken", &proto) {
+            Ok(x) => Ok(IdempotencyToken(x)),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
     }
@@ -172,6 +185,7 @@ where
                 .map(|(id, writer)| ProtoWriterState {
                     writer_id: id.into_proto(),
                     last_heartbeat_timestamp_ms: writer.last_heartbeat_timestamp_ms,
+                    last_idempotency_token: writer.last_idempotency_token.into_proto(),
                 })
                 .collect(),
             trace: Some(self.collections.trace.into_proto()),
@@ -228,6 +242,7 @@ where
                 writer_id,
                 WriterState {
                     last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
+                    last_idempotency_token: proto.last_idempotency_token.into_rust()?,
                 },
             );
         }

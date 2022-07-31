@@ -20,8 +20,10 @@ use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use uuid::Uuid;
 
 use crate::error::{Determinacy, InvalidUsage};
+use crate::r#impl::encoding::parse_id;
 use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
@@ -32,6 +34,36 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_persist_client.r#impl.state.rs"
 ));
+
+/// An opaque token to disambiguate write operations.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct IdempotencyToken(pub [u8; 16]);
+
+impl std::fmt::Display for IdempotencyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "t{}", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for IdempotencyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IdempotencyToken({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::str::FromStr for IdempotencyToken {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_id('t', "IdempotencyToken", s).map(IdempotencyToken)
+    }
+}
+
+impl IdempotencyToken {
+    pub fn new() -> Self {
+        IdempotencyToken(*Uuid::new_v4().as_bytes())
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReaderState<T> {
@@ -45,6 +77,9 @@ pub struct ReaderState<T> {
 pub struct WriterState {
     /// UNIX_EPOCH timestamp (in millis) of this writer's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
+    /// The idempotency token associated with the last compare and append
+    /// operation.
+    pub last_idempotency_token: IdempotencyToken,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -97,6 +132,7 @@ where
     ) -> ControlFlow<Infallible, (Upper<T>, WriterState)> {
         let writer_state = WriterState {
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            last_idempotency_token: IdempotencyToken::new(),
         };
         self.writers.insert(writer_id.clone(), writer_state.clone());
         Continue((Upper(self.trace.upper().clone()), writer_state))
@@ -122,10 +158,13 @@ where
         &mut self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
+        idempotency_token: &IdempotencyToken,
     ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, Vec<FueledMergeReq<T>>> {
-        if !self.writers.contains_key(writer_id) {
-            return Break(Err(InvalidUsage::UnknownWriter(writer_id.clone())));
-        }
+        let writer = match self.writers.get_mut(writer_id) {
+            None => return Break(Err(InvalidUsage::UnknownWriter(writer_id.clone()))),
+            Some(writer) => writer,
+        };
+        writer.last_idempotency_token = idempotency_token.clone();
 
         if PartialOrder::less_than(batch.desc.upper(), batch.desc.lower()) {
             return Break(Err(InvalidUsage::InvalidBounds {
@@ -540,18 +579,26 @@ mod tests {
 
         // Cannot insert a batch with a lower != current shard upper.
         assert_eq!(
-            state.compare_and_append(&hollow(1, 2, &["key1"], 1), &writer_id),
+            state.compare_and_append(
+                &hollow(1, 2, &["key1"], 1),
+                &writer_id,
+                &IdempotencyToken::new()
+            ),
             Break(Ok(Upper(Antichain::from_elem(0))))
         );
 
         // Insert an empty batch with an upper > lower..
         assert!(state
-            .compare_and_append(&hollow(0, 5, &[], 0), &writer_id)
+            .compare_and_append(&hollow(0, 5, &[], 0), &writer_id, &IdempotencyToken::new())
             .is_continue());
 
         // Cannot insert a batch with a upper less than the lower.
         assert_eq!(
-            state.compare_and_append(&hollow(5, 4, &["key1"], 1), &writer_id),
+            state.compare_and_append(
+                &hollow(5, 4, &["key1"], 1),
+                &writer_id,
+                &IdempotencyToken::new()
+            ),
             Break(Err(InvalidBounds {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(4)
@@ -560,7 +607,11 @@ mod tests {
 
         // Cannot insert a nonempty batch with an upper equal to lower.
         assert_eq!(
-            state.compare_and_append(&hollow(5, 5, &["key1"], 1), &writer_id),
+            state.compare_and_append(
+                &hollow(5, 5, &["key1"], 1),
+                &writer_id,
+                &IdempotencyToken::new()
+            ),
             Break(Err(InvalidEmptyTimeInterval {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(5),
@@ -570,7 +621,7 @@ mod tests {
 
         // Can insert an empty batch with an upper equal to lower.
         assert!(state
-            .compare_and_append(&hollow(5, 5, &[], 0), &writer_id)
+            .compare_and_append(&hollow(5, 5, &[], 0), &writer_id, &IdempotencyToken::new())
             .is_continue());
     }
 
@@ -598,7 +649,11 @@ mod tests {
         // Advance upper to 5.
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id)
+            .compare_and_append(
+                &hollow(0, 5, &["key1"], 1),
+                &writer_id,
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         // Can take a snapshot with as_of < upper.
@@ -647,7 +702,7 @@ mod tests {
         // Advance the upper to 10 via an empty batch.
         assert!(state
             .collections
-            .compare_and_append(&hollow(5, 10, &[], 0), &writer_id)
+            .compare_and_append(&hollow(5, 10, &[], 0), &writer_id, &IdempotencyToken::new())
             .is_continue());
 
         // Can still take snapshots at times < upper.
@@ -665,7 +720,11 @@ mod tests {
         // Advance upper to 15.
         assert!(state
             .collections
-            .compare_and_append(&hollow(10, 15, &["key2"], 1), &writer_id)
+            .compare_and_append(
+                &hollow(10, 15, &["key2"], 1),
+                &writer_id,
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         // Filter out batches whose lowers are less than the requested as of (the
@@ -712,11 +771,19 @@ mod tests {
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id)
+            .compare_and_append(
+                &hollow(0, 5, &["key1"], 1),
+                &writer_id,
+                &IdempotencyToken::new()
+            )
             .is_continue());
         assert!(state
             .collections
-            .compare_and_append(&hollow(5, 10, &["key2"], 1), &writer_id)
+            .compare_and_append(
+                &hollow(5, 10, &["key2"], 1),
+                &writer_id,
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         // All frontiers in [0, 5) return the first batch.
@@ -753,9 +820,11 @@ mod tests {
 
         // Writer has not been registered and should be unable to write
         assert_eq!(
-            state
-                .collections
-                .compare_and_append(&hollow(0, 2, &["key1"], 1), &writer_id_one),
+            state.collections.compare_and_append(
+                &hollow(0, 2, &["key1"], 1),
+                &writer_id_one,
+                &IdempotencyToken::new()
+            ),
             Break(Err(InvalidUsage::UnknownWriter(writer_id_one.clone())))
         );
 
@@ -773,7 +842,11 @@ mod tests {
         // Writer is registered and is now eligible to write
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 2, &["key1"], 1), &writer_id_one)
+            .compare_and_append(
+                &hollow(0, 2, &["key1"], 1),
+                &writer_id_one,
+                &IdempotencyToken::new()
+            )
             .is_continue());
 
         assert!(state
@@ -783,16 +856,22 @@ mod tests {
 
         // Writer has been expired and should be fenced off from further writes
         assert_eq!(
-            state
-                .collections
-                .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_one),
+            state.collections.compare_and_append(
+                &hollow(2, 5, &["key2"], 1),
+                &writer_id_one,
+                &IdempotencyToken::new()
+            ),
             Break(Err(InvalidUsage::UnknownWriter(writer_id_one.clone())))
         );
 
         // But other writers should still be able to write
         assert!(state
             .collections
-            .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_two)
+            .compare_and_append(
+                &hollow(2, 5, &["key2"], 1),
+                &writer_id_two,
+                &IdempotencyToken::new()
+            )
             .is_continue());
     }
 }
