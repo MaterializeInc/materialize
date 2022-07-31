@@ -23,9 +23,9 @@ use subprocess::Exec;
  ** Runs psql as a subprocess command
  **/
 fn run_psql_shell(profile: Profile, region: Region) {
-    let host = &region.coordd_pgwire_address[..region.coordd_pgwire_address.len() - 5];
-    let port = &region.coordd_pgwire_address
-        [region.coordd_pgwire_address.len() - 4..region.coordd_pgwire_address.len()];
+    let host = &region.environmentd_pgwire_address[..region.environmentd_pgwire_address.len() - 5];
+    let port = &region.environmentd_pgwire_address
+        [region.environmentd_pgwire_address.len() - 4..region.environmentd_pgwire_address.len()];
     let email = profile.email.clone();
 
     let output = Exec::cmd("psql")
@@ -57,7 +57,7 @@ pub(crate) async fn shell(
     client: Client,
     profile: Profile,
     frontegg_auth_machine: FronteggAuthMachine,
-) -> () {
+) {
     match list_cloud_providers(client.clone(), frontegg_auth_machine.clone()).await {
         Ok(cloud_providers) => {
             let regions = list_regions(
@@ -75,7 +75,7 @@ pub(crate) async fn shell(
             let mut region_input = String::new();
 
             // TODO: Very similar code for both cases
-            if regions.len() > 0 {
+            if !regions.is_empty() {
                 println!(
                     r#"Please, first select a region: ["{}"]"#,
                     cloud_provider_str
