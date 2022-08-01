@@ -112,7 +112,7 @@ use crate::catalog::{
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::coord::appends::{AdvanceLocalInput, AdvanceTables, Deferred, PendingWriteTxn};
+use crate::coord::appends::{AdvanceLocalInput, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
@@ -275,10 +275,6 @@ pub struct Coordinator<S> {
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
-
-    /// Tracks tables needing advancement, which can be processed at a low priority
-    /// in the biased select loop.
-    advance_tables: AdvanceTables<Timestamp>,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -757,18 +753,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
-
-                // At the lowest priority, process table advancements. This is a blocking
-                // HashMap instead of a channel so that we can delay the determination of
-                // which table to advance until we know we can process it. In the event of
-                // very high traffic where a second AdvanceLocalInputs message occurs before
-                // advance_tables is fully emptied, this allows us to replace an old request
-                // with a new one, avoiding duplication of work, which wouldn't be possible if
-                // we had already sent all AdvanceLocalInput messages on a channel.
-                // See [`AdvanceTables::recv`] for notes on why this is cancel-safe.
-                inputs = self.advance_tables.recv() => {
-                    Message::AdvanceLocalInput(inputs)
-                },
             };
 
             // All message processing functions trace. Start a parent span for them to make
@@ -927,7 +911,6 @@ pub async fn serve<S: Append + 'static>(
                 internal_cmd_tx,
                 strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
-                advance_tables: AdvanceTables::new(),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
