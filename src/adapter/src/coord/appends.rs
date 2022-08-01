@@ -335,6 +335,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for (_, updates) in &mut appends {
             differential_dataflow::consolidation::consolidate(updates);
         }
+        appends.retain(|_key, updates| !updates.is_empty());
         let appends = appends
             .into_iter()
             .map(|(id, updates)| {
@@ -348,14 +349,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     .collect();
                 (id, updates, advance_to)
             })
-            .collect();
-        self.controller
-            .storage_mut()
-            .append(appends)
-            .expect("invalid updates")
-            .await
-            .expect("One-shot shouldn't fail")
-            .unwrap();
+            .collect::<Vec<_>>();
+        if !appends.is_empty() {
+            self.controller
+                .storage_mut()
+                .append(appends)
+                .expect("invalid updates")
+                .await
+                .expect("One-shot shouldn't fail")
+                .unwrap();
+        }
     }
 
     /// Enqueue requests to advance all local inputs (tables) to the current wall

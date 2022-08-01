@@ -1543,8 +1543,14 @@ mod persist_write_handles {
             updates: Vec<(GlobalId, Vec<Update<T>>, T)>,
         ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            self.send(PersistWorkerCmd::Append(updates, tx));
-            rx
+            if updates.is_empty() {
+                tx.send(Ok(()))
+                    .expect("rx has not been dropped at this point");
+                rx
+            } else {
+                self.send(PersistWorkerCmd::Append(updates, tx));
+                rx
+            }
         }
 
         fn send(&self, cmd: PersistWorkerCmd<T>) {
