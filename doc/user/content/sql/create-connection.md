@@ -9,6 +9,8 @@ menu:
 
 A connection describes how to connect and authenticate to an external system you want Materialize to read data from. Once created, a connection is **reusable** across multiple [`CREATE SOURCE`](/sql/create-source) statements.
 
+To use credentials that contain sensitive information (like passwords and SSL keys) in a connection, you must first [create a secret](/sql/create-secret) to securely store them in Materialize's secret management system. Credentials that are generally not sensitive (like usernames and SSL certificates) can be specified as plain `text`, or also stored as secrets.
+
 [//]: # "TODO(morsapaes) Adapt once sinks are wired up to use connections."
 
 ## Syntax
@@ -151,5 +153,5 @@ CREAT CONNECTION ssh_connection
 
 ## Related pages
 
-- `CREATE SECRET`
+- [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE SOURCE`](/sql/create-source)

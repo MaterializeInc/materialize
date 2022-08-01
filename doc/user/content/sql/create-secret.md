@@ -1,6 +1,6 @@
 ---
 title: "CREATE SECRET"
-description: "`CREATE SECRET` securely stores confidential credentials in Materialize's secret management system."
+description: "`CREATE SECRET` securely stores credentials in Materialize's secret management system."
 menu:
   main:
     parent: 'commands'
