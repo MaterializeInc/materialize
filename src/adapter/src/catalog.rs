@@ -151,6 +151,7 @@ pub struct CatalogState {
     storage_host_sizes: StorageHostSizeMap,
     default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
+    system_configuration: HashMap<String, mz_sql_parser::ast::Value>,
 }
 
 impl CatalogState {
@@ -649,6 +650,16 @@ impl CatalogState {
             .and_then(|instance| instance.replicas_by_id.get(&replica_id))
             .and_then(|replica| replica.process_status.get(&process_id))
             .cloned()
+    }
+
+    /// Insert system configuration `name` with `value`.
+    fn insert_system_configuration(&mut self, name: String, value: mz_sql_parser::ast::Value) {
+        self.system_configuration.insert(name, value);
+    }
+
+    /// Remove system configuration `name`.
+    fn remove_system_configuration(&mut self, name: &str) -> Option<mz_sql_parser::ast::Value> {
+        self.system_configuration.remove(name)
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -1644,6 +1655,7 @@ impl<S: Append> Catalog<S> {
                 storage_host_sizes: config.storage_host_sizes,
                 default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
+                system_configuration: HashMap::new(),
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -1911,6 +1923,11 @@ impl<S: Append> Catalog<S> {
             catalog
                 .state
                 .insert_compute_instance_replica(instance_id, name, replica_id, config);
+        }
+
+        let system_config = catalog.storage().await.load_system_configuration().await?;
+        for (name, value) in system_config {
+            catalog.state.insert_system_configuration(name, value);
         }
 
         if !config.skip_migrations {
@@ -3067,6 +3084,10 @@ impl<S: Append> Catalog<S> {
             UpdateComputeInstanceStatus {
                 event: ComputeInstanceEvent,
             },
+            UpdateServerConfiguration {
+                name: String,
+                value: mz_sql_parser::ast::Value,
+            },
         }
 
         let drop_ids: HashSet<_> = ops
@@ -3522,6 +3543,10 @@ impl<S: Append> Catalog<S> {
 
                     vec![Action::UpdateComputeInstanceStatus { event }]
                 }
+                Op::UpdateServerConfiguration { name, value } => {
+                    tx.upsert_system_config(&name, value.clone()).await?;
+                    vec![Action::UpdateServerConfiguration { name, value }]
+                }
             });
         }
 
@@ -3760,6 +3785,12 @@ impl<S: Append> Catalog<S> {
                         );
                         builtin_table_updates.push(update);
                     }
+                }
+                Action::UpdateServerConfiguration { name, value } => {
+                    let old_value = state.remove_system_configuration(&name);
+                    state.insert_system_configuration(name.clone(), value.clone());
+                    builtin_table_updates
+                        .extend(state.pack_system_configuration_update(&name, value, old_value)?);
                 }
             }
         }
@@ -4081,6 +4112,10 @@ pub enum Op {
     },
     UpdateComputeInstanceStatus {
         event: ComputeInstanceEvent,
+    },
+    UpdateServerConfiguration {
+        name: String,
+        value: mz_sql_parser::ast::Value,
     },
 }
 

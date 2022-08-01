@@ -1,0 +1,46 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+query TT
+SELECT * FROM mz_system_configuration;
+----
+
+statement ok
+ALTER SYSTEM SET wal_level TO logical
+
+query TT
+SELECT * FROM mz_system_configuration;
+----
+wal_level   {"String":"logical"}
+
+statement ok
+ALTER SYSTEM SET wal_level = 'physical'
+
+query TT
+SELECT * FROM mz_system_configuration;
+----
+wal_level   {"String":"physical"}
+
+statement ok
+ALTER SYSTEM SET shared_buffers = 5
+
+query TT
+SELECT * FROM mz_system_configuration;
+----
+shared_buffers  {"Number":"5"}
+wal_level       {"String":"physical"}

@@ -360,6 +360,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
                     | Statement::AlterObjectRename(_)
+                    | Statement::AlterSystem(_)
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)

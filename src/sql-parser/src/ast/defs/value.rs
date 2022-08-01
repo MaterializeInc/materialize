@@ -21,7 +21,10 @@
 use std::fmt;
 use std::str::FromStr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::Ident;
 
 #[derive(Debug)]
 pub struct ValueError(pub(crate) String);
@@ -35,7 +38,7 @@ impl fmt::Display for ValueError {
 }
 
 /// Primitive SQL values.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Value {
     /// Numeric value.
     Number(String),
@@ -134,7 +137,13 @@ impl AstDisplay for Value {
 }
 impl_display!(Value);
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+impl From<Ident> for Value {
+    fn from(ident: Ident) -> Self {
+        Self::String(ident.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DateTimeField {
     Millennium,
     Century,
@@ -192,7 +201,7 @@ impl FromStr for DateTimeField {
 
 /// An intermediate value for Intervals, which tracks all data from
 /// the user, as well as the computed ParsedDateTime.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct IntervalValue {
     /// The raw `[value]` that was present in `INTERVAL '[value]'`
     pub value: String,

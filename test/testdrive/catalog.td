@@ -452,6 +452,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_system_configuration
 mz_tables
 mz_types
 mz_view_foreign_keys
@@ -485,6 +486,7 @@ mz_secrets                    system
 mz_sinks                      system
 mz_sources                    system
 mz_ssh_tunnel_connections system
+mz_system_configuration       system
 mz_tables                     system
 mz_types                      system
 mz_view_foreign_keys          system
@@ -520,6 +522,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_system_configuration
 mz_tables
 mz_types
 mz_view_foreign_keys
@@ -556,6 +559,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_system_configuration
 mz_tables
 mz_types
 mz_view_foreign_keys
@@ -565,7 +569,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-29
+30
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

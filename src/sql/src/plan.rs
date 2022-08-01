@@ -121,6 +121,7 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
+    AlterSystem(AlterSystemPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -465,6 +466,12 @@ pub struct AlterItemRenamePlan {
 pub struct AlterSecretPlan {
     pub id: GlobalId,
     pub secret_as: MirScalarExpr,
+}
+
+#[derive(Debug)]
+pub struct AlterSystemPlan {
+    pub name: String,
+    pub value: SetVariableValue,
 }
 
 #[derive(Debug)]

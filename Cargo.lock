@@ -3956,6 +3956,7 @@ dependencies = [
  "mz-walkabout",
  "phf",
  "phf_codegen",
+ "serde",
  "tracing",
  "uncased",
  "unicode-width",
