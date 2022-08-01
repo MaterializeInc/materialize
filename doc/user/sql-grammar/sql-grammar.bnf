@@ -278,7 +278,6 @@ select_stmt ::=
   ( 'LIMIT' expr )?
   ( 'OFFSET' expr )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
-  ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
 show_connections ::=
@@ -335,7 +334,6 @@ tail_stmt ::=
     'TAIL'
     ( object_name | '(' select_stmt ')' )
     ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
-    ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
 time_unit ::=
   'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS' | 'MICROSECONDS'
 type_bool ::=

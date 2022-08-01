@@ -64,11 +64,12 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::{
-    peek, read_policy, Coordinator, Message, SendDiffs, SinkConnectionReady, TxnReads,
+    peek, read_policy, Coordinator, Message, PendingTxn, SendDiffs, SinkConnectionReady, TxnReads,
     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
+use crate::session::vars::IsolationLevel;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -1616,19 +1617,37 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
 
         let (response, action) = match result {
-            Ok((Some(writes), _)) if writes.is_empty() => (response, action),
-            Ok((Some(writes), write_lock_guard)) => {
+            Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
+                (response, action)
+            }
+            Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
                 self.submit_write(PendingWriteTxn {
                     writes,
-                    client_transmitter: tx,
-                    response,
-                    session,
-                    action,
                     write_lock_guard,
+                    pending_txn: PendingTxn {
+                        client_transmitter: tx,
+                        response,
+                        session,
+                        action,
+                    },
                 });
                 return;
             }
-            Ok((None, _)) => (response, action),
+            Ok((Some(TransactionOps::Peeks(_)), _))
+                if session.vars().transaction_isolation()
+                    == &IsolationLevel::StrictSerializable =>
+            {
+                self.strict_serializable_reads_tx
+                    .send(PendingTxn {
+                        client_transmitter: tx,
+                        response,
+                        session,
+                        action,
+                    })
+                    .expect("sending to strict_serializable_reads_tx cannot fail");
+                return;
+            }
+            Ok((_, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
         session.vars_mut().end_transaction(action);
@@ -1639,13 +1658,19 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<(Option<Vec<WriteOp>>, Option<OwnedMutexGuard<()>>), AdapterError> {
+    ) -> Result<
+        (
+            Option<TransactionOps<Timestamp>>,
+            Option<OwnedMutexGuard<()>>,
+        ),
+        AdapterError,
+    > {
         let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
-            if let (Some(ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
-                if let TransactionOps::Writes(mut writes) = ops {
-                    for WriteOp { id, .. } in &writes {
+            if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
+                if let TransactionOps::Writes(writes) = &mut ops {
+                    for WriteOp { id, .. } in &mut writes.iter() {
                         // Re-verify this id exists.
                         let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
                             AdapterError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
@@ -1654,10 +1679,11 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                     writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                    return Ok((Some(writes), write_lock_guard));
                 }
+                return Ok((Some(ops), write_lock_guard));
             }
         }
+
         Ok((None, None))
     }
 
@@ -1921,10 +1947,9 @@ impl<S: Append + 'static> Coordinator<S> {
         let fast_path =
             fast_path.finalize(|dataflow| self.finalize_dataflow(dataflow, compute_instance));
 
-        // We only track the peeks in the session if the query is in a transaction,
-        // the query doesn't use AS OF, it's a non-constant or timestamp dependent query.
-        if in_transaction
-            && when == QueryWhen::Immediately
+        // We only track the peeks in the session if the query doesn't use AS OF, it's a
+        // non-constant or timestamp dependent query.
+        if when == QueryWhen::Immediately
             && (!matches!(fast_path, peek::Plan::Constant(_)) || !timestamp_independent)
         {
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;

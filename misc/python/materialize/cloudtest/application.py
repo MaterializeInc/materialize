@@ -7,10 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 import subprocess
 from typing import List
-from unittest.mock import patch
 
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
@@ -39,32 +37,19 @@ class Application:
             resource.create()
 
     def acquire_images(self) -> None:
-        # Direct mzbuild to push the images into minikube's container registry
-        # while preserving the original values for use inside the ci-builder
-        minikube_env = {
-            "MZ_DEV_CI_BUILDER_DOCKER_HOST": os.environ.get("DOCKER_HOST", ""),
-            "MZ_DEV_CI_BUILDER_DOCKER_TLS_VERIFY": os.environ.get(
-                "DOCKER_TLS_VERIFY", ""
-            ),
-            "MZ_DEV_CI_BUILDER_DOCKER_CERT_PATH": os.environ.get(
-                "DOCKER_CERT_PATH", ""
-            ),
-        }
-
-        minikube_env_str = subprocess.check_output(["minikube", "docker-env"]).decode(
-            "ascii"
-        )
-        prefix = "export "
-        for minikube_env_line in minikube_env_str.splitlines():
-            if minikube_env_line.startswith(prefix):
-                parts = minikube_env_line[len(prefix) :].split("=")
-                minikube_env[parts[0]] = parts[1].strip('"')
-
         repo = mzbuild.Repository(ROOT)
-        with patch.dict("os.environ", minikube_env):
-            for image in self.images:
-                deps = repo.resolve_dependencies([repo.images[image]])
-                deps.acquire()
+        for image in self.images:
+            deps = repo.resolve_dependencies([repo.images[image]])
+            deps.acquire()
+            for dep in deps:
+                subprocess.check_call(
+                    [
+                        "kind",
+                        "load",
+                        "docker-image",
+                        dep.spec(),
+                    ]
+                )
 
 
 class MaterializeApplication(Application):
@@ -89,8 +74,10 @@ class MaterializeApplication(Application):
             [
                 "kubectl",
                 "label",
+                "--context",
+                "kind-kind",
                 "--overwrite",
-                "node/minikube",
+                "node/kind-control-plane",
                 "materialize.cloud/availability-zone=",
             ]
         )
