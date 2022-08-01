@@ -62,7 +62,7 @@ that the query is scanning the whole table resulting in slower results. -->
 
 ### WHERE
 
-The filtering clause is one of the most used. Setting up an index on the filtered columns will increases the query speed.
+The filtering clause is one of the most used. Setting up an index on the filtered columns will increase the query speed.
 
 #### Literal Values
 
