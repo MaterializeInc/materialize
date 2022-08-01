@@ -455,20 +455,26 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // Cancel pending writes. There is at most one pending write per session.
-            if let Some(idx) = self
-                .pending_writes
-                .iter()
-                .position(|pending_write_txn| matches!(pending_write_txn, PendingWriteTxn::User {session, ..} if session.conn_id() == conn_id))
-            {
+            if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
+                matches!(pending_write_txn, PendingWriteTxn::User {
+                    pending_txn:
+                        PendingTxn {
+                            session,
+                            ..
+                        },
+                    ..
+                } if session.conn_id() == conn_id)
+            }) {
                 if let PendingWriteTxn::User {
                     pending_txn:
-                    PendingTxn {
-                        client_transmitter,
-                        session,
-                        ..
-                    },
+                        PendingTxn {
+                            client_transmitter,
+                            session,
+                            ..
+                        },
                     ..
-                } = self.pending_writes.remove(idx) {
+                } = self.pending_writes.remove(idx)
+                {
                     let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
                 }
             }
