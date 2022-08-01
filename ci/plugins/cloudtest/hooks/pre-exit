@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -xeu
+
+echo "~~~ Cleaning up after cloudtest" >&2
+
+bin/ci-builder run stable kubectl --context kind-kind get pods -o name | grep -v -E 'kubernetes|minio|postgres|redpanda' | xargs -L 1 bin/ci-builder run stable kubectl --context kind-kind logs --prefix=true > services.log || true
+buildkite-agent artifact upload services.log
+
+bin/ci-builder run stable kubectl --context kind-kind delete all --all

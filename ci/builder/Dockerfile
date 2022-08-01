@@ -240,6 +240,10 @@ ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=0
 
+# The kubeconfig file needs to be in the working directory so that it can be shared
+# across invocations of the container
+ENV KUBECONFIG=kubeconfig
+
 # Set a environment variable that tools can check to see if they're in the
 # builder or not.
 
