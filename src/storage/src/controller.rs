@@ -454,7 +454,7 @@ pub enum StorageError {
     UpdateBeyondUpper(GlobalId),
     /// The read was at a timestamp before the collection's since
     ReadBeforeSince(GlobalId),
-    /// The expected upper of one or more appends was different than the actual appends of the collections
+    /// The expected upper of one or more appends was different from the actual upper of the collection
     InvalidUppers(Vec<GlobalId>),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
