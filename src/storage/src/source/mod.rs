@@ -881,9 +881,6 @@ where
 
                         timestamper.advance().await;
 
-                        // Advance timestamps for healthchecker collection to ensure it's queryable
-                        healthchecker.advance_upper().await;
-
                         // TODO(petrosagg): compaction should be driven by AllowCompaction commands
                         // coming from the storage controller
                         let new_ts_upper = timestamper

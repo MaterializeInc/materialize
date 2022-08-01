@@ -119,44 +119,6 @@ impl Healthchecker {
         Ok(healthchecker)
     }
 
-    /// Advances the upper to ensure the collection is queryable, even when the status
-    /// is unchanged.
-    pub async fn advance_upper(&mut self) {
-        if self.active {
-            let updates: Vec<((SourceData, ()), u64, i64)> = vec![];
-            loop {
-                let next_ts = (self.now)();
-                let new_upper = Antichain::from_elem(next_ts + 1);
-                match self
-                    .write_handle
-                    .compare_and_append(updates.iter(), self.upper.clone(), new_upper.clone())
-                    .await
-                {
-                    Ok(Ok(Ok(()))) => {
-                        trace!("Upper advanced to {new_upper:?}!");
-                        self.upper = new_upper;
-                        break;
-                    }
-                    Ok(Ok(Err(_actual_upper))) => {
-                        // Upper is already up to date, no need to do any work
-                        break;
-                    }
-                    Ok(Err(invalid_use)) => panic!("compare_and_append failed: {invalid_use}"),
-                    // An external error means that the operation might have suceeded or failed but we
-                    // don't know. In either case it is safe to retry because:
-                    // * If it succeeded, then on retry we'll get an `Upper(_)` error as if some other
-                    //   process raced us. This is safe and will just mean that there is no work to be
-                    //   done here any longer, as the `upper` was already advanced.
-                    // * If it failed, then we'll succeed on retry and proceed normally.
-                    Err(external_err) => {
-                        trace!("compare_and_append in advance_upper failed: {external_err}");
-                        continue;
-                    }
-                };
-            }
-        }
-    }
-
     /// Process a [`SourceStatusUpdate`] emitted by a source
     pub async fn update_status(&mut self, status_update: SourceStatusUpdate) {
         trace!(
@@ -609,58 +571,6 @@ mod tests {
         assert_eq!(error_message, "some error here")
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_advance_upper() {
-        let shard_id = ShardId::new();
-        let persist_cache = persist_cache();
-        let mut healthchecker = simple_healthchecker(shard_id, 1, &persist_cache).await;
-        tokio::time::advance(Duration::from_millis(1)).await;
-
-        // Update status to Running
-        healthchecker
-            .update_status(SourceStatusUpdate::new(SourceStatus::Running))
-            .await;
-
-        // Upper is now at 2
-        assert_eq!(
-            get_upper(shard_id, &persist_cache).await,
-            Antichain::from_elem(2)
-        );
-
-        // Now update status to Running multiple times, which is a no-op
-        tokio::time::advance(Duration::from_millis(1)).await;
-        healthchecker
-            .update_status(SourceStatusUpdate::new(SourceStatus::Running))
-            .await;
-        tokio::time::advance(Duration::from_millis(1)).await;
-        healthchecker
-            .update_status(SourceStatusUpdate::new(SourceStatus::Running))
-            .await;
-
-        // Check in the storage collection that there is just a single row
-        assert_eq!(
-            dump_storage_collection(shard_id, &persist_cache)
-                .await
-                .len(),
-            1
-        );
-
-        // Check that the upper has not advanced, as the subsequent messages were ignored
-        assert_eq!(
-            get_upper(shard_id, &persist_cache).await,
-            Antichain::from_elem(2)
-        );
-
-        // Advance timestamp
-        tokio::time::advance(Duration::from_millis(1)).await;
-        healthchecker.advance_upper().await;
-
-        assert_eq!(
-            get_upper(shard_id, &persist_cache).await,
-            Antichain::from_elem(5)
-        );
-    }
-
     #[test]
     fn test_can_transition() {
         let test_cases = [
@@ -847,22 +757,5 @@ mod tests {
         v.into_iter()
             .map(|((v, _), _, _)| v.unwrap().0.unwrap())
             .collect_vec()
-    }
-
-    async fn get_upper(
-        shard_id: ShardId,
-        persist_clients: &Arc<Mutex<PersistClientCache>>,
-    ) -> Antichain<Timestamp> {
-        let persist_client = persist_clients
-            .lock()
-            .await
-            .open((*PERSIST_LOCATION).clone())
-            .await
-            .unwrap();
-
-        let write_handle: WriteHandle<SourceData, (), Timestamp, i64> =
-            persist_client.open_writer(shard_id).await.unwrap();
-
-        write_handle.upper().clone()
     }
 }
