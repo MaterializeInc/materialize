@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, Instrument, Span};
 
 use crate::r#impl::machine::retry_external;
@@ -95,7 +96,7 @@ impl GarbageCollector {
         }
     }
 
-    pub fn gc_and_truncate_background(&self, req: GcReq) {
+    pub fn gc_and_truncate_background(&self, req: GcReq) -> Option<JoinHandle<()>> {
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
@@ -110,7 +111,7 @@ impl GarbageCollector {
             req.new_seqno_since.0 / gc_threshold != req.old_seqno_since.0 / gc_threshold;
         if !should_gc {
             self.metrics.gc.skipped.inc();
-            return;
+            return None;
         }
 
         // Spawn GC in a background task, so the state change that triggered it
@@ -121,7 +122,7 @@ impl GarbageCollector {
         let consensus = Arc::clone(&self.consensus);
         let blob = Arc::clone(&self.blob);
         let metrics = Arc::clone(&self.metrics);
-        let _ = mz_ore::task::spawn(
+        Some(mz_ore::task::spawn(
             || "persist::gc_and_truncate",
             async move {
                 let start = Instant::now();
@@ -131,7 +132,7 @@ impl GarbageCollector {
                 metrics.gc.seconds.inc_by(start.elapsed().as_secs_f64());
             }
             .instrument(gc_span),
-        );
+        ))
     }
 
     pub async fn gc_and_truncate(

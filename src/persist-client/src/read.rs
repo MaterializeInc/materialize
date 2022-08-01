@@ -39,7 +39,7 @@ use crate::r#impl::machine::{retry_external, Machine};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::paths::PartialBlobKey;
 use crate::r#impl::state::Since;
-use crate::{PersistConfig, ShardId};
+use crate::{GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -95,7 +95,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
     as_of: Antichain<T>,
@@ -109,7 +109,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn new(handle: ReadHandle<K, V, T, D>, split: SnapshotSplit<T>) -> Self {
         debug_assert_eq!(handle.reader_id, split.reader_id);
@@ -212,7 +212,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + Lattice + Codec64 + Ord,
-    D: Semigroup + Codec64 + Ord,
+    D: Semigroup + Codec64 + Ord + Send + Sync,
 {
     /// Test helper to read all data in the snapshot and return it sorted.
     #[cfg(test)]
@@ -247,7 +247,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
     as_of: Antichain<T>,
@@ -261,7 +261,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     async fn new(handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
         let mut ret = Listen {
@@ -469,12 +469,13 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
+    pub(crate) gc: GarbageCollector,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
@@ -487,7 +488,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     /// This handle's `since` frontier.
     ///
@@ -508,7 +509,7 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
         trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
-        let (_seqno, current_reader_since) = self
+        let (_seqno, current_reader_since, maintenance) = self
             .machine
             .downgrade_since(&self.reader_id, &new_since, (self.cfg.now)())
             .await;
@@ -516,6 +517,7 @@ where
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
         self.last_heartbeat = Instant::now();
+        maintenance.perform(&self.machine, &self.gc);
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -666,6 +668,7 @@ where
             metrics: Arc::clone(&self.metrics),
             reader_id: split.reader_id.clone(),
             machine,
+            gc: self.gc.clone(),
             blob: Arc::clone(&self.blob),
             since: self.since.clone(),
             // This isn't quite right since we did the heartbeat before sending
@@ -691,6 +694,7 @@ where
             metrics: Arc::clone(&self.metrics),
             reader_id: new_reader_id,
             machine,
+            gc: self.gc.clone(),
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
             last_heartbeat: Instant::now(),
@@ -729,10 +733,12 @@ where
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 2;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.machine
+            let (_, maintenance) = self
+                .machine
                 .heartbeat_reader(&self.reader_id, (self.cfg.now)())
                 .await;
             self.last_heartbeat = Instant::now();
+            maintenance.perform(&self.machine, &self.gc);
         }
     }
 
@@ -776,7 +782,7 @@ where
     // These are only here so we can use them in this auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {

@@ -29,11 +29,11 @@ use uuid::Uuid;
 
 use crate::batch::{validate_truncate_batch, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
-use crate::r#impl::compact::{CompactReq, Compactor};
+use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::{HollowBatch, Upper};
-use crate::{parse_id, PersistConfig};
+use crate::{parse_id, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -87,11 +87,12 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
+    pub(crate) gc: GarbageCollector,
     pub(crate) compact: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) writer_id: WriterId,
@@ -105,7 +106,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     /// This handle's `upper` frontier.
     ///
@@ -449,11 +450,11 @@ where
             )
             .await?;
 
-        let merge_reqs = match res {
-            Ok(Ok((_seqno, merge_reqs))) => {
+        let maintenance = match res {
+            Ok(Ok((_seqno, maintenance))) => {
                 self.upper = desc.upper().clone();
                 batch.mark_consumed();
-                merge_reqs
+                maintenance
             }
             Ok(Err(current_upper)) => {
                 // We tried to to a compare_and_append with the wrong expected upper, that
@@ -464,17 +465,7 @@ where
             Err(err) => return Ok(Err(err)),
         };
 
-        // If the compactor isn't enabled, just ignore the requests.
-        if let Some(compactor) = self.compact.as_ref() {
-            for req in merge_reqs {
-                let req = CompactReq {
-                    shard_id: self.machine.shard_id(),
-                    desc: req.desc,
-                    inputs: req.inputs,
-                };
-                compactor.compact_and_apply_background(&self.machine, req);
-            }
-        }
+        maintenance.perform(&self.machine, &self.gc, self.compact.as_ref());
 
         Ok(Ok(Ok(())))
     }
@@ -619,7 +610,7 @@ where
     T: Timestamp + Lattice + Codec64,
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {

@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
 
@@ -27,14 +28,16 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::{CodecMismatch, InvalidUsage};
-use crate::r#impl::gc::{GarbageCollector, GcReq};
+use crate::r#impl::compact::CompactReq;
+use crate::r#impl::gc::GcReq;
+use crate::r#impl::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
 use crate::r#impl::state::{
     HollowBatch, ReaderState, Since, State, StateCollections, Upper, WriterState,
 };
-use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
+use crate::r#impl::trace::FueledMergeRes;
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -45,7 +48,6 @@ pub struct Machine<K, V, T, D> {
     cfg: PersistConfig,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
-    gc: GarbageCollector,
 
     state: State<K, V, T, D>,
 }
@@ -58,7 +60,6 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
             consensus: Arc::clone(&self.consensus),
             metrics: Arc::clone(&self.metrics),
             state: self.state.clone(),
-            gc: self.gc.clone(),
         }
     }
 }
@@ -75,7 +76,6 @@ where
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
-        gc: GarbageCollector,
     ) -> Result<Self, CodecMismatch> {
         let state = metrics
             .cmds
@@ -91,7 +91,6 @@ where
             consensus,
             metrics,
             state,
-            gc,
         })
     }
 
@@ -114,7 +113,7 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, ReaderState<T>) {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, (shard_upper, read_cap)) = self
+        let (seqno, (shard_upper, read_cap), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
                 state.register_reader(reader_id, seqno, heartbeat_timestamp_ms)
             })
@@ -129,7 +128,7 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, WriterState) {
         let metrics = Arc::clone(&self.metrics);
-        let (_seqno, (shard_upper, writer_state)) = self
+        let (_seqno, (shard_upper, writer_state), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
                 state.register_writer(writer_id, heartbeat_timestamp_ms)
             })
@@ -143,7 +142,7 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> ReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, read_cap) = self
+        let (seqno, read_cap, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, state| {
                 state.clone_reader(new_reader_id, seqno, heartbeat_timestamp_ms)
             })
@@ -157,22 +156,33 @@ where
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
     ) -> Result<
-        Result<Result<(SeqNo, Vec<FueledMergeReq<T>>), Upper<T>>, InvalidUsage<T>>,
+        Result<Result<(SeqNo, WriterMaintenance<T>), Upper<T>>, InvalidUsage<T>>,
         Indeterminate,
     > {
         let metrics = Arc::clone(&self.metrics);
         loop {
-            let (seqno, res) = self
+            let (seqno, res, routine) = self
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
                     state.compare_and_append(batch, writer_id)
                 })
                 .await?;
-            // TODO: This is not a great place to hook this in.
-            self.maybe_expire_readers();
 
             match res {
                 Ok(merge_reqs) => {
-                    return Ok(Ok(Ok((seqno, merge_reqs))));
+                    let mut compact_reqs = Vec::with_capacity(merge_reqs.len());
+                    for req in merge_reqs {
+                        let req = CompactReq {
+                            shard_id: self.shard_id(),
+                            desc: req.desc,
+                            inputs: req.inputs,
+                        };
+                        compact_reqs.push(req);
+                    }
+                    let writer_maintenance = WriterMaintenance {
+                        routine,
+                        compaction: compact_reqs,
+                    };
+                    return Ok(Ok(Ok((seqno, writer_maintenance))));
                 }
                 Err(Ok(_current_upper)) => {
                     // If the state machine thinks that the shard upper is not
@@ -202,7 +212,7 @@ where
 
     pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> bool {
         let metrics = Arc::clone(&self.metrics);
-        let (_seqno, applied) = self
+        let (_seqno, applied, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
                 state.apply_merge_res(&res)
             })
@@ -215,7 +225,7 @@ where
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
-    ) -> (SeqNo, Since<T>) {
+    ) -> (SeqNo, Since<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, state| {
             state.downgrade_since(reader_id, seqno, new_since, heartbeat_timestamp_ms)
@@ -227,19 +237,19 @@ where
         &mut self,
         reader_id: &ReaderId,
         heartbeat_timestamp_ms: u64,
-    ) -> SeqNo {
+    ) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, _existed) = self
+        let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, state| {
                 state.heartbeat_reader(reader_id, heartbeat_timestamp_ms)
             })
             .await;
-        seqno
+        (seqno, maintenance)
     }
 
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, _existed) = self
+        let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
                 state.expire_reader(reader_id)
             })
@@ -249,7 +259,7 @@ where
 
     pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, _existed) = self
+        let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, state| {
                 state.expire_writer(writer_id)
             })
@@ -361,7 +371,7 @@ where
         &mut self,
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
-    ) -> (SeqNo, R) {
+    ) -> (SeqNo, R, RoutineMaintenance) {
         let mut retry = self
             .metrics
             .retries
@@ -369,12 +379,8 @@ where
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
-                Ok((seqno, x)) => match x {
-                    Ok(x) => {
-                        // TODO: This is not a great place to hook this in.
-                        self.maybe_expire_readers();
-                        return (seqno, x);
-                    }
+                Ok((seqno, x, maintenance)) => match x {
+                    Ok(x) => return (seqno, x, maintenance),
                     Err(infallible) => match infallible {},
                 },
                 Err(err) => {
@@ -398,14 +404,16 @@ where
         &mut self,
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
-    ) -> Result<(SeqNo, Result<R, E>), Indeterminate> {
+    ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
         cmd.run_cmd(|cas_mismatch_metric| async move {
             let path = self.shard_id().to_string();
 
             loop {
                 let (work_ret, new_state) = match self.state.clone_apply(&mut work_fn) {
                     Continue(x) => x,
-                    Break(err) => return Ok((self.state.seqno(), Err(err))),
+                    Break(err) => {
+                        return Ok((self.state.seqno(), Err(err), RoutineMaintenance::default()))
+                    }
                 };
                 trace!(
                     "apply_unbatched_cmd {} attempting {}\n  new_state={:?}",
@@ -455,16 +463,34 @@ where
                         // history.
                         let old_seqno_since = self.state.seqno_since();
                         let new_seqno_since = new_state.seqno_since();
-                        if old_seqno_since != new_seqno_since {
-                            self.gc.gc_and_truncate_background(GcReq {
+                        let garbage_collection = if old_seqno_since != new_seqno_since {
+                            Some(GcReq {
                                 shard_id: self.shard_id(),
                                 old_seqno_since,
                                 new_seqno_since,
-                            });
-                        }
+                            })
+                        } else {
+                            None
+                        };
+
+                        let expired_readers =
+                            self.state.readers_needing_expiration((self.cfg.now)());
+                        self.metrics
+                            .lease
+                            .timeout_read
+                            .inc_by(u64::cast_from(expired_readers.len()));
+                        let lease_expiration = Some(LeaseExpiration {
+                            readers: expired_readers,
+                            writers: vec![],
+                        });
+
+                        let maintenance = RoutineMaintenance {
+                            garbage_collection,
+                            lease_expiration,
+                        };
 
                         self.state = new_state;
-                        return Ok((self.state.seqno(), Ok(work_ret)));
+                        return Ok((self.state.seqno(), Ok(work_ret), maintenance));
                     }
                     Err(current) => {
                         debug!(
@@ -485,20 +511,6 @@ where
             }
         })
         .await
-    }
-
-    // HACK: Temporary impl of read lease expiry because otherwise gc can't work
-    // after a restart (the unexpired reader that is never coming back holds
-    // back the seqno cap forever) and we leak data like crazy.
-    fn maybe_expire_readers(&self) {
-        let readers_needing_expiration = self.state.readers_needing_expiration((self.cfg.now)());
-        for reader_needing_expiration in readers_needing_expiration {
-            self.metrics.lease.timeout_read.inc();
-            let mut machine = self.clone();
-            let _ = mz_ore::task::spawn(|| "persist::automatic_read_expiration", async move {
-                machine.expire_reader(&reader_needing_expiration).await
-            });
-        }
     }
 
     async fn maybe_init_state(
@@ -703,7 +715,6 @@ mod tests {
     struct DatadrivenState {
         batches: HashMap<String, HollowBatch<u64>>,
         listens: HashMap<String, Listen<String, (), u64, i64>>,
-        merge_reqs: Vec<FueledMergeReq<u64>>,
     }
 
     #[tokio::test]
@@ -929,14 +940,13 @@ mod tests {
                                 .open_writer::<String, (), u64, i64>(shard_id)
                                 .await
                                 .expect("invalid shard types");
-                            let (_, mut merge_reqs) = write
+                            let (_, _) = write
                                 .machine
                                 .compare_and_append(batch, &write.writer_id)
                                 .await
                                 .expect("indeterminate")
                                 .expect("invalid usage")
                                 .expect("upper mismatch");
-                            state.merge_reqs.append(&mut merge_reqs);
                             format!("ok\n")
                         }
                         "apply-merge-res" => {
@@ -978,8 +988,18 @@ mod tests {
         // live entries in consensus.
         const NUM_BATCHES: u64 = 100;
         for idx in 0..NUM_BATCHES {
-            write
-                .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+            let batch = write
+                .expect_batch(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                .await;
+            let (_, writer_maintenance) = write
+                .machine
+                .compare_and_append(&batch.into_hollow_batch(), &write.writer_id)
+                .await
+                .expect("external durability failed")
+                .expect("invalid usage")
+                .expect("unexpected upper");
+            writer_maintenance
+                .perform_awaitable(&write.machine, &write.gc, write.compact.as_ref())
                 .await;
         }
         let key = write.machine.shard_id().to_string();
@@ -993,23 +1013,6 @@ mod tests {
         // out a tighter bound than this, but the point is only that it's
         // bounded).
         let max_entries = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
-
-        // The truncation is done in the background, so wait until the assertion
-        // passes, giving up and failing the test if that takes "too much" time.
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
-        loop {
-            if consensus_entries.len() <= max_entries {
-                break;
-            }
-            info!(
-                "expected at most {} entries got {}",
-                max_entries,
-                consensus_entries.len()
-            );
-            if retry.next_sleep() > Duration::from_secs(10) {
-                panic!("did not converge in time");
-            }
-            retry = retry.sleep().await;
-        }
+        assert!(consensus_entries.len() < max_entries);
     }
 }
