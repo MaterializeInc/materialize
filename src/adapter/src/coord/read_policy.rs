@@ -145,8 +145,18 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 let mut read_capability: ReadCapability<_> = policy.into();
 
                 if let Some(timeline) = self.get_timeline(*id) {
+                    let initial_frontier = self
+                        .controller
+                        .compute(*compute_instance)
+                        .unwrap()
+                        .collection(*id)
+                        .unwrap()
+                        .read_capabilities
+                        .frontier()
+                        .to_owned();
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(timeline).await;
+                    assert!(initial_frontier.less_equal(&read_holds.time));
                     read_capability
                         .holds
                         .update_iter(Some((read_holds.time, 1)));
@@ -179,7 +189,16 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             let mut read_capability: ReadCapability<_> = policy.into();
 
             if let Some(timeline) = self.get_timeline(*id) {
+                let initial_frontier = self
+                    .controller
+                    .storage()
+                    .collection(*id)
+                    .unwrap()
+                    .read_capabilities
+                    .frontier()
+                    .to_owned();
                 let TimelineState { read_holds, .. } = self.ensure_timeline_state(timeline).await;
+                assert!(initial_frontier.less_equal(&read_holds.time));
                 read_capability
                     .holds
                     .update_iter(Some((read_holds.time, 1)));
