@@ -239,7 +239,6 @@ async fn main() {
                                 let cloud_providers_and_regions =
                                     list_regions(&cloud_providers, &client, &frontegg_auth_machine)
                                         .await;
-
                                 cloud_providers_and_regions.iter().for_each(
                                     |cloud_provider_and_region| {
                                         print_region_enabled(cloud_provider_and_region);

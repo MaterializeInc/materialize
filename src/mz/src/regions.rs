@@ -191,7 +191,7 @@ pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderAndR
  * Prints a region's status and addresses
  * Healthy:         {yes/no}
  * SQL address:     foo.materialize.cloud:6875
- * HTTPS address:   https://foo.materialize.cloud
+ * HTTPS address:   <https://foo.materialize.cloud>
  */
 pub(crate) fn print_region_status(region: Region, health: bool) {
     if health {
