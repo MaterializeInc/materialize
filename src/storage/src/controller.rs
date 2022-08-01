@@ -500,7 +500,7 @@ impl fmt::Display for StorageError {
             Self::InvalidUppers(id) => {
                 write!(
                     f,
-                    "expected upper was different than actual upper for: {}",
+                    "expected upper was different from the actual upper for: {}",
                     id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
