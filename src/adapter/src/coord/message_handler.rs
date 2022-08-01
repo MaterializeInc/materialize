@@ -11,6 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use chrono::DurationRound;
+use timely::PartialOrder;
 use tracing::{event, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
@@ -314,7 +315,7 @@ impl<S: Append + 'static> Coordinator<S> {
             timeline,
             TimelineState {
                 mut oracle,
-                read_holds,
+                mut read_holds,
             },
         ) in global_timelines
         {
@@ -332,7 +333,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .fast_forward(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
-            let read_holds = self.update_read_hold(read_holds, read_ts).await;
+            if read_holds.time.less_than(&read_ts) {
+                read_holds = self.update_read_hold(read_holds, read_ts).await;
+            }
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
         }
