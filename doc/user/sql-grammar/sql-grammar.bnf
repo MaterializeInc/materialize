@@ -59,6 +59,8 @@ create_materialized_view ::=
     'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
+create_secret ::=
+    'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink ::=
