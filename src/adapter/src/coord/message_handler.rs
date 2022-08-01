@@ -10,11 +10,14 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
+use std::str::FromStr;
+
 use chrono::DurationRound;
 use timely::PartialOrder;
 use tracing::{event, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
+use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
@@ -73,18 +76,12 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    //  #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn storage_usage_update(&mut self) {
-        // TODO: call persist API, stub out values for now
         let object_id = None;
-        let size_bytes = 12345;
-        // let insertion = self
-        //     .catalog
-        //     .state()
-        //     .pack_storage_usage_update(storage_id, bytes_used, timestamp);
-        // let updates = vec![insertion];
-        // self.send_builtin_table_updates(updates).await;
-        // Persist update in stash
+        // TODO: where does a shard id come from?
+        let fake_shard_id = ShardId::from_str("123abc").expect("must parse shard id");
+        let size_bytes = self.storageusageclient.shard_size(&fake_shard_id).await;
 
         self.catalog_transact(
             None,

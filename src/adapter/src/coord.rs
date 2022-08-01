@@ -94,6 +94,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
+use mz_persist_client::usage::StorageUsageClient;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
@@ -214,6 +215,7 @@ pub struct Config<S> {
     pub storage_host_sizes: StorageHostSizeMap,
     pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
+    pub storageusageclient: StorageUsageClient,
 }
 
 /// Soft-state metadata about a compute replica
@@ -330,6 +332,9 @@ pub struct Coordinator<S> {
     /// `None` is used as a tombstone value for replicas that have been
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
+
+    // Persist client for fetching storage metadata such as size metrics
+    storageusageclient: StorageUsageClient,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -845,6 +850,7 @@ pub async fn serve<S: Append + 'static>(
         default_storage_host_size,
         mut availability_zones,
         connection_context,
+        storageusageclient,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -944,6 +950,7 @@ pub async fn serve<S: Append + 'static>(
                 secrets_controller,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
+                storageusageclient,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));

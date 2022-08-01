@@ -36,6 +36,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
 use tracing::error;
@@ -236,6 +237,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     )
     .await?;
 
+    // TODO: How to handle this error
+    // set up storage usage client for storage metrics
+    let storageusageclient = StorageUsageClient::open(
+        config.controller.persist_location.blob_uri,
+        config.controller.persist_clients,
+    )
+    .await;
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller).await;
     // Initialize adapter.
@@ -252,6 +260,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
+        storageusageclient,
     })
     .await?;
 
