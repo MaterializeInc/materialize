@@ -32,7 +32,7 @@ use crate::r#impl::compact::CompactReq;
 use crate::r#impl::gc::GcReq;
 use crate::r#impl::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
 use crate::r#impl::metrics::{
-    CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
+    CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics, ShardMetrics,
 };
 use crate::r#impl::state::{
     HollowBatch, ReaderState, Since, State, StateCollections, Upper, WriterState,
@@ -48,6 +48,7 @@ pub struct Machine<K, V, T, D> {
     cfg: PersistConfig,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
+    shard_metrics: Arc<ShardMetrics>,
 
     state: State<K, V, T, D>,
 }
@@ -59,6 +60,7 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
             cfg: self.cfg.clone(),
             consensus: Arc::clone(&self.consensus),
             metrics: Arc::clone(&self.metrics),
+            shard_metrics: Arc::clone(&self.shard_metrics),
             state: self.state.clone(),
         }
     }
@@ -77,6 +79,7 @@ where
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
     ) -> Result<Self, CodecMismatch> {
+        let shard_metrics = metrics.shards.shard(&shard_id);
         let state = metrics
             .cmds
             .init_state
@@ -90,6 +93,7 @@ where
             cfg,
             consensus,
             metrics,
+            shard_metrics,
             state,
         })
     }
@@ -456,6 +460,10 @@ where
                             new_state.seqno(),
                             new_state
                         );
+
+                        self.shard_metrics.set_since(self.state.since());
+                        self.shard_metrics.set_upper(&self.state.upper());
+                        self.shard_metrics.set_encoded_state_size(payload_len);
 
                         // If this command has downgraded the seqno_since, fire
                         // off a background request to the GarbageCollector so
