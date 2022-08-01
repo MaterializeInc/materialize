@@ -1934,18 +1934,22 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
-        let fast_path = peek::create_plan(&mut dataflow, view_id)?;
-
-        // Finalization optimizes the dataflow as much as possible.
-        let dataflow = self.finalize_dataflow(dataflow, compute_instance);
-        let fast_path = fast_path.finalize(dataflow, index_id, key, permutation, thinning.len());
+        let peek_plan = self.create_peek_plan(
+            dataflow,
+            view_id,
+            compute_instance,
+            index_id,
+            key,
+            permutation,
+            thinning.len(),
+        )?;
 
         // We only track the peeks in the session if the query doesn't use AS OF, it's a
         // non-constant or timestamp dependent query.
         if when == QueryWhen::Immediately
             && (!matches!(
-                fast_path,
-                peek::Plan::FastPath(peek::FastPathPlan::Constant(_, _))
+                peek_plan,
+                peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
             ) || !timestamp_independent)
         {
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
@@ -1953,8 +1957,8 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_fast_path_peek(
-                fast_path,
+            .implement_peek_plan(
+                peek_plan,
                 timestamp,
                 finishing,
                 conn_id,
@@ -2200,10 +2204,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
                 let fast_path_plan = match explainee {
                     Explainee::Query => {
-                        match peek::create_plan(&mut dataflow, GlobalId::Explain)? {
-                            peek::Plan::FastPath(fast_path_plan) => Some(fast_path_plan),
-                            peek::Plan::SlowPath(()) => None,
-                        }
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
                     }
                     _ => None,
                 };
@@ -2226,10 +2227,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
                 let fast_path_plan = match explainee {
                     Explainee::Query => {
-                        match peek::create_plan(&mut dataflow, GlobalId::Explain)? {
-                            peek::Plan::FastPath(fast_path_plan) => Some(fast_path_plan),
-                            peek::Plan::SlowPath(()) => None,
-                        }
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
                     }
                     _ => None,
                 };
@@ -2367,9 +2365,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 let mut explanation = explanation.to_string();
                 if view_id == GlobalId::Explain {
-                    let fast_path_plan = peek::create_plan(&mut dataflow, view_id)
+                    let fast_path_plan = peek::create_fast_path_plan(&mut dataflow, view_id)
                         .expect("Fast path planning failed; unrecoverable error");
-                    if let peek::Plan::FastPath(fast_path_plan) = fast_path_plan {
+                    if let Some(fast_path_plan) = fast_path_plan {
                         explanation = fast_path_plan.explain_old(&catalog, options.typed);
                     }
                 }

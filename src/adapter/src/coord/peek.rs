@@ -27,7 +27,7 @@ use uuid::Uuid;
 use mz_compute_client::command::{DataflowDescription, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
-use mz_expr::{EvalError, Id, MirScalarExpr};
+use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, RelationType, Row};
@@ -224,10 +224,10 @@ impl<'a, T> DisplayText<RenderingContext<'a>> for FastPathPlan<T> {
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
 #[derive(Debug)]
-pub enum Plan<P, T = mz_repr::Timestamp> {
+pub enum PeekPlan<T = mz_repr::Timestamp> {
     FastPath(FastPathPlan<T>),
     /// The view must be installed as a dataflow and then read.
-    SlowPath(P),
+    SlowPath(PeekDataflowPlan<T>),
 }
 
 fn permute_oneshot_mfp_around_index(
@@ -255,10 +255,10 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-pub fn create_plan<T: timely::progress::Timestamp>(
+pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     dataflow_plan: &mut DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
-) -> Result<Plan<(), T>, AdapterError> {
+) -> Result<Option<FastPathPlan<T>>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
 
@@ -269,7 +269,7 @@ pub fn create_plan<T: timely::progress::Timestamp>(
         let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let mz_expr::MirRelationExpr::Constant { rows, .. } = mir {
             // In the case of a constant, we can return the result now.
-            return Ok(Plan::FastPath(FastPathPlan::Constant(
+            return Ok(Some(FastPathPlan::Constant(
                 rows.clone().map(|rows| {
                     rows.into_iter()
                         .map(|(row, diff)| (row, T::minimum(), diff))
@@ -289,7 +289,7 @@ pub fn create_plan<T: timely::progress::Timestamp>(
                     // Nothing to be done if an arrangement does not exist
                     for (index_id, (desc, _typ, _monotonic)) in dataflow_plan.index_imports.iter() {
                         if Id::Global(desc.on_id) == *id {
-                            return Ok(Plan::FastPath(FastPathPlan::PeekExisting(
+                            return Ok(Some(FastPathPlan::PeekExisting(
                                 *index_id,
                                 None,
                                 permute_oneshot_mfp_around_index(mfp, &desc.key)?,
@@ -308,7 +308,7 @@ pub fn create_plan<T: timely::progress::Timestamp>(
                         {
                             if desc.on_id == *id && &desc.key == key {
                                 // Indicate an early exit with a specific index and key_val.
-                                return Ok(Plan::FastPath(FastPathPlan::PeekExisting(
+                                return Ok(Some(FastPathPlan::PeekExisting(
                                     *index_id,
                                     Some(val.clone()),
                                     permute_oneshot_mfp_around_index(mfp, key)?,
@@ -322,37 +322,50 @@ pub fn create_plan<T: timely::progress::Timestamp>(
             }
         }
     }
-    return Ok(Plan::SlowPath(()));
-}
-
-impl<T> Plan<(), T> {
-    pub fn finalize(
-        self,
-        dataflow: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
-        index_id: GlobalId,
-        index_key: Vec<MirScalarExpr>,
-        index_permutation: HashMap<usize, usize>,
-        index_thinned_arity: usize,
-    ) -> Plan<PeekDataflowPlan<T>, T> {
-        match self {
-            Plan::FastPath(fast_path_plan) => Plan::FastPath(fast_path_plan),
-            Plan::SlowPath(()) => Plan::SlowPath(PeekDataflowPlan {
-                desc: dataflow,
-                id: index_id,
-                key: index_key,
-                permutation: index_permutation,
-                thinned_arity: index_thinned_arity,
-            }),
-        }
-    }
+    return Ok(None);
 }
 
 impl<S: Append + 'static> crate::coord::Coordinator<S> {
+    /// Creates a [`PeekPlan`] for the given `dataflow`.
+    ///
+    /// The result will be a [`PeekPlan::FastPath`] plan iff the [`create_fast_path_plan`]
+    /// call succeeds, or a [`PeekPlan::SlowPath`] plan wrapping a [`PeekDataflowPlan`]
+    /// otherwise.
+    pub(crate) fn create_peek_plan(
+        &mut self,
+        mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
+        view_id: GlobalId,
+        compute_instance: ComputeInstanceId,
+        index_id: GlobalId,
+        key: Vec<MirScalarExpr>,
+        permutation: HashMap<usize, usize>,
+        thinned_arity: usize,
+    ) -> Result<PeekPlan, AdapterError> {
+        // try to produce a `FastPathPlan`
+        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id)?;
+        // derive a PeekPlan from the optional FastPathPlan
+        let peek_plan = fast_path_plan.map_or_else(
+            // finalize the dataflow and produce a PeekPlan::SlowPath as a default
+            || {
+                PeekPlan::SlowPath(PeekDataflowPlan {
+                    desc: self.finalize_dataflow(dataflow, compute_instance),
+                    id: index_id,
+                    key,
+                    permutation,
+                    thinned_arity,
+                })
+            },
+            // produce a PeekPlan::FastPath if possible
+            |fast_path_plan| PeekPlan::FastPath(fast_path_plan),
+        );
+        Ok(peek_plan)
+    }
+
     /// Implements a peek plan produced by `create_plan` above.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn implement_fast_path_peek(
+    pub async fn implement_peek_plan(
         &mut self,
-        fast_path: Plan<PeekDataflowPlan>,
+        fast_path: PeekPlan,
         timestamp: mz_repr::Timestamp,
         finishing: mz_expr::RowSetFinishing,
         conn_id: ConnectionId,
@@ -361,7 +374,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         target_replica: Option<ReplicaId>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
-        if let Plan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
+        if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
             let mut rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
@@ -403,11 +416,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // If we must build the view, ship the dataflow.
         let (peek_command, drop_dataflow) = match fast_path {
-            Plan::FastPath(FastPathPlan::PeekExisting(id, key, map_filter_project)) => (
+            PeekPlan::FastPath(FastPathPlan::PeekExisting(id, key, map_filter_project)) => (
                 (id, key, timestamp, finishing.clone(), map_filter_project),
                 None,
             ),
-            Plan::SlowPath(PeekDataflowPlan {
+            PeekPlan::SlowPath(PeekDataflowPlan {
                 desc: dataflow,
                 // n.b. this index_id identifies a transient index the
                 // caller created, so it is guaranteed to be on
