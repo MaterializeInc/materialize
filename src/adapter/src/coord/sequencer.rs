@@ -2208,7 +2208,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     _ => None,
                 };
-                println!("fast_path_plan {:?}", fast_path_plan);
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,

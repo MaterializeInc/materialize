@@ -45,7 +45,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
             match &self.0 {
                 // Lets are annotated on the chain ID that they correspond to.
                 Constant { rows, .. } => {
-                    fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.inner.indent)?;
+                    fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)?;
                 }
                 Let {
                     name: _,

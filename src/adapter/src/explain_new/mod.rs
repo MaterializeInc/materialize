@@ -93,21 +93,21 @@ impl UsedIndexes {
     }
 }
 
-impl<'a> DisplayText<RenderingContext<'a>> for UsedIndexes {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut RenderingContext<'a>) -> fmt::Result {
-        write!(f, "{}used_indexes:", ctx.indent)?;
-        ctx.indent += 1;
+impl<'a, C> DisplayText<C> for UsedIndexes
+where
+    C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        write!(f, "{}used_indexes:", ctx.as_mut())?;
+        *ctx.as_mut() += 1;
         for id in &self.0 {
-            write!(
-                f,
-                "{}- {}",
-                ctx.indent,
-                ctx.humanizer
-                    .humanize_id(*id)
-                    .unwrap_or_else(|| id.to_string())
-            )?;
+            let index_name = ctx
+                .as_ref()
+                .humanize_id(*id)
+                .unwrap_or_else(|| id.to_string());
+            write!(f, "{}- {}", ctx.as_mut(), index_name)?;
         }
-        ctx.indent -= 1;
+        *ctx.as_mut() -= 1;
         Ok(())
     }
 }
@@ -128,7 +128,8 @@ where
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = PlanRenderingContext::new(
-            RenderingContext::new(Indent::default(), self.context.humanizer),
+            Indent::default(),
+            self.context.humanizer,
             self.plan.annotations.clone(),
             self.context.config,
         );
@@ -143,14 +144,14 @@ where
             Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
         {
             if let Some(fast_path_plan) = fast_path_plan {
-                fast_path_plan.fmt_text(f, &mut ctx.inner)
+                fast_path_plan.fmt_text(f, ctx)
             } else {
                 Displayable::from(plan).fmt_text(f, ctx)
             }
         }
 
         if let Some(finishing) = &self.context.finishing {
-            finishing.fmt_text(f, &mut ctx.inner.indent)?;
+            finishing.fmt_text(f, &mut ctx.indent)?;
             ctx.indented(|ctx| fmt_plan(ctx, f, &self.context.fast_path_plan, self.plan.plan))?;
         } else {
             fmt_plan(&mut ctx, f, &self.context.fast_path_plan, self.plan.plan)?;
@@ -158,7 +159,7 @@ where
 
         if !self.context.used_indexes.0.is_empty() {
             writeln!(f, "")?;
-            self.context.used_indexes.fmt_text(f, &mut ctx.inner)?;
+            self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
 
         Ok(())
@@ -241,7 +242,8 @@ where
 #[allow(dead_code)] // TODO (#13299)
 #[allow(missing_debug_implementations)]
 pub(crate) struct PlanRenderingContext<'a, T> {
-    pub(crate) inner: RenderingContext<'a>,
+    pub(crate) indent: Indent,
+    pub(crate) humanizer: &'a dyn ExprHumanizer,
     pub(crate) annotations: HashMap<&'a T, Attributes>, // TODO: can this be a ref
     pub(crate) config: &'a ExplainConfig,
 }
@@ -249,12 +251,14 @@ pub(crate) struct PlanRenderingContext<'a, T> {
 impl<'a, T> PlanRenderingContext<'a, T> {
     #[allow(dead_code)] // TODO (#13299)
     pub fn new(
-        inner: RenderingContext<'a>,
+        indent: Indent,
+        humanizer: &'a dyn ExprHumanizer,
         annotations: HashMap<&'a T, Attributes>,
         config: &'a ExplainConfig,
     ) -> PlanRenderingContext<'a, T> {
         PlanRenderingContext {
-            inner,
+            indent,
+            humanizer,
             annotations,
             config,
         }
@@ -263,6 +267,12 @@ impl<'a, T> PlanRenderingContext<'a, T> {
 
 impl<'a, T> AsMut<Indent> for PlanRenderingContext<'a, T> {
     fn as_mut(&mut self) -> &mut Indent {
-        &mut self.inner.indent
+        &mut self.indent
+    }
+}
+
+impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
+    fn as_ref(&self) -> &&'a dyn ExprHumanizer {
+        &self.humanizer
     }
 }

@@ -18,8 +18,8 @@ use std::{collections::HashMap, num::NonZeroUsize};
 
 use futures::{FutureExt, StreamExt};
 use mz_expr::explain::Indices;
-use mz_ore::str::{bracketed, separated};
-use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, ExprHumanizer, RenderingContext};
+use mz_ore::str::{bracketed, separated, Indent};
+use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, ExprHumanizer};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -164,17 +164,20 @@ impl FastPathPlan {
     }
 }
 
-impl<'a, T> DisplayText<RenderingContext<'a>> for FastPathPlan<T> {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut RenderingContext<'a>) -> fmt::Result {
+impl<'a, C, T> DisplayText<C> for FastPathPlan<T>
+where
+    C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         // TODO: (#13299) print out types?
         match self {
             FastPathPlan::Constant(Ok(rows), _) => fmt_text_constant_rows(
                 f,
                 rows.iter().map(|(row, _, diff)| (row, diff)),
-                &mut ctx.indent,
+                ctx.as_mut(),
             ),
             FastPathPlan::Constant(Err(err), _) => {
-                writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())
+                writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
             }
             FastPathPlan::PeekExisting(id, lookup, mfp) => {
                 let mut total_indents = 0;
@@ -183,38 +186,40 @@ impl<'a, T> DisplayText<RenderingContext<'a>> for FastPathPlan<T> {
                     || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
                     let outputs = Indices(&project);
-                    writeln!(f, "{}Project {}", ctx.indent, outputs)?;
-                    ctx.indent += 1;
+                    writeln!(f, "{}Project {}", ctx.as_mut(), outputs)?;
+                    *ctx.as_mut() += 1;
                     total_indents += 1;
                 }
                 if !filter.is_empty() {
                     // TODO (#13299) use separated_text
                     //let predicates = separated_text(", ", filter.iter().map(Displayable::from));
-                    writeln!(f, "{}Filter {}", ctx.indent, separated(" AND ", filter))?;
-                    ctx.indent += 1;
+                    writeln!(f, "{}Filter {}", ctx.as_mut(), separated(" AND ", filter))?;
+                    *ctx.as_mut() += 1;
                     total_indents += 1;
                 }
                 if !map.is_empty() {
                     // TODO (#13299) use separated_text
                     //let scalars = separated_text(", ", map.iter().map(Displayable::from));
-                    writeln!(f, "{}Map {}", ctx.indent, separated(", ", map))?;
-                    ctx.indent += 1;
+                    writeln!(f, "{}Map {}", ctx.as_mut(), separated(", ", map))?;
+                    *ctx.as_mut() += 1;
                     total_indents += 1;
                 }
                 let humanized_index = ctx
-                    .humanizer
+                    .as_ref()
                     .humanize_id(*id)
                     .unwrap_or_else(|| id.to_string());
                 if let Some(lookup) = lookup {
                     writeln!(
                         f,
                         "{}ReadExistingIndex {} lookup_value={}",
-                        ctx.indent, humanized_index, lookup
+                        ctx.as_mut(),
+                        humanized_index,
+                        lookup
                     )?;
                 } else {
-                    writeln!(f, "{}ReadExistingIndex {}", ctx.indent, humanized_index)?;
+                    writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
                 }
-                ctx.indent -= total_indents;
+                *ctx.as_mut() -= total_indents;
                 Ok(())
             }
         }?;
@@ -356,7 +361,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 })
             },
             // produce a PeekPlan::FastPath if possible
-            |fast_path_plan| PeekPlan::FastPath(fast_path_plan),
+            PeekPlan::FastPath,
         );
         Ok(peek_plan)
     }
@@ -619,7 +624,7 @@ mod tests {
     use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::{
-        explain_new::{text_string_at, DummyHumanizer},
+        explain_new::{text_string_at, DummyHumanizer, RenderingContext},
         ColumnType, Datum, ScalarType,
     };
 

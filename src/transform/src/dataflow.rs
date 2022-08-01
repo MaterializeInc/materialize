@@ -195,34 +195,37 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
     // corresponding id.
     let mut demand = HashMap::new();
 
-    // Demand all columns of inputs to sinks.
-    for (_id, sink) in dataflow.sink_exports.iter() {
-        let input_id = sink.from;
-        demand
-            .entry(Id::Global(input_id))
-            .or_insert_with(BTreeSet::new)
-            .extend(0..dataflow.arity_of(&input_id));
-    }
-
-    // Demand all columns of inputs to exported indexes.
-    for (_id, (desc, _typ)) in dataflow.index_exports.iter() {
-        let input_id = desc.on_id;
-        demand
-            .entry(Id::Global(input_id))
-            .or_insert_with(BTreeSet::new)
-            .extend(0..dataflow.arity_of(&input_id));
-    }
-
     if dataflow.index_exports.is_empty() && dataflow.sink_exports.is_empty() {
-        // If we just want to explain the plan for a given view, then there
-        // will be no upstream demand. Just demand all columns from views
+        // In the absence of any exports, just demand all columns from views
         // that are not depended on by another view, which is currently the last
         // object in `objects_to_build`.
+
+        // A DataflowDesc without exports is currently created in the context of
+        // EXPLAIN outputs. This ensures that the output has all the columns of
+        // the original explainee.
         if let Some(build_desc) = dataflow.objects_to_build.iter_mut().rev().next() {
             demand
                 .entry(Id::Global(build_desc.id))
                 .or_insert_with(BTreeSet::new)
                 .extend(0..build_desc.plan.as_inner_mut().arity());
+        }
+    } else {
+        // Demand all columns of inputs to sinks.
+        for (_id, sink) in dataflow.sink_exports.iter() {
+            let input_id = sink.from;
+            demand
+                .entry(Id::Global(input_id))
+                .or_insert_with(BTreeSet::new)
+                .extend(0..dataflow.arity_of(&input_id));
+        }
+
+        // Demand all columns of inputs to exported indexes.
+        for (_id, (desc, _typ)) in dataflow.index_exports.iter() {
+            let input_id = desc.on_id;
+            demand
+                .entry(Id::Global(input_id))
+                .or_insert_with(BTreeSet::new)
+                .extend(0..dataflow.arity_of(&input_id));
         }
     }
 

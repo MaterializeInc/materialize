@@ -519,6 +519,12 @@ impl<'a> AsMut<Indent> for RenderingContext<'a> {
     }
 }
 
+impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
+    fn as_ref(&self) -> &&'a dyn ExprHumanizer {
+        &self.humanizer
+    }
+}
+
 /// A trait for humanizing components of an expression.
 ///
 /// This will be most often used as part of the rendering context
