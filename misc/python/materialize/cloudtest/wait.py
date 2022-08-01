@@ -14,7 +14,9 @@ from materialize import ui
 from materialize.ui import UIError
 
 
-def wait(condition: str, resource: str, timeout_secs: int = 300) -> None:
+def wait(
+    condition: str, resource: str, timeout_secs: int = 300, context: str = "kind-kind"
+) -> None:
     cmd = [
         "kubectl",
         "wait",
@@ -23,6 +25,8 @@ def wait(condition: str, resource: str, timeout_secs: int = 300) -> None:
         resource,
         "--timeout",
         f"{timeout_secs}s",
+        "--context",
+        context,
     ]
     ui.progress(f'waiting for {" ".join(cmd)} ... ')
 

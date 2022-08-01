@@ -756,6 +756,10 @@ impl<S: Append> Connection<S> {
         transaction(&mut self.stash).await
     }
 
+    pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
+        Ok(self.stash.confirm_leadership().await?)
+    }
+
     pub fn cluster_id(&self) -> Uuid {
         self.cluster_id
     }

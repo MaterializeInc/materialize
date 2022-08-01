@@ -509,6 +509,11 @@ impl Stash for Sqlite {
         tx.commit()?;
         Ok(upper)
     }
+
+    async fn confirm_leadership(&mut self) -> Result<(), StashError> {
+        // SQLite doesn't have a concept of leadership
+        Ok(())
+    }
 }
 
 impl From<rusqlite::Error> for StashError {

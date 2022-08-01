@@ -248,6 +248,7 @@ impl MetricsVecs {
             external: RetryExternal {
                 batch_set: self.retry_metrics("batch::set"),
                 blob_open: self.retry_metrics("blob::open"),
+                compaction_noop_delete: self.retry_metrics("compaction_noop::delete"),
                 consensus_open: self.retry_metrics("consensus::open"),
                 fetch_and_update_state_head: self.retry_metrics("fetch_and_update_state::head"),
                 fetch_batch_get: self.retry_metrics("fetch_batch::get"),
@@ -393,6 +394,7 @@ pub struct RetryExternal {
     pub(crate) batch_set: RetryMetrics,
     pub(crate) blob_open: RetryMetrics,
     pub(crate) consensus_open: RetryMetrics,
+    pub(crate) compaction_noop_delete: RetryMetrics,
     pub(crate) fetch_and_update_state_head: RetryMetrics,
     pub(crate) fetch_batch_get: RetryMetrics,
     pub(crate) maybe_init_state_cas: RetryMetrics,

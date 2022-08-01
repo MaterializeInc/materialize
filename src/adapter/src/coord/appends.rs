@@ -24,10 +24,10 @@ use mz_storage::protocol::client::Update;
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::{CoordTimestamp, Coordinator, Message};
-use crate::session::{EndTransactionAction, Session, WriteOp};
+use crate::coord::{CoordTimestamp, Coordinator, Message, PendingTxn};
+use crate::session::{Session, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::{AdapterError, ExecuteResponse};
+use crate::ExecuteResponse;
 
 #[derive(Debug)]
 pub struct AdvanceLocalInput<T> {
@@ -132,16 +132,10 @@ pub(crate) enum PendingWriteTxn {
     User {
         /// List of all write operations within the transaction.
         writes: Vec<WriteOp>,
-        /// Transmitter used to send a response back to the client.
-        client_transmitter: ClientTransmitter<ExecuteResponse>,
-        /// Client response for transaction.
-        response: Result<ExecuteResponse, AdapterError>,
-        /// Session of the client who initiated the transaction.
-        session: Session,
-        /// The action to take at the end of the transaction.
-        action: EndTransactionAction,
         /// Holds the coordinator's write lock.
         write_lock_guard: Option<OwnedMutexGuard<()>>,
+        /// Inner transaction.
+        pending_txn: PendingTxn,
     },
     /// Write to a system table.
     System(BuiltinTableUpdate),
@@ -308,11 +302,14 @@ impl<S: Append + 'static> Coordinator<S> {
             match pending_write_txn {
                 PendingWriteTxn::User {
                     writes,
-                    client_transmitter,
-                    response,
-                    session,
-                    action,
                     write_lock_guard: _,
+                    pending_txn:
+                    PendingTxn {
+                        client_transmitter,
+                        response,
+                        session,
+                        action,
+                    },
                 } => {
                     for WriteOp { id, rows } in writes {
                         // If the table that some write was targeting has been deleted while the write was

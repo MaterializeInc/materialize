@@ -3768,6 +3768,10 @@ impl<S: Append> Catalog<S> {
         Ok((builtin_table_updates, result))
     }
 
+    pub async fn confirm_leadership(&mut self) -> Result<(), AdapterError> {
+        Ok(self.storage().await.confirm_leadership().await?)
+    }
+
     fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {
         let item = match item {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {

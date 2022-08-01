@@ -26,3 +26,5 @@ test/feature-benchmark/tmp/*.td
 test/zippy/tmp/*.td
 junit_*.xml
 perf.data*
+**/*.rej
+**/*.orig

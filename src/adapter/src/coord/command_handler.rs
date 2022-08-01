@@ -30,7 +30,7 @@ use crate::command::{
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
-use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message};
+use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::ClientTransmitter;
@@ -461,8 +461,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 .position(|pending_write_txn| matches!(pending_write_txn, PendingWriteTxn::User {session, ..} if session.conn_id() == conn_id))
             {
                 if let PendingWriteTxn::User {
-                    client_transmitter,
-                    session,
+                    pending_txn:
+                    PendingTxn {
+                        client_transmitter,
+                        session,
+                        ..
+                    },
                     ..
                 } = self.pending_writes.remove(idx) {
                     let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);

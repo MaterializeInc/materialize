@@ -7,9 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import pg8000
+import sqlparse
 import yaml
 from kubernetes.client import (
     AppsV1Api,
@@ -25,26 +28,39 @@ from kubernetes.client import (
 )
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config import new_client_from_config_dict  # type: ignore
+from pg8000 import Cursor
 
 from materialize import ROOT, mzbuild
 
 
 class K8sResource:
+    def kubectl(self, *args: str) -> None:
+        subprocess.check_call(["kubectl", "--context", self.context(), *args])
+
     def kube_config(self) -> Any:
         with open(Path.home() / ".kube" / "config") as f:
             return yaml.safe_load(f)
 
     def api(self) -> CoreV1Api:
-        api_client = new_client_from_config_dict(self.kube_config())
+        api_client = new_client_from_config_dict(
+            self.kube_config(), context=self.context()
+        )
         return CoreV1Api(api_client)
 
     def apps_api(self) -> AppsV1Api:
-        api_client = new_client_from_config_dict(self.kube_config())
+        api_client = new_client_from_config_dict(
+            self.kube_config(), context=self.context()
+        )
         return AppsV1Api(api_client)
 
     def rbac_api(self) -> RbacAuthorizationV1Api:
-        api_client = new_client_from_config_dict(self.kube_config())
+        api_client = new_client_from_config_dict(
+            self.kube_config(), context=self.context()
+        )
         return RbacAuthorizationV1Api(api_client)
+
+    def context(self) -> str:
+        return "kind-kind"
 
     def namespace(self) -> str:
         return "default"
@@ -84,6 +100,47 @@ class K8sService(K8sResource):
         core_v1_api.create_namespaced_service(
             body=self.service, namespace=self.namespace()
         )
+
+    def node_port(self) -> int:
+        assert self.service and self.service.metadata and self.service.metadata.name
+        service = self.api().read_namespaced_service(
+            self.service.metadata.name, self.namespace()
+        )
+        assert service is not None
+
+        spec = service.spec
+        assert spec is not None
+
+        ports = spec.ports
+        assert ports is not None and len(ports) > 0
+
+        port = ports[0]
+        node_port = port.node_port
+        assert node_port is not None
+
+        return node_port
+
+    def sql_cursor(self) -> Cursor:
+        """Get a cursor to run SQL queries against the service"""
+        conn = pg8000.connect(
+            host="localhost", port=self.node_port(), user="materialize"
+        )
+        conn.autocommit = True
+        return conn.cursor()
+
+    def sql(self, sql: str) -> None:
+        """Run a batch of SQL statements against the service."""
+        with self.sql_cursor() as cursor:
+            for statement in sqlparse.split(sql):
+                print(f"> {statement}")
+                cursor.execute(statement)
+
+    def sql_query(self, sql: str) -> Any:
+        """Execute a SQL query against the service and return results."""
+        with self.sql_cursor() as cursor:
+            print(f"> {sql}")
+            cursor.execute(sql)
+            return cursor.fetchall()
 
 
 class K8sDeployment(K8sResource):
