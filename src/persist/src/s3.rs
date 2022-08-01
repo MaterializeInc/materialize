@@ -489,16 +489,33 @@ impl Blob for S3Blob {
         }
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        // There is a race condition here where, if two delete calls for the
+        // same key occur simultaneously, both might think they did the actual
+        // deletion. This return value is only used for metrics, so it's
+        // unfortunate, but fine.
         let path = self.get_path(key);
-        self.client
+        let head_res = self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(&path)
+            .send()
+            .await;
+        let size_bytes = match head_res {
+            Ok(x) => u64::try_from(x.content_length).expect("file in S3 cannot have negative size"),
+            Err(SdkError::ServiceError { err, .. }) if err.is_not_found() => return Ok(None),
+            Err(err) => return Err(ExternalError::from(anyhow!("s3 delete head err: {}", err))),
+        };
+        let _ = self
+            .client
             .delete_object()
             .bucket(&self.bucket)
-            .key(path)
+            .key(&path)
             .send()
             .await
             .map_err(|err| Error::from(err.to_string()))?;
-        Ok(())
+        Ok(Some(usize::cast_from(size_bytes)))
     }
 }
 

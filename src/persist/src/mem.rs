@@ -91,9 +91,9 @@ impl MemBlobCore {
         Ok(())
     }
 
-    fn delete(&mut self, key: &str) -> Result<(), ExternalError> {
-        self.dataz.remove(key);
-        Ok(())
+    fn delete(&mut self, key: &str) -> Result<Option<usize>, ExternalError> {
+        let bytes = self.dataz.remove(key).map(|x| x.len());
+        Ok(bytes)
     }
 }
 
@@ -135,7 +135,7 @@ impl Blob for MemBlob {
         self.core.lock().await.set(key, value)
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         self.core.lock().await.delete(key)
     }
 }

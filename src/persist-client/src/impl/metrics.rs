@@ -100,6 +100,7 @@ struct MetricsVecs {
     external_op_bytes: IntCounterVec,
     external_op_seconds: CounterVec,
     external_consensus_truncated_count: IntCounter,
+    external_blob_delete_noop_count: IntCounter,
 
     retry_started: IntCounterVec,
     retry_finished: IntCounterVec,
@@ -169,6 +170,10 @@ impl MetricsVecs {
             external_consensus_truncated_count: registry.register(metric!(
                 name: "mz_persist_external_consensus_truncated_count",
                 help: "count of versions deleted by consensus truncate calls",
+            )),
+            external_blob_delete_noop_count: registry.register(metric!(
+                name: "mz_persist_external_blob_delete_noop_count",
+                help: "count of blob delete calls that deleted a non-existent key",
             )),
 
             retry_started: registry.register(metric!(
@@ -301,6 +306,7 @@ impl MetricsVecs {
             get: self.external_op_metrics("blob_get"),
             list_keys: self.external_op_metrics("blob_list_keys"),
             delete: self.external_op_metrics("blob_delete"),
+            delete_noop: self.external_blob_delete_noop_count.clone(),
         }
     }
 
@@ -654,6 +660,7 @@ pub struct BlobMetrics {
     get: ExternalOpMetrics,
     list_keys: ExternalOpMetrics,
     delete: ExternalOpMetrics,
+    delete_noop: IntCounter,
 }
 
 #[derive(Debug)]
@@ -722,13 +729,19 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
-        // It'd be nice if this could also track bytes somehow.
-        self.metrics
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        let bytes = self
+            .metrics
             .blob
             .delete
             .run_op(|| self.blob.delete(key))
-            .await
+            .await?;
+        if let Some(bytes) = bytes {
+            self.metrics.blob.delete.bytes.inc_by(u64::cast_from(bytes));
+        } else {
+            self.metrics.blob.delete_noop.inc();
+        }
+        Ok(bytes)
     }
 }
 
