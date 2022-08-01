@@ -338,7 +338,7 @@ impl<S: Append + 'static> Coordinator<S> {
             differential_dataflow::consolidation::consolidate(updates);
         }
         appends.retain(|_key, updates| !updates.is_empty());
-        let appends = appends
+        let appends: Vec<_> = appends
             .into_iter()
             .map(|(id, updates)| {
                 let updates = updates
