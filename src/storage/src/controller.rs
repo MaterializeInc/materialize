@@ -32,6 +32,7 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
+use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -453,8 +454,8 @@ pub enum StorageError {
     UpdateBeyondUpper(GlobalId),
     /// The read was at a timestamp before the collection's since
     ReadBeforeSince(GlobalId),
-    /// The expected upper of an append was different than the actual append of the collection
-    InvalidUpper(GlobalId),
+    /// The expected upper of one or more appends was different than the actual appends of the collections
+    InvalidUppers(Vec<GlobalId>),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
     /// An operation failed to read or write state
@@ -470,7 +471,7 @@ impl Error for StorageError {
             Self::IdentifierMissing(_) => None,
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
-            Self::InvalidUpper(_) => None,
+            Self::InvalidUppers(_) => None,
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
@@ -496,10 +497,11 @@ impl fmt::Display for StorageError {
             Self::ReadBeforeSince(id) => {
                 write!(f, "read for {id} was at a timestamp before its since")
             }
-            Self::InvalidUpper(id) => {
+            Self::InvalidUppers(id) => {
                 write!(
                     f,
-                    "expected upper for {id} was different than its actual upper"
+                    "expected upper was different than actual upper for: {}",
+                    id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
@@ -1288,6 +1290,7 @@ mod persist_write_handles {
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
+    use itertools::Itertools;
     use timely::progress::{Antichain, Timestamp};
     use tokio::sync::mpsc::UnboundedSender;
 
@@ -1408,7 +1411,7 @@ mod persist_write_handles {
                             GlobalId,
                             (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
                         >,
-                    ) -> Result<(), GlobalId> {
+                    ) -> Result<(), Vec<GlobalId>> {
                         let futs = FuturesUnordered::new();
 
                         // We cannot iterate through the updates and then set off a persist call
@@ -1448,14 +1451,23 @@ mod persist_write_handles {
                             }
                         }
 
-                        use futures_util::TryStreamExt;
-                        let change_batches = futs.try_collect::<Vec<_>>().await?;
+                        use futures_util::StreamExt;
+                        // Ensure all futures run to completion, and track status of each of them individually
+                        let (change_batches, failed_appends): (Vec<_>, Vec<_>) = futs
+                            .collect::<Vec<_>>()
+                            .await
+                            .into_iter()
+                            .partition_result();
 
                         // It is not strictly an error for the controller to hang up.
                         let _ = frontier_responses
                             .send(StorageResponse::FrontierUppers(change_batches));
 
-                        Ok(())
+                        if failed_appends.is_empty() {
+                            Ok(())
+                        } else {
+                            Err(failed_appends)
+                        }
                     }
 
                     let result =
@@ -1463,8 +1475,7 @@ mod persist_write_handles {
 
                     // It is not an error for the other end to hang up.
                     for response in all_responses {
-                        let _ =
-                            response.send(result.clone().map_err(StorageError::IdentifierMissing));
+                        let _ = response.send(result.clone().map_err(StorageError::InvalidUppers));
                     }
 
                     if shutdown {
