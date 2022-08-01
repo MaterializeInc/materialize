@@ -245,7 +245,14 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        let (_write_lock_guard, pending_writes) = if let Some(guard) = self
+        let (_write_lock_guard, pending_writes): (_, Vec<_>) = if self
+            .pending_writes
+            .iter()
+            .all(|write| matches!(write, PendingWriteTxn::System { .. }))
+        {
+            // If all pending transactions are for system tables, then we don't need the write lock.
+            (None, self.pending_writes.drain(..).collect())
+        } else if let Some(guard) = self
             .pending_writes
             .iter_mut()
             .filter_map(|write| write.take_write_lock())
