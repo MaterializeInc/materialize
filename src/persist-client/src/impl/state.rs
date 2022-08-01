@@ -301,6 +301,10 @@ where
         self.seqno
     }
 
+    pub fn since(&self) -> &Antichain<T> {
+        self.collections.trace.since()
+    }
+
     pub fn upper(&self) -> Antichain<T> {
         self.collections.trace.upper().clone()
     }

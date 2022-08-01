@@ -9,19 +9,25 @@
 
 //! Prometheus monitoring metrics.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
+use mz_ore::metrics::{ComputedIntGauge, ComputedUIntGauge, Counter, IntCounter, MetricsRegistry};
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
 use mz_persist::retry::RetryStream;
+use mz_persist_types::Codec64;
+use prometheus::core::{Atomic, AtomicI64, AtomicU64};
 use prometheus::{CounterVec, IntCounterVec};
+use timely::progress::Antichain;
+
+use crate::ShardId;
 
 /// Prometheus monitoring metrics.
 ///
@@ -50,6 +56,8 @@ pub struct Metrics {
     pub lease: LeaseMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
+    /// Metrics for various per-shard measurements.
+    pub shards: ShardsMetrics,
 }
 
 impl Metrics {
@@ -66,6 +74,7 @@ impl Metrics {
             compaction: CompactionMetrics::new(registry),
             gc: GcMetrics::new(registry),
             lease: LeaseMetrics::new(registry),
+            shards: ShardsMetrics::new(registry),
             _vecs: vecs,
         }
     }
@@ -624,6 +633,165 @@ impl CodecMetrics {
         self.decode_count.inc();
         self.decode_seconds.inc_by(now.elapsed().as_secs_f64());
         r
+    }
+}
+
+#[derive(Debug)]
+pub struct ShardsMetrics {
+    // Ideally, we'd break these down per-shard, but that might be too expensive
+    // for prometheus. Instead, start with the plumbing and aggregate the
+    // interesting per-shard metrics across a process (min of since, max of
+    // upper, sum of state size bytes). It's not ideal, but it's definitely safe
+    // to ship.
+    //
+    // The structure of the code makes it pretty trivial to do this swap
+    // (actually tracking them per-shard) later: replace the ComputedFooGauge in
+    // ShardsMetrics with a FooCounterVec and the AtomicFoo in ShardMetrics with
+    // a FooCounter.
+    _count: ComputedUIntGauge,
+    _since: ComputedIntGauge,
+    _upper: ComputedIntGauge,
+    _encoded_state_size: ComputedUIntGauge,
+    // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
+    // here as `Weak`. This allows us to discover if it's no longer in use and
+    // so we can remove it from the map.
+    shards: Arc<Mutex<HashMap<ShardId, Weak<ShardMetrics>>>>,
+}
+
+impl ShardsMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let shards = Arc::new(Mutex::new(HashMap::new()));
+        let shards_count = Arc::clone(&shards);
+        let shards_since = Arc::clone(&shards);
+        let shards_upper = Arc::clone(&shards);
+        let shards_size = Arc::clone(&shards);
+        ShardsMetrics {
+            _count: registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_shard_count",
+                    help: "count of all active shards on this process",
+                ),
+                move || {
+                    let mut ret = 0;
+                    Self::compute(&shards_count, |_m| ret += 1);
+                    ret
+                },
+            ),
+            _since: registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_shard_since",
+                    help: "minimum since of all active shards on this process",
+                ),
+                move || {
+                    let mut ret = i64::MAX;
+                    Self::compute(&shards_since, |m| ret = std::cmp::min(ret, m.since.get()));
+                    ret
+                },
+            ),
+            _upper: registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_shard_upper",
+                    help: "maximum upper of all active shards on this process",
+                ),
+                move || {
+                    let mut ret = 0;
+                    Self::compute(&shards_upper, |m| ret = std::cmp::max(ret, m.upper.get()));
+                    ret
+                },
+            ),
+            _encoded_state_size: registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_shard_state_size_bytes",
+                    help: "total encoded state size of all active shards on this process",
+                ),
+                move || {
+                    let mut ret = 0;
+                    Self::compute(&shards_size, |m| ret += m.encoded_state_size.get());
+                    ret
+                },
+            ),
+            shards,
+        }
+    }
+
+    pub fn shard(&self, shard_id: &ShardId) -> Arc<ShardMetrics> {
+        let mut shards = self.shards.lock().expect("mutex poisoned");
+        if let Some(shard) = shards.get(shard_id) {
+            if let Some(shard) = shard.upgrade() {
+                return Arc::clone(&shard);
+            } else {
+                assert!(shards.remove(shard_id).is_some());
+            }
+        }
+        let shard = Arc::new(ShardMetrics::new(self));
+        assert!(shards
+            .insert(shard_id.clone(), Arc::downgrade(&shard))
+            .is_none());
+        shard
+    }
+
+    fn compute<F: FnMut(&ShardMetrics)>(
+        shards: &Arc<Mutex<HashMap<ShardId, Weak<ShardMetrics>>>>,
+        mut f: F,
+    ) {
+        let mut shards = shards.lock().expect("mutex poisoned");
+        let mut deleted_shards = Vec::new();
+        for (shard_id, metrics) in shards.iter() {
+            if let Some(metrics) = metrics.upgrade() {
+                f(&metrics);
+            } else {
+                deleted_shards.push(shard_id.clone());
+            }
+        }
+        for deleted_shard_id in deleted_shards {
+            assert!(shards.remove(&deleted_shard_id).is_some());
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ShardMetrics {
+    since: AtomicI64,
+    upper: AtomicI64,
+    encoded_state_size: AtomicU64,
+}
+
+impl ShardMetrics {
+    pub fn new(_shards_metrics: &ShardsMetrics) -> Self {
+        ShardMetrics {
+            since: AtomicI64::new(0),
+            upper: AtomicI64::new(0),
+            encoded_state_size: AtomicU64::new(0),
+        }
+    }
+
+    fn encode_ts_metric<T: Codec64>(ts: &Antichain<T>) -> i64 {
+        // We have two problems in mapping a persist frontier into a metric.
+        // First is that we only have a `T: Timestamp+Codec64`. Second, is
+        // mapping an antichain to a single counter value. We solve both by
+        // taking advantage of the fact that in practice, timestamps in mz are
+        // currently always a u64 (and if we switch them, it will be to an i64).
+        // This means that for all values that mz would actually produce,
+        // interpreting the the encoded bytes as a little-endian i64 will work.
+        // Both of them impl PartialOrder, so in practice, there will always be
+        // zero or one elements in the antichain.
+        match ts.elements().first() {
+            Some(ts) => i64::from_le_bytes(Codec64::encode(ts)),
+            None => i64::MAX,
+        }
+    }
+
+    pub fn set_since<T: Codec64>(&self, since: &Antichain<T>) {
+        self.since.set(Self::encode_ts_metric(since))
+    }
+
+    pub fn set_upper<T: Codec64>(&self, upper: &Antichain<T>) {
+        self.upper.set(Self::encode_ts_metric(upper))
+    }
+
+    pub fn set_encoded_state_size(&self, encoded_state_size: usize) {
+        self.encoded_state_size
+            .set(u64::cast_from(encoded_state_size))
     }
 }
 
