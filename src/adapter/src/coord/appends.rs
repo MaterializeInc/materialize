@@ -202,13 +202,11 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        // If we need to sleep below, then it's possible that some DDL may execute while we sleep.
-        // In that case, the DDL will use some timestamp greater than or equal to the time that we
-        // peeked, closing the peeked time and making it invalid for future writes. Therefore, we
-        // must get a new valid timestamp everytime this method is called.
-        // In the future we should include DDL in group commits, to avoid this issue. Then
-        // `self.peek_local_write_ts()` can be removed. Instead we can call
-        // `self.get_and_step_local_write_ts()` and safely use that value once we wake up.
+        // If we need to sleep below, then it's possible that some DDL or table advancements may
+        // execute while we sleep. In that case, the DDL or table advancement will use some
+        // timestamp greater than or equal to the time that we peeked, closing the peeked time and
+        // making it invalid for future writes. Therefore, we must get a new valid timestamp
+        // everytime this method is called.
         let timestamp = self.peek_local_ts();
         let now = (self.catalog.config().now)();
         if timestamp > now {
@@ -229,10 +227,13 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    /// Commits all pending write transactions at the same timestamp. All pending writes will be
-    /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
-    /// happen at the same timestamp and all involved tables will be advanced to some timestamp
-    /// larger than the timestamp of the write.
+    /// Tries to commit all pending writes transactions at the same timestamp. If the `write_lock`
+    /// is currently locked, then only writes to system tables will be applied. If the `write_lock`
+    /// is not currently locked, then group commit will acquire it and all writes will be applied.
+    ///
+    /// All applicable pending writes will be combined into a single Append command and sent to
+    /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
+    /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn group_commit(&mut self) {
         if self.pending_writes.is_empty() {
@@ -249,8 +250,7 @@ impl<S: Append + 'static> Coordinator<S> {
         } else if let Some(guard) = self
             .pending_writes
             .iter_mut()
-            .filter_map(|write| write.take_write_lock())
-            .next()
+            .find_map(|write| write.take_write_lock())
         {
             // If some pending transaction already holds the write lock, then we can execute a group
             // commit.
@@ -275,7 +275,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let mut i = 0;
             while i < self.pending_writes.len() {
                 if matches!(&self.pending_writes[i], PendingWriteTxn::System(_)) {
-                    pending_writes.push(self.pending_writes.remove(i));
+                    pending_writes.push(self.pending_writes.swap_remove(i));
                 } else {
                     i += 1;
                 }
@@ -287,10 +287,12 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
-        // any point during this method. We will still commit the write without waiting for `now()`
-        // to advance. This is ok because the next batch of writes will trigger the wait loop in
-        // `try_group_commit()` if `now()` hasn't advanced past the global timeline, preventing
-        // an unbounded advancing of the global timeline ahead of `now()`.
+        // any point during this method or if this was triggered from DDL. We will still commit the
+        // write without waiting for `now()`to advance. This is ok because the next batch of writes
+        // will trigger the wait loop in `try_group_commit()` if `now()` hasn't advanced past the
+        // global timeline, preventing an unbounded advancing of the global timeline ahead of
+        // `now()`. Additionally DDL is infrequent enough and takes long enough that we don't think
+        // it's practical for continuous DDL to advance the global timestamp in an unbounded manner.
         let WriteTimestamp {
             timestamp,
             advance_to,
