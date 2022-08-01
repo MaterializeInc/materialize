@@ -156,7 +156,13 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         .to_owned();
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(timeline).await;
-                    assert!(initial_frontier.less_equal(&read_holds.time));
+                    assert!(initial_frontier.less_equal(&read_holds.time),
+                        "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal to read_hold.time: {:?}",
+                        id,
+                        compute_instance,
+                        initial_frontier,
+                        read_holds.time,
+                    );
                     read_capability
                         .holds
                         .update_iter(Some((read_holds.time, 1)));
@@ -198,7 +204,12 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     .frontier()
                     .to_owned();
                 let TimelineState { read_holds, .. } = self.ensure_timeline_state(timeline).await;
-                assert!(initial_frontier.less_equal(&read_holds.time));
+                assert!(initial_frontier.less_equal(&read_holds.time),
+                    "Storage collection {:?} has read frontier {:?} not less-equal to read_hold.time: {:?}",
+                    id,
+                    initial_frontier,
+                    read_holds.time,
+                );
                 read_capability
                     .holds
                     .update_iter(Some((read_holds.time, 1)));
