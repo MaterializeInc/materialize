@@ -304,12 +304,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     writes,
                     write_lock_guard: _,
                     pending_txn:
-                    PendingTxn {
-                        client_transmitter,
-                        response,
-                        session,
-                        action,
-                    },
+                        PendingTxn {
+                            client_transmitter,
+                            response,
+                            session,
+                            action,
+                        },
                 } => {
                     for WriteOp { id, rows } in writes {
                         // If the table that some write was targeting has been deleted while the write was
