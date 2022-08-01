@@ -232,10 +232,16 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let storage = self.controller.storage_mut();
         for id in read_holds.id_bundle.storage_ids.iter() {
             let collection = storage.collection(*id).unwrap();
-            assert!(collection
-                .read_capabilities
-                .frontier()
-                .less_equal(&read_holds.time));
+            assert!(
+                collection
+                    .read_capabilities
+                    .frontier()
+                    .less_equal(&read_holds.time),
+                "Storage collection {:?} has read frontier {:?} not less-equal desired time {:?}",
+                id,
+                collection.read_capabilities.frontier(),
+                read_holds.time,
+            );
             let read_needs = self.read_capability.get_mut(id).unwrap();
             read_needs.holds.update_iter(Some((read_holds.time, 1)));
             policy_changes.push((*id, read_needs.policy()));
@@ -250,7 +256,13 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 assert!(collection
                     .read_capabilities
                     .frontier()
-                    .less_equal(&read_holds.time));
+                    .less_equal(&read_holds.time),
+                    "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal desired time {:?}",
+                    id,
+                    compute_instance,
+                    collection.read_capabilities.frontier(),
+                    read_holds.time,
+                );
                 let read_needs = self.read_capability.get_mut(id).unwrap();
                 read_needs.holds.update_iter(Some((read_holds.time, 1)));
                 policy_changes.push((*id, read_needs.policy()));
@@ -286,7 +298,13 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             assert!(collection
                 .read_capabilities
                 .frontier()
-                .less_equal(&new_time));
+                .less_equal(&new_time),
+                "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
+                id,
+                collection.read_capabilities.frontier(),
+                new_time,
+                old_time,
+            );
             let read_needs = self.read_capability.get_mut(id).unwrap();
             read_needs.holds.update_iter(Some((new_time, 1)));
             read_needs.holds.update_iter(Some((*old_time, -1)));
@@ -302,7 +320,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 assert!(collection
                     .read_capabilities
                     .frontier()
-                    .less_equal(&new_time));
+                    .less_equal(&new_time),
+                    "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
+                    id,
+                    compute_instance,
+                    collection.read_capabilities.frontier(),
+                    new_time,
+                    old_time,
+                );
                 let read_needs = self.read_capability.get_mut(id).unwrap();
                 read_needs.holds.update_iter(Some((new_time, 1)));
                 read_needs.holds.update_iter(Some((*old_time, -1)));
