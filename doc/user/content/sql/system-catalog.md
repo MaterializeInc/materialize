@@ -289,6 +289,22 @@ Field       | Type       | Meaning
 `global_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
 `time`      | [`bigint`] | The next timestamp at which the materialization may change.
 
+### `mz_materialization_source_frontiers`
+
+The `mz_materialization_source_frontiers` view describes the frontiers for every
+source used in a [dataflow] in the system across all workers. The frontier
+describes the earliest timestamp at which the output of the source instantiation
+at the dataflow layer may change; data prior to that timestamp is sealed.
+
+For per-worker frontier information, see
+[`mz_worker_materialization_source_frontiers`](#mz_worker_materialization_source_frontiers).
+
+Field       | Type       | Meaning
+------------|------------|--------
+`dataflow`  | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
+`source`    | [`text`]   | The ID of the input source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`time`      | [`bigint`] | The next timestamp at which the source instantiation may change.
+
 ### `mz_materializations`
 
 The `mz_materializations` source describes the indexes and materialized views in the system.
@@ -550,6 +566,23 @@ Field       | Type       | Meaning
 `global_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`bigint`] | The next timestamp at which the dataflow may change.
+
+### `mz_worker_materialization_source_frontiers`
+
+The `mz_worker_materialization_source_frontiers` source describes the frontiers that
+each worker is aware of for every source used in a [dataflow] in the system. The
+frontier describes the earliest timestamp at which the output of the source instantiation
+at the dataflow layer may change; data prior to that timestamp is sealed.
+
+For frontier information aggregated across all workers, see
+[`mz_materialization_source_frontiers`](#mz_materialization_source_frontiers).
+
+Field       | Type       | Meaning
+------------|------------|--------
+`dataflow`  | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
+`source`    | [`text`]   | The ID of the input source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`time`      | [`bigint`] | The next timestamp at which the source instantiation may change.
 
 ### `mz_worker_materialization_delays`
 

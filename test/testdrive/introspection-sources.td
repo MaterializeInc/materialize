@@ -29,6 +29,15 @@
             views.id = delays.dataflow)
 true
 
+> SELECT time > 0
+  FROM
+    mz_materialized_views AS views,
+    mz_materialization_source_frontiers AS sf
+  WHERE
+    views.name = 'mv' AND
+    views.id = sf.dataflow
+true
+
 > CREATE VIEW vv AS SELECT * FROM t
 
 > SELECT COUNT(*)
@@ -37,12 +46,24 @@ true
             mz_worker_materialization_delays AS delays)
 1
 
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT sf.dataflow, sf.source
+        FROM
+            mz_worker_materialization_source_frontiers AS sf)
+1
+
 > CREATE DEFAULT INDEX ON vv
 
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.dataflow, delays.source
         FROM
             mz_worker_materialization_delays AS delays)
+2
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT sf.dataflow, sf.source
+        FROM
+            mz_worker_materialization_source_frontiers AS sf)
 2
 
 > SELECT count_all > 0
@@ -57,6 +78,17 @@ true
             indexes.id = delays.dataflow)
 true
 
+> SELECT time > 0
+  FROM
+    mz_views AS views,
+    mz_indexes AS indexes,
+    mz_materialization_source_frontiers AS sf
+  WHERE
+    views.name = 'vv' AND
+    views.id = indexes.on_id AND
+    indexes.id = sf.dataflow
+true
+
 > DROP INDEX vv_primary_idx
 
 > SELECT COUNT(*)
@@ -65,10 +97,22 @@ true
             mz_worker_materialization_delays AS delays)
 1
 
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT sf.dataflow, sf.source
+        FROM
+            mz_worker_materialization_source_frontiers AS sf)
+1
+
 > DROP MATERIALIZED VIEW mv
 
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.dataflow, delays.source
         FROM
             mz_worker_materialization_delays AS delays)
+0
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT sf.dataflow, sf.source
+        FROM
+            mz_worker_materialization_source_frontiers AS sf)
 0
