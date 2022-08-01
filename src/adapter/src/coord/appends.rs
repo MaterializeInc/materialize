@@ -337,6 +337,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for (_, updates) in &mut appends {
             differential_dataflow::consolidation::consolidate(updates);
         }
+        appends.retain(|_key, updates| !updates.is_empty());
         let appends = appends
             .into_iter()
             .map(|(id, updates)| {
@@ -351,13 +352,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 (id, updates, advance_to)
             })
             .collect();
-        self.controller
-            .storage_mut()
-            .append(appends)
-            .expect("invalid updates")
-            .await
-            .expect("One-shot shouldn't fail")
-            .unwrap();
+        if !appends.is_empty() {
+            self.controller
+                .storage_mut()
+                .append(appends)
+                .expect("invalid updates")
+                .await
+                .expect("One-shot shouldn't fail")
+                .unwrap();
+        }
         for (client_transmitter, response, mut session, action) in responses {
             session.vars_mut().end_transaction(action);
             client_transmitter.send(response, session);

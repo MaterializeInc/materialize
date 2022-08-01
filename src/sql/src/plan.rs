@@ -65,7 +65,9 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
-pub use self::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use self::expr::{
+    AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
+};
 pub use error::PlanError;
 pub use explain::Explanation;
 use mz_sql_parser::ast::TransactionIsolationLevel;

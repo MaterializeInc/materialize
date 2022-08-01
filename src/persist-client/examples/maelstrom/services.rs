@@ -213,13 +213,15 @@ impl Blob for MaelstromBlob {
         Ok(())
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         // Setting the value to Null is as close as we can get with lin_kv.
         self.handle
             .lin_kv_write(Value::from(format!("blob/{}", key)), Value::Null)
             .await
             .map_err(anyhow::Error::new)?;
-        Ok(())
+        // The "existed" return value only controls our metrics, so I suppose
+        // it's okay if its wrong in Maelstrom.
+        Ok(Some(0))
     }
 }
 
@@ -282,7 +284,7 @@ impl Blob for CachingBlob {
         self.blob.set(key, value, atomic).await
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         self.cache.lock().await.remove(key);
         self.blob.delete(key).await
     }
