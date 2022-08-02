@@ -152,9 +152,9 @@ Field      | Type       | Meaning
 `local_id` | [`bigint`] | The scope-local index of the dataflow.
 `name`     | [`text`]   | The internal name of the dataflow.
 
-### `mz_dataflow_operator_addresses`
+### `mz_dataflow_addresses`
 
-The `mz_dataflow_operator_addresses` source describes how the dataflow channels
+The `mz_dataflow_addresses` source describes how the dataflow channels
 and operators in the system are nested into scopes.
 
 Field     | Type            | Meaning

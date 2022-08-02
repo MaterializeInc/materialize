@@ -190,13 +190,13 @@ order by ratio desc;
 
 ### I found a problematic operator. Where did it come from?
 
-Look up the operator in `mz_dataflow_operator_addresses`. If an operator has
+Look up the operator in `mz_dataflow_addresses`. If an operator has
 value `x` at position `n`, then it is part of the `x` subregion of the region
 defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 ```sql
-select * from mz_dataflow_operator_addresses where id=515 and worker=0;
+select * from mz_dataflow_addresses where id=515 and worker=0;
 ```
 ```
  id  | worker | address
@@ -220,7 +220,7 @@ SELECT
     mdo.id as id,
     mdo.name as name
 FROM
-    mz_dataflow_operator_addresses mdoa,
+    mz_dataflow_addresses mdoa,
     -- source of operator names
     mz_dataflow_operators mdo,
     -- view containing operators representing entire dataflows
@@ -228,7 +228,7 @@ FROM
       mdoa.id as dataflow_operator,
       mdoa.address[1] as dataflow_address
     FROM
-      mz_dataflow_operator_addresses mdoa
+      mz_dataflow_addresses mdoa
     WHERE
       mdoa.worker = 0
       AND list_length(mdoa.address) = 1) dataflows
