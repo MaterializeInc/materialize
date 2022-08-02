@@ -3165,7 +3165,7 @@ impl<S: Append> Catalog<S> {
                 Op::CreateComputeInstance {
                     name,
                     config,
-                    introspection_sources,
+                    introspection_source_indexes: introspection_sources,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
@@ -4030,7 +4030,7 @@ pub enum Op {
     CreateComputeInstance {
         name: String,
         config: Option<ComputeInstanceIntrospectionConfig>,
-        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateComputeInstanceReplica {
         name: String,
