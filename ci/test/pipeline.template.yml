@@ -361,17 +361,17 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: pg-cdc
-    label: Postgres CDC tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/pg-cdc]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: pg-cdc
-    agents:
-      queue: linux-x86_64
+      #- id: pg-cdc
+      #  label: Postgres CDC tests
+      #  depends_on: build-x86_64
+      #  timeout_in_minutes: 30
+      #  inputs: [test/pg-cdc]
+      #  artifact_paths: junit_mzcompose_*.xml
+      #  plugins:
+      #    - ./ci/plugins/mzcompose:
+      #        composition: pg-cdc
+      #  agents:
+      #    queue: linux-x86_64
 
   - id: pg-cdc-resumption
     label: Postgres CDC resumption tests
@@ -454,17 +454,17 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: lang-csharp
-    label: ":csharp: tests"
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/lang/csharp]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: csharp
-    agents:
-      queue: linux-x86_64
+      #- id: lang-csharp
+      #  label: ":csharp: tests"
+      #  depends_on: build-x86_64
+      #  timeout_in_minutes: 10
+      #  inputs: [test/lang/csharp]
+      #  artifact_paths: junit_mzcompose_*.xml
+      #  plugins:
+      #    - ./ci/plugins/mzcompose:
+      #        composition: csharp
+      #  agents:
+      #    queue: linux-x86_64
 
   - id: lang-js
     label: ":js: tests"
