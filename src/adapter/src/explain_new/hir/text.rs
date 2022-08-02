@@ -15,7 +15,7 @@ use mz_expr::explain::Indices;
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::Id;
 use mz_ore::str::{separated, IndentLike};
-use mz_repr::explain_new::{separated_text, DisplayText};
+use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
 use mz_sql::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 
 use crate::explain_new::{Displayable, PlanRenderingContext};
@@ -40,18 +40,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
                 Displayable::from(lhs).fmt_text(f, ctx)?;
                 Displayable::from(rhs).fmt_text(f, ctx)?;
                 Ok(())
-            })?;
+            })?
         } else {
             match &self.0 {
                 // Lets are annotated on the chain ID that they correspond to.
                 Constant { rows, .. } => {
-                    writeln!(f, "{}Constant", ctx.indent)?;
-                    ctx.indented(|ctx| {
-                        for row in rows {
-                            writeln!(f, "{}- {}", ctx.indent, row)?;
-                        }
-                        Ok(())
-                    })?;
+                    fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)?;
                 }
                 Let {
                     name: _,
