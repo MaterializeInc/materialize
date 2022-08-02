@@ -261,10 +261,18 @@ impl<S: Append + 'static> Coordinator<S> {
             // By this point we should be in a running transaction.
             TransactionStatus::Default => unreachable!(),
 
-            // Started is almost always safe (started means there's a single statement
-            // being executed). Failed transactions have already been checked in pgwire for
-            // a safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
-            TransactionStatus::Started(_) | TransactionStatus::Failed(_) => {
+            // Failed transactions have already been checked in pgwire for a safe statement
+            // (COMMIT, ROLLBACK, etc.) and can proceed.
+            TransactionStatus::Failed(_) => {}
+
+            // Started is a deceptive name, and means different things depending on which
+            // protocol was used. It's either exactly one statement (known because this
+            // is the simple protocol and the parser parsed the entire string, and it had
+            // one statement). Or from the extended protocol, it means *some* query is
+            // being executed, but there might be others after it before the Sync (commit)
+            // message. Postgres handles this by teaching Started to eagerly commit certain
+            // statements that can't be run in a transaction block.
+            TransactionStatus::Started(_) => {
                 if let Statement::Declare(_) = stmt {
                     // Declare is an exception. Although it's not against any spec to execute
                     // it, it will always result in nothing happening, since all portals will be
@@ -277,6 +285,14 @@ impl<S: Append + 'static> Coordinator<S> {
                         session,
                     );
                 }
+
+                // TODO(mjibson): The current code causes DDL statements (well, any statement
+                // that doesn't call `add_transaction_ops`) to execute outside of the extended
+                // protocol transaction. For example, executing in extended a SELECT, then
+                // CREATE, then SELECT, followed by a Sync would register the transaction
+                // as read only in the first SELECT, then the CREATE ignores the transaction
+                // ops, and the last SELECT will use the timestamp from the first. This isn't
+                // correct, but this is an edge case that we can fix later.
             }
 
             // Implicit or explicit transactions.

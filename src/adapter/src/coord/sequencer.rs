@@ -1780,20 +1780,16 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
-        let in_transaction = matches!(
-            session.transaction(),
-            &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
-        );
         // Queries are independent of the logical timestamp iff there are no referenced
         // sources or indexes and there is no reference to `mz_logical_timestamp()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
-        // For explicit or implicit transactions that do not use AS OF, get the
+        // For queries that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
-        // query, we don't care about any possible transaction timestamp. If this is a
-        // single-statement transaction (TransactionStatus::Started), we don't need to
-        // worry about preventing compaction or choosing a valid timestamp for future
-        // queries.
-        let timestamp = if in_transaction && when == QueryWhen::Immediately {
+        // query, we don't care about any possible transaction timestamp. We do
+        // not do any optimization of the so-called single-statement transactions
+        // (TransactionStatus::Started) because multiple statements can actually be
+        // executed there in the extended protocol.
+        let timestamp = if when == QueryWhen::Immediately {
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
             if let Some(read_txn) = self.txn_reads.get(&conn_id) {
