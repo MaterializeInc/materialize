@@ -10,14 +10,11 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::str::FromStr;
-
 use chrono::DurationRound;
 use timely::PartialOrder;
 use tracing::{event, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
-use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
@@ -79,15 +76,26 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn storage_usage_update(&mut self) {
         let object_id = None;
-        // TODO: where does a shard id come from?
-        let fake_shard_id = ShardId::from_str("123abc").expect("must parse shard id");
-        let size_bytes = self.storageusageclient.shard_size(&fake_shard_id).await;
+        let shard_sizes = self.storageusageclient.shard_sizes().await;
 
+        let mut unk_storage = 0u64;
+        let mut known_storage = 0u64;
+        for (key, val) in shard_sizes.iter() {
+            if key.is_some() {
+                known_storage += val;
+                continue;
+            }
+            unk_storage += val
+        }
+        // TODO: What, if anything, do we want to do with orphaned storage?
+        if unk_storage > 0 {
+            println!("Found {} bytes of orphaned storage", unk_storage);
+        }
         self.catalog_transact(
             None,
             vec![catalog::Op::UpdateStorageMetrics {
                 object_id,
-                size_bytes,
+                size_bytes: known_storage,
             }],
             |_| Ok(()),
         )

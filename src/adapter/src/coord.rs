@@ -766,18 +766,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
                 _ = storage_usage_update_interval.tick() => Message::StorageUsage,
-
-                // At the lowest priority, process table advancements. This is a blocking
-                // HashMap instead of a channel so that we can delay the determination of
-                // which table to advance until we know we can process it. In the event of
-                // very high traffic where a second AdvanceLocalInputs message occurs before
-                // advance_tables is fully emptied, this allows us to replace an old request
-                // with a new one, avoiding duplication of work, which wouldn't be possible if
-                // we had already sent all AdvanceLocalInput messages on a channel.
-                // See [`AdvanceTables::recv`] for notes on why this is cancel-safe.
-                inputs = self.advance_tables.recv() => {
-                    Message::AdvanceLocalInput(inputs)
-                },
             };
 
             // All message processing functions trace. Start a parent span for them to make

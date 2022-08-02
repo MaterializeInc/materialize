@@ -2005,11 +2005,9 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
-        println!("About to load_storage_metrics");
-        let storage_metric_events = storage.load_storage_metrics().await?;
+        let storage_metric_events = catalog.storage().await.load_storage_metrics().await?;
         for event in storage_metric_events {
             let event = serde_json::from_slice(&event).unwrap();
-            println!("packing storage metric event: {:?}", event);
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 

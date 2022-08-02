@@ -237,13 +237,19 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     )
     .await?;
 
-    // TODO: How to handle this error
     // set up storage usage client for storage metrics
-    let storageusageclient = StorageUsageClient::open(
-        config.controller.persist_location.blob_uri,
-        config.controller.persist_clients,
+    let storage_usage_response = StorageUsageClient::open(
+        // TODO: Is this the correct handling for this client?
+        config.controller.persist_location.blob_uri.clone(),
+        Arc::<tokio::sync::Mutex<mz_persist_client::cache::PersistClientCache>>::clone(
+            &config.controller.persist_clients,
+        ),
     )
     .await;
+    let storage_usage_client = match storage_usage_response {
+        Ok(storageusageclient) => storageusageclient,
+        Err(error) => panic!("Problem opening storage usage client: {}", error),
+    };
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller).await;
     // Initialize adapter.
@@ -260,7 +266,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
-        storageusageclient,
+        storageusageclient: storage_usage_client,
     })
     .await?;
 

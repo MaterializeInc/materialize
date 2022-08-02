@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::{retry_external, Metrics, ShardId};
 use mz_persist::location::{Blob, ExternalError};
+use tokio::sync::Mutex;
 
 use crate::cache::PersistClientCache;
 use crate::r#impl::paths::{BlobKey, BlobKeyPrefix};
@@ -29,10 +30,10 @@ impl StorageUsageClient {
     /// Creates a new StorageUsageClient pointed to a specific Blob
     pub async fn open(
         blob_uri: String,
-        client_cache: &mut PersistClientCache,
+        client_cache: Arc<Mutex<PersistClientCache>>,
     ) -> Result<StorageUsageClient, ExternalError> {
-        let blob = client_cache.open_blob(blob_uri).await?;
-        let metrics = Arc::clone(&client_cache.metrics);
+        let blob = client_cache.lock().await.open_blob(blob_uri).await?;
+        let metrics = Arc::clone(&client_cache.lock().await.metrics);
         Ok(StorageUsageClient { blob, metrics })
     }
 

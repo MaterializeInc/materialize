@@ -878,14 +878,12 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
         let event = event.serialize();
         self.audit_log_updates.push((AuditLogKey { event }, (), 1));
-        println!("insert_audit_log_event: {:?}", self.audit_log_updates);
     }
 
     pub fn insert_storage_metrics_event(&mut self, event: EventDetails) {
         let event = serde_json::to_vec(&event).expect("must serialize");
         self.storage_usage_updates
             .push((StorageMetricsKey { event }, (), 1));
-        println!("storage_usage_updates: {:?}", self.storage_usage_updates);
     }
 
     pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
@@ -1345,7 +1343,6 @@ impl<'a, S: Append> Transaction<'a, S> {
         )
         .await?;
         if batches.is_empty() {
-            println!("batches empty!");
             return Ok(());
         }
         self.stash.append(batches).await.map_err(|e| e.into())

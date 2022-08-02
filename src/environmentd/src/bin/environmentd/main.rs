@@ -556,7 +556,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         args.tracing.clone(),
         otel_enable_callback.clone(),
     ));
-    println!("persist blob url: {}", args.persist_blob_url.to_string());
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
