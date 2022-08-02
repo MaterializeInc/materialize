@@ -579,15 +579,19 @@ impl<S: Append + 'static> Coordinator<S> {
         }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
-        let introspection_sources = if compute_instance_config.is_some() {
+        let introspection_source_indexes = if compute_instance_config.is_some() {
             self.catalog.allocate_introspection_source_indexes().await
         } else {
             Vec::new()
         };
+        let introspection_source_index_ids: Vec<_> = introspection_source_indexes
+            .iter()
+            .map(|(_, id)| *id)
+            .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
             config: compute_instance_config.clone(),
-            introspection_sources,
+            introspection_source_indexes,
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -690,6 +694,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap();
         }
 
+        if !introspection_source_index_ids.is_empty() {
+            self.initialize_compute_read_policies(
+                introspection_source_index_ids,
+                instance.id,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
+        }
         if !introspection_collection_ids.is_empty() {
             self.initialize_storage_read_policies(
                 introspection_collection_ids,

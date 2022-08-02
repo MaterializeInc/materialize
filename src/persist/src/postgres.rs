@@ -175,6 +175,16 @@ impl PostgresConsensus {
             // The lock ID was randomly generated.
             tx.batch_execute("SELECT pg_advisory_xact_lock(135664303235462630);")
                 .await?;
+        } else {
+            // The `consensus` table creates and deletes rows at a high frequency, generating many
+            // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
+            // these tombstones accumulate, scanning over the table will take increasingly and
+            // prohibitively long.
+            //
+            // See: https://github.com/MaterializeInc/materialize/issues/13975
+            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+            tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                .await?;
         }
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;

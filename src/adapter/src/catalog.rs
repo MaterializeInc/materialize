@@ -489,13 +489,13 @@ impl CatalogState {
         id: ComputeInstanceId,
         name: String,
         introspection: Option<ComputeInstanceIntrospectionConfig>,
-        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
         let logging = match introspection {
             None => None,
             Some(introspection) => {
                 let mut active_logs = BTreeMap::new();
-                for (log, index_id) in introspection_sources {
+                for (log, index_id) in introspection_source_indexes {
                     let source_name = FullObjectName {
                         database: RawDatabaseSpecifier::Ambient,
                         schema: log.schema.into(),
@@ -3025,7 +3025,7 @@ impl<S: Append> Catalog<S> {
                 name: String,
                 config: Option<ComputeInstanceIntrospectionConfig>,
                 // These are the legacy, active logs of this compute instance
-                introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+                introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
             },
             CreateComputeInstanceReplica {
                 id: ReplicaId,
@@ -3165,14 +3165,15 @@ impl<S: Append> Catalog<S> {
                 Op::CreateComputeInstance {
                     name,
                     config,
-                    introspection_sources,
+                    introspection_source_indexes,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    let id = tx.insert_compute_instance(&name, &config, &introspection_sources)?;
+                    let id =
+                        tx.insert_compute_instance(&name, &config, &introspection_source_indexes)?;
                     self.add_to_audit_log(
                         session,
                         &mut tx,
@@ -3185,7 +3186,7 @@ impl<S: Append> Catalog<S> {
                         id,
                         name,
                         config,
-                        introspection_sources,
+                        introspection_source_indexes,
                     }]
                 }
                 Op::CreateComputeInstanceReplica {
@@ -3595,13 +3596,21 @@ impl<S: Append> Catalog<S> {
                     id,
                     name,
                     config,
-                    introspection_sources,
+                    introspection_source_indexes,
                 } => {
                     info!("create cluster {}", name);
                     let introspection_source_index_ids: Vec<GlobalId> =
-                        introspection_sources.iter().map(|(_, id)| *id).collect();
+                        introspection_source_indexes
+                            .iter()
+                            .map(|(_, id)| *id)
+                            .collect();
                     state
-                        .insert_compute_instance(id, name.clone(), config, introspection_sources)
+                        .insert_compute_instance(
+                            id,
+                            name.clone(),
+                            config,
+                            introspection_source_indexes,
+                        )
                         .await;
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                     for id in introspection_source_index_ids {
@@ -4030,7 +4039,7 @@ pub enum Op {
     CreateComputeInstance {
         name: String,
         config: Option<ComputeInstanceIntrospectionConfig>,
-        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateComputeInstanceReplica {
         name: String,
