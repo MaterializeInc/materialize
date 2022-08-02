@@ -150,7 +150,7 @@ where
 ///
 /// This will be most often used as part of the rendering context
 /// type for various `Display$Format` implementation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Indent {
     unit: String,
     buff: String,

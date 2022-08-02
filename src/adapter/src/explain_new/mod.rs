@@ -242,9 +242,9 @@ where
 #[allow(dead_code)] // TODO (#13299)
 #[allow(missing_debug_implementations)]
 pub(crate) struct PlanRenderingContext<'a, T> {
-    pub(crate) indent: Indent,
+    pub(crate) indent: Indent, // TODO: can this be a ref?
     pub(crate) humanizer: &'a dyn ExprHumanizer,
-    pub(crate) annotations: HashMap<&'a T, Attributes>, // TODO: can this be a ref
+    pub(crate) annotations: HashMap<&'a T, Attributes>, // TODO: can this be a ref?
     pub(crate) config: &'a ExplainConfig,
 }
 
