@@ -241,7 +241,7 @@ impl PersistConfig {
             compaction_enabled: !compaction_disabled,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
-            consensus_connection_pool_max_size: 8,
+            consensus_connection_pool_max_size: 50,
         }
     }
 
