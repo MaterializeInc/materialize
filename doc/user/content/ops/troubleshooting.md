@@ -220,22 +220,22 @@ SELECT
     mdo.id as id,
     mdo.name as name
 FROM
-    mz_dataflow_addresses mdoa,
+    mz_dataflow_addresses mda,
     -- source of operator names
     mz_dataflow_operators mdo,
     -- view containing operators representing entire dataflows
     (SELECT
-      mdoa.id as dataflow_operator,
-      mdoa.address[1] as dataflow_address
+      mda.id as dataflow_operator,
+      mda.address[1] as dataflow_address
     FROM
-      mz_dataflow_addresses mdoa
+      mz_dataflow_addresses mda
     WHERE
-      mdoa.worker = 0
-      AND list_length(mdoa.address) = 1) dataflows
+      mda.worker = 0
+      AND list_length(mda.address) = 1) dataflows
 WHERE
-    mdoa.worker = 0
-    AND mdoa.id = <problematic_operator_id>
-    AND mdoa.address[1] = dataflows.dataflow_address
+    mda.worker = 0
+    AND mda.id = <problematic_operator_id>
+    AND mda.address[1] = dataflows.dataflow_address
     AND mdo.id = dataflows.dataflow_operator
     AND mdo.worker = 0;
 ```
