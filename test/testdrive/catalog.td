@@ -399,8 +399,8 @@ mz_arrangement_sharing_internal               system log
 mz_arrangement_sharing_internal_1             system log
 mz_dataflow_channels                          system log
 mz_dataflow_channels_1                        system log
-mz_dataflow_addresses                system log
-mz_dataflow_addresses_1              system log
+mz_dataflow_addresses                         system log
+mz_dataflow_addresses_1                       system log
 mz_dataflow_operator_reachability_internal    system log
 mz_dataflow_operator_reachability_internal_1  system log
 mz_dataflow_operators                         system log
