@@ -1987,7 +1987,7 @@ impl<'a> Parser<'a> {
                 KEY => {
                     self.expect_keyword(PEM)?;
                     KafkaConnectionOptionName::SslKeyPem
-                },
+                }
                 CERTIFICATE => {
                     if self.parse_keyword(AUTHORITY) {
                         KafkaConnectionOptionName::SslCertificateAuthority
@@ -2013,7 +2013,7 @@ impl<'a> Parser<'a> {
                 KEY => {
                     self.expect_keyword(PEM)?;
                     CsrConnectionOptionName::SslKeyPem
-                },
+                }
                 CERTIFICATE => {
                     if self.parse_keyword(AUTHORITY) {
                         CsrConnectionOptionName::SslCertificateAuthority
@@ -2061,7 +2061,7 @@ impl<'a> Parser<'a> {
                 KEY => {
                     self.expect_keyword(PEM)?;
                     PostgresConnectionOptionName::SslKeyPem
-                },
+                }
                 MODE => PostgresConnectionOptionName::SslMode,
                 _ => unreachable!(),
             },
