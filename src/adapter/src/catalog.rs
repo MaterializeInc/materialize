@@ -1652,7 +1652,9 @@ impl CatalogItemRebuilder {
             Self::SystemTable(item) => item,
             Self::Object(create_sql) => catalog
                 .parse_item(create_sql.clone(), None)
-                .unwrap_or_else(|_| panic!("invalid persisted create sql: {create_sql}")),
+                .unwrap_or_else(|error| {
+                    panic!("invalid persisted create sql ({error:?}): {create_sql}")
+                }),
         }
     }
 }
