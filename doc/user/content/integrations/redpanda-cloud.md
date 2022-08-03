@@ -69,7 +69,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
     ```
 
 4. #### Create a topic
-    To start using Materialize with Redpanda, you need to create a Materialize source over a Redpanda topic.
+    To start using Materialize with Redpanda, you need to point it to an existing Redpanda topic you want to read data from.
 
     If you already have a topic created, you can skip this step.
 
