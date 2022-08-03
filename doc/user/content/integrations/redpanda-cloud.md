@@ -53,7 +53,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
 
     f. Click on **Create**
 
-3. #### Download Redpanda Broker CA certificate
+3. #### Download the Redpanda Broker CA certificate
     a. Go to the [Redpanda cloud console](https://vectorized.cloud/)
 
     b. Click on the **Overview** tab
