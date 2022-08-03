@@ -1353,10 +1353,6 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
         .runtime
         .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
 
-    // Create user table in Materialize.
-    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
-    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
-
     wait_for_view_population(&mut mz_client, view_name, 1, Arc::clone(&now))?;
 
     // The user table's write frontier will be close to zero because we use a deterministic
@@ -1370,6 +1366,9 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
 
     mz_client.batch_execute(&"SET transaction_isolation = serializable")?;
     let view_ts = get_explain_timestamp(view_name, &mut mz_client);
+    // Create user table in Materialize.
+    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
+    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
     let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // In serializable transaction isolation, read timestamps can go backwards.
     assert!(join_ts < view_ts);
@@ -1380,12 +1379,6 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // Since the query on the join was done after the query on the view, it should have a higher or
     // equal timestamp in strict serializable mode.
     assert!(join_ts >= view_ts);
-
-    mz_client.batch_execute(&"SET transaction_isolation = serializable")?;
-    let view_ts = get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
-    // If we go back to serializable, then timestamps can revert again.
-    assert!(join_ts < view_ts);
 
     cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
 
