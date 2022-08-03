@@ -20,7 +20,6 @@ use mz_compute_client::command::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr};
 use mz_ore::id_gen::IdGen;
-use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
@@ -196,22 +195,38 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
     // corresponding id.
     let mut demand = HashMap::new();
 
-    // Demand all columns of inputs to sinks.
-    for (_id, sink) in dataflow.sink_exports.iter() {
-        let input_id = sink.from;
-        demand
-            .entry(Id::Global(input_id))
-            .or_insert_with(BTreeSet::new)
-            .extend(0..dataflow.arity_of(&input_id));
-    }
+    if dataflow.index_exports.is_empty() && dataflow.sink_exports.is_empty() {
+        // In the absence of any exports, just demand all columns from views
+        // that are not depended on by another view, which is currently the last
+        // object in `objects_to_build`.
 
-    // Demand all columns of inputs to exported indexes.
-    for (_id, (desc, _typ)) in dataflow.index_exports.iter() {
-        let input_id = desc.on_id;
-        demand
-            .entry(Id::Global(input_id))
-            .or_insert_with(BTreeSet::new)
-            .extend(0..dataflow.arity_of(&input_id));
+        // A DataflowDesc without exports is currently created in the context of
+        // EXPLAIN outputs. This ensures that the output has all the columns of
+        // the original explainee.
+        if let Some(build_desc) = dataflow.objects_to_build.iter_mut().rev().next() {
+            demand
+                .entry(Id::Global(build_desc.id))
+                .or_insert_with(BTreeSet::new)
+                .extend(0..build_desc.plan.as_inner_mut().arity());
+        }
+    } else {
+        // Demand all columns of inputs to sinks.
+        for (_id, sink) in dataflow.sink_exports.iter() {
+            let input_id = sink.from;
+            demand
+                .entry(Id::Global(input_id))
+                .or_insert_with(BTreeSet::new)
+                .extend(0..dataflow.arity_of(&input_id));
+        }
+
+        // Demand all columns of inputs to exported indexes.
+        for (_id, (desc, _typ)) in dataflow.index_exports.iter() {
+            let input_id = desc.on_id;
+            demand
+                .entry(Id::Global(input_id))
+                .or_insert_with(BTreeSet::new)
+                .extend(0..dataflow.arity_of(&input_id));
+        }
     }
 
     optimize_dataflow_demand_inner(
@@ -269,12 +284,6 @@ where
             // in increasing order.
             projection_pushdown.action(view, &projection_pushed_down, demand)?;
             applied_projection.insert(id, projection_pushed_down);
-        } else if id == Id::Global(GlobalId::Explain) {
-            // If we just want to explain the plan for a given view, then there
-            // will be no upstream demand. Just demand all columns from views
-            // that are not depended on by another view.
-            let arity = view.arity();
-            projection_pushdown.action(view, &(0..arity).collect(), demand)?;
         }
         view_refs.push(view);
     }

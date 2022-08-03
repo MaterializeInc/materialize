@@ -15,7 +15,7 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-This page describes how to connect Materialize to a Kafka broker to read data from individual topics.
+To connect to a Kafka broker (and optionally a schema registry), you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
 {{% /create-source/intro %}}
 
 {{< note >}}
@@ -88,8 +88,8 @@ To create a source that uses the standard key-value convention to support insert
 
 ```sql
 CREATE SOURCE current_predictions
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'events'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT;
 ```
 
@@ -113,8 +113,8 @@ Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka 
 
 ```sql
 CREATE SOURCE kafka_repl
-  FROM KAFKA BROKER 'kafka:9092' TOPIC 'pg_repl.public.table1'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'pg_repl.public.table1'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
 ```
 
@@ -136,7 +136,7 @@ The message key is exposed via the `INCLUDE KEY` option. Composite keys are also
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM 'localhost:9092' TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY AS renamed_id;
@@ -156,8 +156,8 @@ Message headers are exposed via the `INCLUDE HEADERS` option, and are included a
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE HEADERS
   ENVELOPE NONE;
 ```
@@ -208,8 +208,8 @@ These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET` 
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE PARTITION, OFFSET, TIMESTAMP AS ts
   ENVELOPE NONE;
 ```
@@ -234,11 +234,11 @@ To start consuming a Kafka stream from a specific offset, you can use the `start
 
 ```sql
 CREATE SOURCE kafka_offset
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
   -- Start reading from the earliest offset in the first partition,
   -- the second partition at 10, and the third partition at 100
   WITH (start_offset=[0,10,100])
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081';
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 Note that:
@@ -269,82 +269,63 @@ using the `KEY STRATEGY` and `VALUE STRATEGY` keywords, as shown in the syntax d
 
 A strategy of `LATEST` (the default) will choose the latest writer schema from the schema registry to use as a reader schema. `ID` or `INLINE` will allow specifying a schema from the registry by ID or inline in the `CREATE SOURCE` statement, respectively.
 
-## Authentication
+## Examples
 
-### SSL
+### Creating a connection
 
-To connect to a Kafka broker that requires [SSL authentication](https://docs.confluent.io/platform/current/kafka/authentication_ssl.html), use the provided [`WITH` options](#ssl-with-options).
+A connection describes how to connect and authenticate to an external system you want Materialize to read data from.
 
+Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation page.
+
+#### Broker
+
+{{< tabs tabID="1" >}}
+{{< tab "SSL">}}
 ```sql
-CREATE SECRET materialized_key AS '...';
-CREATE SOURCE kafka_ssl
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'top-secret' WITH (
-      security_protocol = 'SSL',
-      ssl_key_pem = SECRET materialized_key,
-      ssl_certificate_pem = '...',
-      ssl_ca_pem = '...',
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081' WITH (
-      ssl_key_pem = SECRET materialized_key,
-      ssl_certificate_pem = '...',
-      ssl_ca_pem = '...'
-  );
+CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
+CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
+
+CREATE CONNECTION kafka_connection
+  FOR KAFKA
+    BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
+    SSL KEY = SECRET kafka_ssl_key,
+    SSL CERTIFICATE = SECRET kafka_ssl_crt;
 ```
-
-
-#### SSL `WITH` options
-
-Field                      | Value  | Description
----------------------------|--------|---------------------------
-`security_protocol`        | `text` | Use `ssl` to connect to the Kafka cluster.
-`ssl_certificate_pem`      | `text` | Your SSL certificate. Required for SSL client authentication.
-`ssl_key_pem`              | `text` | Your SSL certificate's key. Required for SSL client authentication.
-`ssl_ca_location`          | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-
-#### Confluent Schema Registry SSL `WITH` options
-
-Field | Value | Description
-------|-------|------------
-`ssl_certificate_pem` | `text` | Your SSL certificate. Required for SSL client authentication.
-`ssl_key_pem` | `text` | Your SSL certificate's key. Required for SSL client authentication.
-`ssl_ca_pem` | `text` | The certificate authority (CA) certificate. Used for both SSL client and server authentication.
-`username` | `text` | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
-`password` | `text` | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
-
-### SASL
-
-To connect to a Kafka broker that requires [SASL authentication](https://docs.confluent.io/platform/current/kafka/authentication_sasl/auth-sasl-overview.html), use the provided [`WITH` options](#sasl-with-options).
-
-#### SASL/PLAIN
+{{< /tab >}}
+{{< tab "SASL">}}
 
 ```sql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
-CREATE SECRET schema_registry_password AS '<SCHEMA_REGISTRY_PASSWORD>';
-CREATE SOURCE kafka_sasl
-  FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'top-secret' WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = '<BROKER_USERNAME>',
-      sasl_password = SECRET kafka_password,
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld' WITH (
-      username = '<SCHEMA_REGISTRY_USERNAME>',
-      password = SECRET schema_registry_password
-  );
+
+CREATE CONNECTION kafka_connection
+  FOR KAFKA
+    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    SASL MECHANISMS = 'SCRAM-SHA-256',
+    SASL USERNAME = 'foo',
+    SASL PASSWORD = SECRET kafka_password;
 ```
+{{< /tab >}}
+{{< /tabs >}}
 
-This is the configuration required to connect to Kafka brokers running on [Confluent Cloud](https://docs.confluent.io/cloud/current/faq.html#what-client-and-protocol-versions-are-supported).
+#### Confluent Schema Registry
 
-#### SASL `WITH` options
+{{< tabs tabID="1" >}}
+{{< tab "SSL">}}
+```sql
+CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
+CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
+CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
-Field                                   | Value  | Description
-----------------------------------------|--------|----------------------------------------
-`security_protocol`                     | `text` | Use `plaintext`, `ssl`, `sasl_plaintext` or `sasl_ssl` to connect to the Kafka cluster.
-`sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
-`sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
-`sasl_password`                         | secret | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.
-
-## Examples
+CREATE CONNECTION csr_ssl
+  FOR CONFLUENT SCHEMA REGISTRY
+    URL 'rp-f00000bar.data.vectorized.cloud:30993',
+    SSL KEY = SECRET csr_ssl_key,
+    SSL CERTIFICATE = SECRET csr_ssl_crt,
+    USERNAME = 'foo',
+    PASSWORD = SECRET csr_password;
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Creating a source
 
@@ -353,8 +334,9 @@ Field                                   | Value  | Description
 
 ```sql
 CREATE SOURCE avro_source
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081';
+  FROM KAFKA
+    CONNECTION kafka_connection TOPIC 'test_topic'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 {{< /tab >}}
@@ -362,12 +344,13 @@ CREATE SOURCE avro_source
 
 ```sql
 CREATE SOURCE json_source
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
   FORMAT BYTES;
 ```
 
+
 ```sql
-CREATE MATERIALIZED VIEW jsonified_kafka_source AS
+CREATE VIEW jsonified_kafka_source AS
   SELECT
     data->>'field1' AS field_1,
     data->>'field2' AS field_2,
@@ -380,9 +363,9 @@ CREATE MATERIALIZED VIEW jsonified_kafka_source AS
 
 ```sql
 CREATE SOURCE proto_source
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
   WITH (cache = true)
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry:8081';
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 {{< /tab >}}
@@ -390,7 +373,7 @@ CREATE SOURCE proto_source
 
 ```sql
 CREATE SOURCE text_source
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
   FORMAT TEXT
   ENVELOPE UPSERT;
 ```
@@ -400,7 +383,7 @@ CREATE SOURCE text_source
 
 ```sql
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
   FORMAT CSV WITH 3 COLUMNS;
 ```
 
@@ -409,6 +392,8 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 
 ## Related pages
 
+- `CREATE SECRET`
+- [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
 - [Using Debezium](/integrations/debezium/)
 

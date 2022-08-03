@@ -11,6 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use chrono::DurationRound;
+use timely::PartialOrder;
 use tracing::{event, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
@@ -24,8 +25,8 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
 use crate::coord::timeline::TimelineState;
 use crate::coord::{
-    CoordTimestamp, Coordinator, CreateSourceStatementReady, Message, ReplicaMetadata, SendDiffs,
-    SinkConnectionReady,
+    CoordTimestamp, Coordinator, CreateSourceStatementReady, Message, PendingTxn, ReplicaMetadata,
+    SendDiffs, SinkConnectionReady,
 };
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -62,6 +63,9 @@ impl<S: Append + 'static> Coordinator<S> {
             // path that responds to the client (e.g. reporting an error).
             Message::RemovePendingPeeks { conn_id } => {
                 self.cancel_pending_peeks(conn_id).await;
+            }
+            Message::LinearizeReads(pending_read_txns) => {
+                self.message_linearize_reads(pending_read_txns).await;
             }
         }
     }
@@ -139,8 +143,11 @@ impl<S: Append + 'static> Coordinator<S> {
             params,
             depends_on,
             original_stmt,
+            otel_ctx,
         }: CreateSourceStatementReady,
     ) {
+        otel_ctx.attach_as_parent();
+
         let stmt = match result {
             Ok(stmt) => stmt,
             Err(e) => return tx.send(Err(e), session),
@@ -311,7 +318,7 @@ impl<S: Append + 'static> Coordinator<S> {
             timeline,
             TimelineState {
                 mut oracle,
-                read_holds,
+                mut read_holds,
             },
         ) in global_timelines
         {
@@ -329,7 +336,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .fast_forward(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
-            let read_holds = self.update_read_hold(read_holds, read_ts).await;
+            if read_holds.time.less_than(&read_ts) {
+                read_holds = self.update_read_hold(read_holds, read_ts).await;
+            }
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
         }
@@ -345,5 +354,23 @@ impl<S: Append + 'static> Coordinator<S> {
         )
         .await
         .expect("updating compute instance status cannot fail");
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingTxn>) {
+        self.catalog
+            .confirm_leadership()
+            .await
+            .expect("unable to confirm leadership");
+        for PendingTxn {
+            client_transmitter,
+            response,
+            mut session,
+            action,
+        } in pending_read_txns
+        {
+            session.vars_mut().end_transaction(action);
+            client_transmitter.send(response, session);
+        }
     }
 }

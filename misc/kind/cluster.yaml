@@ -1,0 +1,153 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Adapted from https://github.com/MaterializeInc/cloud/blob/main/misc/kind/cluster.yaml
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+# Constrain the node port range to something relatively small, then forward all
+# those ports from the host. This makes services running in Kubernetes
+# accessible at localhost:$NODEPORT without requiring manual port forwarding.
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        "service-node-port-range": "32000-32063"
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 32000
+        hostPort: 32000
+      - containerPort: 32001
+        hostPort: 32001
+      - containerPort: 32002
+        hostPort: 32002
+      - containerPort: 32003
+        hostPort: 32003
+      - containerPort: 32004
+        hostPort: 32004
+      - containerPort: 32005
+        hostPort: 32005
+      - containerPort: 32006
+        hostPort: 32006
+      - containerPort: 32007
+        hostPort: 32007
+      - containerPort: 32008
+        hostPort: 32008
+      - containerPort: 32009
+        hostPort: 32009
+      - containerPort: 32010
+        hostPort: 32010
+      - containerPort: 32011
+        hostPort: 32011
+      - containerPort: 32012
+        hostPort: 32012
+      - containerPort: 32013
+        hostPort: 32013
+      - containerPort: 32014
+        hostPort: 32014
+      - containerPort: 32015
+        hostPort: 32015
+      - containerPort: 32016
+        hostPort: 32016
+      - containerPort: 32017
+        hostPort: 32017
+      - containerPort: 32018
+        hostPort: 32018
+      - containerPort: 32019
+        hostPort: 32019
+      - containerPort: 32020
+        hostPort: 32020
+      - containerPort: 32021
+        hostPort: 32021
+      - containerPort: 32022
+        hostPort: 32022
+      - containerPort: 32023
+        hostPort: 32023
+      - containerPort: 32024
+        hostPort: 32024
+      - containerPort: 32025
+        hostPort: 32025
+      - containerPort: 32026
+        hostPort: 32026
+      - containerPort: 32027
+        hostPort: 32027
+      - containerPort: 32028
+        hostPort: 32028
+      - containerPort: 32029
+        hostPort: 32029
+      - containerPort: 32030
+        hostPort: 32030
+      - containerPort: 32031
+        hostPort: 32031
+      - containerPort: 32032
+        hostPort: 32032
+      - containerPort: 32033
+        hostPort: 32033
+      - containerPort: 32034
+        hostPort: 32034
+      - containerPort: 32035
+        hostPort: 32035
+      - containerPort: 32036
+        hostPort: 32036
+      - containerPort: 32037
+        hostPort: 32037
+      - containerPort: 32038
+        hostPort: 32038
+      - containerPort: 32039
+        hostPort: 32039
+      - containerPort: 32040
+        hostPort: 32040
+      - containerPort: 32041
+        hostPort: 32041
+      - containerPort: 32042
+        hostPort: 32042
+      - containerPort: 32043
+        hostPort: 32043
+      - containerPort: 32044
+        hostPort: 32044
+      - containerPort: 32045
+        hostPort: 32045
+      - containerPort: 32046
+        hostPort: 32046
+      - containerPort: 32047
+        hostPort: 32047
+      - containerPort: 32048
+        hostPort: 32048
+      - containerPort: 32049
+        hostPort: 32049
+      - containerPort: 32050
+        hostPort: 32050
+      - containerPort: 32051
+        hostPort: 32051
+      - containerPort: 32052
+        hostPort: 32052
+      - containerPort: 32053
+        hostPort: 32053
+      - containerPort: 32054
+        hostPort: 32054
+      - containerPort: 32055
+        hostPort: 32055
+      - containerPort: 32056
+        hostPort: 32056
+      - containerPort: 32057
+        hostPort: 32057
+      - containerPort: 32058
+        hostPort: 32058
+      - containerPort: 32059
+        hostPort: 32059
+      - containerPort: 32060
+        hostPort: 32060
+      - containerPort: 32061
+        hostPort: 32061
+      - containerPort: 32062
+        hostPort: 32062
+      - containerPort: 32063
+        hostPort: 32063

@@ -33,6 +33,7 @@ use timely::progress::Timestamp;
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::encoding::parse_id;
@@ -41,6 +42,7 @@ use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
 
+pub mod async_runtime;
 pub mod batch;
 pub mod cache;
 pub mod error;
@@ -56,6 +58,7 @@ pub(crate) mod r#impl {
     pub mod encoding;
     pub mod gc;
     pub mod machine;
+    pub mod maintenance;
     pub mod metrics;
     pub mod paths;
     pub mod state;
@@ -87,6 +90,7 @@ impl PersistLocation {
     /// [crate::cache::PersistClientCache::open].
     pub async fn open_locations(
         &self,
+        config: &PersistConfig,
         metrics: &Metrics,
     ) -> Result<
         (
@@ -102,7 +106,11 @@ impl PersistLocation {
         let blob = BlobConfig::try_from(&self.blob_uri).await?;
         let blob =
             retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
-        let consensus = ConsensusConfig::try_from(&self.consensus_uri).await?;
+        let consensus = ConsensusConfig::try_from(
+            &self.consensus_uri,
+            config.consensus_connection_pool_max_size,
+        )
+        .await?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
             consensus.clone().open()
         })
@@ -173,6 +181,9 @@ pub struct PersistConfig {
     /// if the number of updates is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
     pub compaction_heuristic_min_updates: usize,
+    /// The maximum size of the connection pool to Postgres/CRDB when performing
+    /// consensus reads and writes.
+    pub consensus_connection_pool_max_size: usize,
 }
 
 // Tuning inputs:
@@ -230,7 +241,15 @@ impl PersistConfig {
             compaction_enabled: !compaction_disabled,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
+            consensus_connection_pool_max_size: 8,
         }
+    }
+
+    /// Returns a new instance of [PersistConfig] with default tunings for unit tests
+    pub fn new_for_test(now: NowFn) -> Self {
+        let mut defaults = Self::new(now);
+        defaults.consensus_connection_pool_max_size = 1;
+        defaults
     }
 }
 
@@ -261,6 +280,7 @@ pub struct PersistClient {
     blob: Arc<dyn Blob + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
+    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
 }
 
 impl PersistClient {
@@ -274,6 +294,7 @@ impl PersistClient {
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     ) -> Result<Self, ExternalError> {
         trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
@@ -283,6 +304,7 @@ impl PersistClient {
             blob,
             consensus,
             metrics,
+            cpu_heavy_runtime,
         })
     }
 
@@ -308,7 +330,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         trace!("Client::open shard_id={:?}", shard_id);
         Ok((
@@ -330,7 +352,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         trace!("Client::open_reader shard_id={:?}", shard_id);
         let gc = GarbageCollector::new(
@@ -339,10 +361,10 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         );
         let mut machine = Machine::new(
+            self.cfg.clone(),
             shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
-            gc,
         )
         .await?;
 
@@ -353,6 +375,7 @@ impl PersistClient {
             metrics: Arc::clone(&self.metrics),
             reader_id,
             machine,
+            gc,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
             last_heartbeat: Instant::now(),
@@ -375,7 +398,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         trace!("Client::open_writer shard_id={:?}", shard_id);
         let gc = GarbageCollector::new(
@@ -384,10 +407,10 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         );
         let mut machine = Machine::new(
+            self.cfg.clone(),
             shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
-            gc,
         )
         .await?;
         let writer_id = WriterId::new();
@@ -396,6 +419,7 @@ impl PersistClient {
                 self.cfg.clone(),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.metrics),
+                Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
             )
         });
@@ -405,6 +429,7 @@ impl PersistClient {
             metrics: Arc::clone(&self.metrics),
             writer_id,
             machine,
+            gc,
             compact,
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
@@ -424,7 +449,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
     {
         self.open(shard_id).await.expect("codec mismatch")
     }

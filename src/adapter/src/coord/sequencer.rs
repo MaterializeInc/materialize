@@ -34,7 +34,7 @@ use mz_expr::{
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
-use mz_repr::explain_new::Explain;
+use mz_repr::explain_new::{Explain, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
@@ -64,11 +64,12 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::{
-    peek, read_policy, Coordinator, Message, SendDiffs, SinkConnectionReady, TxnReads,
+    peek, read_policy, Coordinator, Message, PendingTxn, SendDiffs, SinkConnectionReady, TxnReads,
     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
+use crate::session::vars::IsolationLevel;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -387,6 +388,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
         let source_oid = self.catalog.allocate_oid().await?;
+        let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
             source_desc: plan.source.source_desc,
@@ -394,6 +396,7 @@ impl<S: Append + 'static> Coordinator<S> {
             timeline: plan.timeline,
             depends_on,
             remote_addr: plan.remote,
+            host_config,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,
@@ -434,9 +437,9 @@ impl<S: Append + 'static> Coordinator<S> {
                         CollectionDescription {
                             desc: source.desc.clone(),
                             ingestion: Some(ingestion),
-                            remote_addr: source.remote_addr,
                             since: None,
                             status_collection_id: Some(source_status_collection_id),
+                            host_config: Some(source.host_config),
                         },
                     )])
                     .await
@@ -576,15 +579,19 @@ impl<S: Append + 'static> Coordinator<S> {
         }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
-        let introspection_sources = if compute_instance_config.is_some() {
+        let introspection_source_indexes = if compute_instance_config.is_some() {
             self.catalog.allocate_introspection_source_indexes().await
         } else {
             Vec::new()
         };
+        let introspection_source_index_ids: Vec<_> = introspection_source_indexes
+            .iter()
+            .map(|(_, id)| *id)
+            .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
             config: compute_instance_config.clone(),
-            introspection_sources,
+            introspection_source_indexes,
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -687,6 +694,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap();
         }
 
+        if !introspection_source_index_ids.is_empty() {
+            self.initialize_compute_read_policies(
+                introspection_source_index_ids,
+                instance.id,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
+        }
         if !introspection_collection_ids.is_empty() {
             self.initialize_storage_read_policies(
                 introspection_collection_ids,
@@ -748,7 +763,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         // Choose the least popular AZ among all replicas of this cluster as the default
                         // if none was specified. If there is a tie for "least popular", pick the first one.
                         // That is globally unbiased (for Materialize, not necessarily for this customer)
-                        // because we shuffle the AZs on boot.
+                        // because we shuffle the AZs on boot in `crate::serve`.
                         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
                         let azs = self.catalog.state().availability_zones();
                         let mut n_replicas_per_az = azs
@@ -1173,7 +1188,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // are replaced with persist-based ones.
         let log_names = depends_on
             .iter()
-            .flat_map(|id| self.catalog.log_dependencies(*id))
+            .flat_map(|id| self.catalog.active_log_dependencies(*id))
             .map(|id| self.catalog.get_entry(&id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
@@ -1238,9 +1253,9 @@ impl<S: Append + 'static> Coordinator<S> {
                         CollectionDescription {
                             desc,
                             ingestion: None,
-                            remote_addr: None,
                             since: Some(as_of),
                             status_collection_id: None,
+                            host_config: None,
                         },
                     )])
                     .await
@@ -1394,18 +1409,30 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::new();
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
-        for name in plan.names {
-            let instance = self.catalog.resolve_compute_instance(&name)?;
+        for compute_name in plan.names {
+            let instance = self.catalog.resolve_compute_instance(&compute_name)?;
             instance_replica_drop_sets.push((instance.id, instance.replicas_by_id.clone()));
             for replica_name in instance.replica_id_by_name.keys() {
                 ops.push(catalog::Op::DropComputeInstanceReplica {
                     name: replica_name.to_string(),
-                    compute_id: instance.id,
+                    compute_name: compute_name.clone(),
                 });
             }
-            let ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
+
+            let mut ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items that depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeInstanceReplica.
+            for replica in instance.replicas_by_id.values() {
+                let log_ids = replica.config.persisted_logs.get_log_ids();
+                for log_id in log_ids {
+                    ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                }
+            }
+
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
-            ops.push(catalog::Op::DropComputeInstance { name });
+            ops.push(catalog::Op::DropComputeInstance { name: compute_name });
         }
 
         self.catalog_transact(Some(session), ops, |_| Ok(()))
@@ -1432,13 +1459,28 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         let mut ops = Vec::with_capacity(names.len());
         let mut replicas_to_drop = Vec::with_capacity(names.len());
+        let mut ids_to_drop = vec![];
         for (instance_name, replica_name) in names {
             let instance = self.catalog.resolve_compute_instance(&instance_name)?;
             ops.push(catalog::Op::DropComputeInstanceReplica {
                 name: replica_name.clone(),
-                compute_id: instance.id,
+                compute_name: instance_name.clone(),
             });
             let replica_id = instance.replica_id_by_name[&replica_name];
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items that depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeInstanceReplica.
+            for log_id in instance
+                .replicas_by_id
+                .get(&replica_id)
+                .unwrap()
+                .config
+                .persisted_logs
+                .get_log_ids()
+            {
+                ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+            }
 
             replicas_to_drop.push((
                 instance.id,
@@ -1446,6 +1488,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 instance.replicas_by_id[&replica_id].clone(),
             ));
         }
+
+        ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
 
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
@@ -1585,19 +1629,37 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
 
         let (response, action) = match result {
-            Ok((Some(writes), _)) if writes.is_empty() => (response, action),
-            Ok((Some(writes), write_lock_guard)) => {
-                self.submit_write(PendingWriteTxn {
+            Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
+                (response, action)
+            }
+            Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
+                self.submit_write(PendingWriteTxn::User {
                     writes,
-                    client_transmitter: tx,
-                    response,
-                    session,
-                    action,
                     write_lock_guard,
+                    pending_txn: PendingTxn {
+                        client_transmitter: tx,
+                        response,
+                        session,
+                        action,
+                    },
                 });
                 return;
             }
-            Ok((None, _)) => (response, action),
+            Ok((Some(TransactionOps::Peeks(_)), _))
+                if session.vars().transaction_isolation()
+                    == &IsolationLevel::StrictSerializable =>
+            {
+                self.strict_serializable_reads_tx
+                    .send(PendingTxn {
+                        client_transmitter: tx,
+                        response,
+                        session,
+                        action,
+                    })
+                    .expect("sending to strict_serializable_reads_tx cannot fail");
+                return;
+            }
+            Ok((_, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
         session.vars_mut().end_transaction(action);
@@ -1608,13 +1670,19 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<(Option<Vec<WriteOp>>, Option<OwnedMutexGuard<()>>), AdapterError> {
+    ) -> Result<
+        (
+            Option<TransactionOps<Timestamp>>,
+            Option<OwnedMutexGuard<()>>,
+        ),
+        AdapterError,
+    > {
         let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
-            if let (Some(ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
-                if let TransactionOps::Writes(mut writes) = ops {
-                    for WriteOp { id, .. } in &writes {
+            if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
+                if let TransactionOps::Writes(writes) = &mut ops {
+                    for WriteOp { id, .. } in &mut writes.iter() {
                         // Re-verify this id exists.
                         let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
                             AdapterError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
@@ -1623,10 +1691,11 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                     writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                    return Ok((Some(writes), write_lock_guard));
                 }
+                return Ok((Some(ops), write_lock_guard));
             }
         }
+
         Ok((None, None))
     }
 
@@ -1651,7 +1720,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ) -> Result<(), AdapterError> {
             let log_names = source_ids
                 .iter()
-                .flat_map(|id| catalog.log_dependencies(*id))
+                .flat_map(|id| catalog.active_log_dependencies(*id))
                 .map(|id| catalog.get_entry(&id).name().item.clone())
                 .collect::<Vec<_>>();
 
@@ -1877,32 +1946,31 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
-        let fast_path = peek::create_plan(
+        let peek_plan = self.create_peek_plan(
             dataflow,
             view_id,
+            compute_instance,
             index_id,
             key,
             permutation,
             thinning.len(),
         )?;
 
-        // Finalization optimizes the dataflow as much as possible.
-        let fast_path =
-            fast_path.finalize(|dataflow| self.finalize_dataflow(dataflow, compute_instance));
-
-        // We only track the peeks in the session if the query is in a transaction,
-        // the query doesn't use AS OF, it's a non-constant or timestamp dependent query.
-        if in_transaction
-            && when == QueryWhen::Immediately
-            && (!matches!(fast_path, peek::Plan::Constant(_)) || !timestamp_independent)
+        // We only track the peeks in the session if the query doesn't use AS OF, it's a
+        // non-constant or timestamp dependent query.
+        if when == QueryWhen::Immediately
+            && (!matches!(
+                peek_plan,
+                peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
+            ) || !timestamp_independent)
         {
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
         }
 
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_fast_path_peek(
-                fast_path,
+            .implement_peek_plan(
+                peek_plan,
                 timestamp,
                 finishing,
                 conn_id,
@@ -2045,6 +2113,7 @@ impl<S: Append + 'static> Coordinator<S> {
             stage,
             format,
             config,
+            explainee,
         } = plan;
 
         let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
@@ -2144,12 +2213,19 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = optimize(self, decorrelated_plan)?;
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
+                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                    }
+                    _ => None,
+                };
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: UsedIndexes::new(used_indexes),
                     finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                    fast_path_plan,
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -2158,7 +2234,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 // run partial pipeline
                 let decorrelated_plan = decorrelate(raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(self, decorrelated_plan)?;
+                let mut dataflow = optimize(self, decorrelated_plan)?;
+                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                    }
+                    _ => None,
+                };
                 let mut dataflow_plan =
                     mz_compute_client::plan::Plan::<mz_repr::Timestamp>::finalize_dataflow(
                         dataflow,
@@ -2169,9 +2252,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: UsedIndexes::new(used_indexes),
                     finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                    fast_path_plan,
                 };
                 // explain plan
                 Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
@@ -2201,6 +2284,7 @@ impl<S: Append + 'static> Coordinator<S> {
             row_set_finishing,
             stage,
             options,
+            view_id,
         } = plan;
 
         struct Timings {
@@ -2234,12 +2318,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
                 coord
                     .dataflow_builder(compute_instance)
-                    .import_view_into_dataflow(
-                        // TODO: If explaining a view, pipe the actual id of the view.
-                        &GlobalId::Explain,
-                        &optimized_plan,
-                        &mut dataflow,
-                    )?;
+                    .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;
                 mz_transform::optimize_dataflow(
                     &mut dataflow,
                     &coord.index_oracle(compute_instance),
@@ -2287,7 +2366,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStageOld::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
+                let mut dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
                 let formatter = DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
@@ -2295,7 +2374,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
-                explanation.to_string()
+                let mut explanation = explanation.to_string();
+                if view_id == GlobalId::Explain {
+                    let fast_path_plan = peek::create_fast_path_plan(&mut dataflow, view_id)
+                        .expect("Fast path planning failed; unrecoverable error");
+                    if let Some(fast_path_plan) = fast_path_plan {
+                        explanation = fast_path_plan.explain_old(&catalog, options.typed);
+                    }
+                }
+                explanation
             }
             ExplainStageOld::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;

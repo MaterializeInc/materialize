@@ -14,6 +14,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 use tokio::sync::oneshot;
 
+use mz_compute_client::controller::ComputeError;
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -21,6 +22,7 @@ use mz_repr::explain_new::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
 use mz_sql::query_model::QGMError;
+use mz_storage::controller::StorageError;
 use mz_transform::TransformError;
 
 use crate::catalog;
@@ -76,6 +78,11 @@ pub enum AdapterError {
     },
     /// No such cluster replica size has been configured.
     InvalidClusterReplicaSize {
+        size: String,
+        expected: Vec<String>,
+    },
+    /// No such storage instance size has been configured.
+    InvalidStorageHostSize {
         size: String,
         expected: Vec<String>,
     },
@@ -152,6 +159,10 @@ pub enum AdapterError {
     WriteOnlyTransaction,
     /// The transaction only supports single table writes
     MultiTableWriteTransaction,
+    /// An error occurred in the storage layer
+    Storage(mz_storage::controller::StorageError),
+    /// An error occurred in the compute layer
+    Compute(mz_compute_client::controller::ComputeError),
 }
 
 impl AdapterError {
@@ -228,6 +239,9 @@ impl AdapterError {
                 "Valid cluster replica sizes are: {}",
                 expected.join(", ")
             )),
+            AdapterError::InvalidStorageHostSize { expected, .. } => {
+                Some(format!("Valid source sizes are: {}", expected.join(", ")))
+            }
             AdapterError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
@@ -299,6 +313,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::InvalidClusterReplicaSize { size, expected: _ } => {
                 write!(f, "unknown cluster replica size {size}",)
+            }
+            AdapterError::InvalidStorageHostSize { size, .. } => {
+                write!(f, "unknown source size {size}")
             }
             AdapterError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")
@@ -381,6 +398,8 @@ impl fmt::Display for AdapterError {
             AdapterError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
             }
+            AdapterError::Storage(e) => e.fmt(f),
+            AdapterError::Compute(e) => e.fmt(f),
         }
     }
 }
@@ -463,6 +482,18 @@ impl From<RecursionLimitError> for AdapterError {
 impl From<oneshot::error::RecvError> for AdapterError {
     fn from(e: oneshot::error::RecvError) -> AdapterError {
         AdapterError::Unstructured(e.into())
+    }
+}
+
+impl From<StorageError> for AdapterError {
+    fn from(e: StorageError) -> Self {
+        AdapterError::Storage(e)
+    }
+}
+
+impl From<ComputeError> for AdapterError {
+    fn from(e: ComputeError) -> Self {
+        AdapterError::Compute(e)
     }
 }
 

@@ -31,8 +31,7 @@ use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited}
 use crate::source::persist_source;
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
-    LoadGeneratorSourceReader, PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig,
-    S3SourceReader, SourceOutput,
+    LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
 };
 use crate::types::errors::{DataflowError, DecodeError};
 use crate::types::sources::{encoding::*, *};
@@ -42,7 +41,7 @@ use crate::types::transforms::LinearOperator;
 ///
 /// This enum puts no restrictions to the generic parameters of the variants since it only serves
 /// as a type-level enum.
-enum SourceType<Delimited, ByteStream, RowSource, AppendRowSource> {
+enum SourceType<Delimited, ByteStream, RowSource> {
     /// A delimited source
     Delimited(Delimited),
     /// A bytestream source
@@ -52,9 +51,6 @@ enum SourceType<Delimited, ByteStream, RowSource, AppendRowSource> {
     /// adapters, and can produce
     /// retractions
     Row(RowSource),
-    /// A source that produces Row's natively,
-    /// that are purely appended.
-    AppendRow(AppendRowSource),
 }
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -179,14 +175,6 @@ where
             );
             ((SourceType::ByteStream(ok), err), cap)
         }
-        SourceConnection::PubNub(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, PubNubSourceReader>(
-                base_source_config,
-                &connection,
-                storage_state.connection_context.clone(),
-            );
-            ((SourceType::AppendRow(ok), err), cap)
-        }
         SourceConnection::Postgres(_) => {
             let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader>(
                 base_source_config,
@@ -276,30 +264,6 @@ where
                     &mut linear_operators,
                     storage_state.decode_metrics.clone(),
                     &storage_state.connection_context,
-                ),
-                SourceType::AppendRow(source) => (
-                    source.map(
-                        |SourceOutput {
-                             key: (),
-                             value,
-                             position,
-                             upstream_time_millis,
-                             partition,
-                             // Not expected to support headers
-                             // when full rows are produced
-                             headers: _,
-                             diff: (),
-                         }| DecodeResult {
-                            key: None,
-                            // The diff for appends is +1
-                            value: Some(Ok((value, 1))),
-                            position,
-                            upstream_time_millis,
-                            partition,
-                            metadata: Row::default(),
-                        },
-                    ),
-                    None,
                 ),
                 SourceType::Row(source) => (
                     source.map(|r| DecodeResult {

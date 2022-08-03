@@ -334,7 +334,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v21.11.13",
+        version: str = "v22.1.6",
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         ports: Optional[List[int]] = None,
@@ -462,7 +462,7 @@ class Postgres(Service):
         mzbuild: str = "postgres",
         image: Optional[str] = None,
         port: int = 5432,
-        command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20",
+        command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20 -c max_connections=5000",
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
     ) -> None:
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}

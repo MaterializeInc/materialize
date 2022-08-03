@@ -76,6 +76,9 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
+use itertools::Itertools;
+use mz_ore::tracing::OpenTelemetryContext;
+use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -105,18 +108,18 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, ClusterReplicaSizeMap, Sink,
-    SinkConnectionState,
+    self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
+    ClusterReplicaSizeMap, Sink, SinkConnectionState, StorageHostSizeMap,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::coord::appends::{AdvanceLocalInput, AdvanceTables, Deferred, PendingWriteTxn};
+use crate::coord::appends::{AdvanceLocalInput, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
 use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
-use crate::session::Session;
+use crate::session::{EndTransactionAction, Session};
 use crate::sink_connection;
 use crate::tail::PendingTail;
 use crate::util::ClientTransmitter;
@@ -139,6 +142,10 @@ mod timestamp_selection;
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
 
+/// A dummy availability zone to use when no availability zones are explicitly
+/// specified.
+pub const DUMMY_AVAILABILITY_ZONE: &str = "";
+
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -152,6 +159,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks { conn_id: ConnectionId },
+    LinearizeReads(Vec<PendingTxn>),
 }
 
 #[derive(Derivative)]
@@ -176,6 +184,7 @@ pub struct CreateSourceStatementReady {
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
+    pub otel_ctx: OpenTelemetryContext,
 }
 
 #[derive(Derivative)]
@@ -201,6 +210,8 @@ pub struct Config<S> {
     pub secrets_controller: Arc<dyn SecretsController>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
+    pub storage_host_sizes: StorageHostSizeMap,
+    pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
 }
 
@@ -236,6 +247,19 @@ struct TxnReads {
     read_holds: crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>,
 }
 
+#[derive(Debug)]
+/// A pending transaction waiting to be committed.
+pub struct PendingTxn {
+    /// Transmitter used to send a response back to the client.
+    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Client response for transaction.
+    response: Result<ExecuteResponse, AdapterError>,
+    /// Session of the client who initiated the transaction.
+    session: Session,
+    /// The action to take at the end of the transaction.
+    action: EndTransactionAction,
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// The controller for the storage and compute layers.
@@ -247,13 +271,12 @@ pub struct Coordinator<S> {
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
 
+    /// Channel for strict serializable reads ready to commit.
+    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingTxn>,
+
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
-
-    /// Tracks tables needing advancement, which can be processed at a low priority
-    /// in the biased select loop.
-    advance_tables: AdvanceTables<Timestamp>,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -315,6 +338,7 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn bootstrap(
         &mut self,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         let mut persisted_log_ids = vec![];
@@ -353,6 +377,39 @@ impl<S: Append + 'static> Coordinator<S> {
             DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
         )
         .await;
+
+        // Migrate builtin objects.
+        for (compute_id, sink_ids) in builtin_migration_metadata.previous_sink_ids {
+            self.controller
+                .compute_mut(compute_id)
+                .unwrap()
+                .drop_sinks_unvalidated(sink_ids)
+                .await?;
+        }
+        for (compute_id, index_ids) in builtin_migration_metadata.previous_index_ids {
+            self.controller
+                .compute_mut(compute_id)
+                .unwrap()
+                .drop_indexes_unvalidated(index_ids)
+                .await?;
+        }
+        for (compute_id, recorded_view_ids) in
+            builtin_migration_metadata.previous_materialized_view_ids
+        {
+            self.controller
+                .compute_mut(compute_id)
+                .unwrap()
+                .drop_sinks_unvalidated(recorded_view_ids.clone())
+                .await?;
+            self.controller
+                .storage_mut()
+                .drop_sources_unvalidated(recorded_view_ids)
+                .await?;
+        }
+        self.controller
+            .storage_mut()
+            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
+            .await?;
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
         // Topologically sort entries based on the used_by relationship
@@ -407,9 +464,9 @@ impl<S: Append + 'static> Coordinator<S> {
                             CollectionDescription {
                                 desc: source.desc.clone(),
                                 ingestion: Some(ingestion),
-                                remote_addr: source.remote_addr.clone(),
                                 since: None,
                                 status_collection_id: Some(source_status_collection_id),
+                                host_config: Some(source.host_config.clone()),
                             },
                         )])
                         .await
@@ -643,6 +700,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
+        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
         // For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
@@ -685,21 +743,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
+                    let mut pending_read_txns = vec![pending_read_txn];
+                    while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
+                        pending_read_txns.push(pending_read_txn);
+                    }
+                    Message::LinearizeReads(pending_read_txns)
+                }
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
-
-                // At the lowest priority, process table advancements. This is a blocking
-                // HashMap instead of a channel so that we can delay the determination of
-                // which table to advance until we know we can process it. In the event of
-                // very high traffic where a second AdvanceLocalInputs message occurs before
-                // advance_tables is fully emptied, this allows us to replace an old request
-                // with a new one, avoiding duplication of work, which wouldn't be possible if
-                // we had already sent all AdvanceLocalInput messages on a channel.
-                // See [`AdvanceTables::recv`] for notes on why this is cancel-safe.
-                inputs = self.advance_tables.recv() => {
-                    Message::AdvanceLocalInput(inputs)
-                },
             };
 
             // All message processing functions trace. Start a parent span for them to make
@@ -768,24 +823,44 @@ pub async fn serve<S: Append + 'static>(
         now,
         secrets_controller,
         cluster_replica_sizes,
-        availability_zones,
+        storage_host_sizes,
+        default_storage_host_size,
+        mut availability_zones,
         connection_context,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+    let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
 
-    let (mut catalog, builtin_table_updates) = Catalog::open(catalog::Config {
-        storage,
-        unsafe_mode,
-        build_info,
-        now: now.clone(),
-        skip_migrations: false,
-        metrics_registry: &metrics_registry,
-        cluster_replica_sizes,
-        availability_zones,
-    })
-    .await?;
+    // Validate and process availability zones.
+    if !availability_zones.iter().all_unique() {
+        coord_bail!("availability zones must be unique");
+    }
+    // Later on, we choose an AZ for every replica, so we need to have at least
+    // one. If we're using an orchestrator that doesn't have the notion of AZs,
+    // just create a fake, blank one.
+    if availability_zones.is_empty() {
+        availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
+    }
+    // Shuffle availability zones for unbiased selection in
+    // Coordinator::sequence_create_compute_instance_replica.
+    availability_zones.shuffle(&mut rand::thread_rng());
+
+    let (mut catalog, builtin_migration_metadata, builtin_table_updates) =
+        Catalog::open(catalog::Config {
+            storage,
+            unsafe_mode,
+            build_info,
+            now: now.clone(),
+            skip_migrations: false,
+            metrics_registry: &metrics_registry,
+            cluster_replica_sizes,
+            storage_host_sizes,
+            default_storage_host_size,
+            availability_zones,
+        })
+        .await?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
@@ -836,8 +911,8 @@ pub async fn serve<S: Append + 'static>(
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 internal_cmd_tx,
+                strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
-                advance_tables: AdvanceTables::new(),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
@@ -852,11 +927,12 @@ pub async fn serve<S: Append + 'static>(
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
             };
-            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
+            let bootstrap =
+                handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, cmd_rx));
+                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
             }
         })
         .unwrap();

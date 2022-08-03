@@ -16,7 +16,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use fail::fail_point;
-
+use mz_ore::cast::CastFrom;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -183,7 +183,7 @@ impl Blob for FileBlob {
         Ok(())
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.
@@ -195,11 +195,29 @@ impl Blob for FileBlob {
             )))
         });
 
-        if let Err(err) = fs::remove_file(&file_path).await {
-            // delete is documented to succeed if the key doesn't exist.
-            if err.kind() != ErrorKind::NotFound {
+        // There is a race condition here between metadata and remove_file where
+        // we won't return the correct length of the deleted file if it changes
+        // between the two calls. Luckily 1. we only every write to a given key
+        // once and it never changes and 2. this is only used for metrics
+        // anyway.
+
+        let size_bytes = match fs::metadata(&file_path).await {
+            Ok(x) => x.len(),
+            Err(err) => {
+                // delete is documented to succeed if the key doesn't exist.
+                if err.kind() == ErrorKind::NotFound {
+                    return Ok(None);
+                }
                 return Err(err.into());
             }
+        };
+
+        if let Err(err) = fs::remove_file(&file_path).await {
+            // delete is documented to succeed if the key doesn't exist.
+            if err.kind() == ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(err.into());
         };
 
         fail_point!("fileblob_delete_after", |_| {
@@ -209,7 +227,7 @@ impl Blob for FileBlob {
             )))
         });
 
-        Ok(())
+        Ok(Some(usize::cast_from(size_bytes)))
     }
 }
 

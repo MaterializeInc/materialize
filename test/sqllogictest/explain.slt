@@ -294,7 +294,7 @@ EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW ordered_view
 Source materialize.public.ordered (u2):
 | Project (#0, #1)
 
-Query:
+View materialize.public.ordered_view (u3):
 %0 =
 | Get materialize.public.ordered (u2)
 | | types = (integer?, text?)
@@ -388,7 +388,7 @@ Source materialize.public.ordered (u2):
   ]
 }
 
-Query:
+View materialize.public.ordered_view (u3):
 {
   "TopK": {
     "input": {
@@ -442,7 +442,7 @@ Source materialize.public.ordered (u2):
   ]
 }
 
-Query:
+View materialize.public.ordered_view (u3):
 {
   "TopK": {
     "input": {

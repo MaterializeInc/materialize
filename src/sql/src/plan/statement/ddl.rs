@@ -52,8 +52,8 @@ use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
     KinesisSourceConnection, LoadGeneratorSourceConnection, MzOffset, PostgresSourceConnection,
-    PostgresSourceDetails, ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection,
-    SourceConnection, SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    PostgresSourceDetails, ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection,
+    SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -64,13 +64,13 @@ use crate::ast::{
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnection, CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName,
-    CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode, DbzTxMetadataOption,
-    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
-    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
+    CreateViewsSourceTarget, CreateViewsStatement, CsrConnection, CsrConnectionAvro,
+    CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
     KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
     PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
@@ -100,7 +100,7 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
-    Table, Type, View,
+    StorageHostConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -302,6 +302,8 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(CreateSourceOption, (Size, String));
+
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
@@ -310,25 +312,26 @@ pub fn plan_create_source(
         name,
         col_names,
         connection,
-        with_options,
+        legacy_with_options,
         envelope,
         if_not_exists,
         format,
         key_constraint,
         include_metadata,
         remote,
+        with_options,
     } = &stmt;
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    let with_options_original = with_options;
-    let mut with_options = normalize::options(with_options_original)?;
+    let legacy_with_options_original = legacy_with_options;
+    let mut legacy_with_options = normalize::options(legacy_with_options_original)?;
 
-    if !with_options.is_empty() {
+    if !legacy_with_options.is_empty() || !with_options.is_empty() {
         scx.require_unsafe_mode("creating sources with WITH options")?;
     }
 
-    let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
+    let ts_frequency = match legacy_with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val.into() {
             Some(Value::Number(n)) => match n.parse::<u64>() {
                 Ok(n) => Duration::from_millis(n),
@@ -353,7 +356,7 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
-            let mut options = kafka_util::extract_config(&mut with_options)?;
+            let mut options = kafka_util::extract_config(&mut legacy_with_options)?;
             let kafka_connection = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
                     scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
@@ -389,7 +392,7 @@ pub fn plan_create_source(
                 }
             };
 
-            let group_id_prefix = match with_options.remove("group_id_prefix") {
+            let group_id_prefix = match legacy_with_options.remove("group_id_prefix") {
                 None => None,
                 Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
                 Some(_) => sql_bail!("group_id_prefix must be a string"),
@@ -408,7 +411,7 @@ pub fn plan_create_source(
             };
 
             let mut start_offsets = HashMap::new();
-            match with_options.remove("start_offset") {
+            match legacy_with_options.remove("start_offset") {
                 None => {
                     start_offsets.insert(0, MzOffset::from(0));
                 }
@@ -522,7 +525,7 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| sql_err!("Provided ARN does not include an AWS region"))?;
 
-            let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let aws = normalize::aws_config(&mut legacy_with_options, Some(region.into()))?;
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
@@ -534,7 +537,7 @@ pub fn plan_create_source(
             compression,
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
-            let aws = normalize::aws_config(&mut with_options, None)?;
+            let aws = normalize::aws_config(&mut legacy_with_options, None)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
@@ -601,23 +604,6 @@ pub fn plan_create_source(
             let encoding =
                 SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
             (connection, encoding)
-        }
-        CreateSourceConnection::PubNub {
-            subscribe_key,
-            channel,
-        } => {
-            match format {
-                CreateSourceFormat::None | CreateSourceFormat::Bare(Format::Text) => (),
-                _ => sql_bail!("CREATE SOURCE ... PUBNUB must specify FORMAT TEXT"),
-            }
-            let connection = SourceConnection::PubNub(PubNubSourceConnection {
-                subscribe_key: subscribe_key.clone(),
-                channel: channel.clone(),
-            });
-            (
-                connection,
-                SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Text)),
-            )
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let load_generator = match generator {
@@ -759,7 +745,7 @@ pub fn plan_create_source(
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
-    let ignore_source_keys = match with_options.remove("ignore_source_keys") {
+    let ignore_source_keys = match legacy_with_options.remove("ignore_source_keys") {
         None => false,
         Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
         Some(_) => sql_bail!("ignore_source_keys must be a boolean"),
@@ -820,12 +806,21 @@ pub fn plan_create_source(
         None
     };
 
+    let opt = CreateSourceOptionExtracted::try_from(with_options.clone())?;
+
+    let host_config = match (&remote, &opt.size) {
+        (None, None) => StorageHostConfig::Undefined,
+        (None, Some(size)) => StorageHostConfig::Managed { size: size.clone() },
+        (Some(addr), None) => StorageHostConfig::Remote { addr: addr.clone() },
+        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+    };
+
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
-    let timeline = if let Some(timeline) = with_options.remove("timeline") {
+    let timeline = if let Some(timeline) = legacy_with_options.remove("timeline") {
         match timeline.into() {
             Some(Value::String(timeline)) => Timeline::User(timeline),
             Some(v) => sql_bail!("unsupported timeline value {}", v.to_ast_string()),
@@ -833,7 +828,7 @@ pub fn plan_create_source(
         }
     } else {
         match envelope {
-            SourceEnvelope::CdcV2 => match with_options.remove("epoch_ms_timeline") {
+            SourceEnvelope::CdcV2 => match legacy_with_options.remove("epoch_ms_timeline") {
                 None => Timeline::External(name.to_string()),
                 Some(SqlValueOrSecret::Value(Value::Boolean(true))) => Timeline::EpochMilliseconds,
                 Some(v) => sql_bail!("unsupported epoch_ms_timeline value {}", v),
@@ -853,7 +848,7 @@ pub fn plan_create_source(
         desc,
     };
 
-    normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
+    normalize::ensure_empty_options(&legacy_with_options, "CREATE SOURCE")?;
 
     Ok(Plan::CreateSource(CreateSourcePlan {
         name,
@@ -861,6 +856,7 @@ pub fn plan_create_source(
         if_not_exists,
         timeline,
         remote,
+        host_config,
     }))
 }
 
@@ -2469,7 +2465,7 @@ pub fn plan_create_index(
         }
     };
 
-    let options = plan_index_options(with_options.clone())?;
+    let options = plan_index_options(scx, with_options.clone())?;
     let compute_instance = match in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
         Some(in_cluster) => in_cluster.id,
@@ -3413,7 +3409,24 @@ pub fn plan_drop_cluster_replica(
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
-            names_out.push((instance.name().to_string(), replica_name))
+            // Check if we have an item that depends on the replica's logs
+            let log_ids = instance.replica_logs(&replica_name).unwrap();
+            for id in log_ids {
+                let log_item = scx.catalog.get_item(&id);
+                for id in log_item.used_by() {
+                    let dep = scx.catalog.get_item(id);
+                    if dependency_prevents_drop(ObjectType::Source, dep) {
+                        sql_bail!(
+                            "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
+                            replica_name.quoted(),
+                            instance.name().quoted(),
+                            scx.catalog.resolve_full_name(dep.name())
+                        );
+                    }
+                }
+            }
+
+            names_out.push((instance.name().to_string(), replica_name));
         } else {
             // If "IF EXISTS" supplied, names allowed to be missing,
             // otherwise error.
@@ -3481,34 +3494,35 @@ pub fn plan_drop_item(
     if !cascade {
         for id in catalog_entry.used_by() {
             let dep = scx.catalog.get_item(id);
-            match object_type {
-                ObjectType::Type => sql_bail!(
+            if dependency_prevents_drop(object_type, dep) {
+                sql_bail!(
                     "cannot drop {}: still depended upon by catalog item '{}'",
                     scx.catalog.resolve_full_name(catalog_entry.name()),
                     scx.catalog.resolve_full_name(dep.name())
-                ),
-                _ => match dep.item_type() {
-                    CatalogItemType::Func
-                    | CatalogItemType::Table
-                    | CatalogItemType::Source
-                    | CatalogItemType::View
-                    | CatalogItemType::MaterializedView
-                    | CatalogItemType::Sink
-                    | CatalogItemType::Type
-                    | CatalogItemType::Secret
-                    | CatalogItemType::Connection => {
-                        sql_bail!(
-                            "cannot drop {}: still depended upon by catalog item '{}'",
-                            scx.catalog.resolve_full_name(catalog_entry.name()),
-                            scx.catalog.resolve_full_name(dep.name())
-                        );
-                    }
-                    CatalogItemType::Index => (),
-                },
+                );
             }
         }
     }
     Ok(Some(catalog_entry.id()))
+}
+
+/// Does the dependency `dep` prevent a drop of a non-cascade query?
+fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> bool {
+    match object_type {
+        ObjectType::Type => true,
+        _ => match dep.item_type() {
+            CatalogItemType::Func
+            | CatalogItemType::Table
+            | CatalogItemType::Source
+            | CatalogItemType::View
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::Sink
+            | CatalogItemType::Type
+            | CatalogItemType::Secret
+            | CatalogItemType::Connection => true,
+            CatalogItemType::Index => false,
+        },
+    }
 }
 
 pub fn describe_alter_index_options(
@@ -3521,6 +3535,7 @@ pub fn describe_alter_index_options(
 generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalInterval));
 
 fn plan_index_options(
+    scx: &StatementContext,
     with_opts: Vec<IndexOption<Aug>>,
 ) -> Result<Vec<crate::plan::IndexOption>, PlanError> {
     let IndexOptionExtracted {
@@ -3531,6 +3546,7 @@ fn plan_index_options(
     let mut out = Vec::with_capacity(1);
 
     if let Some(OptionalInterval(lcw)) = logical_compaction_window {
+        scx.require_unsafe_mode("LOGICAL COMPACTION WINDOW")?;
         out.push(crate::plan::IndexOption::LogicalCompactionWindow(
             lcw.map(|interval| interval.duration()).transpose()?,
         ))
@@ -3578,7 +3594,7 @@ pub fn plan_alter_index_options(
         AlterIndexAction::SetOptions(options) => {
             Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
                 id,
-                options: plan_index_options(options)?,
+                options: plan_index_options(scx, options)?,
             }))
         }
     }

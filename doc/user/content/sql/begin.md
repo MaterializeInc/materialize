@@ -33,7 +33,6 @@ Other queries can only reference these same-schema objects.
 During the first query, a timestamp is chosen that is valid for all of those objects.
 This timestamp will be used for all other queries.
 The transaction will additionally hold back normal compaction of the objects, potentially increasing memory usage for very long running transactions.
-If `AS OF` is specified in any query, it is exempt from the above restrictions (it uses the specified `AS OF` timestamp and can reference objects from any schema).
 
 A second kind of **read-only** transaction can contain an initial [`TAIL`](/sql/tail), which can appear in a transaction block along with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 

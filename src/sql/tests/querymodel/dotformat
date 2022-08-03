@@ -93,7 +93,7 @@ digraph G {
     }
     subgraph cluster2 {
         label = "Box2:Select"
-        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0| 1: (Q1.C0 \|\| false) }" ]
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C0| 1: (Q1.C0 OR false) }" ]
         {
             rank = same
             node [ shape = circle ]

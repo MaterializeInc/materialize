@@ -53,7 +53,6 @@ Case
 Cast
 Certificate
 Chain
-Channel
 Char
 Character
 Characteristics
@@ -239,7 +238,6 @@ Primary
 Progress
 Protobuf
 Publication
-Pubnub
 Query
 Quote
 Raise
@@ -297,7 +295,6 @@ Stdin
 Stdout
 Strategy
 String
-Subscribe
 Substring
 Superuser
 Table

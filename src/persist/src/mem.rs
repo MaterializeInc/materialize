@@ -91,9 +91,9 @@ impl MemBlobCore {
         Ok(())
     }
 
-    fn delete(&mut self, key: &str) -> Result<(), ExternalError> {
-        self.dataz.remove(key);
-        Ok(())
+    fn delete(&mut self, key: &str) -> Result<Option<usize>, ExternalError> {
+        let bytes = self.dataz.remove(key).map(|x| x.len());
+        Ok(bytes)
     }
 }
 
@@ -135,7 +135,7 @@ impl Blob for MemBlob {
         self.core.lock().await.set(key, value)
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         self.core.lock().await.delete(key)
     }
 }
@@ -229,7 +229,7 @@ impl Consensus for MemConsensus {
         }
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let current = self.head(key).await?;
         if current.map_or(true, |data| data.seqno < seqno) {
             return Err(ExternalError::from(anyhow!(
@@ -240,11 +240,14 @@ impl Consensus for MemConsensus {
 
         let mut store = self.data.lock().map_err(Error::from)?;
 
+        let mut deleted = 0;
         if let Some(values) = store.get_mut(key) {
+            let count_before = values.len();
             values.retain(|val| val.seqno >= seqno);
+            deleted += count_before - values.len();
         }
 
-        Ok(())
+        Ok(deleted)
     }
 }
 

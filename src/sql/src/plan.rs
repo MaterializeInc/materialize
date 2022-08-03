@@ -65,7 +65,9 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
-pub use self::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use self::expr::{
+    AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
+};
 pub use error::PlanError;
 pub use explain::Explanation;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -206,6 +208,27 @@ pub struct CreateSourcePlan {
     pub if_not_exists: bool,
     pub timeline: Timeline,
     pub remote: Option<String>,
+    pub host_config: StorageHostConfig,
+}
+
+/// Settings related to storage hosts
+///
+/// This represents how resources for a storage instance are going to be
+/// provisioned, based on the SQL logic. Storage equivalent of ComputeInstanceReplicaConfig
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StorageHostConfig {
+    /// Remote unmanaged storage
+    Remote {
+        /// The network addresses of the storaged process.
+        addr: String,
+    },
+    /// A remote but managed storage host
+    Managed {
+        /// SQL size parameter used for allocation
+        size: String,
+    },
+    /// This configuration was not defined in the SQL query, so it should use the default behavior
+    Undefined,
 }
 
 #[derive(Debug)]
@@ -375,6 +398,7 @@ pub struct ExplainPlanNew {
     pub stage: ExplainStageNew,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
+    pub explainee: mz_repr::explain_new::Explainee,
 }
 
 #[derive(Debug)]
@@ -383,6 +407,7 @@ pub struct ExplainPlanOld {
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStageOld,
     pub options: ExplainOptions,
+    pub view_id: GlobalId,
 }
 
 #[derive(Debug)]

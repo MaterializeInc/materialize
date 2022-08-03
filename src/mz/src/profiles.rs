@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use crate::{
-    FronteggAuthMachine, Profile, MACHINE_AUTH_URL, PROFILES_DIR_NAME, PROFILES_FILE_NAME,
+    FronteggAuthMachine, Profile, DEFAULT_PROFILE_NAME, MACHINE_AUTH_URL, PROFILES_DIR_NAME,
+    PROFILES_FILE_NAME, PROFILES_PREFIX, PROFILE_NOT_FOUND_MESSAGE,
 };
 use dirs::home_dir;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
@@ -17,6 +18,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
+
+use toml_edit::{value, Document};
 
 /// ----------------------------
 ///  Profiles handling
@@ -52,18 +55,21 @@ pub(crate) async fn authenticate_profile(
         .await?;
 
     if authentication_result.status() == 401 {
-        println!("Unauthorized. Please, update the credentials.");
+        println!("Unauthorized. Please, check the credentials.");
         exit(0);
     } else {
         authentication_result.json::<FronteggAuthMachine>().await
     }
 }
 
+fn path_not_exist(path: PathBuf) -> bool {
+    fs::metadata(path).is_err()
+}
+
 fn create_profile_dir_if_not_exists() {
     let config_path = get_config_path();
 
-    // Check if path exists
-    if fs::metadata(config_path.clone()).is_err() {
+    if path_not_exist(config_path.clone()) {
         fs::create_dir_all(config_path.as_path()).unwrap();
     };
 }
@@ -72,8 +78,17 @@ fn write_profile(profile: Profile) -> std::io::Result<()> {
     let mut config_path = get_config_path();
     config_path.push(PROFILES_FILE_NAME);
 
-    let toml = toml::to_string(&profile).unwrap();
-    fs::write(config_path, toml)
+    let mut profiles_opt = get_profiles();
+    let profiles_document = profiles_opt.get_or_insert(Document::new());
+
+    let mut new_profile_table = toml_edit::table();
+    new_profile_table["email"] = value(profile.email);
+    new_profile_table["secret"] = value(profile.secret);
+    new_profile_table["client_id"] = value(profile.client_id);
+    new_profile_table["region"] = value("");
+    profiles_document[format!("{}.{}", PROFILES_PREFIX, profile.name).as_str()] = new_profile_table;
+
+    fs::write(config_path, profiles_document.to_string())
 }
 
 pub(crate) fn save_profile(profile: Profile) -> std::io::Result<()> {
@@ -82,38 +97,73 @@ pub(crate) fn save_profile(profile: Profile) -> std::io::Result<()> {
     write_profile(profile)
 }
 
-pub(crate) fn get_local_profile() -> Option<Profile> {
-    // Check if path exists
-    create_profile_dir_if_not_exists();
-
-    let mut config_path = get_config_path();
-    config_path.push(PROFILES_FILE_NAME);
+pub(crate) fn get_profiles() -> Option<Document> {
+    let mut profiles_path = get_config_path();
+    profiles_path.push(PROFILES_FILE_NAME);
 
     // Check if profiles file exists
-    if fs::metadata(config_path.clone()).is_err() {
+    if path_not_exist(get_config_path()) || path_not_exist(profiles_path.clone()) {
         None
     } else {
         // Return profile
-        match fs::read_to_string(config_path.as_path()) {
-            Ok(profiles_serialized) => match toml::from_str(&*profiles_serialized) {
-                Ok(profile) => Some(profile),
-                Err(error) => panic!("Problem parsing the profiles: {:?}", error),
+        match fs::read_to_string(profiles_path.as_path()) {
+            Ok(profiles_string) => match profiles_string.parse::<Document>() {
+                Ok(profiles) => Some(profiles),
+                Err(error) => panic!("Error parsing the profiles: {:?}", error),
             },
-            Err(error) => panic!("Problem opening the profiles file: {:?}", error),
+            Err(error) => panic!("Error opening the profiles file: {:?}", error),
         }
     }
 }
 
-pub(crate) async fn validate_profile(client: Client) -> Option<FronteggAuthMachine> {
-    match get_local_profile() {
+pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
+    if let Some(profiles) = get_profiles() {
+        let profile_name_key = format!("{:}.{:}", PROFILES_PREFIX, profile_name);
+        if !profiles.contains_key(profile_name_key.as_str()) {
+            return None;
+        }
+
+        let mut default_profile = profiles[profile_name_key.as_str()].clone();
+        if default_profile.is_table() {
+            default_profile["name"] = value(DEFAULT_PROFILE_NAME);
+            let string_default_profile = default_profile.to_string();
+            match toml::from_str(string_default_profile.as_str()) {
+                Ok(profile) => Some(profile),
+                Err(error) => panic!("Error parsing the profiles: {:?}", error),
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn get_default_profile() -> Option<Profile> {
+    get_profile(DEFAULT_PROFILE_NAME.to_string())
+}
+
+pub(crate) async fn validate_profile(
+    profile_arg: Option<String>,
+    client: Client,
+) -> Option<FronteggAuthMachine> {
+    match get_profile_using_args(profile_arg) {
         Some(profile) => match authenticate_profile(client, profile).await {
             Ok(frontegg_auth_machine) => {
                 return Some(frontegg_auth_machine);
             }
             Err(error) => panic!("Error authenticating profile : {:?}", error),
         },
-        None => println!("Profile not found. Please, login using `mz login`."),
+        None => println!("{}", PROFILE_NOT_FOUND_MESSAGE),
     }
 
     None
+}
+
+pub(crate) fn get_profile_using_args(profile_arg: Option<String>) -> Option<Profile> {
+    if let Some(profile_name) = profile_arg {
+        get_profile(profile_name)
+    } else {
+        get_default_profile()
+    }
 }

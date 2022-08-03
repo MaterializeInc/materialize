@@ -386,6 +386,7 @@ impl ErrorResponse {
             AdapterError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidStorageHostSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
@@ -419,6 +420,7 @@ impl ErrorResponse {
             // code, so it's probably the best choice.
             AdapterError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::Storage(_) | AdapterError::Compute(_) => SqlState::INTERNAL_ERROR,
         };
         ErrorResponse {
             severity,

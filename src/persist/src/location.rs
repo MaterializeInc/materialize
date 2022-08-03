@@ -17,7 +17,6 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use mz_persist_types::Codec;
 use mz_proto::RustType;
-use tokio_postgres::error::SqlState;
 
 use crate::error::Error;
 
@@ -205,8 +204,8 @@ impl From<std::io::Error> for ExternalError {
     }
 }
 
-impl From<tokio_postgres::Error> for ExternalError {
-    fn from(e: tokio_postgres::Error) -> Self {
+impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
+    fn from(e: deadpool_postgres::tokio_postgres::Error) -> Self {
         let code = match e.as_db_error().map(|x| x.code()) {
             Some(x) => x,
             None => {
@@ -218,11 +217,26 @@ impl From<tokio_postgres::Error> for ExternalError {
         match code {
             // Feel free to add more things to this whitelist as we encounter
             // them as long as you're certain they're determinate.
-            &SqlState::T_R_SERIALIZATION_FAILURE => ExternalError::Determinate(Determinate {
-                inner: anyhow::Error::new(e),
-            }),
+            &deadpool_postgres::tokio_postgres::error::SqlState::T_R_SERIALIZATION_FAILURE => {
+                ExternalError::Determinate(Determinate {
+                    inner: anyhow::Error::new(e),
+                })
+            }
             _ => ExternalError::Indeterminate(Indeterminate {
                 inner: anyhow::Error::new(e),
+            }),
+        }
+    }
+}
+
+impl From<deadpool_postgres::PoolError> for ExternalError {
+    fn from(x: deadpool_postgres::PoolError) -> Self {
+        match x {
+            // We have logic for turning a postgres Error into an ExternalError,
+            // so use it.
+            deadpool_postgres::PoolError::Backend(x) => ExternalError::from(x),
+            x => ExternalError::Indeterminate(Indeterminate {
+                inner: anyhow::Error::new(x),
             }),
         }
     }
@@ -329,12 +343,13 @@ pub trait Consensus: std::fmt::Debug {
     /// or if there is no data at this key.
     async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError>;
 
-    /// Deletes all historical versions of the data stored at `key` that are < `seqno`,
-    /// iff `seqno` <= the current sequence number.
+    /// Deletes all historical versions of the data stored at `key` that are <
+    /// `seqno`, iff `seqno` <= the current sequence number.
     ///
-    /// Returns an error if `seqno` is greater than the current sequence number,
-    /// or if there is no data at this key.
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<(), ExternalError>;
+    /// Returns the number of versions deleted on success. Returns an error if
+    /// `seqno` is greater than the current sequence number, or if there is no
+    /// data at this key.
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
 }
 
 /// Metadata about a particular blob stored by persist
@@ -380,8 +395,9 @@ pub trait Blob: std::fmt::Debug {
 
     /// Remove a key from the map.
     ///
-    /// Succeeds if the key does not exist.
-    async fn delete(&self, key: &str) -> Result<(), ExternalError>;
+    /// Returns Some and the size of the deleted blob if if exists. Succeeds and
+    /// returns None if it does not exist.
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError>;
 }
 
 #[cfg(test)]
@@ -485,14 +501,18 @@ pub mod tests {
         assert_eq!(blob1.get("k0a").await?, Some(values[1].clone()));
 
         // Can delete a key.
-        blob0.delete(&k0).await?;
+        assert_eq!(blob0.delete(&k0).await, Ok(Some(2)));
         // Can no longer get a deleted key.
         assert_eq!(blob0.get(&k0).await?, None);
         assert_eq!(blob1.get(&k0).await?, None);
-        // Double deleting a key succeeds.
-        assert_eq!(blob0.delete(&k0).await, Ok(()));
+        // Double deleting a key succeeds but indicates that it did no work.
+        assert_eq!(blob0.delete(&k0).await, Ok(None));
         // Deleting a key that does not exist succeeds.
-        assert_eq!(blob0.delete("nope").await, Ok(()));
+        assert_eq!(blob0.delete("nope").await, Ok(None));
+        // Deleting a key with an empty value indicates it did work but deleted
+        // no bytes.
+        blob0.set(&"empty", Bytes::new(), AllowNonAtomic).await?;
+        assert_eq!(blob0.delete("empty").await, Ok(Some(0)));
 
         // Empty blob contains no keys.
         blob0.delete("k0a").await?;
@@ -615,8 +635,8 @@ pub mod tests {
 
         // Can truncate data with an upper bound <= head, even if there is no data in the
         // range [0, upper).
-        assert_eq!(consensus.truncate(&key, SeqNo(0)).await, Ok(()));
-        assert_eq!(consensus.truncate(&key, SeqNo(5)).await, Ok(()));
+        assert_eq!(consensus.truncate(&key, SeqNo(0)).await, Ok(0));
+        assert_eq!(consensus.truncate(&key, SeqNo(5)).await, Ok(0));
 
         // Cannot truncate data with an upper bound > head.
         assert!(consensus.truncate(&key, SeqNo(6)).await.is_err(),);
@@ -706,7 +726,7 @@ pub mod tests {
         assert!(consensus.scan(&key, SeqNo(11)).await.is_err());
 
         // Can remove the previous write with the appropriate truncation.
-        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(()));
+        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(1));
 
         // Verify that the old write is indeed deleted.
         assert_eq!(
@@ -714,8 +734,9 @@ pub mod tests {
             Ok(vec![new_state.clone()])
         );
 
-        // Truncate is idempotent and can be repeated.
-        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(()));
+        // Truncate is idempotent and can be repeated. The return value
+        // indicates we didn't do any work though.
+        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(0));
 
         // Make sure entries under different keys don't clash.
         let other_key = Uuid::new_v4().to_string();
@@ -762,6 +783,17 @@ pub mod tests {
                 .await,
             Ok(Ok(()))
         );
+
+        // Truncate can delete more than one version at a time.
+        let v12 = VersionedData {
+            seqno: SeqNo(12),
+            data: Bytes::new(),
+        };
+        assert_eq!(
+            consensus.compare_and_set(&key, Some(SeqNo(11)), v12).await,
+            Ok(Ok(()))
+        );
+        assert_eq!(consensus.truncate(&key, SeqNo(12)).await, Ok(2));
 
         // Sequence numbers used within Consensus have to be within [0, i64::MAX].
 

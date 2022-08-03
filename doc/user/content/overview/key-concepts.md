@@ -47,11 +47,11 @@ combination works.
 
 Sources consist of the following components:
 
-Component | Use | Example
-----------|-----|---------
-**Connector** | Provides actual bytes of data to Materialize | Kafka
-**Format** | Structures of the external source's bytes, i.e. its schema | Avro
-**Envelope** | Expresses how Materialize should handle the incoming data + any additional formatting information | Append-only
+Component      | Use                                                                                               | Example
+---------------|---------------------------------------------------------------------------------------------------|---------
+**Connector**  | Provides actual bytes of data to Materialize                                                      | Kafka
+**Format**     | Structures of the external source's bytes, i.e. its schema                                        | Avro
+**Envelope**   | Expresses how Materialize should handle the incoming data + any additional formatting information | Upsert
 
 #### Connectors
 

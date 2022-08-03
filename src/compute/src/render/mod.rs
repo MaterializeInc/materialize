@@ -107,8 +107,9 @@ use std::sync::Arc;
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
+use timely::dataflow::operators::InspectCore;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 
@@ -116,13 +117,15 @@ use mz_compute_client::command::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::plan::Plan;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
-use mz_repr::{GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::source::persist_source;
 use mz_storage::types::errors::DataflowError;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
+use crate::logging::compute::ComputeEvent;
+use crate::logging::compute::Logger;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
@@ -163,12 +166,22 @@ pub fn build_compute_dataflow<A: Allocate>(
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
                 // Note: For correctness, we require that sources only emit times advanced by
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                let (ok_stream, err_stream, token) = persist_source::persist_source(
+                let (mut ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
                 );
+
+                // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
+                // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
+                // time of the frontier advancement for each dataflow as early as possible.
+                if let Some(logger) = compute_state.compute_logger.clone() {
+                    let export_ids = dataflow.export_ids().collect();
+                    ok_stream = intercept_source_instantiation_frontiers(
+                        &ok_stream, logger, *source_id, export_ids,
+                    );
+                }
 
                 // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
                 // type checker happy. We should decide what we want our tokens to look like
@@ -223,6 +236,28 @@ pub fn build_compute_dataflow<A: Allocate>(
                 context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
             }
         });
+    })
+}
+
+// This helper function adds an operator to track source instantiation frontier advancements
+// in a dataflow. The tracking supports instrospection sources populated by compute logging.
+fn intercept_source_instantiation_frontiers<G>(
+    source_instantiation: &Stream<G, (Row, mz_repr::Timestamp, Diff)>,
+    logger: Logger,
+    source_id: GlobalId,
+    dataflow_ids: Vec<GlobalId>,
+) -> Stream<G, (Row, mz_repr::Timestamp, Diff)>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+{
+    source_instantiation.inspect_container(move |event| {
+        if let Err(frontier) = event {
+            if let Some(time) = frontier.get(0) {
+                for dataflow_id in dataflow_ids.iter() {
+                    logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, *time));
+                }
+            }
+        }
     })
 }
 

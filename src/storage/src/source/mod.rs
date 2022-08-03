@@ -34,12 +34,13 @@ use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use futures::stream::LocalBoxStream;
 use futures::{Stream, StreamExt as _};
+use itertools::Itertools;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::{Capability, Event};
+use timely::dataflow::operators::{CapabilitySet, Event};
 use timely::dataflow::Scope;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::activate::SyncActivator;
@@ -58,6 +59,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
 use crate::controller::CollectionMetadata;
+use crate::source::healthcheck::{Healthchecker, SourceStatusUpdate};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockOperator;
 use crate::source::util::source;
@@ -67,12 +69,12 @@ use crate::types::sources::encoding::SourceDataEncoding;
 use crate::types::sources::{MzOffset, SourceConnection};
 
 pub mod generator;
+mod healthcheck;
 mod kafka;
 mod kinesis;
 pub mod metrics;
 pub mod persist_source;
 mod postgres;
-mod pubnub;
 mod reclock;
 mod s3;
 pub mod util;
@@ -81,7 +83,6 @@ pub use generator::LoadGeneratorSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
-pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
 
 // Interval after which the source operator will yield control.
@@ -232,6 +233,9 @@ where
                     specific_diff,
                 },
             ))),
+            NextMessage::Ready(SourceMessageType::SourceStatus(update)) => {
+                Ok(NextMessage::Ready(SourceMessageType::SourceStatus(update)))
+            }
             NextMessage::Pending => Ok(NextMessage::Pending),
             NextMessage::TransientDelay => Ok(NextMessage::TransientDelay),
             NextMessage::Finished => Ok(NextMessage::Finished),
@@ -321,15 +325,6 @@ where
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
     _activator: Rc<ActivateOnDrop<()>>,
-}
-
-/// The status of a source.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum SourceStatus {
-    /// The source is still alive.
-    Alive,
-    /// The source is complete.
-    Done,
 }
 
 /// Types that implement this trait expose a length function
@@ -496,6 +491,8 @@ pub enum SourceMessageType<Key, Value, Diff> {
     /// Communicate that more [`SourceMessage`]'s
     /// will come later at the same offset as this one.
     InProgress(SourceMessage<Key, Value, Diff>),
+    /// Information about the source status
+    SourceStatus(SourceStatusUpdate),
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
@@ -739,7 +736,7 @@ where
         let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
         let waker = futures::task::waker(waker_activator);
 
-        let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
+        let metrics_name = upstream_name.clone().unwrap_or_else(|| name.clone());
         let mut source_metrics =
             SourceMetrics::new(base_metrics, &metrics_name, id, &worker_id.to_string());
 
@@ -750,9 +747,9 @@ where
             let upper_ts = resume_upper.as_option().copied().unwrap();
             let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
             let mut timestamper = match ReclockOperator::new(
-                persist_clients,
-                storage_metadata,
-                now,
+                Arc::clone(&persist_clients),
+                storage_metadata.clone(),
+                now.clone(),
                 timestamp_frequency.clone(),
                 as_of,
             )
@@ -761,6 +758,29 @@ where
                 Ok(t) => t,
                 Err(e) => {
                     panic!("Failed to create source {} timestamper: {:#}", name, e);
+                }
+            };
+
+            let mut healthchecker = match Healthchecker::new(
+                name.clone(),
+                upstream_name,
+                id,
+                source_connection.name(),
+                worker_id,
+                worker_count,
+                active,
+                &persist_clients,
+                &storage_metadata,
+                now.clone(),
+            )
+            .await
+            {
+                Ok(h) => h,
+                Err(e) => {
+                    panic!(
+                        "Failed to create healthchecker for source {}: {:#}",
+                        &name, e
+                    );
                 }
             };
 
@@ -819,15 +839,36 @@ where
                                         }
                                         untimestamped_messages.entry(pid).or_default().push((message, offset));
                                     }
+                                    SourceMessageType::SourceStatus(update) => {
+                                        healthchecker.update_status(update).await;
+                                    }
                                 }
                             }
                             // TODO: make errors definite
-                            Some(Err(e)) => non_definite_errors.push(e),
+                            Some(Err(e)) => {
+                                non_definite_errors.push(e);
+                            }
                             None => {},
                         }
                     }
                     // It's time to timestamp a batch
                     _ = timestamp_interval.tick() => {
+                        // Emit errors at the current upper timestamp, to make
+                        // sure that they can be emitted with the existing
+                        // capability.
+                        let current_ts_upper = timestamper
+                            .reclock_frontier(&source_upper)
+                            .expect("compacted past upper");
+                        for err in non_definite_errors.drain(..) {
+                            // TODO: make errors definite
+                            yield Event::Message(
+                                current_ts_upper
+                                    .first()
+                                    .cloned()
+                                    .expect("cannot emit errors when advanced to the empty frontier"),
+                                Err(err));
+                        }
+
                         let reclocked_msgs = match timestamper.reclock(&mut untimestamped_messages).await {
                             Ok(msgs) => msgs,
                             Err((pid, offset)) => panic!("failed to reclock {} @ {}", pid, offset),
@@ -840,10 +881,6 @@ where
 
                         timestamper.advance().await;
 
-                        for err in non_definite_errors.drain(..) {
-                            // TODO: make errors definite
-                            yield Event::Message(0, Err(err));
-                        }
                         // TODO(petrosagg): compaction should be driven by AllowCompaction commands
                         // coming from the storage controller
                         let new_ts_upper = timestamper
@@ -855,10 +892,10 @@ where
                             // is critical here: once this capability is downgraded, that timestamp
                             // is sealed forever.
                             ts_upper = new_ts_upper.clone();
-                            yield Event::Progress(new_ts_upper.into_option());
+                            yield Event::Progress(new_ts_upper);
                         }
                         if source_stream.is_done() {
-                            yield Event::Progress(None);
+                            yield Event::Progress(Antichain::new());
                             break;
                         }
                     }
@@ -867,9 +904,11 @@ where
         }));
 
         let activator = scope.activator_for(&info.address[..]);
-        move |cap, output| {
+        move |cap_set, output| {
             if !active {
-                return SourceStatus::Done;
+                // Empty out the `CapabilitySet` to indicate that we're done.
+                cap_set.downgrade(&[]);
+                return;
             }
 
             // Accumulate updates to bytes_read for Prometheus metrics collection
@@ -880,37 +919,36 @@ where
             source_metrics.operator_scheduled_counter.inc();
 
             let mut context = Context::from_waker(&waker);
-            let mut source_status = SourceStatus::Alive;
 
             let timer = Instant::now();
 
             while let Poll::Ready(Some(event)) = source_reader.as_mut().poll_next(&mut context) {
                 match event {
                     Event::Progress(upper) => {
-                        let ts = upper.unwrap_or(Timestamp::MAX);
+                        let ts = upper.as_option().cloned().unwrap_or(Timestamp::MAX);
                         for partition_metrics in source_metrics.partition_metrics.values_mut() {
                             partition_metrics.closed_ts.set(ts);
                         }
-                        // TODO(petrosagg): `cap` should become a CapabilitySet to allow
-                        // downgrading it to the empty frontier. For now setting SourceStatus to
-                        // Done achieves the same effect
-                        cap.downgrade(&ts);
-                        if upper.is_none() {
-                            source_status = SourceStatus::Done;
+
+                        cap_set.downgrade(upper.iter());
+
+                        if upper.is_empty() {
+                            // Return early because this source is done now.
+                            break;
                         }
                     }
                     Event::Message(ts, message) => match message {
                         Ok(message) => handle_message::<S>(
                             message,
                             &mut bytes_read,
-                            &cap,
+                            &cap_set,
                             output,
                             &mut metric_updates,
                             ts,
                         ),
                         // TODO: make errors definite
                         Err(e) => {
-                            output.session(&cap).give(Err(SourceError {
+                            output.session(&cap_set.delayed(&ts)).give(Err(SourceError {
                                 source_id: id,
                                 error: e.inner,
                             }));
@@ -925,9 +963,19 @@ where
 
             bytes_read_counter.inc_by(bytes_read as u64);
             source_metrics.record_partition_offsets(metric_updates);
-            source_metrics.capability.set(*cap.time());
-
-            source_status
+            // This is correct for totally ordered times because there can be at
+            // most one entry in the `CapabilitySet`. If this ever changes we
+            // need to rethink how we surface this in metrics. We will notice
+            // when that happens because the `expect()` will fail.
+            source_metrics.capability.set(
+                cap_set
+                    .iter()
+                    .at_most_one()
+                    .expect("there can be at most one element for totally ordered times")
+                    .map(|c| c.time())
+                    .cloned()
+                    .unwrap_or(Timestamp::MAX),
+            );
         }
     });
     let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", |r| r);
@@ -947,7 +995,7 @@ where
 fn handle_message<S: SourceReader>(
     message: SourceMessage<S::Key, S::Value, S::Diff>,
     bytes_read: &mut usize,
-    cap: &Capability<Timestamp>,
+    cap_set: &CapabilitySet<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
         Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
@@ -972,7 +1020,7 @@ fn handle_message<S: SourceReader>(
     if let Some(len) = out.len() {
         *bytes_read += len;
     }
-    let ts_cap = cap.delayed(&ts);
+    let ts_cap = cap_set.delayed(&ts);
     output.session(&ts_cap).give(Ok(SourceOutput::new(
         key,
         out,

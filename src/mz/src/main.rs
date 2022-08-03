@@ -21,13 +21,14 @@ mod regions;
 mod shell;
 mod utils;
 
+use profiles::get_profile_using_args;
 use serde::{Deserialize, Serialize};
 
 use clap::{ArgEnum, Args, Parser, Subcommand};
 use reqwest::Client;
 
 use crate::login::{login_with_browser, login_with_console};
-use crate::profiles::{authenticate_profile, get_local_profile, validate_profile};
+use crate::profiles::{authenticate_profile, validate_profile};
 use crate::regions::{
     delete_region, enable_region, list_cloud_providers, list_regions, warning_delete_region,
 };
@@ -47,6 +48,8 @@ enum CloudProviderRegion {
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
+    #[clap(short, long)]
+    profile: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -99,7 +102,7 @@ enum RegionsCommands {
 
 #[derive(Debug, Deserialize)]
 struct Region {
-    coordd_pgwire_address: String,
+    environmentd_pgwire_address: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -134,14 +137,16 @@ struct BrowserAPIToken {
     email: String,
     client_id: String,
     secret: String,
+    name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Profile {
+    name: String,
     email: String,
     client_id: String,
     secret: String,
-    default_region: Option<String>,
+    region: Option<String>,
 }
 
 const PROFILES_DIR_NAME: &str = ".config/mz";
@@ -153,29 +158,29 @@ const USER_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/frontegg/identity/resources/auth/v1/user";
 const MACHINE_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/auth/v1/api-token";
-const WEB_LOGIN_URL: &str = "http://www.materialize.com/account/login?redirectUrl=/access/cli";
+const WEB_LOGIN_URL: &str = "https://cloud.materialize.com/account/login?redirectUrl=/access/cli";
+const DEFAULT_PROFILE_NAME: &str = "default";
+const PROFILES_PREFIX: &str = "profiles";
+const PROFILE_NOT_FOUND_MESSAGE: &str =
+    "Profile not found. Please, add one or login using `mz login`.";
 
 #[tokio::main]
 async fn main() {
     let args = Cli::parse();
+    let profile_arg: Option<String> = args.profile;
 
     match args.command {
-        Commands::Login(login_cmd) => match login_cmd.command {
-            Some(LoginCommands::Interactive) => match get_local_profile() {
-                None => login_with_console().await.unwrap(),
-                Some(profile) => println!(
-                    "There is a profile available: {:?} \nPlease, remove to assign a new one.",
-                    profile
-                ),
-            },
-            _ => match get_local_profile() {
-                None => login_with_browser().await.unwrap(),
-                Some(profile) => println!(
-                    "There is a profile available: {:?} \nPlease, remove to assign a new one.",
-                    profile
-                ),
-            },
-        },
+        Commands::Login(login_cmd) => {
+            let mut profile_name = DEFAULT_PROFILE_NAME.to_string();
+            if let Some(some_profile_name) = profile_arg {
+                profile_name = some_profile_name;
+            }
+
+            match login_cmd.command {
+                Some(LoginCommands::Interactive) => login_with_console(profile_name).await.unwrap(),
+                _ => login_with_browser(profile_name).await.unwrap(),
+            }
+        }
 
         Commands::Regions(regions_cmd) => {
             let client = Client::new();
@@ -183,7 +188,7 @@ async fn main() {
             match regions_cmd.command {
                 RegionsCommands::Enable {
                     cloud_provider_region,
-                } => match validate_profile(client.clone()).await {
+                } => match validate_profile(profile_arg, client.clone()).await {
                     Some(frontegg_auth_machine) => {
                         match enable_region(client, cloud_provider_region, frontegg_auth_machine)
                             .await
@@ -198,7 +203,7 @@ async fn main() {
                     cloud_provider_region,
                 } => {
                     if warning_delete_region(cloud_provider_region.clone()) {
-                        match validate_profile(client.clone()).await {
+                        match validate_profile(profile_arg, client.clone()).await {
                             Some(frontegg_auth_machine) => {
                                 println!(
                                     "Deleting region. The operation may take a couple of minutes."
@@ -219,31 +224,37 @@ async fn main() {
                         }
                     }
                 }
-                RegionsCommands::List => match validate_profile(client.clone()).await {
-                    Some(frontegg_auth_machine) => {
-                        match list_cloud_providers(client.clone(), frontegg_auth_machine.clone())
+                RegionsCommands::List => {
+                    match validate_profile(profile_arg, client.clone()).await {
+                        Some(frontegg_auth_machine) => {
+                            match list_cloud_providers(
+                                client.clone(),
+                                frontegg_auth_machine.clone(),
+                            )
                             .await
-                        {
-                            Ok(cloud_providers) => {
-                                let regions = list_regions(
-                                    cloud_providers,
-                                    client.clone(),
-                                    frontegg_auth_machine,
-                                )
-                                .await;
-                                println!("Regions: {:?}", regions);
+                            {
+                                Ok(cloud_providers) => {
+                                    let regions = list_regions(
+                                        cloud_providers,
+                                        client.clone(),
+                                        frontegg_auth_machine,
+                                    )
+                                    .await;
+                                    println!("Regions: {:?}", regions);
+                                }
+                                Err(error) => {
+                                    panic!("Error retrieving cloud providers: {:?}", error)
+                                }
                             }
-                            Err(error) => panic!("Error retrieving cloud providers: {:?}", error),
                         }
+                        None => {}
                     }
-                    None => {}
-                },
+                }
             }
         }
 
         Commands::Shell => {
-            // TODO: Use local profile to retrieve default region.
-            match get_local_profile() {
+            match get_profile_using_args(profile_arg) {
                 Some(profile) => {
                     let client = Client::new();
                     match authenticate_profile(client.clone(), profile.clone()).await {
@@ -253,7 +264,7 @@ async fn main() {
                         Err(error) => panic!("Error authenticating profile : {:?}", error),
                     }
                 }
-                None => println!("Profile not found. Please, login using `mz login`."),
+                None => println!("{}", PROFILE_NOT_FOUND_MESSAGE),
             };
         }
     }

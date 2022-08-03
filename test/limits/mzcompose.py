@@ -181,7 +181,7 @@ class KafkaPartitions(Generator):
     @classmethod
     def body(cls) -> None:
         # gh#12193 : topic_metadata_refresh_interval_ms is not observed so a default refresh interval of 300s applies
-        print("$ set-sql-timeout duration=360s")
+        print("$ set-sql-timeout duration=600s")
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -564,6 +564,10 @@ class ViewsNested(Generator):
 
 
 class ViewsMaterializedNested(Generator):
+    COUNT = min(
+        Generator.COUNT, 25
+    )  # https://github.com/MaterializeInc/materialize/issues/13840
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t (f1 INTEGER);")

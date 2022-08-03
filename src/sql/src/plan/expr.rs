@@ -23,6 +23,7 @@ use mz_ore::stack::RecursionLimitError;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::func;
+use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
 use mz_repr::adt::array::ArrayDimension;
@@ -42,6 +43,55 @@ pub use mz_expr::{
 };
 
 use super::Explanation;
+
+#[allow(missing_debug_implementations)]
+pub struct Hir;
+
+impl IR for Hir {
+    type Relation = HirRelationExpr;
+    type Scalar = HirScalarExpr;
+}
+
+impl AlgExcept for Hir {
+    fn except(all: &bool, lhs: Self::Relation, rhs: Self::Relation) -> Self::Relation {
+        if *all {
+            let rhs = rhs.negate();
+            HirRelationExpr::union(lhs, rhs).threshold()
+        } else {
+            let lhs = lhs.distinct();
+            let rhs = rhs.distinct().negate();
+            HirRelationExpr::union(lhs, rhs).threshold()
+        }
+    }
+
+    fn un_except<'a>(expr: &'a Self::Relation) -> Option<Except<'a, Self>> {
+        let mut result = None;
+
+        use HirRelationExpr::*;
+        if let Threshold { input } = expr {
+            if let Union { base: lhs, inputs } = input.as_ref() {
+                if let [rhs] = &inputs[..] {
+                    if let Negate { input: rhs } = rhs {
+                        match (lhs.as_ref(), rhs.as_ref()) {
+                            (Distinct { input: lhs }, Distinct { input: rhs }) => {
+                                let all = false;
+                                let lhs = lhs.as_ref();
+                                let rhs = rhs.as_ref();
+                                result = Some(Except { all, lhs, rhs })
+                            }
+                            (lhs, rhs) => {
+                                let all = true;
+                                result = Some(Except { all, lhs, rhs })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// Just like MirRelationExpr, except where otherwise noted below.

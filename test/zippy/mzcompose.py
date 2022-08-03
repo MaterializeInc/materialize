@@ -24,14 +24,13 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    # --persistent-kafka-sources can not be enabled due to gh#11711 , gh#11506
     Materialized(),
     Testdrive(
         validate_data_dir=False,
         no_reset=True,
         seed=1,
         default_timeout="600s",
-        materialize_params={"statement_timeout": "'600s'"},
+        materialize_params={"statement_timeout": "'900s'"},
     ),
 ]
 

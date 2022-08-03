@@ -1,14 +1,10 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_rename ::=
-  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE') name 'RENAME TO' new_name
+  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
-  'ALTER' 'INDEX' name (
-    'SET' (
-      'ENABLED'
-      | '(' field '=' val ( ',' field '=' val )* ')'
-    )
-    | 'RESET' '(' field ( ',' field )* ')'
-  )
+  'ALTER' 'INDEX' name 'SET' 'ENABLED'
+alter_secret ::=
+  'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
@@ -52,7 +48,6 @@ create_index ::=
         'INDEX' index_name 'ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
         | 'DEFAULT INDEX ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)?
     )
-    ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
@@ -64,6 +59,8 @@ create_materialized_view ::=
     'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
+create_secret ::=
+    'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink ::=
@@ -78,7 +75,7 @@ create_sink ::=
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
+  'FROM' 'KAFKA' 'CONNECTION' connection_name 'TOPIC' topic with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
   ('INCLUDE'
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
@@ -92,16 +89,9 @@ create_source_kinesis ::=
   ('ENVELOPE NONE')?
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM' 'POSTGRES'
-  'CONNECTION' connection_info
+  'FROM' 'POSTGRES' 'CONNECTION' connection_name
   'PUBLICATION' publication_name
   ('WITH timestamp_frequency_ms =' int)?
-create_source_pubnub ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'PUBNUB' 'SUBSCRIBE KEY' key 'CHANNEL' channel
-  'FORMAT' 'TEXT'
-  ('ENVELOPE' 'NONE')?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -161,6 +151,8 @@ drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
+drop_secret ::=
+    'DROP' 'SECRET' ('IF EXISTS')? secret_name ('CASCADE' | 'RESTRICT')?
 drop_schema ::=
     'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')?
 drop_sink ::=
@@ -189,8 +181,8 @@ fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec ::=
-  'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url key_strat? val_strat? with_options? |
-  'PROTOBUF' 'USING CONFLUENT SCHEMA REGISTRY' url with_options |
+  'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name key_strat? val_strat? with_options? |
+  'PROTOBUF USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name with_options |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
@@ -292,7 +284,6 @@ select_stmt ::=
   ( 'LIMIT' expr )?
   ( 'OFFSET' expr )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
-  ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
 show_connections ::=
@@ -314,7 +305,7 @@ show_create_table ::=
 show_create_view ::=
   'SHOW' 'CREATE' 'VIEW' view_name
 show_databases ::=
-    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)
+    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
 show_index ::=
     'SHOW' 'EXTENDED'? ('INDEX' | 'INDEXES' | 'KEYS')
     (('FROM' | 'IN') on_name)?
@@ -322,6 +313,8 @@ show_index ::=
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
     'SHOW' 'FULL'? 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
+show_secrets ::=
+    'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
@@ -349,7 +342,6 @@ tail_stmt ::=
     'TAIL'
     ( object_name | '(' select_stmt ')' )
     ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
-    ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
 time_unit ::=
   'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS' | 'MICROSECONDS'
 type_bool ::=

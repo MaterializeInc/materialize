@@ -1,4 +1,4 @@
-**KAFKA BROKER** _host_ | The Kafka broker's host name without the security protocol, which is specified by the [`WITH` options](#with-options).) If you wish to specify multiple brokers (bootstrap servers) as an additional safeguard, use a comma-separated list. For example: `localhost:9092, localhost:9093`.
+**CONNECTION** _connection_name_ | The name of the Kafka connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation page.
 **TOPIC** _topic_ | The Kafka topic you want to subscribe to.
 **INCLUDE KEY** | Include a column containing the Kafka message key. If the key is encoded using a format that includes schemas the column will take its name from the schema. For unnamed formats (e.g. `TEXT`), the column will be named `key`. The column can be renamed with the optional **AS** *name* statement.
 **INCLUDE PARTITION** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause. *New in v0.12.0.*

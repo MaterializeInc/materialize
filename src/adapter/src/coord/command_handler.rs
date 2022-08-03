@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use mz_ore::tracing::OpenTelemetryContext;
 use rand::Rng;
 use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
@@ -30,7 +31,7 @@ use crate::command::{
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
-use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message};
+use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::ClientTransmitter;
@@ -403,6 +404,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     stmt,
                     self.connection_context.clone(),
                 );
+                let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx
@@ -414,6 +416,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 params,
                                 depends_on,
                                 original_stmt,
+                                otel_ctx,
                             },
                         ))
                         .expect("sending to internal_cmd_tx cannot fail");
@@ -455,17 +458,28 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // Cancel pending writes. There is at most one pending write per session.
-            if let Some(idx) = self
-                .pending_writes
-                .iter()
-                .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
-            {
-                let PendingWriteTxn {
-                    client_transmitter,
-                    session,
+            if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
+                matches!(pending_write_txn, PendingWriteTxn::User {
+                    pending_txn:
+                        PendingTxn {
+                            session,
+                            ..
+                        },
                     ..
-                } = self.pending_writes.remove(idx);
-                let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                } if session.conn_id() == conn_id)
+            }) {
+                if let PendingWriteTxn::User {
+                    pending_txn:
+                        PendingTxn {
+                            client_transmitter,
+                            session,
+                            ..
+                        },
+                    ..
+                } = self.pending_writes.remove(idx)
+                {
+                    let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                }
             }
 
             // Cancel deferred writes. There is at most one deferred write per session.
