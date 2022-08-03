@@ -137,7 +137,7 @@ contains:Expected a list of columns in parentheses, found EOF
 # since the definition of "static" means "will never change again".
 $ set-regex match=(\d{13}|u\d{1,3}) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM static_csv
-" timestamp: <>\n since:[<>]\n upper:[]\n has table: false\n\nsource materialize.public.static_csv (<>, storage):\n read frontier:[<>]\nwrite frontier:[]\n"
+"     timestamp: <>\n         since:[<>]\n         upper:[]\n     has table: false\n\nsource materialize.public.static_csv (<>, storage):\n read frontier:[<>]\nwrite frontier:[]\n"
 
 # Static CSV with manual headers.
 > CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
