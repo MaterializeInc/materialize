@@ -13,7 +13,7 @@ This guide goes through the required steps to connect Materialize to a Redpanda 
 If you already have a Redpanda Cloud cluster, you can skip steps 1 and 2 and directly move on to [Download Redpanda Broker CA certificate](#download-redpanda-broker-ca-certificate). You can also skip step 4 if you already have a Redpanda Cloud cluster up and running, and have created a topic that you want to create a source for.
 
 The process to connect Materialize to Redpanda Cloud consists of the following steps:
-1. #### Create a Redpanda Cloud Cluster
+1. #### Create a Redpanda Cloud cluster
     If you already have a Redpanda Cloud cluster set up, then you can skip this step.
 
     a. Sign in to the [Redpanda Cloud console](https://vectorized.cloud/)
