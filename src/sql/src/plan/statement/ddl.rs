@@ -2894,7 +2894,7 @@ generate_extracted_config!(
     KafkaConnectionOption,
     (Broker, String),
     (Brokers, Vec<String>),
-    (SslKey, with_options::Secret),
+    (SslKeyPem, with_options::Secret),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
     (SaslMechanisms, String),
@@ -2925,7 +2925,7 @@ impl KafkaConnectionOptionExtracted {
     }
     pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
-        HashSet::from([SslKey, SslCertificate])
+        HashSet::from([SslKeyPem, SslCertificate])
     }
     pub fn sasl_config(&self) -> HashSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
@@ -2938,7 +2938,7 @@ impl From<&KafkaConnectionOptionExtracted> for Option<KafkaTlsConfig> {
         if k.ssl_config().iter().all(|config| k.seen.contains(config)) {
             Some(KafkaTlsConfig {
                 identity: Some(TlsIdentity {
-                    key: k.ssl_key.unwrap().into(),
+                    key: k.ssl_key_pem.unwrap().into(),
                     cert: k.ssl_certificate.clone().unwrap(),
                 }),
                 root_cert: k.ssl_certificate_authority.clone(),
@@ -3007,7 +3007,7 @@ impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
 generate_extracted_config!(
     CsrConnectionOption,
     (Url, String),
-    (SslKey, with_options::Secret),
+    (SslKeyPem, with_options::Secret),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
     (Username, StringOrSecret),
@@ -3024,12 +3024,12 @@ impl TryFrom<CsrConnectionOptionExtracted> for mz_storage::types::connections::C
             None => sql_bail!("invalid CONNECTION: must specify URL"),
         };
         let cert = ccsr_options.ssl_certificate;
-        let key = ccsr_options.ssl_key.map(|secret| secret.into());
+        let key = ccsr_options.ssl_key_pem.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
             (None, None) => None,
             (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
             _ => sql_bail!(
-                "invalid CONNECTION: reading from SSL-auth Confluent Schema Registry requires both SSL KEY and SSL CERTIFICATE"
+                "invalid CONNECTION: reading from SSL-auth Confluent Schema Registry requires both SSL KEY PEM and SSL CERTIFICATE"
             ),
         };
         let http_auth = ccsr_options.username.map(|username| CsrConnectionHttpAuth {
@@ -3054,7 +3054,7 @@ generate_extracted_config!(
     (SshTunnel, String),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
-    (SslKey, with_options::Secret),
+    (SslKeyPem, with_options::Secret),
     (SslMode, String),
     (User, StringOrSecret)
 );
@@ -3066,11 +3066,11 @@ impl TryFrom<PostgresConnectionOptionExtracted>
 
     fn try_from(options: PostgresConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let cert = options.ssl_certificate;
-        let key = options.ssl_key.map(|secret| secret.into());
+        let key = options.ssl_key_pem.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
             (None, None) => None,
             (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
-            _ => sql_bail!("invalid CONNECTION: both SSL KEY and SSL CERTIFICATE are required"),
+            _ => sql_bail!("invalid CONNECTION: both SSL KEY PEM and SSL CERTIFICATE are required"),
         };
         let tls_mode = match options.ssl_mode.as_ref().map(|m| m.as_str()) {
             None | Some("disable") => tokio_postgres::config::SslMode::Disable,

@@ -278,7 +278,7 @@ contains:self signed certificate in certificate chain
   USER certuser,
   SSL MODE require,
   SSL CERTIFICATE SECRET ssl_cert,
-  SSL KEY SECRET ssl_key,
+  SSL KEY PEM SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
@@ -317,7 +317,7 @@ contains:db error: FATAL: connection requires a valid client certificate
   USER certuser,
   SSL MODE verify_ca,
   SSL CERTIFICATE SECRET ssl_wrong_cert,
-  SSL KEY SECRET ssl_wrong_key,
+  SSL KEY PEM SECRET ssl_wrong_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
 ! CREATE SOURCE "mz_source"
@@ -332,7 +332,7 @@ contains:db error: FATAL: certificate authentication failed for user "certuser"
   USER certuser,
   SSL MODE verify_ca,
   SSL CERTIFICATE SECRET ssl_cert,
-  SSL KEY SECRET ssl_key,
+  SSL KEY PEM SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
@@ -358,7 +358,7 @@ DELETE FROM numbers WHERE number = 2;
   USER certuser,
   SSL MODE verify_full,
   SSL CERTIFICATE SECRET ssl_cert,
-  SSL KEY SECRET ssl_key,
+  SSL KEY PEM SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
 > CREATE SOURCE "mz_source"
@@ -384,7 +384,7 @@ DELETE FROM numbers WHERE number = 2;
   USER certuser,
   SSL MODE verify_full,
   SSL CERTIFICATE SECRET noexist,
-  SSL KEY SECRET ssl_key,
+  SSL KEY PEM SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
 contains:unknown catalog item 'noexist'
@@ -395,7 +395,7 @@ contains:unknown catalog item 'noexist'
   USER certuser,
   SSL MODE verify_full,
   SSL CERTIFICATE SECRET ssl_cert,
-  SSL KEY SECRET noexist,
+  SSL KEY PEM SECRET noexist,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres;
 contains:unknown catalog item 'noexist'
@@ -406,7 +406,7 @@ contains:unknown catalog item 'noexist'
   USER certuser,
   SSL MODE verify_full,
   SSL CERTIFICATE SECRET ssl_cert,
-  SSL KEY SECRET ssl_key,
+  SSL KEY PEM SECRET ssl_key,
   SSL CERTIFICATE AUTHORITY SECRET noexist,
   DATABASE postgres;
 contains:unknown catalog item 'noexist'
@@ -418,12 +418,12 @@ contains:unknown catalog item 'noexist'
   SSL MODE verify_full,
   SSL CERTIFICATE SECRET ssl_cert,
   DATABASE postgres;
-contains:invalid CONNECTION: both SSL KEY and SSL CERTIFICATE are required
+contains:invalid CONNECTION: both SSL KEY PEM and SSL CERTIFICATE are required
 
 ! CREATE CONNECTION pgconn FOR POSTGRES
   HOST postgres,
   USER certuser,
   SSL MODE verify_full,
-  SSL KEY SECRET ssl_cert,
+  SSL KEY PEM SECRET ssl_cert,
   DATABASE postgres;
-contains:invalid CONNECTION: both SSL KEY and SSL CERTIFICATE are required
+contains:invalid CONNECTION: both SSL KEY PEM and SSL CERTIFICATE are required

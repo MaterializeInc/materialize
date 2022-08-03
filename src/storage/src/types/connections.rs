@@ -216,7 +216,7 @@ impl ConfigKey for KafkaConnectionOptionName {
         use KafkaConnectionOptionName::*;
         match self {
             Broker | Brokers => "bootstrap.servers",
-            SslKey => "ssl.key.pem",
+            SslKeyPem => "ssl.key.pem",
             SslCertificate => "ssl.certificate.pem",
             SslCertificateAuthority => "ssl.ca.pem",
             SaslMechanisms => "sasl.mechanisms",
@@ -248,7 +248,7 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
                     r.insert(SslCertificateAuthority.config_key(), root_cert);
                 }
                 if let Some(identity) = identity {
-                    r.insert(SslKey.config_key(), StringOrSecret::Secret(identity.key));
+                    r.insert(SslKeyPem.config_key(), StringOrSecret::Secret(identity.key));
                     r.insert(SslCertificate.config_key(), identity.cert);
                 }
             }
@@ -306,7 +306,7 @@ impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
             match v.unwrap_string().to_lowercase().as_str() {
                 config @ "ssl" => Some(KafkaSecurity::Tls(KafkaTlsConfig {
                     identity: Some(TlsIdentity {
-                        key: key_or_err(config, map, SslKey)?.unwrap_secret(),
+                        key: key_or_err(config, map, SslKeyPem)?.unwrap_secret(),
                         cert: key_or_err(config, map, SslCertificate)?,
                     }),
                     root_cert: map.remove(&SslCertificateAuthority.config_key()),
