@@ -43,4 +43,3 @@
   {%- endcall -%}
   {{ return(load_result('catalog').table) }}
 {%- endmacro %}
-
