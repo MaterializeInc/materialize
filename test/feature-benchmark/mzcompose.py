@@ -42,6 +42,7 @@ from materialize.mzcompose.services import Kgen as KgenService
 from materialize.mzcompose.services import (
     Materialized,
     Postgres,
+    Redpanda,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -82,6 +83,7 @@ SERVICES = [
     Zookeeper(),
     KafkaService(),
     SchemaRegistry(),
+    Redpanda(),
     # We are going to override the service definitions during the actual benchmark
     # we put "unstable" here so that we fetch some image from Docker Hub and thus
     # avoid recompiling the current source unless we will actually be benchmarking it.
@@ -206,6 +208,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Feature benchmark framework."""
 
     c.silent = True
+
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
+    )
 
     parser.add_argument(
         "--this-tag",
@@ -333,9 +341,14 @@ root_scenario: {args.root_scenario}"""
     else:
         initial_scenarios[root_scenario] = 1
 
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "postgres"]
-    )
+    dependencies = ["postgres"]
+
+    if args.redpanda:
+        dependencies += ["redpanda"]
+    else:
+        dependencies += ["zookeeper", "kafka", "schema-registry"]
+
+    c.start_and_wait_for_tcp(services=dependencies)
 
     scenarios = initial_scenarios.copy()
 

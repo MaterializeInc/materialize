@@ -72,7 +72,7 @@ def clean_up_sqs() -> None:
                 print("Skipping non-testdrive queue {}".format(name))
                 continue
             attributes = client.get_queue_attributes(
-                QueueUrl=queue, AttributeNames=["CreatedTimestamp"]
+                QueueUrl=queue, AttributeNames=["All"]
             )
             created_at = int(attributes["Attributes"]["CreatedTimestamp"])
             age = datetime.now(timezone.utc) - datetime.fromtimestamp(
