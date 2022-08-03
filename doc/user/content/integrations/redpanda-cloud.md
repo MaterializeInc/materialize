@@ -10,7 +10,7 @@ menu:
 
 This guide goes through the required steps to connect Materialize to a Redpanda Cloud cluster.
 
-If you already have a Redpanda Cloud cluster, you can skip steps 1 and 2 and directly move on to [Download Redpanda Broker CA certificate](#download-redpanda-broker-ca-certificate). You can also skip step 4 if you already have a Redpanda Cloud cluster up and running, and have created a topic that you want to create a source for.
+If you already have a Redpanda Cloud cluster, you can skip steps 1 and 2 and directly move on to [Download Redpanda Broker CA certificate](#download-the-redpanda-broker-ca-certificate). You can also skip step 4 if you already have a Redpanda Cloud cluster up and running, and have created a topic that you want to create a source for.
 
 The process to connect Materialize to Redpanda Cloud consists of the following steps:
 1. #### Create a Redpanda Cloud cluster
@@ -83,7 +83,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
 
     c. Copy the URL under **Cluster hosts**. This will be your `<broker-url>` going forward
 
-    d. From the _psql_ terminal, run the following command. Replace `<redpanda_cloud>` with whatever you want to name your source. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.
+    d. From the _psql_ terminal, run the following command. Replace `<redpanda_cloud>` with whatever you want to name your source. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` are from the _Create a Service Account_ step.
     ```sql
       CREATE SECRET redpanda_username AS '<your-username>';
       CREATE SECRET redpanda_password AS '<your-password>';
