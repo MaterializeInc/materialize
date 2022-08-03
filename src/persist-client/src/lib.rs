@@ -109,6 +109,7 @@ impl PersistLocation {
         let consensus = ConsensusConfig::try_from(
             &self.consensus_uri,
             config.consensus_connection_pool_max_size,
+            metrics.postgres_consensus.clone(),
         )
         .await?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
@@ -241,7 +242,7 @@ impl PersistConfig {
             compaction_enabled: !compaction_disabled,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
-            consensus_connection_pool_max_size: 8,
+            consensus_connection_pool_max_size: 50,
         }
     }
 

@@ -15,17 +15,22 @@ use bytes::Bytes;
 use deadpool_postgres::tokio_postgres::config::SslMode;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::tokio_postgres::Config;
-use deadpool_postgres::{Hook, HookError, HookErrorCause, ManagerConfig, RecyclingMethod};
+use deadpool_postgres::{
+    Hook, HookError, HookErrorCause, ManagerConfig, Object, PoolError, RecyclingMethod,
+};
 use deadpool_postgres::{Manager, Pool};
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
+use std::time::Instant;
 use tracing::debug;
 
 use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
+use crate::metrics::PostgresConsensusMetrics;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
@@ -77,6 +82,7 @@ impl<'a> FromSql<'a> for SeqNo {
 pub struct PostgresConsensusConfig {
     url: String,
     connection_pool_max_size: usize,
+    metrics: PostgresConsensusMetrics,
 }
 
 impl PostgresConsensusConfig {
@@ -84,10 +90,15 @@ impl PostgresConsensusConfig {
         "MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL";
 
     /// Returns a new [PostgresConsensusConfig] for use in production.
-    pub async fn new(url: &str, connection_pool_max_size: usize) -> Result<Self, Error> {
+    pub async fn new(
+        url: &str,
+        connection_pool_max_size: usize,
+        metrics: PostgresConsensusMetrics,
+    ) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
             url: url.to_string(),
             connection_pool_max_size,
+            metrics,
         })
     }
 
@@ -111,7 +122,12 @@ impl PostgresConsensusConfig {
             }
         };
 
-        let config = PostgresConsensusConfig::new(&url, 2).await?;
+        let config = PostgresConsensusConfig::new(
+            &url,
+            2,
+            PostgresConsensusMetrics::new(&MetricsRegistry::new()),
+        )
+        .await?;
         Ok(Some(config))
     }
 }
@@ -119,6 +135,7 @@ impl PostgresConsensusConfig {
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
     pool: Pool,
+    metrics: PostgresConsensusMetrics,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -193,7 +210,10 @@ impl PostgresConsensus {
         }
 
         tx.commit().await?;
-        Ok(PostgresConsensus { pool })
+        Ok(PostgresConsensus {
+            pool,
+            metrics: config.metrics,
+        })
     }
 
     /// Drops and recreates the `consensus` table in Postgres
@@ -201,10 +221,24 @@ impl PostgresConsensus {
     /// ONLY FOR TESTING
     pub async fn drop_and_recreate(&self) -> Result<(), ExternalError> {
         // this could be a TRUNCATE if we're confident the db won't reuse any state
-        let client = self.pool.get().await?;
+        let client = self.get_connection().await?;
         client.execute("DROP TABLE consensus", &[]).await?;
         client.execute(SCHEMA, &[]).await?;
         Ok(())
+    }
+
+    async fn get_connection(&self) -> Result<Object, PoolError> {
+        let start = Instant::now();
+        let res = self.pool.get().await;
+        self.metrics
+            .connpool_acquire_seconds
+            .inc_by(start.elapsed().as_secs_f64());
+        self.metrics.connpool_acquires.inc();
+        // note that getting the pool size here requires briefly locking the pool
+        self.metrics
+            .connpool_size
+            .set(u64::cast_from(self.pool.status().size));
+        res
     }
 }
 
@@ -273,7 +307,7 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
         let row = {
-            let client = self.pool.get().await?;
+            let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client.query_opt(&statement, &[&key]).await?
         };
@@ -323,7 +357,7 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.pool.get().await?;
+            let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client
                 .execute(
@@ -338,7 +372,7 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.pool.get().await?;
+            let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client
                 .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
@@ -364,7 +398,7 @@ impl Consensus for PostgresConsensus {
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
         let rows = {
-            let client = self.pool.get().await?;
+            let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client.query(&statement, &[&key, &from]).await?
         };
@@ -397,7 +431,7 @@ impl Consensus for PostgresConsensus {
                 )";
 
         let result = {
-            let client = self.pool.get().await?;
+            let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client.execute(&statement, &[&key, &seqno]).await?
         };

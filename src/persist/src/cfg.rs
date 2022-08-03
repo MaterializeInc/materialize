@@ -19,6 +19,7 @@ use url::Url;
 use crate::file::{FileBlob, FileBlobConfig};
 use crate::location::{Blob, Consensus, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
+use crate::metrics::PostgresConsensusMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
 
@@ -143,6 +144,7 @@ impl ConsensusConfig {
     pub async fn try_from(
         value: &str,
         connection_pool_max_size: usize,
+        metrics: PostgresConsensusMetrics,
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value).map_err(|err| {
             anyhow!(
@@ -154,7 +156,7 @@ impl ConsensusConfig {
 
         let config = match url.scheme() {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(value, connection_pool_max_size).await?,
+                PostgresConsensusConfig::new(value, connection_pool_max_size, metrics).await?,
             )),
             "mem" => {
                 if !cfg!(debug_assertions) {

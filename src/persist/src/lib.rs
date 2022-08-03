@@ -24,6 +24,7 @@ pub mod gen;
 pub mod indexed;
 pub mod location;
 pub mod mem;
+pub mod metrics;
 pub mod postgres;
 pub mod retry;
 pub mod s3;

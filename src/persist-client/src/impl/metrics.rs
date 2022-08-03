@@ -21,6 +21,7 @@ use mz_ore::metrics::{ComputedIntGauge, ComputedUIntGauge, Counter, IntCounter, 
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
+use mz_persist::metrics::PostgresConsensusMetrics;
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use prometheus::core::{Atomic, AtomicI64, AtomicU64};
@@ -58,6 +59,9 @@ pub struct Metrics {
     pub codecs: CodecsMetrics,
     /// Metrics for various per-shard measurements.
     pub shards: ShardsMetrics,
+
+    /// Metrics for Postgres-backed consensus implementation
+    pub postgres_consensus: PostgresConsensusMetrics,
 }
 
 impl Metrics {
@@ -75,6 +79,7 @@ impl Metrics {
             gc: GcMetrics::new(registry),
             lease: LeaseMetrics::new(registry),
             shards: ShardsMetrics::new(registry),
+            postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
         }
     }
