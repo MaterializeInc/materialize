@@ -26,7 +26,7 @@ use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
 use std::time::Instant;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
@@ -340,31 +340,64 @@ impl Consensus for PostgresConsensus {
         }
 
         let result = if let Some(expected) = expected {
-            // Only insert the new row if:
-            // - sequence number expected is already present
-            // - expected corresponds to the most recent sequence number
-            //   i.e. there is no other sequence number > expected already
-            //   present.
+            // This PR uses a few tricks to execute in a single network round-trip:
+            // - It conditionally UPSERTs[0] a new row into consensus iff the greatest sequence
+            //   number is of the expected value, and then uses UPSERT ... RETURNING to indicate
+            //   whether the upsert succeeded
+            // - The SELECT statement with the greatest sequence number (and its data) is unioned
+            //   with the results of the conditional UPSERT, allowing the client to read whether
+            //   it succeeded, and if not, the latest state so it can retry without having to
+            //   refetch state in a separate query.
+            // [0]: https://www.cockroachlabs.com/docs/stable/upsert.html
             //
-            // This query has also been written to execute within a single
-            // network round-trip (instead of a slightly simpler implementation
-            // that would call `BEGIN` and have multiple `SELECT` queries).
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     EXISTS (
-                        SELECT * FROM consensus WHERE shard = $1 AND sequence_number = $4
-                     )
-                     AND NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
-                     )
-                     ON CONFLICT DO NOTHING";
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(
-                    &statement,
-                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
-                )
-                .await?
+            // WIP: there are open questions about the linearizability of the
+            //      `SELECT ... ORDER BY sequence_number DESC LIMIT` use on CRDB
+            let q = r#"
+                WITH
+                    greatest_seqno AS (
+                        SELECT sequence_number, data FROM consensus WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1
+                    ),
+                    inserted AS (
+                        UPSERT INTO consensus (shard, sequence_number, data)
+                        SELECT $1, $2, $3
+                        WHERE EXISTS (SELECT 1 FROM greatest_seqno WHERE sequence_number = $4)
+                        RETURNING sequence_number
+                    )
+                    SELECT true as was_inserted, sequence_number, NULL as data FROM inserted
+                    UNION ALL
+                    SELECT false as was_inserted, sequence_number, data FROM greatest_seqno
+            "#;
+            let result = {
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                client
+                    .query(
+                        &statement,
+                        &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                    )
+                    .await?
+            };
+            for row in result {
+                let was_inserted: bool = row.try_get("was_inserted")?;
+
+                if was_inserted {
+                    debug!("Upserted: {:?}", new.seqno);
+                    return Ok(Ok(()));
+                }
+
+                let seqno: SeqNo = row.try_get("sequence_number")?;
+                let data: Vec<u8> = row.try_get("data")?;
+                debug!(
+                    "Did not upsert row: tried {:?} and got {:?}",
+                    new.seqno, seqno
+                );
+                return Ok(Err(Some(VersionedData {
+                    seqno,
+                    data: Bytes::from(data),
+                })));
+            }
+            // no-op, we'd want to refactor how the initial insert works here
+            1
         } else {
             // Insert the new row as long as no other row exists for the same shard.
             let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
