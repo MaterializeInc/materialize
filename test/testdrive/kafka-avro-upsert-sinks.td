@@ -137,7 +137,7 @@ $ kafka-create-topic topic=input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE VIEW input_keyed AS SELECT a, max(b) as b FROM input GROUP BY a
+> CREATE MATERIALIZED VIEW input_keyed AS SELECT a, max(b) as b FROM input GROUP BY a
 
 > CREATE SINK input_sink FROM input_keyed
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
@@ -215,7 +215,7 @@ $ kafka-create-topic topic=input-with-deletions
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-with-deletions-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
+> CREATE MATERIALIZED VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
 
 > CREATE SINK input_with_deletions_sink FROM input_with_deletions_keyed
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
@@ -293,7 +293,7 @@ contains:Invalid upsert key: (a), there are no valid keys
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (b), valid keys are: (a)
 
-> CREATE VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
+> CREATE MATERIALIZED VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
 
 ! CREATE SINK invalid_sub_key FROM input_keyed_ab
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)

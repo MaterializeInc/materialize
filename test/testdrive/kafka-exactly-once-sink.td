@@ -155,9 +155,9 @@ $ kafka-create-topic topic=input_cdcv2
 
 > CREATE MATERIALIZED VIEW input_kafka_cdcv2_mview_view AS SELECT * FROM input_kafka_cdcv2_mview;
 
-> CREATE VIEW input_kafka_dbz_mview AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_dbz;
+> CREATE VIEW input_kafka_dbz_view AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_dbz;
 
-> CREATE MATERIALIZED VIEW input_kafka_dbz_mview_view AS SELECT * FROM input_kafka_dbz_mview;
+> CREATE MATERIALIZED VIEW input_kafka_dbz_view_mview AS SELECT * FROM input_kafka_dbz_view;
 
 > CREATE MATERIALIZED VIEW input_table_mview AS SELECT a + 2 AS a , b + 10 AS b from input_table;
 
@@ -205,12 +205,13 @@ contains:reuse_topic requires that sink input dependencies are sources, material
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE SINK output5 FROM input_kafka_dbz_mview
+! CREATE SINK output5 FROM input_kafka_dbz_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+contains:source identifier is not present
 
-> CREATE SINK output5_view FROM input_kafka_dbz_mview_view
+> CREATE SINK output5_view FROM input_kafka_dbz_view_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5b-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -225,7 +226,7 @@ contains:reuse_topic requires that sink input dependencies are sources, material
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output7-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_view is not
+contains:source identifier is not present
 
 ! CREATE SINK output8 FROM input_values_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output8-view-${testdrive.seed}'

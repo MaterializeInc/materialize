@@ -139,15 +139,21 @@ a  b
 3  1
 1  2
 
-# Can create sink from unmaterialized view.
-> CREATE SINK not_mat_sink2 FROM data_view
+# Cannot create sink from unmaterialized view.
+! CREATE SINK not_mat_sink2 FROM data_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+contains:source identifier is not present
 
 # Can create indexed view from unmaterialized view.
 > CREATE VIEW test5 AS
   SELECT b, max(a) AS c FROM data_view GROUP BY b
 > CREATE DEFAULT INDEX ON test5
+
+# But can create sink from this!
+> CREATE SINK not_mat_sink2 FROM data_view
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ set-regex match=(\s\(u\d+\)|\n) replacement=
 
