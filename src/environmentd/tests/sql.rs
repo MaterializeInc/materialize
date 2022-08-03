@@ -1311,7 +1311,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
             .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
     }
 
-    wait_for_view_population(&mut mz_client, view_name, source_rows)?;
+    wait_for_view_population(&mut mz_client, view_name, source_rows, Arc::clone(&now))?;
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mut mz_join_client = server.connect(postgres::NoTls)?;
@@ -1357,7 +1357,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
     mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
 
-    wait_for_view_population(&mut mz_client, view_name, 1)?;
+    wait_for_view_population(&mut mz_client, view_name, 1, Arc::clone(&now))?;
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
@@ -1539,24 +1539,22 @@ fn wait_for_view_population(
     mz_client: &mut postgres::Client,
     view_name: &str,
     source_rows: i64,
+    now: Arc<Mutex<EpochMillis>>,
 ) -> Result<(), Box<dyn Error>> {
     let _ = mz_client.query_one(&format!("SET transaction_isolation = SERIALIZABLE"), &[]);
-    Retry::default()
-        .max_duration(Duration::from_secs(10))
-        .retry(|_| {
-            let rows = mz_client
-                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
-                .unwrap()
-                .get::<_, i64>(0);
-            if rows == source_rows {
-                Ok(())
-            } else {
-                Err(format!(
-                    "Waiting for {source_rows} row to be ingested. Currently at {rows}."
-                ))
-            }
-        })
-        .unwrap();
+    let mut rows = 0;
+    let mut current_ts = (SYSTEM_TIME.as_secs() as EpochMillis) * 1_000;
+    while rows != source_rows {
+        // Keep increasing `now` until we can see the source data.
+        current_ts += 1_000;
+        *now.lock().expect("lock poisoned") = current_ts;
+        thread::sleep(Duration::from_millis(1));
+        rows = mz_client
+            .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
+            .unwrap()
+            .get::<_, i64>(0);
+        get_explain_timestamp(view_name, mz_client);
+    }
     let _ = mz_client.query_one(
         &format!("SET transaction_isolation = 'strict serializable'"),
         &[],
