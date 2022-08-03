@@ -686,21 +686,20 @@ where
                 return Ok(x);
             }
             Err(ExternalError::Determinate(err)) => {
-                if retry.attempt() >= INFO_MIN_ATTEMPTS {
-                    info!(
-                        "external operation {} failed, retrying in {:?}: {:#}",
-                        metrics.name,
-                        retry.next_sleep(),
-                        err
-                    );
-                } else {
-                    debug!(
-                        "external operation {} failed, retrying in {:?}: {:#}",
-                        metrics.name,
-                        retry.next_sleep(),
-                        err
-                    );
-                }
+                // The determinate "could not serialize access" errors
+                // happen often enough in dev (which uses Postgres) that
+                // it's impeding people's work. At the same time, it's been
+                // a source of confusion for eng. The situation is much
+                // better on CRDB and we have metrics coverage in prod, so
+                // this is redundant enough that it's more hurtful than
+                // helpful. As a result, this intentionally ignores
+                // INFO_MIN_ATTEMPTS and always logs at debug.
+                debug!(
+                    "external operation {} failed, retrying in {:?}: {:#}",
+                    metrics.name,
+                    retry.next_sleep(),
+                    err
+                );
                 retry = retry.sleep().await;
                 continue;
             }
