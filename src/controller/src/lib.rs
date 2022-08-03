@@ -46,7 +46,7 @@ use mz_compute_client::controller::{
     ComputeController, ComputeControllerMut, ComputeControllerResponse, ComputeControllerState,
     ComputeInstanceId,
 };
-use mz_compute_client::logging::{LogVariant, LoggingConfig};
+use mz_compute_client::logging::{LogVariant, LogView, LoggingConfig};
 use mz_compute_client::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, TailResponse,
 };
@@ -142,21 +142,42 @@ pub enum ConcreteComputeInstanceReplicaLogging {
     /// To configure a replica without logging, Concrete(vec![]) should be used.
     Default,
     /// Logging collections have already been built for this replica.
-    Concrete(Vec<(LogVariant, GlobalId)>),
+    Concrete(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
 
 impl ConcreteComputeInstanceReplicaLogging {
-    /// Return all logs described
+    /// Return all log sources described
     pub fn get_logs(&self) -> Vec<(LogVariant, GlobalId)> {
         match self {
             ConcreteComputeInstanceReplicaLogging::Default => vec![],
-            ConcreteComputeInstanceReplicaLogging::Concrete(logs) => logs.clone(),
+            ConcreteComputeInstanceReplicaLogging::Concrete(logs, _) => logs.clone(),
         }
+    }
+
+    /// Returns log ids described
+    pub fn get_views(&self) -> Vec<(LogView, GlobalId)> {
+        match self {
+            ConcreteComputeInstanceReplicaLogging::Default => vec![],
+            ConcreteComputeInstanceReplicaLogging::Concrete(_, views) => views.clone(),
+        }
+    }
+
+    /// Returns log ids described
+    pub fn get_view_ids(&self) -> Vec<GlobalId> {
+        self.get_views().into_iter().map(|(_, id)| id).collect()
     }
 
     /// Returns log ids described
     pub fn get_log_ids(&self) -> Vec<GlobalId> {
         self.get_logs().into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Returns log ids described
+    pub fn get_log_and_view_ids(&self) -> Vec<GlobalId> {
+        self.get_log_ids()
+            .into_iter()
+            .chain(self.get_view_ids().into_iter())
+            .collect()
     }
 }
 

@@ -644,7 +644,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .allocate_persisted_introspection_source_indexes()
                     .await
             } else {
-                ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
+                ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new(), Vec::new())
             };
 
             introspection_collections.extend(
@@ -729,7 +729,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .allocate_persisted_introspection_source_indexes()
                 .await
         } else {
-            ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
+            ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new(), Vec::new())
         };
 
         let persisted_log_ids = persisted_logs.get_log_ids();
@@ -1425,9 +1425,21 @@ impl<S: Append + 'static> Coordinator<S> {
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
             for replica in instance.replicas_by_id.values() {
-                let log_ids = replica.config.persisted_logs.get_log_ids();
-                for log_id in log_ids {
-                    ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                let persisted_logs = replica.config.persisted_logs.clone();
+                let log_and_view_ids = persisted_logs.get_log_and_view_ids();
+                let view_ids = persisted_logs.get_view_ids();
+                for log_id in log_and_view_ids {
+                    // We consider the dependencies of both views and logs, but remove the
+                    // views itself. The views are included as they depend on the source,
+                    // but we dont need an explicit Op::DropItem as they are dropped together
+                    // with the replica.
+                    ids_to_drop.extend(
+                        self.catalog
+                            .get_entry(&log_id)
+                            .used_by()
+                            .into_iter()
+                            .filter(|x| !view_ids.contains(x)),
+                    )
                 }
             }
 
@@ -1471,15 +1483,29 @@ impl<S: Append + 'static> Coordinator<S> {
             // Determine from the replica which additional items to drop. This is the set
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
-            for log_id in instance
+            let persisted_logs = instance
                 .replicas_by_id
                 .get(&replica_id)
                 .unwrap()
                 .config
                 .persisted_logs
-                .get_log_ids()
-            {
-                ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                .clone();
+
+            let log_and_view_ids = persisted_logs.get_log_and_view_ids();
+            let view_ids = persisted_logs.get_view_ids();
+
+            for log_id in log_and_view_ids {
+                // We consider the dependencies of both views and logs, but remove the
+                // views itself. The views are included as they depend on the source,
+                // but we dont need an explicit Op::DropItem as they are dropped together
+                // with the replica.
+                ids_to_drop.extend(
+                    self.catalog
+                        .get_entry(&log_id)
+                        .used_by()
+                        .into_iter()
+                        .filter(|x| !view_ids.contains(x)),
+                )
             }
 
             replicas_to_drop.push((

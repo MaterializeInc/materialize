@@ -279,6 +279,29 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
     default_logs
 });
 
+/// Create a VIEW over the postfixed introspection sources. These views are created and torn down
+/// with replicas.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum LogView {
+    PeekActive,
+}
+
+pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
+    // Order matters, if view A depends on view B, A must be listed before B
+    vec![LogView::PeekActive]
+});
+
+impl LogView {
+    pub fn get_template(&self) -> (String, String) {
+        match self {
+            LogView::PeekActive => (
+                "CREATE VIEW mz_peek_active_view_{} AS SELECT * FROM mz_peek_active_{}".into(),
+                "mz_peek_active_view_{}".into(),
+            ),
+        }
+    }
+}
+
 impl LogVariant {
     /// By which columns should the logs be indexed.
     ///

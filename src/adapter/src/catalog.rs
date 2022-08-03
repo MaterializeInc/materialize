@@ -28,7 +28,8 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::logging::{
-    LogVariant, LoggingConfig as DataflowLoggingConfig, DEFAULT_LOG_VARIANTS,
+    LogVariant, LogView, LoggingConfig as DataflowLoggingConfig, DEFAULT_LOG_VARIANTS,
+    DEFAULT_LOG_VIEWS,
 };
 use mz_controller::{
     ComputeInstanceEvent, ComputeInstanceReplicaAllocation, ConcreteComputeInstanceReplicaConfig,
@@ -577,25 +578,6 @@ impl CatalogState {
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) {
-        for (variant, source_id) in config.persisted_logs.get_logs() {
-            let oid = self.allocate_oid().expect("cannot return error here");
-            // TODO(lh): Once we get rid of legacy active logs, we should refactor the
-            // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
-            // in BUILTINS.
-            let log = BUILTINS::logs()
-                .find(|log| log.variant == variant)
-                .expect("variant must be included in builtins");
-
-            let source_name = QualifiedObjectName {
-                qualifiers: ObjectQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
-                },
-                item: format!("{}_{}", log.name, replica_id),
-            };
-            self.insert_item(source_id, oid, source_name, CatalogItem::Log(log));
-        }
-
         let replica = ComputeInstanceReplica {
             config,
             process_status: HashMap::new(),
@@ -1891,14 +1873,14 @@ impl<S: Append> Catalog<S> {
                         .await
                 }
 
-                SerializedComputeInstanceReplicaLogging::Concrete(x) => {
-                    ConcreteComputeInstanceReplicaLogging::Concrete(x.clone())
+                SerializedComputeInstanceReplicaLogging::Concrete(x, y) => {
+                    ConcreteComputeInstanceReplicaLogging::Concrete(x.clone(), y.clone())
                 }
             };
 
             let config = ConcreteComputeInstanceReplicaConfig {
                 location: catalog.concretize_replica_location(serialized_config.location)?,
-                persisted_logs,
+                persisted_logs: persisted_logs.clone(),
             };
 
             // And write the allocated sources back to storage
@@ -1911,6 +1893,10 @@ impl<S: Append> Catalog<S> {
             catalog
                 .state
                 .insert_compute_instance_replica(instance_id, name, replica_id, config);
+
+            let mut new_state = catalog.state.clone();
+            catalog.insert_per_replica_items(&mut new_state, &persisted_logs, replica_id);
+            catalog.state = new_state;
         }
 
         if !config.skip_migrations {
@@ -2083,6 +2069,58 @@ impl<S: Append> Catalog<S> {
             .await?;
 
         Ok(())
+    }
+
+    /// Create and insert the per replica log sources and log views.
+    ///
+    /// The replica with replica_id must already be present in the catalog state.
+    /// This function will allocate the oid's. The GlobalIds are already pre-allocated.
+    /// Views can depend on introspection sources and on other views.
+    fn insert_per_replica_items(
+        &self,
+        state: &mut CatalogState,
+        persisted_logs: &ConcreteComputeInstanceReplicaLogging,
+        replica_id: u64,
+    ) {
+        for (variant, source_id) in persisted_logs.get_logs() {
+            let oid = state.allocate_oid().expect("cannot return error here");
+            // TODO(lh): Once we get rid of legacy active logs, we should refactor the
+            // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
+            // in BUILTINS.
+            let log = BUILTINS::logs()
+                .find(|log| log.variant == variant)
+                .expect("variant must be included in builtins");
+
+            let source_name = QualifiedObjectName {
+                qualifiers: ObjectQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                },
+                item: format!("{}_{}", log.name, replica_id),
+            };
+            state.insert_item(source_id, oid, source_name, CatalogItem::Log(log));
+        }
+
+        for (logview, id) in persisted_logs.get_views() {
+            let (sql_template, name_template) = logview.get_template();
+            let sql = sql_template.replace("{}", &replica_id.to_string());
+            let name = name_template.replace("{}", &replica_id.to_string());
+
+            let item = self
+                .parse_item_state(state, sql, None)
+                .expect("SQL parse success");
+
+            let oid = state.allocate_oid().expect("cannot return error here");
+            let view_name = QualifiedObjectName {
+                qualifiers: ObjectQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                },
+                item: name,
+            };
+
+            state.insert_item(id, oid, view_name, item);
+        }
     }
 
     fn resolve_builtin_type(
@@ -3626,14 +3664,15 @@ impl<S: Append> Catalog<S> {
                     config,
                 } => {
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
-                    let persisted_log_ids = config.persisted_logs.get_log_ids();
+                    let persisted_logs = config.persisted_logs.clone();
                     state.insert_compute_instance_replica(
                         compute_instance_id,
                         name.clone(),
                         id,
                         config,
                     );
-                    for id in persisted_log_ids {
+                    self.insert_per_replica_items(&mut state, &persisted_logs, id);
+                    for id in persisted_logs.get_log_and_view_ids() {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                     builtin_table_updates.push(state.pack_compute_instance_replica_update(
@@ -3706,7 +3745,7 @@ impl<S: Append> Catalog<S> {
                         .expect("can only drop replicas from known instances");
                     let replica_id = instance.replica_id_by_name.remove(&name).unwrap();
                     let replica = instance.replicas_by_id.remove(&replica_id).unwrap();
-                    let persisted_log_ids = replica.config.persisted_logs.get_log_ids();
+                    let persisted_log_ids = replica.config.persisted_logs.get_log_and_view_ids();
                     assert!(instance.replica_id_by_name.len() == instance.replicas_by_id.len());
 
                     for id in persisted_log_ids {
@@ -3837,13 +3876,25 @@ impl<S: Append> Catalog<S> {
         self.parse_item(create_sql, Some(&PlanContext::zero()))
     }
 
-    // Parses the given SQL string into a `CatalogItem`.
-    fn parse_item(
+    // Parses the given SQL string into a `CatalogItem`, using an explicit state
+    fn parse_item_state(
         &self,
+        state: &CatalogState,
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
-        let session_catalog = self.for_system_session();
+        let session_catalog = ConnCatalog {
+            state: Cow::Borrowed(state),
+            conn_id: SYSTEM_CONN_ID,
+            compute_instance: "default".into(),
+            database: self
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .ok()
+                .map(|db| db.id()),
+            search_path: Vec::new(),
+            user: SYSTEM_USER.into(),
+            prepared_statements: None,
+        };
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let depends_on = depends_on.into_iter().collect();
@@ -3940,6 +3991,15 @@ impl<S: Append> Catalog<S> {
         })
     }
 
+    // Parses the given SQL string into a `CatalogItem`.
+    fn parse_item(
+        &self,
+        create_sql: String,
+        pcx: Option<&PlanContext>,
+    ) -> Result<CatalogItem, anyhow::Error> {
+        self.parse_item_state(&self.state, create_sql, pcx)
+    }
+
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         self.state.uses_tables(id)
     }
@@ -3992,24 +4052,47 @@ impl<S: Append> Catalog<S> {
     pub async fn allocate_persisted_introspection_source_indexes(
         &mut self,
     ) -> ConcreteComputeInstanceReplicaLogging {
-        let log_amount = DEFAULT_LOG_VARIANTS.len();
-        let system_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(
-                log_amount
-                    .try_into()
-                    .expect("default log variants should fit into u64"),
-            )
-            .await
-            .expect("cannot fail to allocate system ids");
-        ConcreteComputeInstanceReplicaLogging::Concrete(
+        let logs = {
+            let log_amount = DEFAULT_LOG_VARIANTS.len();
+            let system_ids = self
+                .storage()
+                .await
+                .allocate_system_ids(
+                    log_amount
+                        .try_into()
+                        .expect("default log variants should fit into u64"),
+                )
+                .await
+                .expect("cannot fail to allocate system ids");
+
             DEFAULT_LOG_VARIANTS
                 .clone()
                 .into_iter()
                 .zip(system_ids.into_iter())
-                .collect(),
-        )
+                .collect()
+        };
+
+        let views = {
+            let log_amount = DEFAULT_LOG_VIEWS.len();
+            let system_ids = self
+                .storage()
+                .await
+                .allocate_system_ids(
+                    log_amount
+                        .try_into()
+                        .expect("default log variants should fit into u64"),
+                )
+                .await
+                .expect("cannot fail to allocate system ids");
+
+            DEFAULT_LOG_VIEWS
+                .clone()
+                .into_iter()
+                .zip(system_ids.into_iter())
+                .collect()
+        };
+
+        ConcreteComputeInstanceReplicaLogging::Concrete(logs, views)
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
@@ -4121,14 +4204,14 @@ impl From<PlanContext> for SerializedPlanContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SerializedComputeInstanceReplicaLogging {
     Default,
-    Concrete(Vec<(LogVariant, GlobalId)>),
+    Concrete(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
 
 impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
     fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
         match conc {
             ConcreteComputeInstanceReplicaLogging::Default => Self::Default,
-            ConcreteComputeInstanceReplicaLogging::Concrete(vars) => Self::Concrete(vars),
+            ConcreteComputeInstanceReplicaLogging::Concrete(x, y) => Self::Concrete(x, y),
         }
     }
 }
@@ -4529,11 +4612,14 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
         self.replica_id_by_name.keys().collect::<HashSet<_>>()
     }
 
-    fn replica_logs(&self, name: &String) -> Option<Vec<GlobalId>> {
+    fn replica_logs_and_views(&self, name: &String) -> Option<(Vec<GlobalId>, Vec<GlobalId>)> {
         let replica = self
             .replicas_by_id
             .get(self.replica_id_by_name.get(name)?)?;
-        Some(replica.config.persisted_logs.get_log_ids())
+        Some((
+            replica.config.persisted_logs.get_log_ids(),
+            replica.config.persisted_logs.get_view_ids(),
+        ))
     }
 }
 
