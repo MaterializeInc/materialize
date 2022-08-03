@@ -38,6 +38,10 @@ CREATE TABLE fence (
 );
 INSERT INTO fence VALUES (1, '');
 
+-- Although collections are queried by name, the PK is on collection_id
+-- to allow it to be a foreign key. We do not search by collection name
+-- frequently, and they get cached, so we don't need an index on name.
+--
 -- bigserial is not ideal for Cockroach, but we have a stable number of
 -- collections, so our use of it here is fine and compatible with Postgres.
 CREATE TABLE collections (
@@ -45,6 +49,10 @@ CREATE TABLE collections (
     name text NOT NULL UNIQUE
 );
 
+-- SELECTs over data are on collection_id or (collection_id, key), so that is
+-- the natural index. There is a DELETE over (collection_id, time), which
+-- would make it a good candidate for another index, but it is not clear if
+-- the extra writes for the index would improve overall performance.
 CREATE TABLE data (
     collection_id bigint NOT NULL REFERENCES collections (collection_id),
     key bytea NOT NULL,
@@ -53,7 +61,7 @@ CREATE TABLE data (
     diff bigint NOT NULL
 );
 
-CREATE INDEX data_time_idx ON data (collection_id, time);
+CREATE INDEX data_collection_key ON data (collection_id, key) INCLUDE (value, time, diff);
 
 CREATE TABLE sinces (
     collection_id bigint PRIMARY KEY REFERENCES collections (collection_id),
