@@ -35,7 +35,7 @@ See the [dbt documentation](https://docs.getdbt.com/docs/core-versions#how-we-ve
 4. Install `dbt-materialize` into the virtual environment:
 
    ```shell
-   pip install .
+   pip install . && pytest && dbt-tests-adapter
    ```
 
 5. Launch `materialized` in a different terminal:
@@ -59,14 +59,7 @@ See the [dbt documentation](https://docs.getdbt.com/docs/core-versions#how-we-ve
 All-in-one command to run after making a change to `dbt-materialize`:
 
 ```shell
-pip install . && pytest
-```
-
-If you want to test `dbt-materialize` against the latest changes to
-`materialized`, build `materialized` from source:
-
-```shell
-bin/materialized
+pip install . && pytest && dbt-tests-adapter
 ```
 
 Run only the tests matching a filter:
@@ -88,11 +81,10 @@ pytest -s
 ```
 
 Don't drop the schema in `materialized` after a test failure, so that you can
-inspect the objects that the test created via `psql`:
+inspect the objects that the test created:
 
 ```shell
 pytest --no-drop-schema
-psql -h localhost -p 6875 -U materialize materialize
 ```
 
 Run the `dbt-materialize` test suite via [mzcompose](../../doc/developer/mzbuild.md#mzcompose)
@@ -104,6 +96,6 @@ to match how it is run in CI:
 
 ### Useful links
 
-* [dbt-adapter-tests](https://github.com/dbt-labs/dbt-adapter-tests) pytest plugin
+* [Guide: testing a new adapter](https://docs.getdbt.com/docs/contributing/testing-a-new-adapter)
 
-* [List of available dbt-adapter-tests steps](https://github.com/dbt-labs/dbt-adapter-tests/blob/29356d9a07529e1a835ffdd422d94ad44a005b6f/pytest_dbt_adapter/spec_file.py#L616-L631)
+* [Test utilities](https://github.com/dbt-labs/dbt-core/blob/main/core/dbt/tests/util.py)
