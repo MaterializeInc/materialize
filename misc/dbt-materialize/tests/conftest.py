@@ -13,8 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import os
+
+import pytest
 
 pytest_plugins = ["dbt.tests.fixtures.project"]
 
@@ -23,15 +24,15 @@ pytest_plugins = ["dbt.tests.fixtures.project"]
 @pytest.fixture(scope="class")
 def dbt_profile_target():
     return {
-        'type': 'materialize',
-        'threads': 1,
-        'host': "{{ env_var('DBT_HOST', 'localhost') }}",
-        'user': 'materialize',
-        'pass': 'password',
-        'database': 'materialize',
-        'port': "{{ env_var('DBT_PORT', 6875) }}",
-        'sslmode': "{{ env_var('DBT_SSLMODE', '') }}",
-        'sslcert': "{{ env_var('DBT_SSLCERT', '') }}",
-        'sslkey': "{{ env_var('DBT_SSLKEY', '') }}",
-        'sslrootcert': "{{ env_var('DBT_SSLROOTCERT', '') }}"
+        "type": "materialize",
+        "threads": 1,
+        "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+        "user": "materialize",
+        "pass": "password",
+        "database": "materialize",
+        "port": "{{ env_var('DBT_PORT', 6875) }}",
+        "sslmode": "{{ env_var('DBT_SSLMODE', '') }}",
+        "sslcert": "{{ env_var('DBT_SSLCERT', '') }}",
+        "sslkey": "{{ env_var('DBT_SSLKEY', '') }}",
+        "sslrootcert": "{{ env_var('DBT_SSLROOTCERT', '') }}",
     }

@@ -14,27 +14,21 @@
 # limitations under the License.
 
 import pytest
-
-from dbt.tests.util import (
-    run_dbt,
-    check_relations_equal,
-)
-
+from dbt.tests.util import check_relations_equal, run_dbt
 from fixtures import (
+    actual_indexes,
+    expected_indexes,
+    test_index,
     test_materialized_view,
     test_materialized_view_index,
-    test_view_index,
-    test_source,
-    test_index,
-    test_source_index,
     test_sink,
-    actual_indexes,
-    expected_indexes
+    test_source,
+    test_source_index,
+    test_view_index,
 )
 
 
 class TestCustomMaterializations:
-
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return {"name": "custom_materializations"}
@@ -58,7 +52,6 @@ class TestCustomMaterializations:
             "actual_indexes.sql": actual_indexes,
         }
 
-
     def test_custom_materializations(self, project):
         # seed seeds
         results = run_dbt(["seed"])
@@ -70,7 +63,9 @@ class TestCustomMaterializations:
         assert len(results) == 8
 
         # relations_equal
-        check_relations_equal(project.adapter, ["test_materialized_view", "test_view_index"])
+        check_relations_equal(
+            project.adapter, ["test_materialized_view", "test_view_index"]
+        )
 
         check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
 

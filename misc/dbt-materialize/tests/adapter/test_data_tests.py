@@ -14,21 +14,11 @@
 # limitations under the License.
 
 import pytest
-
-from dbt.tests.util import (
-    run_dbt,
-    check_result_nodes_by_name,
-)
-
-from fixtures import (
-    test_materialized_view,
-    not_null,
-    unique
-)
+from dbt.tests.util import check_result_nodes_by_name, run_dbt
+from fixtures import not_null, test_materialized_view, unique
 
 
 class TestDataTest:
-
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return {"name": "data_tests"}
@@ -46,14 +36,13 @@ class TestDataTest:
             "not_null.sql": not_null,
         }
 
-
     def test_store_failures(self, project):
         # run models
         results = run_dbt(["run"])
         # run result length
         assert len(results) == 1
 
-        results = run_dbt(["test"], expect_pass = False) # expect failing test
+        results = run_dbt(["test"], expect_pass=False)  # expect failing test
         assert len(results) == 2
 
         result_statuses = sorted(r.status for r in results)
