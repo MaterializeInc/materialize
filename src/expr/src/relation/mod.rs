@@ -233,7 +233,8 @@ pub enum MirRelationExpr {
         inputs: Vec<MirRelationExpr>,
     },
     /// Technically a no-op. Used to render an index. Will be used to optimize queries
-    /// on finer grain
+    /// on finer grain. Each `keys` item represents a different index that should be
+    /// produced from the `keys`.
     ///
     /// The runtime memory footprint of this operator is proportional to its input.
     ArrangeBy {
