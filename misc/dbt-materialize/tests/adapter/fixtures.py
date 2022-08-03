@@ -16,7 +16,7 @@
 test_materialized_view = """
 {{ config(materialized='materializedview') }}
 
-    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """
 
 test_materialized_view_index = """
@@ -34,7 +34,7 @@ test_view_index = """
     indexes=[{'columns': ['a', 'length(a)']}]
 ) }}
 
-    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """
 
 test_source = """
@@ -92,3 +92,23 @@ test_source_index,1,1,
 test_view_index,1,1,
 test_view_index,2,,pg_catalog.length(a)
 """.lstrip()
+
+not_null = """
+{{ config(store_failures=true, schema='test', alias='testnull') }}
+
+    SELECT *
+    FROM {{ ref('test_materialized_view') }}
+    WHERE a IS NULL
+"""
+
+unique = """
+{{ config(store_failures=true, schema='test', alias='testunique') }}
+
+    SELECT
+        a AS unique_field,
+        count(*) AS num_records
+    FROM {{ ref('test_materialized_view') }}
+    WHERE a IS NOT NULL
+    GROUP BY a
+    HAVING count(*) > 1
+"""
