@@ -201,6 +201,7 @@ pub trait Stash: std::fmt::Debug + Send {
     ///
     /// Sealed entries are those with timestamps less than the collection's upper
     /// frontier.
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn peek_key_one<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
@@ -637,6 +638,7 @@ where
         stash.peek_one(collection).await
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     pub async fn peek_key_one(
         &self,
         stash: &mut impl Stash,

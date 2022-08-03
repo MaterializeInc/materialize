@@ -2991,6 +2991,7 @@ impl<S: Append> Catalog<S> {
         Ok(storage_host_config)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn transact<F, T>(
         &mut self,
         session: Option<&Session>,
