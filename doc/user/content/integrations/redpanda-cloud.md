@@ -40,7 +40,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
 
     Take note of the name of the service account you just created, as well as the service account secret key; you'll need them later on. Keep in mind that the service account secret key contains sensitive information, and you should store it somewhere safe!
 
-    ##### Create an ACL
+    ##### Create an Access Control List (ACL)
     a. Next, while you're at the **Security** section, click on the **ACL** tab
 
     b. Click **Add ACL**
