@@ -277,7 +277,7 @@ contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be 
 
 > CREATE OR REPLACE MATERIALIZED VIEW numeric_trunc AS
   SELECT 1
-  WHERE mz_logical_timestamp() > 1927418240000.1;
+  WHERE mz_logical_timestamp() <= 18446744073709551614.1;
 
 > SELECT * FROM numeric_trunc;
 1
