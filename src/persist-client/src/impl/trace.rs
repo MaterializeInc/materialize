@@ -175,7 +175,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
         ret
     }
 
-    #[cfg(test)]
     pub fn num_hollow_batches(&self) -> usize {
         let mut ret = 0;
         self.map_batches(|_| ret += 1);

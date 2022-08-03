@@ -56,6 +56,7 @@ message ProtoStateRollup {
     string ts_codec = 4;
     string diff_codec = 5;
     uint64 seqno = 6;
+    uint64 last_gc_req = 10;
     ProtoTrace trace = 7;
     repeated ProtoReaderState readers = 8;
     repeated ProtoWriterState writers = 9;

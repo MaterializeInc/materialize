@@ -501,7 +501,6 @@ impl CompactionMetrics {
 
 #[derive(Debug)]
 pub struct GcMetrics {
-    pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) finished: IntCounter,
     pub(crate) seconds: Counter,
@@ -510,10 +509,6 @@ pub struct GcMetrics {
 impl GcMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         GcMetrics {
-            skipped: registry.register(metric!(
-                name: "mz_persist_gc_skipped",
-                help: "count of garbage collections skipped due to heuristics",
-            )),
             started: registry.register(metric!(
                 name: "mz_persist_gc_started",
                 help: "count of garbage collections started",
@@ -652,6 +647,11 @@ pub struct ShardsMetrics {
     _since: ComputedIntGauge,
     _upper: ComputedIntGauge,
     _encoded_state_size: ComputedUIntGauge,
+    // _batch_count is somewhat redundant with _encoded_state_size. It's nice to
+    // see directly as we're getting started, perhaps we're able to drop it
+    // later in favor of only having the latter.
+    _batch_count: ComputedUIntGauge,
+    _seqnos_held: ComputedUIntGauge,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -665,6 +665,8 @@ impl ShardsMetrics {
         let shards_since = Arc::clone(&shards);
         let shards_upper = Arc::clone(&shards);
         let shards_size = Arc::clone(&shards);
+        let shards_batches = Arc::clone(&shards);
+        let shards_seqnos = Arc::clone(&shards);
         ShardsMetrics {
             _count: registry.register_computed_gauge(
                 metric!(
@@ -707,6 +709,28 @@ impl ShardsMetrics {
                 move || {
                     let mut ret = 0;
                     Self::compute(&shards_size, |m| ret += m.encoded_state_size.get());
+                    ret
+                },
+            ),
+            _batch_count: registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_shard_batch_count",
+                    help: "count of batches in all active shards on this process",
+                ),
+                move || {
+                    let mut ret = 0;
+                    Self::compute(&shards_batches, |m| ret += m.batch_count.get());
+                    ret
+                },
+            ),
+            _seqnos_held: registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_shard_seqnos_held",
+                    help: "maximum count of gc-ineligible states across all active shards on this process",
+                ),
+                move || {
+                    let mut ret = 0;
+                    Self::compute(&shards_seqnos, |m| ret = std::cmp::max(ret, m.seqnos_held.get()));
                     ret
                 },
             ),
@@ -754,6 +778,8 @@ pub struct ShardMetrics {
     since: AtomicI64,
     upper: AtomicI64,
     encoded_state_size: AtomicU64,
+    batch_count: AtomicU64,
+    seqnos_held: AtomicU64,
 }
 
 impl ShardMetrics {
@@ -762,6 +788,8 @@ impl ShardMetrics {
             since: AtomicI64::new(0),
             upper: AtomicI64::new(0),
             encoded_state_size: AtomicU64::new(0),
+            batch_count: AtomicU64::new(0),
+            seqnos_held: AtomicU64::new(0),
         }
     }
 
@@ -792,6 +820,14 @@ impl ShardMetrics {
     pub fn set_encoded_state_size(&self, encoded_state_size: usize) {
         self.encoded_state_size
             .set(u64::cast_from(encoded_state_size))
+    }
+
+    pub fn set_batch_count(&self, batch_count: usize) {
+        self.batch_count.set(u64::cast_from(batch_count))
+    }
+
+    pub fn set_seqnos_held(&self, seqnos_held: usize) {
+        self.seqnos_held.set(u64::cast_from(seqnos_held))
     }
 }
 
