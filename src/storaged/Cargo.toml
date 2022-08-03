@@ -1,7 +1,7 @@
 [package]
 name = "mz-storaged"
 description = "Materialize's storage server."
-version = "0.26.1-dev"
+version = "0.27.0-alpha.10"
 edition = "2021"
 rust-version = "1.62.0"
 publish = false
