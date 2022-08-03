@@ -442,12 +442,17 @@ impl Service for TransactorService {
 
         // Construct requested Consensus.
         let config = PersistConfig::new(SYSTEM_TIME.clone());
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
-                ConsensusConfig::try_from(consensus_uri, config.consensus_connection_pool_max_size)
-                    .await?
-                    .open()
-                    .await?
+                ConsensusConfig::try_from(
+                    consensus_uri,
+                    config.consensus_connection_pool_max_size,
+                    metrics.postgres_consensus.clone(),
+                )
+                .await?
+                .open()
+                .await?
             }
             None => MaelstromConsensus::new(handle.clone()),
         };
@@ -455,7 +460,6 @@ impl Service for TransactorService {
             as Arc<dyn Consensus + Send + Sync>;
 
         // Wire up the TransactorService.
-        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
         let client =
             PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime).await?;
