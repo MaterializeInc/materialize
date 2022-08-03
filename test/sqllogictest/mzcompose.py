@@ -11,7 +11,7 @@ from materialize import ROOT, ci_util
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Postgres, SqlLogicTest
 
-SERVICES = [Postgres(), SqlLogicTest()]
+SERVICES = [Postgres(image="postgres:14.4"), SqlLogicTest()]
 
 
 def workflow_default(c: Composition) -> None:
