@@ -282,13 +282,13 @@ Once created, a connection is **reusable** across multiple `CREATE SOURCE` state
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
 ```sql
-CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
+CREATE SECRET kafka_ssl_key_pem AS '<BROKER_SSL_KEY_PEM>';
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 
 CREATE CONNECTION kafka_connection
   FOR KAFKA
     BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
-    SSL KEY = SECRET kafka_ssl_key,
+    SSL KEY PEM = SECRET kafka_ssl_key_pem,
     SSL CERTIFICATE = SECRET kafka_ssl_crt;
 ```
 {{< /tab >}}
@@ -313,13 +313,13 @@ CREATE CONNECTION kafka_connection
 {{< tab "SSL">}}
 ```sql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
-CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
+CREATE SECRET csr_ssl_key_pem AS '<CSR_SSL_KEY_PEM>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
 CREATE CONNECTION csr_ssl
   FOR CONFLUENT SCHEMA REGISTRY
     URL 'rp-f00000bar.data.vectorized.cloud:30993',
-    SSL KEY = SECRET csr_ssl_key,
+    SSL KEY PEM = SECRET csr_ssl_key_pem,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
     USERNAME = 'foo',
     PASSWORD = SECRET csr_password;

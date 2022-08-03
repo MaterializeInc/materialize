@@ -28,7 +28,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 > CREATE CONNECTION kafka_ssl
   FOR KAFKA
     BROKER 'kafka:9092',
-    SSL KEY = SECRET ssl_key_kafka,
+    SSL KEY PEM = SECRET ssl_key_kafka,
     SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
     SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
 
@@ -160,7 +160,7 @@ contains:self signed certificate in certificate chain
       ssl_ca_pem = '${arg.ca-crt}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:missing SSL KEY (ssl.key.pem)
+contains:missing SSL KEY PEM (ssl.key.pem)
 
 > CREATE SOURCE kafka_connector_source
   FROM KAFKA CONNECTION kafka_ssl
@@ -183,7 +183,7 @@ a
 > CREATE CONNECTION csr_ssl
   FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}',
-    SSL KEY = SECRET ssl_key_csr,
+    SSL KEY PEM = SECRET ssl_key_csr,
     SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
     SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}',
     USERNAME = 'materialize',
@@ -225,13 +225,13 @@ contains:cannot set option security.protocol for SOURCE using CONNECTION materia
 > CREATE CONNECTION kafka_sasl_no_ca
   FOR KAFKA
     BROKER 'kafka:9092',
-    SSL KEY = SECRET ssl_key_kafka,
+    SSL KEY PEM = SECRET ssl_key_kafka,
     SSL CERTIFICATE = '${arg.materialized-kafka-crt}';
 
 >  CREATE CONNECTION csr_ssl_no_ca
   FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}',
-    SSL KEY = SECRET ssl_key_csr,
+    SSL KEY PEM = SECRET ssl_key_csr,
     SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
     USERNAME = 'materialize',
     PASSWORD = SECRET password_csr;

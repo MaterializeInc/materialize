@@ -540,7 +540,7 @@ impl_display_t!(DbzTxMetadataOption);
 pub enum KafkaConnectionOptionName {
     Broker,
     Brokers,
-    SslKey,
+    SslKeyPem,
     SslCertificate,
     SslCertificateAuthority,
     SaslMechanisms,
@@ -553,7 +553,7 @@ impl AstDisplay for KafkaConnectionOptionName {
         f.write_str(match self {
             KafkaConnectionOptionName::Broker => "BROKER",
             KafkaConnectionOptionName::Brokers => "BROKERS",
-            KafkaConnectionOptionName::SslKey => "SSL KEY",
+            KafkaConnectionOptionName::SslKeyPem => "SSL KEY PEM",
             KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
             KafkaConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
@@ -585,7 +585,7 @@ impl_display_t!(KafkaConnectionOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CsrConnectionOptionName {
     Url,
-    SslKey,
+    SslKeyPem,
     SslCertificate,
     SslCertificateAuthority,
     Username,
@@ -596,7 +596,7 @@ impl AstDisplay for CsrConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             CsrConnectionOptionName::Url => "URL",
-            CsrConnectionOptionName::SslKey => "SSL KEY",
+            CsrConnectionOptionName::SslKeyPem => "SSL KEY PEM",
             CsrConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             CsrConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
             CsrConnectionOptionName::Username => "USERNAME",
@@ -633,7 +633,7 @@ pub enum PostgresConnectionOptionName {
     SshTunnel,
     SslCertificate,
     SslCertificateAuthority,
-    SslKey,
+    SslKeyPem,
     SslMode,
     User,
 }
@@ -648,7 +648,7 @@ impl AstDisplay for PostgresConnectionOptionName {
             PostgresConnectionOptionName::SshTunnel => "SSH TUNNEL",
             PostgresConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             PostgresConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
-            PostgresConnectionOptionName::SslKey => "SSL KEY",
+            PostgresConnectionOptionName::SslKeyPem => "SSL KEY PEM",
             PostgresConnectionOptionName::SslMode => "SSL MODE",
             PostgresConnectionOptionName::User => "USER",
         })

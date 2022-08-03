@@ -1984,7 +1984,10 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
             SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
-                KEY => KafkaConnectionOptionName::SslKey,
+                KEY => {
+                    self.expect_keyword(PEM)?;
+                    KafkaConnectionOptionName::SslKeyPem
+                },
                 CERTIFICATE => {
                     if self.parse_keyword(AUTHORITY) {
                         KafkaConnectionOptionName::SslCertificateAuthority
@@ -2007,7 +2010,10 @@ impl<'a> Parser<'a> {
     fn parse_csr_connection_options(&mut self) -> Result<CsrConnectionOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[SSL, URL, USERNAME, PASSWORD])? {
             SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
-                KEY => CsrConnectionOptionName::SslKey,
+                KEY => {
+                    self.expect_keyword(PEM)?;
+                    CsrConnectionOptionName::SslKeyPem
+                },
                 CERTIFICATE => {
                     if self.parse_keyword(AUTHORITY) {
                         CsrConnectionOptionName::SslCertificateAuthority
@@ -2052,7 +2058,10 @@ impl<'a> Parser<'a> {
                         PostgresConnectionOptionName::SslCertificate
                     }
                 }
-                KEY => PostgresConnectionOptionName::SslKey,
+                KEY => {
+                    self.expect_keyword(PEM)?;
+                    PostgresConnectionOptionName::SslKeyPem
+                },
                 MODE => PostgresConnectionOptionName::SslMode,
                 _ => unreachable!(),
             },

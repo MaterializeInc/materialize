@@ -274,8 +274,8 @@ contains:invalid SASL PASSWORD: must provide a secret value
 ! CREATE CONNECTION not_a_secret
   FOR KAFKA
     BROKER '',
-    SSL KEY = ''
-contains:invalid SSL KEY: must provide a secret value
+    SSL KEY PEM = ''
+contains:invalid SSL KEY PEM: must provide a secret value
 
 ! CREATE CONNECTION duplicate_option
   FOR KAFKA
@@ -327,14 +327,14 @@ contains: must specify URL
 ! CREATE CONNECTION missing_cert
     FOR CONFLUENT SCHEMA REGISTRY
     URL 'http://localhost',
-    SSL KEY = SECRET s
-contains: requires both SSL KEY and SSL CERTIFICATE
+    SSL KEY PEM = SECRET s
+contains: requires both SSL KEY PEM and SSL CERTIFICATE
 
 ! CREATE CONNECTION missing_key
     FOR CONFLUENT SCHEMA REGISTRY
      URL 'http://localhost',
     SSL CERTIFICATE = ''
-contains: requires both SSL KEY and SSL CERTIFICATE
+contains: requires both SSL KEY PEM and SSL CERTIFICATE
 
 ## SSH
 ! CREATE CONNECTION missing_user

@@ -29,18 +29,18 @@ Field                       | Value            | Required | Description
 `BROKERS`                   | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate. Required for SSL client authentication.
-`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key. Required for SSL client authentication.
+`SSL KEY PEM`               | secret           | ✓        | Your SSL certificate's key. Required for SSL client authentication.
 
 ##### Example
 
 ```sql
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
-CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
+CREATE SECRET kafka_ssl_key_pem AS '<BROKER_SSL_KEY_PEM>';
 
 CREATE CONNECTION kafka_connection
   FOR KAFKA
     BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
-    SSL KEY = SECRET kafka_ssl_key,
+    SSL KEY PEM = SECRET kafka_ssl_key_pem,
     SSL CERTIFICATE = SECRET kafka_ssl_crt;
 ```
 
@@ -51,7 +51,7 @@ Field                       | Value            | Required | Description
 `URL`                       | `text`           | ✓        | The schema registry URL.
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate. Required for SSL client authentication.
-`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key. Required for SSL client authentication.
+`SSL KEY PEM`               | secret           | ✓        | Your SSL certificate's key. Required for SSL client authentication.
 `PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 `USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 
@@ -59,13 +59,13 @@ Field                       | Value            | Required | Description
 
 ```sql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
-CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
+CREATE SECRET csr_ssl_key_pem AS '<CSR_SSL_KEY_PEM>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
 CREATE CONNECTION csr_ssl
   FOR CONFLUENT SCHEMA REGISTRY
     URL 'rp-f00000bar.data.vectorized.cloud:30993',
-    SSL KEY = SECRET csr_ssl_key,
+    SSL KEY PEM = SECRET csr_ssl_key_pem,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
     USERNAME = 'foo',
     PASSWORD = SECRET csr_password;
@@ -111,7 +111,7 @@ Field                       | Value            | Required | Description
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL MODE`                  | `text`           |          | Default: `disable`. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
 `SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate.
-`SSL KEY`                   | secret           |          | Client SSL key.
+`SSL KEY PEM`               | secret           |          | Client SSL key.
 `USER`                      | `text`           | ✓        | Database username.
 
 ##### Example
