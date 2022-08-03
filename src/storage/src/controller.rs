@@ -694,8 +694,11 @@ where
                 // storing their state in persist shards. This whole section should be eventually
                 // removed as we make each operator durably record its state in persist shards.
                 let resume_upper = match ingestion.desc.envelope {
-                    // We can only resume with the None envelope right now which is stateless
+                    // We can only resume with the None envelope, which is stateless,
+                    // or with the [Debezium] Upsert envelope, which is easy
+                    //   (re-ingest the last emitted state)
                     SourceEnvelope::None(_) => resume_upper,
+                    SourceEnvelope::Upsert(_) => resume_upper,
                     // Otherwise re-ingest everything
                     _ => Antichain::from_elem(T::minimum()),
                 };
