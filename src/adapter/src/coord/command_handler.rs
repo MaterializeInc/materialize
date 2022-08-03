@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use mz_ore::tracing::OpenTelemetryContext;
 use rand::Rng;
 use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
@@ -403,6 +404,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     stmt,
                     self.connection_context.clone(),
                 );
+                let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx
@@ -414,6 +416,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 params,
                                 depends_on,
                                 original_stmt,
+                                otel_ctx,
                             },
                         ))
                         .expect("sending to internal_cmd_tx cannot fail");

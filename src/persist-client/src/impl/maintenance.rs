@@ -90,9 +90,7 @@ impl RoutineMaintenance {
     {
         let mut join_handles = vec![];
         if let Some(gc_req) = self.garbage_collection {
-            if let Some(join) = gc.gc_and_truncate_background(gc_req) {
-                join_handles.push(join);
-            }
+            join_handles.push(gc.gc_and_truncate_background(gc_req));
         }
 
         if let Some(lease_expiration) = self.lease_expiration {

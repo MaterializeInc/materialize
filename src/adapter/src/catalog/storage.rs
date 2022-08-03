@@ -918,7 +918,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         &mut self,
         cluster_name: &str,
         config: &Option<ComputeInstanceIntrospectionConfig>,
-        introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         let id = self.get_and_increment_id(COMPUTE_ID_ALLOC_KEY.to_string())?;
         let config = serde_json::to_string(config)
@@ -935,7 +935,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             )));
         };
 
-        for (builtin, index_id) in introspection_sources {
+        for (builtin, index_id) in introspection_source_indexes {
             let index_id = if let GlobalId::System(id) = index_id {
                 *id
             } else {

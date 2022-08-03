@@ -409,23 +409,44 @@ where
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
+        let is_write = cmd.name == self.metrics.cmds.compare_and_append.name;
         cmd.run_cmd(|cas_mismatch_metric| async move {
             let path = self.shard_id().to_string();
+            let mut garbage_collection;
 
             loop {
-                let (work_ret, new_state) = match self.state.clone_apply(&mut work_fn) {
+                let (work_ret, mut new_state) = match self.state.clone_apply(&mut work_fn) {
                     Continue(x) => x,
                     Break(err) => {
                         return Ok((self.state.seqno(), Err(err), RoutineMaintenance::default()))
                     }
                 };
+
+                // Find out if this command has been selected to perform gc, so
+                // that it will fire off a background request to the
+                // GarbageCollector to delete eligible blobs and truncate the
+                // state history. This is dependant both on `maybe_gc` returning
+                // Some _and_ on this state being successfully compare_and_set.
+                //
+                // NB: Make sure this overwrites `garbage_collection` on every
+                // run though the loop (i.e. no `if let Some` here). When we
+                // lose a CaS race, we might discover that the winner got
+                // assigned the gc.
+                garbage_collection =
+                    new_state
+                        .maybe_gc(is_write)
+                        .map(|(old_seqno_since, new_seqno_since)| GcReq {
+                            shard_id: self.shard_id(),
+                            old_seqno_since,
+                            new_seqno_since,
+                        });
+
                 trace!(
                     "apply_unbatched_cmd {} attempting {}\n  new_state={:?}",
                     cmd.name,
                     self.state.seqno(),
                     new_state
                 );
-
                 let new = self
                     .metrics
                     .codecs
@@ -464,22 +485,8 @@ where
                         self.shard_metrics.set_since(self.state.since());
                         self.shard_metrics.set_upper(&self.state.upper());
                         self.shard_metrics.set_encoded_state_size(payload_len);
-
-                        // If this command has downgraded the seqno_since, fire
-                        // off a background request to the GarbageCollector so
-                        // it can delete eligible blobs and truncate the state
-                        // history.
-                        let old_seqno_since = self.state.seqno_since();
-                        let new_seqno_since = new_state.seqno_since();
-                        let garbage_collection = if old_seqno_since != new_seqno_since {
-                            Some(GcReq {
-                                shard_id: self.shard_id(),
-                                old_seqno_since,
-                                new_seqno_since,
-                            })
-                        } else {
-                            None
-                        };
+                        self.shard_metrics.set_batch_count(self.state.batch_count());
+                        self.shard_metrics.set_seqnos_held(self.state.seqnos_held());
 
                         let expired_readers =
                             self.state.readers_needing_expiration((self.cfg.now)());
