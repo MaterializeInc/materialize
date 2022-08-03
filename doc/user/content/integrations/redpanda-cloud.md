@@ -60,7 +60,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
 
     c. Click on the **Download** button next to the **Kafka API TLS**
 
-    d. Next base64 encode the certificate and save somewhere safe. You'll need it later in this tutorial.
+    d. You'll need to `base64`-encode the certificate, and store it somewhere safe; you'll need this to securely connect to Materialize.
 
 
     One way of doing this is to use the following command:
