@@ -45,7 +45,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
 
     b. Click **Add ACL**
 
-    c. Choose **Service Account** that you've just created
+    c. Choose the **Service Account** that you've just created
 
     d. Choose the **Read** and **Write** permissions for the **Topics** section
 
