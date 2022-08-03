@@ -49,7 +49,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
 
     d. Choose the **Read** and **Write** permissions for the **Topics** section
 
-    e. You can choose which topics you want to grant access to, but you can also choose to grant access to all topics by adding a `*` in the **Topics ID** input field.
+    e. You can grant access on a per-topic basis, but you can also choose to grant access to all topics by adding a `*` in the **Topics ID** input field.
 
     f. Click on **Create**
 
