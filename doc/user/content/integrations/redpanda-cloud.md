@@ -63,7 +63,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
     d. You'll need to `base64`-encode the certificate, and store it somewhere safe; you'll need this to securely connect to Materialize.
 
 
-    One way of doing this is to use the following command:
+    One way of doing this is to open up a terminal and run the following command:
     ```shell
     cat <redpanda-broker-ca>.crt | base64
     ```
