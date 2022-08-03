@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="545" height="279">
+<svg xmlns="http://www.w3.org/2000/svg" width="545" height="323">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="31" y="3" width="66" height="32" rx="10"/>
@@ -49,6 +49,14 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="145" y="197">TABLE</text>
+   <rect x="137" y="223" width="76" height="32" rx="10"/>
+   <rect x="135"
+         y="221"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="241">SECRET</text>
    <rect x="343" y="3" width="56" height="32"/>
    <rect x="341" y="1" width="56" height="32" class="nonterminal"/>
    <text class="nonterminal" x="351" y="21">name</text>
@@ -60,11 +68,11 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="427" y="21">RENAME TO</text>
-   <rect x="427" y="245" width="90" height="32"/>
-   <rect x="425" y="243" width="90" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="435" y="263">new_name</text>
+   <rect x="427" y="289" width="90" height="32"/>
+   <rect x="425" y="287" width="90" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="435" y="307">new_name</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m66 0 h10 m20 0 h10 m62 0 h10 m0 0 h104 m-206 0 h20 m186 0 h20 m-226 0 q10 0 10 10 m206 0 q0 -10 10 -10 m-216 10 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m78 0 h10 m0 0 h88 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m58 0 h10 m0 0 h108 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m166 0 h10 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m66 0 h10 m0 0 h100 m20 -176 h10 m56 0 h10 m0 0 h10 m104 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-140 242 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m90 0 h10 m3 0 h-3"/>
-   <polygon points="535 259 543 255 543 263"/>
-   <polygon points="535 259 527 255 527 263"/>
+         d="m17 17 h2 m0 0 h10 m66 0 h10 m20 0 h10 m62 0 h10 m0 0 h104 m-206 0 h20 m186 0 h20 m-226 0 q10 0 10 10 m206 0 q0 -10 10 -10 m-216 10 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m78 0 h10 m0 0 h88 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m58 0 h10 m0 0 h108 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m166 0 h10 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m66 0 h10 m0 0 h100 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m76 0 h10 m0 0 h90 m20 -220 h10 m56 0 h10 m0 0 h10 m104 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-140 286 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m90 0 h10 m3 0 h-3"/>
+   <polygon points="535 303 543 299 543 307"/>
+   <polygon points="535 303 527 299 527 307"/>
 </svg>

@@ -163,7 +163,8 @@ impl PostgresConsensus {
         // support this function and (we suspect) doesn't have this bug anyway). Use
         // this construction (not cockroach instead of yes postgres) to avoid
         // accidentally not executing in Postgres.
-        if !version.starts_with("CockroachDB") {
+        let is_cockroach = version.starts_with("CockroachDB");
+        if !is_cockroach {
             // Obtain an advisory lock before attempting to create the schema. This is
             // necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
             // in PostgreSQL.
@@ -175,7 +176,11 @@ impl PostgresConsensus {
             // The lock ID was randomly generated.
             tx.batch_execute("SELECT pg_advisory_xact_lock(135664303235462630);")
                 .await?;
-        } else {
+        }
+
+        tx.batch_execute(SCHEMA).await?;
+
+        if is_cockroach {
             // The `consensus` table creates and deletes rows at a high frequency, generating many
             // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
             // these tombstones accumulate, scanning over the table will take increasingly and
@@ -186,7 +191,7 @@ impl PostgresConsensus {
             tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
                 .await?;
         }
-        tx.batch_execute(SCHEMA).await?;
+
         tx.commit().await?;
         Ok(PostgresConsensus { pool })
     }
