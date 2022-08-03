@@ -19,7 +19,7 @@
 
 #     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
 
-name: Slack - Notify P1
+name: Slack Issue Notifications
 
 on:
   issues:
@@ -35,7 +35,16 @@ jobs:
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           message: |
-            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (#${{ github.event.issue.number }}).
+            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (https://github.com/MaterializeInc/materialize/issues/${{ github.event.issue.number }}).
           channel: github-p1
           color: red
-          verbose: true
+          verbose: false
+      - uses: actions-ecosystem/action-slack-notifier@v1
+        if: ${{ github.event.label.name == 'C-triage' }}
+        with:
+          slack_token: ${{ secrets.SLACK_TOKEN }}
+          message: |
+            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (https://github.com/MaterializeInc/materialize/issues/${{ github.event.issue.number }}).
+          channel: github-triage
+          color: red
+          verbose: false
