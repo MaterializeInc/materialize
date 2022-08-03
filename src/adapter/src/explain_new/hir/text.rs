@@ -43,7 +43,6 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
             })?
         } else {
             match &self.0 {
-                // Lets are annotated on the chain ID that they correspond to.
                 Constant { rows, .. } => {
                     fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)?;
                 }
@@ -99,12 +98,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
                 },
                 Project { outputs, input } => {
                     let outputs = Indices(outputs);
-                    writeln!(f, "{}Project {}", ctx.indent, outputs)?;
+                    writeln!(f, "{}Project ({})", ctx.indent, outputs)?;
                     ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
                 }
                 Map { scalars, input } => {
                     let scalars = separated_text(", ", scalars.iter().map(Displayable::from));
-                    writeln!(f, "{}Map {}", ctx.indent, scalars)?;
+                    writeln!(f, "{}Map ({})", ctx.indent, scalars)?;
                     ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
                 }
                 CallTable { func, exprs } => {
@@ -270,34 +269,39 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                 }
             }
             CallVariadic { func, exprs } => {
-                if func.is_infix_op() && exprs.len() > 1 {
-                    write!(f, "(")?;
-                    for (i, expr) in exprs.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, " {} ", func)?;
-                        }
-                        Displayable::from(expr).fmt_text(f, ctx)?;
+                use mz_expr::VariadicFunc::*;
+                match func {
+                    ArrayCreate { .. } => {
+                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        write!(f, "array[{}]", exprs)
                     }
-                    write!(f, ")")
-                } else {
-                    write!(f, "{}(", func)?;
-                    for (i, expr) in exprs.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        Displayable::from(expr).fmt_text(f, ctx)?;
+                    ListCreate { .. } => {
+                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        write!(f, "list[{}]", exprs)
                     }
-                    write!(f, ")")
+                    RecordCreate { .. } => {
+                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        write!(f, "row({})", exprs)
+                    }
+                    func if func.is_infix_op() && exprs.len() > 1 => {
+                        let func = format!(" {} ", func);
+                        let exprs = separated_text(&func, exprs.iter().map(Displayable::from));
+                        write!(f, "({})", exprs)
+                    }
+                    func => {
+                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        write!(f, "{}({})", func, exprs)
+                    }
                 }
             }
             If { cond, then, els } => {
-                write!(f, "if ")?;
+                write!(f, "case when ")?;
                 Displayable::from(cond.as_ref()).fmt_text(f, ctx)?;
-                write!(f, " then {{")?;
+                write!(f, " then ")?;
                 Displayable::from(then.as_ref()).fmt_text(f, ctx)?;
-                write!(f, "}} els {{")?;
+                write!(f, " else ")?;
                 Displayable::from(els.as_ref()).fmt_text(f, ctx)?;
-                write!(f, "}}")
+                write!(f, " end")
             }
             Windowing(expr) => {
                 match &expr.func {
@@ -332,12 +336,12 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                 Ok(())
             }
             Exists(expr) => match expr.as_ref() {
-                Get { id, .. } => write!(f, "Exists(Get {})", id), // TODO: optional humanizer
-                _ => write!(f, "Exists(???)"),
+                Get { id, .. } => write!(f, "exists(Get {})", id), // TODO: optional humanizer
+                _ => write!(f, "exists(???)"),
             },
             Select(expr) => match expr.as_ref() {
-                Get { id, .. } => write!(f, "Select(Get {})", id), // TODO: optional humanizer
-                _ => write!(f, "Select(???)"),
+                Get { id, .. } => write!(f, "select(Get {})", id), // TODO: optional humanizer
+                _ => write!(f, "select(???)"),
             },
         }
     }
