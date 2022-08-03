@@ -234,7 +234,7 @@ impl PartialOrd for DatumList<'_> {
 }
 
 /// A mapping from string keys to Datums
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DatumMap<'a> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],

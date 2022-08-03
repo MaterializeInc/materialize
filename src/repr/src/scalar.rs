@@ -22,7 +22,8 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use serde::ser::{SerializeMap, SerializeSeq};
 use uuid::Uuid;
 
 use mz_lowertest::MzReflect;
@@ -46,7 +47,7 @@ pub use crate::relation_and_scalar::ProtoScalarType;
 ///
 /// Note that `Datum` must always derive [`Eq`] to enforce equality with
 /// `repr::Row`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Datum<'a> {
     /// The `false` boolean value.
     False,
@@ -124,6 +125,62 @@ pub enum Datum<'a> {
     // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
+}
+
+impl<'a> Serialize for Datum<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use Datum::*;
+        match self {
+            False => serializer.serialize_bool(false),
+            True => serializer.serialize_bool(true),
+            Int16(i) => serializer.serialize_i16(*i),
+            Int32(i) => serializer.serialize_i32(*i),
+            Int64(i) => serializer.serialize_i64(*i),
+            UInt8(u) => serializer.serialize_u8(*u),
+            UInt32(u) => serializer.serialize_u32(*u),
+            Float32(f) => serializer.serialize_f32(**f),
+            Float64(f) => serializer.serialize_f64(**f),
+            Date(d) => d.serialize(serializer),
+            Time(t) => t.serialize(serializer),
+            Timestamp(ts) => ts.serialize(serializer),
+            TimestampTz(tstz) => tstz.serialize(serializer),
+            Interval(i) => i.serialize(serializer),
+            Bytes(b) => serializer.serialize_bytes(b),
+            String(s) => serializer.serialize_str(s),
+            Array(a) => {
+                let mut seq = serializer.serialize_seq(None)?;
+                let mut iter = a.elements.iter();
+                while let Some(datum) = iter.next() {
+                    seq.serialize_element(&datum)?;
+                }
+                seq.end()
+            },
+            List(l) => {
+                let mut seq = serializer.serialize_seq(None)?;
+                let mut iter = l.iter();
+                while let Some(datum) = iter.next() {
+                    seq.serialize_element(&datum)?;
+                }
+                seq.end()
+            },
+            Map(m) => {
+                let mut map = serializer.serialize_map(None)?;
+                let mut iter = m.iter();
+                while let Some((key, val)) = iter.next() {
+                    map.serialize_entry(&key, &val)?;
+                }
+                map.end()
+            },
+            Numeric(n) => n.serialize(serializer),
+            Uuid(u) => u.serialize(serializer),
+            Dummy => serializer.serialize_unit_variant("", 1, "Dummy"),
+            JsonNull => serializer.serialize_unit_variant("", 0, "JsonNull"),
+            Null => serializer.serialize_none(),
+        }
+    }
 }
 
 impl TryFrom<Datum<'_>> for bool {

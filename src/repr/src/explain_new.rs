@@ -545,16 +545,6 @@ impl Serialize for JSONRow {
     }
 }
 
-impl<'de> Deserialize<'de> for JSONRow {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let vec: Vec<crate::Datum> = serde::Deserialize::deserialize(deserializer)?;
-        Ok(JSONRow(Row::pack(vec.into_iter())))
-    }
-}
-
 /// A trait for humanizing components of an expression.
 ///
 /// This will be most often used as part of the rendering context
@@ -756,5 +746,47 @@ mod tests {
 
         assert!(act.is_ok());
         assert_eq!(act.unwrap(), exp);
+    }
+
+    #[test]
+    fn test_json_row_serialization() {
+        use crate::Datum;
+        let mut list_datum = Row::default();
+        list_datum.packer().push_list_with(|row| {
+            row.push(Datum::UInt32(0));
+            row.push(Datum::Int64(10));
+        });
+        let mut map_datum = Row::default();
+        map_datum.packer().push_dict_with(|row| {
+            row.push(Datum::String("hello"));
+            row.push(Datum::Int16(-1));
+            row.push(Datum::String("world"));
+            row.push(Datum::Int16(1000));
+        });
+        let all_types_of_datum = vec![
+            Datum::True,
+            Datum::False,
+            Datum::Null,
+            Datum::Dummy,
+            Datum::JsonNull,
+            Datum::Int32(12),
+            Datum::UInt8(32),
+            Datum::from(0.1 as f32),
+            Datum::from(-1.23),
+            Datum::Date(chrono::NaiveDate::from_ymd(2022, 8, 3)),
+            Datum::Time(chrono::NaiveTime::from_hms(12, 10, 22)),
+            Datum::Timestamp(chrono::NaiveDateTime::from_timestamp(1023123, 234)),
+            Datum::TimestampTz(chrono::DateTime::from_utc(chrono::NaiveDateTime::from_timestamp(90234242, 234), chrono::Utc)),
+            Datum::Uuid(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+            Datum::Bytes(&[127, 23, 4]),
+            Datum::Interval(crate::adt::interval::Interval{months: 1, days: 2, micros: 10}),
+            list_datum.unpack_first(),
+            map_datum.unpack_first()
+        ];
+        let row = JSONRow(Row::pack(all_types_of_datum.into_iter()));
+        let result = serde_json::to_string(&row);
+        let expected = "[true,false,null,\"Dummy\",\"JsonNull\",12,-1]";
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected);
     }
 }
