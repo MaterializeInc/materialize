@@ -2400,11 +2400,16 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStageOld::Timestamp => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                self.validate_timeline(optimized_plan.depends_on())?;
+                let timeline = self.validate_timeline(optimized_plan.depends_on())?;
                 let source_ids = optimized_plan.depends_on();
-                let id_bundle = self
-                    .index_oracle(compute_instance)
-                    .sufficient_collections(&source_ids);
+                // Determine a timestamp that will be valid for anything in any schema
+                // referenced by the query.
+                let id_bundle = self.timedomain_for(
+                    &source_ids,
+                    &timeline,
+                    session.conn_id(),
+                    compute_instance,
+                )?;
                 // TODO: determine_timestamp takes a mut self to track table linearizability,
                 // so explaining a plan involving tables has side effects. Removing those side
                 // effects would be good.
