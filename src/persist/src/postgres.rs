@@ -163,7 +163,8 @@ impl PostgresConsensus {
         // support this function and (we suspect) doesn't have this bug anyway). Use
         // this construction (not cockroach instead of yes postgres) to avoid
         // accidentally not executing in Postgres.
-        if !version.starts_with("CockroachDB") {
+        let is_cockroach = version.starts_with("CockroachDB");
+        if !is_cockroach {
             // Obtain an advisory lock before attempting to create the schema. This is
             // necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
             // in PostgreSQL.
@@ -176,7 +177,21 @@ impl PostgresConsensus {
             tx.batch_execute("SELECT pg_advisory_xact_lock(135664303235462630);")
                 .await?;
         }
+
         tx.batch_execute(SCHEMA).await?;
+
+        if is_cockroach {
+            // The `consensus` table creates and deletes rows at a high frequency, generating many
+            // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
+            // these tombstones accumulate, scanning over the table will take increasingly and
+            // prohibitively long.
+            //
+            // See: https://github.com/MaterializeInc/materialize/issues/13975
+            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+            tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                .await?;
+        }
+
         tx.commit().await?;
         Ok(PostgresConsensus { pool })
     }
@@ -259,7 +274,8 @@ impl Consensus for PostgresConsensus {
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
         let row = {
             let client = self.pool.get().await?;
-            client.query_opt(&*q, &[&key]).await?
+            let statement = client.prepare_cached(q).await?;
+            client.query_opt(&statement, &[&key]).await?
         };
         let row = match row {
             None => return Ok(None),
@@ -308,8 +324,12 @@ impl Consensus for PostgresConsensus {
                      )
                      ON CONFLICT DO NOTHING";
             let client = self.pool.get().await?;
+            let statement = client.prepare_cached(q).await?;
             client
-                .execute(&*q, &[&key, &new.seqno, &new.data.as_ref(), &expected])
+                .execute(
+                    &statement,
+                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                )
                 .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
@@ -319,8 +339,9 @@ impl Consensus for PostgresConsensus {
                      )
                      ON CONFLICT DO NOTHING";
             let client = self.pool.get().await?;
+            let statement = client.prepare_cached(q).await?;
             client
-                .execute(&*q, &[&key, &new.seqno, &new.data.as_ref()])
+                .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
                 .await?
         };
 
@@ -344,7 +365,8 @@ impl Consensus for PostgresConsensus {
              ORDER BY sequence_number";
         let rows = {
             let client = self.pool.get().await?;
-            client.query(&*q, &[&key, &from]).await?
+            let statement = client.prepare_cached(q).await?;
+            client.query(&statement, &[&key, &from]).await?
         };
         let mut results = Vec::with_capacity(rows.len());
 
@@ -376,7 +398,8 @@ impl Consensus for PostgresConsensus {
 
         let result = {
             let client = self.pool.get().await?;
-            client.execute(&*q, &[&key, &seqno]).await?
+            let statement = client.prepare_cached(q).await?;
+            client.execute(&statement, &[&key, &seqno]).await?
         };
         if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to

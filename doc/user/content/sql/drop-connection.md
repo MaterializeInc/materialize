@@ -30,7 +30,7 @@ To drop an existing connection, run:
 DROP CONNECTION kafka_connection;
 ```
 
-To avoid issuing an error if the specified connection does not exist, use the `IF NOT EXISTS` option:
+To avoid issuing an error if the specified connection does not exist, use the `IF EXISTS` option:
 
 ```sql
 DROP CONNECTION IF EXISTS kafka_connection;

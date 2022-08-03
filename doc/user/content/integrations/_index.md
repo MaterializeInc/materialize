@@ -48,7 +48,7 @@ Being Kafka API-compatible, Redpanda is supported as a [**source**](/overview/ke
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
 | Redpanda | {{< supportLevel beta >}} | See the [source](/sql/create-source/kafka/) and documentation for more details. | [](#notify) |
-| Redpanda Cloud | {{< supportLevel beta >}} | Use [`SASL` authentication](/sql/create-connection/#kafka-sasl) to securely connect to Redpanda Cloud clusters. See the [Redpanda documentation](https://docs.redpanda.com/docs/security/acls/#acls) for more details. | [](#notify) |
+| Redpanda Cloud | {{< supportLevel beta >}} | Use [`SASL` authentication](/sql/create-connection/#kafka-sasl) to securely connect to Redpanda Cloud clusters. See the [Redpanda documentation](https://docs.redpanda.com/docs/security/acls/#acls) for more details, and the [Redpanda Cloud guide](/integrations/redpanda-cloud/) for a step-by-step breakdown of the integration. | [](#notify) |
 
 ### Kinesis Data Streams
 

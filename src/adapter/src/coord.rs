@@ -77,6 +77,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
@@ -183,6 +184,7 @@ pub struct CreateSourceStatementReady {
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
+    pub otel_ctx: OpenTelemetryContext,
 }
 
 #[derive(Derivative)]
