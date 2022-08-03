@@ -23,7 +23,6 @@ use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize, Serializer};
-use serde::ser::{SerializeMap, SerializeSeq};
 use uuid::Uuid;
 
 use mz_lowertest::MzReflect;
@@ -127,6 +126,9 @@ pub enum Datum<'a> {
     Null,
 }
 
+/// This implementation of serialize is designed to be able to print out Datums
+/// in a human-readable way in JSON. This implementation may not suit other
+/// serialization purposes.
 impl<'a> Serialize for Datum<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -150,34 +152,13 @@ impl<'a> Serialize for Datum<'a> {
             Interval(i) => i.serialize(serializer),
             Bytes(b) => serializer.serialize_bytes(b),
             String(s) => serializer.serialize_str(s),
-            Array(a) => {
-                let mut seq = serializer.serialize_seq(None)?;
-                let mut iter = a.elements.iter();
-                while let Some(datum) = iter.next() {
-                    seq.serialize_element(&datum)?;
-                }
-                seq.end()
-            },
-            List(l) => {
-                let mut seq = serializer.serialize_seq(None)?;
-                let mut iter = l.iter();
-                while let Some(datum) = iter.next() {
-                    seq.serialize_element(&datum)?;
-                }
-                seq.end()
-            },
-            Map(m) => {
-                let mut map = serializer.serialize_map(None)?;
-                let mut iter = m.iter();
-                while let Some((key, val)) = iter.next() {
-                    map.serialize_entry(&key, &val)?;
-                }
-                map.end()
-            },
+            Array(a) => a.serialize(serializer),
+            List(l) => l.serialize(serializer),
+            Map(m) => m.serialize(serializer),
             Numeric(n) => n.serialize(serializer),
             Uuid(u) => u.serialize(serializer),
-            Dummy => serializer.serialize_unit_variant("", 1, "Dummy"),
-            JsonNull => serializer.serialize_unit_variant("", 0, "JsonNull"),
+            Dummy => serializer.serialize_str("Dummy"),
+            JsonNull => serializer.serialize_str("JsonNull"),
             Null => serializer.serialize_none(),
         }
     }

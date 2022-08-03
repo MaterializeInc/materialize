@@ -33,7 +33,7 @@
 use std::{collections::HashSet, fmt};
 
 use mz_ore::{stack::RecursionLimitError, str::Indent, str::IndentLike};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 
 use crate::{ColumnType, GlobalId, Row, ScalarType};
 
@@ -750,7 +750,34 @@ mod tests {
 
     #[test]
     fn test_json_row_serialization() {
+        use crate::adt::array::ArrayDimension;
         use crate::Datum;
+        // a 2 x 3 array
+        let mut array = Row::default();
+        array
+            .packer()
+            .push_array(
+                &[
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 2,
+                    },
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 3,
+                    },
+                ],
+                [
+                    Datum::Int32(12),
+                    Datum::Int32(20),
+                    Datum::Int32(-312),
+                    Datum::Int32(0),
+                    Datum::Int32(-42),
+                    Datum::Int32(1231),
+                ]
+                .into_iter(),
+            )
+            .unwrap();
         let mut list_datum = Row::default();
         list_datum.packer().push_list_with(|row| {
             row.push(Datum::UInt32(0));
@@ -769,23 +796,36 @@ mod tests {
             Datum::Null,
             Datum::Dummy,
             Datum::JsonNull,
-            Datum::Int32(12),
             Datum::UInt8(32),
-            Datum::from(0.1 as f32),
+            Datum::from(0.1_f32),
             Datum::from(-1.23),
             Datum::Date(chrono::NaiveDate::from_ymd(2022, 8, 3)),
             Datum::Time(chrono::NaiveTime::from_hms(12, 10, 22)),
             Datum::Timestamp(chrono::NaiveDateTime::from_timestamp(1023123, 234)),
-            Datum::TimestampTz(chrono::DateTime::from_utc(chrono::NaiveDateTime::from_timestamp(90234242, 234), chrono::Utc)),
+            Datum::TimestampTz(chrono::DateTime::from_utc(
+                chrono::NaiveDateTime::from_timestamp(90234242, 234),
+                chrono::Utc,
+            )),
             Datum::Uuid(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
             Datum::Bytes(&[127, 23, 4]),
-            Datum::Interval(crate::adt::interval::Interval{months: 1, days: 2, micros: 10}),
+            Datum::Interval(crate::adt::interval::Interval {
+                months: 1,
+                days: 2,
+                micros: 10,
+            }),
+            Datum::from(crate::adt::numeric::Numeric::from(10.234)),
+            array.unpack_first(),
             list_datum.unpack_first(),
-            map_datum.unpack_first()
+            map_datum.unpack_first(),
         ];
         let row = JSONRow(Row::pack(all_types_of_datum.into_iter()));
         let result = serde_json::to_string(&row);
-        let expected = "[true,false,null,\"Dummy\",\"JsonNull\",12,-1]";
+        let expected = "[true,false,null,\"Dummy\",\"JsonNull\",32,0.1,-1.23,\
+        \"2022-08-03\",\"12:10:22\",\"1970-01-12T20:12:03.000000234\",\
+        \"1972-11-10T09:04:02.000000234Z\",\"67e55044-10b1-426f-9247-bb680e5fe0c8\",\
+        [127,23,4],{\"months\":1,\"days\":2,\"micros\":10},\
+        {\"digits\":5,\"exponent\":-3,\"bits\":0,\"lsu\":[234,10,0,0,0,0,0,0,0,0,0,0,0]},\
+        [[12,20,-312],[0,-42,1231]],[0,10],{\"hello\":-1,\"world\":1000}]";
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), expected);
     }
