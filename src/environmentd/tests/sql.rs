@@ -1311,7 +1311,7 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
             .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
     }
 
-    wait_for_view_population(&mut mz_client, view_name, source_rows, Arc::clone(&now))?;
+    wait_for_view_population(&mut mz_client, view_name, source_rows)?;
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mut mz_join_client = server.connect(postgres::NoTls)?;
@@ -1353,14 +1353,14 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
         .runtime
         .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))?;
 
-    wait_for_view_population(&mut mz_client, view_name, 1, Arc::clone(&now))?;
+    wait_for_view_population(&mut mz_client, view_name, 1)?;
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
     // and background tasks push the global timestamp forward.
     // The materialized view's write frontier will be close to the system time because it uses
     // the system clock to close timestamps.
-    // Therefor queries that only involve the view will normally happen at a higher timestamp
+    // Therefore queries that only involve the view will normally happen at a higher timestamp
     // than queries that involve the user table. However, we prevent this when in strict
     // serializable mode.
 
@@ -1532,26 +1532,23 @@ fn wait_for_view_population(
     mz_client: &mut postgres::Client,
     view_name: &str,
     source_rows: i64,
-    now: Arc<Mutex<EpochMillis>>,
 ) -> Result<(), Box<dyn Error>> {
-    let _ = mz_client.query_one(&format!("SET transaction_isolation = SERIALIZABLE"), &[]);
     let mut rows = 0;
-    let mut current_ts = (SYSTEM_TIME.as_secs() as EpochMillis) * 1_000;
     while rows != source_rows {
-        // Keep increasing `now` until we can see the source data.
-        current_ts += 1_000;
-        *now.lock().expect("lock poisoned") = current_ts;
         thread::sleep(Duration::from_millis(1));
+        // This is a bit hacky. We have no way of getting the freshest data in the view, without
+        // also advancing every other object in the time domain, which we usually want to avoid in
+        // these tests. Instead we query the view using AS OF a value close to the current system
+        // clock and hope it gives us fresh enough data.
+        let now = ((SYSTEM_TIME.as_secs() as EpochMillis) * 1_000) - 100;
         rows = mz_client
-            .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
-            .unwrap()
-            .get::<_, i64>(0);
-        get_explain_timestamp(view_name, mz_client);
+            .query_one(
+                &format!("SELECT COUNT(*) FROM {view_name} AS OF {now};"),
+                &[],
+            )
+            .map(|row| row.get::<_, i64>(0))
+            .unwrap_or(0);
     }
-    let _ = mz_client.query_one(
-        &format!("SET transaction_isolation = 'strict serializable'"),
-        &[],
-    );
     Ok(())
 }
 
