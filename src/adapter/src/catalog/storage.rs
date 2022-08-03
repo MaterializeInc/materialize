@@ -262,24 +262,6 @@ async fn migrate<S: Append>(
             })?;
             Ok(())
         },
-        // Add new migrations here.
-        //
-        // Migrations should be preceded with a comment of the following form:
-        //
-        //     > Short summary of migration's purpose.
-        //     >
-        //     > Introduced in <VERSION>.
-        //     >
-        //     > Optional additional commentary about safety or approach.
-        //
-        // Please include @mjibson and @jkosh44 on any code reviews that add or
-        // edit migrations.
-        // Migrations must preserve backwards compatibility with all past releases
-        // of Materialize. Migrations can be edited up until they ship in a
-        // release, after which they must never be removed, only patched by future
-        // migrations. Migrations must be transactional or idempotent (in case of
-        // midway failure).
-
         // Fill in non-optional availability zone
         // Introduced in alpha.4
         |txn: &mut Transaction<'_, S>, bootstrap_args| {
@@ -337,6 +319,23 @@ async fn migrate<S: Append>(
             })?;
             Ok(())
         },
+        // Add new migrations here.
+        //
+        // Migrations should be preceded with a comment of the following form:
+        //
+        //     > Short summary of migration's purpose.
+        //     >
+        //     > Introduced in <VERSION>.
+        //     >
+        //     > Optional additional commentary about safety or approach.
+        //
+        // Please include @mjibson and @jkosh44 on any code reviews that add or
+        // edit migrations.
+        // Migrations must preserve backwards compatibility with all past releases
+        // of Materialize. Migrations can be edited up until they ship in a
+        // release, after which they must never be removed, only patched by future
+        // migrations. Migrations must be transactional or idempotent (in case of
+        // midway failure).
     ];
 
     let mut txn = transaction(stash).await?;
