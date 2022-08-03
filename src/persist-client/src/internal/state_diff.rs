@@ -71,7 +71,7 @@ pub struct StateDiff<T> {
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
     pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
-    pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState>>,
+    pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState<T>>>,
     pub(crate) since: Vec<StateFieldDiff<(), Antichain<T>>>,
     pub(crate) spine: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
 }

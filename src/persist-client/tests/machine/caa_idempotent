@@ -1,0 +1,114 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the various edge cases of retrying compare_and_append in the
+# presence of indeterminate errors.
+
+# Write some batches we'll need later and register some writers
+
+write-batch output=b0w1 lower=0 upper=1
+zero 0 1
+----
+parts=1 len=1
+
+write-batch output=b1w1 lower=1 upper=2
+one 1 1
+----
+parts=1 len=1
+
+write-batch output=b2w1 lower=2 upper=3
+w1 2 1
+----
+parts=1 len=1
+
+write-batch output=b2w2 lower=2 upper=3
+w2 2 1
+----
+parts=1 len=1
+
+write-batch output=b3w1 lower=3 upper=4
+w1 3 1
+----
+parts=1 len=1
+
+write-batch output=b4w2 lower=4 upper=5
+w2 4 1
+----
+parts=1 len=1
+
+register-writer writer_id=w11111111-1111-1111-1111-111111111111
+----
+v2 [0]
+
+register-writer writer_id=w22222222-2222-2222-2222-222222222222
+----
+v3 [0]
+
+# Case 1: A compare_and_append receives an indeterminate error, but _doesn't_
+# actually commit. On retry it commits.
+
+# Imagine the first attempt getting an indeterminate error, but not committing
+# here.
+
+# Okay and pretend this is a retry.
+compare-and-append input=b0w1 writer_id=w11111111-1111-1111-1111-111111111111 token=i33333333-3333-3333-3333-333333333333 prev_indeterminate=timeout
+----
+v4 [1]
+
+# Case 2: A compare_and_append receives an indeterminate error, but _does_
+# actually commit. On retry it is a no-op.
+compare-and-append input=b1w1 writer_id=w11111111-1111-1111-1111-111111111111 token=i44444444-4444-4444-4444-444444444444
+----
+v5 [2]
+
+compare-and-append input=b1w1 writer_id=w11111111-1111-1111-1111-111111111111 token=i44444444-4444-4444-4444-444444444444 prev_indeterminate=timeout
+----
+v5 [2]
+
+# Case 1B: A compare_and_append receives an indeterminate error, but _doesn't_
+# actually commit. Another writer advances the upper in between retries. On
+# retry it discovers the upper mismatch and also that it didn't commit before.
+
+# Imagine the first attempt getting an indeterminate error, but not committing
+# here.
+
+compare-and-append input=b2w2 writer_id=w22222222-2222-2222-2222-222222222222
+----
+v6 [3]
+
+compare-and-append input=b2w1 writer_id=w11111111-1111-1111-1111-111111111111 token=i55555555-5555-5555-5555-555555555555 prev_indeterminate=timeout
+----
+error: Upper(Antichain { elements: [3] })
+
+# Case 2B: A compare_and_append receives an indeterminate error, but _does_
+# actually commit. Another writer advances the upper in between retries. On
+# retry it discovers the upper mismatch and also that it did commit before and
+# so is now a no-op.
+
+compare-and-append input=b3w1 writer_id=w11111111-1111-1111-1111-111111111111 token=i66666666-6666-6666-6666-666666666666
+----
+v7 [4]
+
+compare-and-append input=b4w2 writer_id=w22222222-2222-2222-2222-222222222222
+----
+v8 [5]
+
+compare-and-append input=b3w1 writer_id=w11111111-1111-1111-1111-111111111111 token=i66666666-6666-6666-6666-666666666666 prev_indeterminate=timeout
+----
+v8 [5]
+
+# Case 3: We expect that writers generally move "forward" in time and the
+# technique we use to make compare_and_append idempotent depends on this.
+# However, we don't just totally punt on the case. We're able to handle this as
+# long as we don't see an Indeterminate error the first time through (otherwise
+# we'll hit a panic). The combination of two rare (hopefully independent?)
+# events means we expect to ~never see the panic in practice.
+compare-and-append input=b0w1 writer_id=w11111111-1111-1111-1111-111111111111 token=i77777777-7777-7777-7777-777777777777
+----
+error: Upper(Antichain { elements: [5] })

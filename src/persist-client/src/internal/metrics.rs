@@ -93,7 +93,7 @@ impl Metrics {
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
-            cmds: vecs.cmds_metrics(),
+            cmds: vecs.cmds_metrics(registry),
             retries: vecs.retries_metrics(),
             codecs: vecs.codecs_metrics(),
             user: BatchWriteMetrics::new(registry, "user"),
@@ -301,13 +301,17 @@ impl MetricsVecs {
         }
     }
 
-    fn cmds_metrics(&self) -> CmdsMetrics {
+    fn cmds_metrics(&self, registry: &MetricsRegistry) -> CmdsMetrics {
         CmdsMetrics {
             init_state: self.cmd_metrics("init_state"),
             add_and_remove_rollups: self.cmd_metrics("add_and_remove_rollups"),
             register: self.cmd_metrics("register"),
             clone_reader: self.cmd_metrics("clone_reader"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
+            compare_and_append_noop:             registry.register(metric!(
+                name: "mz_persist_cmd_compare_and_append_noop",
+                help: "count of compare_and_append retries that were discoverd to have already committed",
+            )),
             compare_and_downgrade_since: self.cmd_metrics("compare_and_downgrade_since"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
             heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
@@ -350,6 +354,7 @@ impl MetricsVecs {
                 storage_usage_shard_size: self.retry_metrics("storage_usage::shard_size"),
             },
             append_batch: self.retry_metrics("append_batch"),
+            compare_and_append_idempotent: self.retry_metrics("compare_and_append_idempotent"),
             fetch_latest_state: self.retry_metrics("fetch_latest_state"),
             fetch_live_states: self.retry_metrics("fetch_live_states"),
             idempotent_cmd: self.retry_metrics("idempotent_cmd"),
@@ -481,6 +486,7 @@ pub struct CmdsMetrics {
     pub(crate) register: CmdMetrics,
     pub(crate) clone_reader: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
+    pub(crate) compare_and_append_noop: IntCounter,
     pub(crate) compare_and_downgrade_since: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
     pub(crate) heartbeat_writer: CmdMetrics,
@@ -533,6 +539,7 @@ pub struct RetriesMetrics {
     pub(crate) external: RetryExternal,
 
     pub(crate) append_batch: RetryMetrics,
+    pub(crate) compare_and_append_idempotent: RetryMetrics,
     pub(crate) fetch_latest_state: RetryMetrics,
     pub(crate) fetch_live_states: RetryMetrics,
     pub(crate) idempotent_cmd: RetryMetrics,

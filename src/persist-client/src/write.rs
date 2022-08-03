@@ -521,7 +521,7 @@ where
                 &self.writer_id,
                 heartbeat_timestamp,
             )
-            .await?;
+            .await;
 
         let maintenance = match res {
             Ok(Ok((_seqno, maintenance))) => {
@@ -532,13 +532,13 @@ where
                 }
                 maintenance
             }
-            Ok(Err(current_upper)) => {
+            Ok(Err(invalid_usage)) => return Ok(Err(invalid_usage)),
+            Err(current_upper) => {
                 // We tried to to a compare_and_append with the wrong expected upper, that
                 // won't work. Update the cached upper to the current upper.
                 self.upper = current_upper.0.clone();
                 return Ok(Ok(Err(current_upper)));
             }
-            Err(err) => return Ok(Err(err)),
         };
 
         maintenance.start_performing(&self.machine, &self.gc, self.compact.as_ref());
