@@ -274,7 +274,8 @@ impl Consensus for PostgresConsensus {
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
         let row = {
             let client = self.pool.get().await?;
-            client.query_opt(&*q, &[&key]).await?
+            let statement = client.prepare_cached(q).await?;
+            client.query_opt(&statement, &[&key]).await?
         };
         let row = match row {
             None => return Ok(None),
@@ -323,8 +324,12 @@ impl Consensus for PostgresConsensus {
                      )
                      ON CONFLICT DO NOTHING";
             let client = self.pool.get().await?;
+            let statement = client.prepare_cached(q).await?;
             client
-                .execute(&*q, &[&key, &new.seqno, &new.data.as_ref(), &expected])
+                .execute(
+                    &statement,
+                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                )
                 .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
@@ -334,8 +339,9 @@ impl Consensus for PostgresConsensus {
                      )
                      ON CONFLICT DO NOTHING";
             let client = self.pool.get().await?;
+            let statement = client.prepare_cached(q).await?;
             client
-                .execute(&*q, &[&key, &new.seqno, &new.data.as_ref()])
+                .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
                 .await?
         };
 
@@ -359,7 +365,8 @@ impl Consensus for PostgresConsensus {
              ORDER BY sequence_number";
         let rows = {
             let client = self.pool.get().await?;
-            client.query(&*q, &[&key, &from]).await?
+            let statement = client.prepare_cached(q).await?;
+            client.query(&statement, &[&key, &from]).await?
         };
         let mut results = Vec::with_capacity(rows.len());
 
@@ -391,7 +398,8 @@ impl Consensus for PostgresConsensus {
 
         let result = {
             let client = self.pool.get().await?;
-            client.execute(&*q, &[&key, &seqno]).await?
+            let statement = client.prepare_cached(q).await?;
+            client.execute(&statement, &[&key, &seqno]).await?
         };
         if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to
