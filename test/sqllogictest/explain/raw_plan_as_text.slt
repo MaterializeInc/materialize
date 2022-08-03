@@ -55,19 +55,32 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
-Threshold
-  Union
-    Distinct
+Except
+  Project #1
+    Map #0
+      Project #0
+        Get materialize.public.t
+  Project #1
+    Map #0
       Project #1
-        Map #0
-          Project #0
-            Get materialize.public.t
-    Negate
-      Distinct
-        Project #1
-          Map #0
-            Project #1
-              Get materialize.public.mv
+        Get materialize.public.mv
+
+EOF
+
+# Test Threshold, Union, Distinct, Negate.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT a FROM t EXCEPT ALL SELECT b FROM mv
+----
+ExceptAll
+  Project #1
+    Map #0
+      Project #0
+        Get materialize.public.t
+  Project #1
+    Map #0
+      Project #1
+        Get materialize.public.mv
 
 EOF
 

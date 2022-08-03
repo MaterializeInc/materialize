@@ -1621,7 +1621,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 (response, action)
             }
             Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
-                self.submit_write(PendingWriteTxn {
+                self.submit_write(PendingWriteTxn::User {
                     writes,
                     write_lock_guard,
                     pending_txn: PendingTxn {

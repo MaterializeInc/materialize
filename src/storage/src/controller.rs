@@ -32,6 +32,7 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
+use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -453,8 +454,8 @@ pub enum StorageError {
     UpdateBeyondUpper(GlobalId),
     /// The read was at a timestamp before the collection's since
     ReadBeforeSince(GlobalId),
-    /// The expected upper of an append was different than the actual append of the collection
-    InvalidUpper(GlobalId),
+    /// The expected upper of one or more appends was different from the actual upper of the collection
+    InvalidUppers(Vec<GlobalId>),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
     /// An operation failed to read or write state
@@ -470,7 +471,7 @@ impl Error for StorageError {
             Self::IdentifierMissing(_) => None,
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
-            Self::InvalidUpper(_) => None,
+            Self::InvalidUppers(_) => None,
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
@@ -496,10 +497,11 @@ impl fmt::Display for StorageError {
             Self::ReadBeforeSince(id) => {
                 write!(f, "read for {id} was at a timestamp before its since")
             }
-            Self::InvalidUpper(id) => {
+            Self::InvalidUppers(id) => {
                 write!(
                     f,
-                    "expected upper for {id} was different than its actual upper"
+                    "expected upper was different from the actual upper for: {}",
+                    id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
@@ -1104,6 +1106,7 @@ mod persist_read_handles {
     use mz_persist_types::Codec64;
     use mz_repr::Row;
     use mz_repr::{Diff, GlobalId};
+    use tracing::Instrument;
 
     use crate::controller::StorageError;
     use crate::types::sources::SourceData;
@@ -1119,7 +1122,7 @@ mod persist_read_handles {
     /// persist calls.
     #[derive(Debug)]
     pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
-        tx: UnboundedSender<PersistWorkerCmd<T>>,
+        tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
     impl<T> Drop for PersistWorker<T>
@@ -1147,7 +1150,7 @@ mod persist_read_handles {
 
     impl<T: Timestamp + Lattice + Codec64> PersistWorker<T> {
         pub(crate) fn new() -> Self {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
             mz_ore::task::spawn(|| "PersistReadHandles", async move {
                 let mut read_handles: BTreeMap<GlobalId, ReadHandle<SourceData, (), T, Diff>> =
@@ -1164,7 +1167,7 @@ mod persist_read_handles {
                     let mut downgrades = BTreeMap::default();
                     let mut shutdown = false;
 
-                    for command in commands {
+                    for (span, command) in commands {
                         match command {
                             PersistWorkerCmd::Register(id, read_handle) => {
                                 let previous = read_handles.insert(id, read_handle);
@@ -1177,7 +1180,7 @@ mod persist_read_handles {
                             }
                             PersistWorkerCmd::Downgrade(since_frontiers) => {
                                 for (id, frontier) in since_frontiers {
-                                    downgrades.insert(id, frontier);
+                                    downgrades.insert(id, (span.clone(), frontier));
                                 }
                             }
                             PersistWorkerCmd::Snapshot(id, as_of, oneshot) => {
@@ -1206,7 +1209,9 @@ mod persist_read_handles {
                                 }
 
                                 if let Some(read_handle) = read_handles.get_mut(&id) {
-                                    let result = snapshot(read_handle, id, as_of).await;
+                                    let result = snapshot(read_handle, id, as_of)
+                                        .instrument(span.clone())
+                                        .await;
                                     oneshot.send(result).expect("Oneshot should not fail");
                                 } else {
                                     oneshot
@@ -1224,9 +1229,9 @@ mod persist_read_handles {
                         let futs = FuturesUnordered::new();
 
                         for (id, read) in read_handles.iter_mut() {
-                            if let Some(since) = downgrades.remove(id) {
+                            if let Some((span, since)) = downgrades.remove(id) {
                                 let fut = async move {
-                                    read.downgrade_since(since).await;
+                                    read.downgrade_since(since).instrument(span).await;
                                 };
 
                                 futs.push(fut);
@@ -1269,7 +1274,7 @@ mod persist_read_handles {
         }
 
         fn send(&self, cmd: PersistWorkerCmd<T>) {
-            match self.tx.send(cmd) {
+            match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
                     tracing::error!("could not forward command: {:?}", e);
@@ -1285,12 +1290,14 @@ mod persist_write_handles {
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
+    use itertools::Itertools;
     use timely::progress::{Antichain, Timestamp};
     use tokio::sync::mpsc::UnboundedSender;
 
     use mz_persist_client::write::WriteHandle;
     use mz_persist_types::Codec64;
     use mz_repr::{Diff, GlobalId};
+    use tracing::Instrument;
 
     use crate::controller::StorageError;
     use crate::protocol::client::StorageResponse;
@@ -1299,7 +1306,7 @@ mod persist_write_handles {
 
     #[derive(Debug)]
     pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
-        tx: UnboundedSender<PersistWorkerCmd<T>>,
+        tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
     impl<T> Drop for PersistWorker<T>
@@ -1327,7 +1334,7 @@ mod persist_write_handles {
         pub(crate) fn new(
             mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         ) -> Self {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
             mz_ore::task::spawn(|| "PersistWriteHandles", async move {
                 let mut write_handles = BTreeMap::new();
@@ -1348,7 +1355,7 @@ mod persist_write_handles {
 
                     let mut shutdown = false;
 
-                    for command in commands {
+                    for (span, command) in commands {
                         match command {
                             PersistWorkerCmd::Register(id, write_handle) => {
                                 let previous = write_handles
@@ -1362,11 +1369,25 @@ mod persist_write_handles {
                             }
                             PersistWorkerCmd::Append(updates, response) => {
                                 for (id, update, upper) in updates {
-                                    let (updates, old_upper) =
+                                    let (old_span, updates, old_upper) =
                                         all_updates.entry(id).or_insert_with(|| {
-                                            (Vec::default(), Antichain::from_elem(T::minimum()))
+                                            (
+                                                span.clone(),
+                                                Vec::default(),
+                                                Antichain::from_elem(T::minimum()),
+                                            )
                                         });
 
+                                    if old_span.id() != span.id() {
+                                        // Link in any spans for `Append`
+                                        // operations that we lump together by
+                                        // doing this. This is not ideal,
+                                        // because we only have a true tracing
+                                        // history for the "first" span that we
+                                        // process, but it's better than
+                                        // nothing.
+                                        old_span.follows_from(span.id());
+                                    }
                                     updates.extend(update);
                                     old_upper.join_assign(&Antichain::from_elem(upper));
                                 }
@@ -1386,8 +1407,11 @@ mod persist_write_handles {
                             GlobalId,
                             (WriteHandle<SourceData, (), T2, Diff>, Antichain<T2>),
                         >,
-                        mut commands: BTreeMap<GlobalId, (Vec<Update<T2>>, Antichain<T2>)>,
-                    ) -> Result<(), GlobalId> {
+                        mut commands: BTreeMap<
+                            GlobalId,
+                            (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
+                        >,
+                    ) -> Result<(), Vec<GlobalId>> {
                         let futs = FuturesUnordered::new();
 
                         // We cannot iterate through the updates and then set off a persist call
@@ -1398,21 +1422,64 @@ mod persist_write_handles {
                         // through all available write handles and see if there are any updates
                         // for it. If yes, we send them all in one go.
                         for (id, (write, old_upper)) in write_handles.iter_mut() {
-                            if let Some((updates, new_upper)) = commands.remove(id) {
+                            if let Some((span, updates, new_upper)) = commands.remove(id) {
                                 let persist_upper = write.upper().clone();
                                 let updates = updates
                                     .into_iter()
                                     .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
 
                                 futs.push(async move {
+                                    let persist_upper = persist_upper.clone();
+                                    let mut result =
                                     write
                                         .compare_and_append(
-                                            updates,
+                                            updates.clone(),
                                             persist_upper.clone(),
                                             new_upper.clone(),
                                         )
-                                        .await
-                                        .expect("cannot append updates")
+                                        .instrument(span.clone())
+                                        .await;
+
+                                    // Indeterminate results can occur when persist is not certain
+                                    // whether the transaction has applied or not. We will attempt
+                                    // to suss this out by looking at the recent `upper`, and retrying
+                                    // if it is still appropriate, not retrying if it has advanced
+                                    // to `new_upper`, and panicking if it is anything else.
+                                    while let Err(indeterminate) = result {
+                                        tracing::warn!("Retrying indeterminate table write: {:?}", indeterminate);
+                                        write.fetch_recent_upper().await;
+                                        if write.upper() == &persist_upper {
+                                            // If the upper frontier is the prior frontier, the commit
+                                            // did not happen and we should retry it.
+                                            result =
+                                            write
+                                                .compare_and_append(
+                                                    updates.clone(),
+                                                    persist_upper.clone(),
+                                                    new_upper.clone(),
+                                                )
+                                                .instrument(span.clone())
+                                                .await;
+
+                                        } else if write.upper() == &new_upper {
+                                            // If the upper frontier is the new frontier, then because
+                                            // of mutual exclusion of writes, no other writer should be
+                                            // advancing the frontier to `new_upper`.
+                                            //
+                                            // TODO: This may succeed if `new_upper` is where we cut over
+                                            // to a new leader, who advanced tables to `new_upper` when it
+                                            // started. In that case, a success here will soon be followed
+                                            // by a failure on our next interaction with the catalog stash,
+                                            // but we would incorrectly think this committed and may serve
+                                            // results in the meantime.
+                                            result = Ok(Ok(Ok(())))
+                                        } else {
+                                            panic!("Table write failed: `write.upper` set to value that signals we have lost leadership");
+                                        }
+                                    }
+
+                                    result
+                                        .expect("Indeterminate response not resolved")
                                         .expect("cannot append updates")
                                         .or(Err(*id))?;
 
@@ -1426,14 +1493,23 @@ mod persist_write_handles {
                             }
                         }
 
-                        use futures_util::TryStreamExt;
-                        let change_batches = futs.try_collect::<Vec<_>>().await?;
+                        use futures_util::StreamExt;
+                        // Ensure all futures run to completion, and track status of each of them individually
+                        let (change_batches, failed_appends): (Vec<_>, Vec<_>) = futs
+                            .collect::<Vec<_>>()
+                            .await
+                            .into_iter()
+                            .partition_result();
 
                         // It is not strictly an error for the controller to hang up.
                         let _ = frontier_responses
                             .send(StorageResponse::FrontierUppers(change_batches));
 
-                        Ok(())
+                        if failed_appends.is_empty() {
+                            Ok(())
+                        } else {
+                            Err(failed_appends)
+                        }
                     }
 
                     let result =
@@ -1441,8 +1517,7 @@ mod persist_write_handles {
 
                     // It is not an error for the other end to hang up.
                     for response in all_responses {
-                        let _ =
-                            response.send(result.clone().map_err(StorageError::IdentifierMissing));
+                        let _ = response.send(result.clone().map_err(StorageError::InvalidUppers));
                     }
 
                     if shutdown {
@@ -1468,12 +1543,18 @@ mod persist_write_handles {
             updates: Vec<(GlobalId, Vec<Update<T>>, T)>,
         ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            self.send(PersistWorkerCmd::Append(updates, tx));
-            rx
+            if updates.is_empty() {
+                tx.send(Ok(()))
+                    .expect("rx has not been dropped at this point");
+                rx
+            } else {
+                self.send(PersistWorkerCmd::Append(updates, tx));
+                rx
+            }
         }
 
         fn send(&self, cmd: PersistWorkerCmd<T>) {
-            match self.tx.send(cmd) {
+            match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
                     tracing::error!("could not forward command: {:?}", e);
