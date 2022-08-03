@@ -142,9 +142,9 @@ projects:
             SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
 
         models/test_source.sql: |
-            {{ config(materialized='source') }}
+            {{ config(materialized='source', database='materialize') }}
 
-            CREATE SOURCE {{ mz_generate_name('test_source') }}
+            CREATE SOURCE {{ this }}
             FROM KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-source'
             FORMAT BYTES
 
@@ -160,14 +160,14 @@ projects:
                 indexes=[{'columns': ['data']}]
             ) }}
 
-            CREATE SOURCE {{ mz_generate_name('test_source_index') }}
+            CREATE SOURCE {{ this }}
             FROM KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-source-index'
             FORMAT BYTES
 
         models/test_sink.sql: |
             {{ config(materialized='sink') }}
 
-            CREATE SINK {{ mz_generate_name('test_sink') }}
+            CREATE SINK {{ this }}
             FROM {{ ref('test_materialized_view') }}
             INTO KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-sink'
             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'

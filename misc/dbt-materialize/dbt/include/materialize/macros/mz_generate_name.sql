@@ -14,5 +14,19 @@
 -- limitations under the License.
 
 {% macro mz_generate_name(identifier) -%}
+    {{ exceptions.warn(
+        """
+        The mz_generate_name macro is deprecated and will be removed in a future release of dbt-materialize.
+        Please use the {{ this }} jinja function to reference the relation instead:
+
+        e.g.
+        {{ config(materialized=''source'') }}
+
+        CREATE SOURCE {{ this }} ...
+
+        Will create a source using the filename as the identifier.
+        Documentation for {{ this }} can be found: https://docs.getdbt.com/reference/dbt-jinja-functions/this
+        """
+    )}}
   {{ return("{}.{}.{}".format(database, schema, identifier)) }}
 {% endmacro %}
