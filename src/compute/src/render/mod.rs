@@ -253,8 +253,8 @@ where
     let mut previous_time = None;
     source_instantiation.inspect_container(move |event| {
         if let Err(frontier) = event {
-            for dataflow_id in dataflow_ids.iter() {
-                if let Some(previous) = previous_time {
+            if let Some(previous) = previous_time {
+                for dataflow_id in dataflow_ids.iter() {
                     logger.log(ComputeEvent::SourceFrontier(
                         *dataflow_id,
                         source_id,
@@ -262,15 +262,19 @@ where
                         -1,
                     ));
                 }
-                if let Some(time) = frontier.get(0) {
+            }
+            if let Some(time) = frontier.get(0) {
+                for dataflow_id in dataflow_ids.iter() {
                     logger.log(ComputeEvent::SourceFrontier(
                         *dataflow_id,
                         source_id,
                         *time,
                         1,
                     ));
-                    previous_time = Some(*time);
                 }
+                previous_time = Some(*time);
+            } else {
+                previous_time = None;
             }
         }
     })

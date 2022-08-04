@@ -374,7 +374,7 @@ impl LogVariant {
                 .with_column("worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
-                .with_column("name", ScalarType::String.nullable(false))
+                .with_column("dataflow", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
@@ -384,7 +384,7 @@ impl LogVariant {
                 .with_column("worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
-                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("dataflow", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 

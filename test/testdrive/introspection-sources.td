@@ -23,19 +23,23 @@
   FROM (SELECT SUM(count) as count_all
         FROM
             mz_materialized_views AS views,
+            mz_materializations as mats,
             mz_worker_materialization_delays AS delays
         WHERE
             views.name = 'mv' AND
-            views.id = delays.dataflow)
+            views.id = mats.dataflow AND
+            mats.dataflow = delays.dataflow)
 true
 
 > SELECT time > 0
   FROM
     mz_materialized_views AS views,
+    mz_materializations AS mats,
     mz_materialization_source_frontiers AS sf
   WHERE
     views.name = 'mv' AND
-    views.id = sf.dataflow
+    views.id = mats.dataflow AND
+    mats.dataflow = sf.dataflow
 true
 
 > CREATE VIEW vv AS SELECT * FROM t
@@ -71,22 +75,26 @@ true
         FROM
             mz_views AS views,
             mz_indexes AS indexes,
+            mz_materializations AS mats,
             mz_worker_materialization_delays AS delays
         WHERE
             views.name = 'vv' AND
             views.id = indexes.on_id AND
-            indexes.id = delays.dataflow)
+            indexes.id = mats.dataflow AND
+            mats.dataflow = delays.dataflow)
 true
 
 > SELECT time > 0
   FROM
     mz_views AS views,
     mz_indexes AS indexes,
+    mz_materializations mats,
     mz_materialization_source_frontiers AS sf
   WHERE
     views.name = 'vv' AND
     views.id = indexes.on_id AND
-    indexes.id = sf.dataflow
+    indexes.id = mats.dataflow AND
+    mats.dataflow = sf.dataflow
 true
 
 > DROP INDEX vv_primary_idx
