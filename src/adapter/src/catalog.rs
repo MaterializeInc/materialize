@@ -73,7 +73,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::storage::BootstrapArgs;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
-use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
+use crate::{AdapterError, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS, DUMMY_AVAILABILITY_ZONE};
 
 mod builtin_table_updates;
 mod config;
@@ -1643,8 +1643,9 @@ impl<S: Append> Catalog<S> {
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     timestamp_frequency: Duration::from_secs(1),
-                    // TODO: Make this more configurable?
-                    storage_metrics_collection_interval: Duration::from_secs(120),
+                    storage_metrics_collection_interval: Duration::from_secs(
+                        config.storage_metric_interval,
+                    ),
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
@@ -2444,6 +2445,7 @@ impl<S: Append> Catalog<S> {
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: vec![],
+            storage_metric_interval: DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
         })
         .await?;
         Ok(catalog)

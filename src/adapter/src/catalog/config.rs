@@ -42,6 +42,8 @@ pub struct Config<'a, S> {
     pub default_storage_host_size: Option<String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
+    /// How often in seconds to collect storage usage metrics.
+    pub storage_metric_interval: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

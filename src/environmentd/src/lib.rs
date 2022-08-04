@@ -47,6 +47,7 @@ pub mod http;
 pub mod tcp_connection;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
+// TODO: should storage usage default go here?
 
 /// Configuration for an `environmentd` server.
 #[derive(Debug, Clone)]
@@ -107,6 +108,10 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// A callback to enable or disable the OpenTelemetry tracing collector.
     pub otel_enable_callback: OpenTelemetryEnableCallback,
+
+    // === Metrics Options. ===
+    /// How frequently to collect storage usage metrics.
+    pub storage_metric_collection_interval: u64,
 
     // === Testing options. ===
     /// A now generation function for mocking time.
@@ -267,6 +272,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
         storageusageclient: storage_usage_client,
+        storage_metric_interval: config.storage_metric_collection_interval,
     })
     .await?;
 

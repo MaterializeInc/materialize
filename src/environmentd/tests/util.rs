@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use mz_adapter::DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS;
 use once_cell::sync::Lazy;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
@@ -159,6 +160,10 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             command_wrapper: vec![],
         }))?,
     );
+    let storage_metric_collection_interval = env::var("STORAGE_USAGE_COLLECTION_INTERVAL")
+        .map_or(DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS, |v| {
+            v.parse::<u64>().ok().unwrap()
+        });
     // Messing with the clock causes persist to expire leases, causing hangs and
     // panics. Is it possible/desirable to put this back somehow?
     let persist_now = SYSTEM_TIME.clone();
@@ -199,6 +204,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
         ),
         otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+        storage_metric_collection_interval,
     }))?;
     let server = Server {
         inner,
