@@ -561,9 +561,6 @@ impl fmt::Display for CatalogError {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
-            Self::UnexpectedType(name, cit) => {
-                write!(f, "\"{name}\" is not of type {cit}")
-            }
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
@@ -572,6 +569,9 @@ impl fmt::Display for CatalogError {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::UnexpectedType(name, cit) => {
+                write!(f, "\"{name}\" is not of type {cit}")
+            }
             Self::InvalidDependency { name, typ } => write!(
                 f,
                 "catalog item '{}' is {} {} and so cannot be depended upon",
