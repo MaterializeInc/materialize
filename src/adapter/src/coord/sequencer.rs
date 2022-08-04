@@ -644,7 +644,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .allocate_persisted_introspection_source_indexes()
                     .await
             } else {
-                ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new(), Vec::new())
+                ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
             };
 
             introspection_collections.extend(
@@ -729,7 +729,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .allocate_persisted_introspection_source_indexes()
                 .await
         } else {
-            ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new(), Vec::new())
+            ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
         let persisted_log_ids = persisted_logs.get_log_ids();

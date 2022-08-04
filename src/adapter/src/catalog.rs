@@ -1873,8 +1873,24 @@ impl<S: Append> Catalog<S> {
                         .await
                 }
 
-                SerializedComputeInstanceReplicaLogging::Concrete(x, y) => {
-                    ConcreteComputeInstanceReplicaLogging::Concrete(x.clone(), y.clone())
+                SerializedComputeInstanceReplicaLogging::Concrete(x) => {
+                    ConcreteComputeInstanceReplicaLogging::ConcreteViews(x.clone(), {
+                        // Build the views only if the cluster is configured with logging
+                        let inst = catalog
+                            .state
+                            .compute_instances_by_id
+                            .get(&instance_id)
+                            .unwrap();
+                        if inst.logging.is_some() {
+                            catalog.allocate_persisted_introspection_views().await
+                        } else {
+                            vec![]
+                        }
+                    })
+                }
+
+                SerializedComputeInstanceReplicaLogging::ConcreteViews(x, y) => {
+                    ConcreteComputeInstanceReplicaLogging::ConcreteViews(x.clone(), y.clone())
                 }
             };
 
@@ -2111,20 +2127,31 @@ impl<S: Append> Catalog<S> {
                 + " AS "
                 + &sql_template.replace("{}", &replica_id.to_string());
 
-            let item = self
-                .parse_item_state(state, sql, None)
-                .expect("SQL parse success");
+            let item = self.parse_item_state(state, sql, None);
 
-            let oid = state.allocate_oid().expect("cannot return error here");
-            let view_name = QualifiedObjectName {
-                qualifiers: ObjectQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
-                },
-                item: name,
-            };
+            match item {
+                Ok(item) => {
+                    let oid = state.allocate_oid().expect("cannot return error here");
+                    let view_name = QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(
+                                self.get_mz_catalog_schema_id().clone(),
+                            ),
+                        },
+                        item: name,
+                    };
 
-            state.insert_item(id, oid, view_name, item);
+                    state.insert_item(id, oid, view_name, item);
+                }
+                Err(e) => {
+                    // This error should never happen, but if we add a logging
+                    // source + view pair and make a mistake in the migration
+                    // it's better to bring up the instance without the view
+                    // than to crash.
+                    tracing::warn!("Could not create log view: {}", e);
+                }
+            }
         }
     }
 
@@ -4053,6 +4080,27 @@ impl<S: Append> Catalog<S> {
         BUILTINS::logs().zip(system_ids.into_iter()).collect()
     }
 
+    /// Allocate ids for views over persisted logs. Called once per compute replica creation
+    pub async fn allocate_persisted_introspection_views(&mut self) -> Vec<(LogView, GlobalId)> {
+        let log_amount = DEFAULT_LOG_VIEWS.len();
+        let system_ids = self
+            .storage()
+            .await
+            .allocate_system_ids(
+                log_amount
+                    .try_into()
+                    .expect("default log variants should fit into u64"),
+            )
+            .await
+            .expect("cannot fail to allocate system ids");
+
+        DEFAULT_LOG_VIEWS
+            .clone()
+            .into_iter()
+            .zip(system_ids.into_iter())
+            .collect()
+    }
+
     /// Allocate ids for persisted logs. Called once per compute replica creation
     pub async fn allocate_persisted_introspection_source_indexes(
         &mut self,
@@ -4077,27 +4125,10 @@ impl<S: Append> Catalog<S> {
                 .collect()
         };
 
-        let views = {
-            let log_amount = DEFAULT_LOG_VIEWS.len();
-            let system_ids = self
-                .storage()
-                .await
-                .allocate_system_ids(
-                    log_amount
-                        .try_into()
-                        .expect("default log variants should fit into u64"),
-                )
-                .await
-                .expect("cannot fail to allocate system ids");
-
-            DEFAULT_LOG_VIEWS
-                .clone()
-                .into_iter()
-                .zip(system_ids.into_iter())
-                .collect()
-        };
-
-        ConcreteComputeInstanceReplicaLogging::Concrete(logs, views)
+        ConcreteComputeInstanceReplicaLogging::ConcreteViews(
+            logs,
+            self.allocate_persisted_introspection_views().await,
+        )
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
@@ -4209,14 +4240,16 @@ impl From<PlanContext> for SerializedPlanContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SerializedComputeInstanceReplicaLogging {
     Default,
-    Concrete(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
+    Concrete(Vec<(LogVariant, GlobalId)>),
+    ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
 
 impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
     fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
         match conc {
             ConcreteComputeInstanceReplicaLogging::Default => Self::Default,
-            ConcreteComputeInstanceReplicaLogging::Concrete(x, y) => Self::Concrete(x, y),
+            ConcreteComputeInstanceReplicaLogging::Concrete(x) => Self::Concrete(x),
+            ConcreteComputeInstanceReplicaLogging::ConcreteViews(x, y) => Self::ConcreteViews(x, y),
         }
     }
 }
