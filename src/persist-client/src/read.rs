@@ -311,21 +311,24 @@ where
         // distinguish between the times T at the frontier (to emit updates with
         // these times) and T-1 (to filter them). Advancing the since to
         // frontier would erase the ability to distinguish between them. Ideally
-        // we'd use what is conceptually "frontier - 1" (the greatest elements
-        // that are still strictly less than frontier), but the trait bounds on
-        // T don't give us a way to compute that directly. Instead, we sniff out
-        // any elements in lower that are strictly less_than frontier to compute
-        // a new since. For totally ordered times (currently always the case in
-        // mz) lower will always have a single element and it will be less_than
-        // upper, but the following logic is (hopefully) correct for partially
-        // order times as well. We could also abuse the fact that every time we
-        // actually emit is guaranteed by definition to be less_than upper to be
-        // a bit more prompt, but this would involve a lot more temporary
-        // antichains and it's unclear if that's worth it.
-        for l in batch.desc.lower().elements().iter() {
-            let lower_than_upper = batch.desc.upper().elements().iter().any(|u| l.less_than(u));
-            if lower_than_upper {
-                self.since.join_assign(&Antichain::from_elem(l.clone()));
+        // we'd use what is conceptually "batch.upper - 1" (the greatest
+        // elements that are still strictly less than batch.upper, which will be
+        // the new value of self.frontier after this call returns), but the
+        // trait bounds on T don't give us a way to compute that directly.
+        // Instead, we sniff out any elements in self.frontier (the upper of the
+        // batch the last time we called this) that are strictly less_than the
+        // batch upper to compute a new since. For totally ordered times
+        // (currently always the case in mz) self.frontier will always have a
+        // single element and it will be less_than upper, but the following
+        // logic is (hopefully) correct for partially order times as well. We
+        // could also abuse the fact that every time we actually emit is
+        // guaranteed by definition to be less_than upper to be a bit more
+        // prompt, but this would involve a lot more temporary antichains and
+        // it's unclear if that's worth it.
+        for x in self.frontier.elements().iter() {
+            let less_than_upper = batch.desc.upper().elements().iter().any(|u| x.less_than(u));
+            if less_than_upper {
+                self.since.join_assign(&Antichain::from_elem(x.clone()));
             }
         }
 
@@ -338,6 +341,7 @@ where
             },
             batch,
         };
+        // NB: Keep this after we use self.frontier to join_assign self.since.
         self.frontier = new_frontier;
         r
     }
