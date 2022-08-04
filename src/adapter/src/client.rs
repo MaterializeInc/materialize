@@ -433,11 +433,19 @@ impl SessionClient {
                 Datum::List(list) => serde_json::Value::Array(
                     list.iter().map(|entry| datum_to_json(&entry)).collect(),
                 ),
+                Datum::Array(array) => serde_json::Value::Array(
+                    array
+                        .elements()
+                        .iter()
+                        .map(|entry| datum_to_json(&entry))
+                        .collect(),
+                ),
                 Datum::Map(map) => serde_json::Value::Object(
                     map.iter()
                         .map(|(k, v)| (k.to_owned(), datum_to_json(&v)))
                         .collect(),
                 ),
+                Datum::Dummy => unreachable!(),
                 _ => serde_json::Value::String(datum.to_string()),
             }
         }
