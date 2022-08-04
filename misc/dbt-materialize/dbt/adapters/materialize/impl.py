@@ -46,7 +46,6 @@ class MaterializeAdapter(PostgresAdapter):
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
     ) -> List[MaterializeRelation]:
-        # Adapted from: https://github.com/dbt-labs/dbt-snowflake/blob/main/dbt/adapters/snowflake/impl.py#L110
         kwargs = {"schema_relation": schema_relation}
         results = self.execute_macro(LIST_RELATIONS_MACRO_NAME, kwargs=kwargs)
 
