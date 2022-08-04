@@ -764,6 +764,7 @@ impl<S: Append> Connection<S> {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<'a, S>, Error> {
     let databases = COLLECTION_DATABASE.peek_one(stash).await?;
     let schemas = COLLECTION_SCHEMA.peek_one(stash).await?;
