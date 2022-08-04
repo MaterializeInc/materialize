@@ -947,5 +947,3 @@ SELECT * FROM ((SELECT * FROM mz_scheduling_histogram) EXCEPT (SELECT * FROM mz_
 query T
 SELECT * FROM ((SELECT * FROM mz_scheduling_histogram_3) EXCEPT (SELECT * FROM mz_scheduling_histogram));
 ----
-
-
