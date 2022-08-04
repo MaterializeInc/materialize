@@ -932,8 +932,9 @@ mod tests {
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
         assert_eq!(write2.fetch_recent_upper().await, Antichain::from_elem(3));
 
-        // The writer-local upper should not advance if another writer advances the frontier.
-        assert_eq!(write2.upper().clone(), Antichain::from_elem(0));
+        // The writer-local upper should advance, even if it was another writer
+        // that advanced the frontier.
+        assert_eq!(write2.upper().clone(), Antichain::from_elem(3));
     }
 
     #[tokio::test]

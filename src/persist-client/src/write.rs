@@ -108,9 +108,9 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    /// This handle's `upper` frontier.
+    /// A cached version of the shard-global `upper` frontier.
     ///
-    /// This will always be greater or equal to the shard-global `upper`.
+    /// This will always be less or equal to the shard-global `upper`.
     pub fn upper(&self) -> &Antichain<T> {
         &self.upper
     }
@@ -123,7 +123,11 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn fetch_recent_upper(&mut self) -> Antichain<T> {
         trace!("WriteHandle::fetch_recent_upper");
-        self.machine.fetch_upper().await
+        // TODO: Do we even need to track self.upper on WriteHandle or could
+        // WriteHandle::upper just get the one out of machine?
+        let fresh_upper = self.machine.fetch_upper().await;
+        self.upper.clone_from(&fresh_upper);
+        fresh_upper
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
