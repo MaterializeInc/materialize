@@ -21,13 +21,14 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::ReaderEnrichedHollowBatch;
+use mz_persist_client::read::{ListenEvent, ReaderEnrichedHollowBatch};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -36,12 +37,165 @@ use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 
-/// Creates a new source that reads from a persist shard.
+/// Creates a new source that reads from a persist shard, distributing the work
+/// of reading data to all timely workers.
+///
+/// TODO: deprecate this method when fixing issues with `persist_source_sharded`.
 ///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G>(
+    scope: &G,
+    source_id: GlobalId,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
+    metadata: CollectionMetadata,
+    as_of: Antichain<Timestamp>,
+) -> (
+    Stream<G, (Row, Timestamp, Diff)>,
+    Stream<G, (DataflowError, Timestamp, Diff)>,
+    Rc<dyn Any>,
+)
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+{
+    let worker_index = scope.index();
+    let peers = scope.peers();
+    let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
+
+    // This source is split into two parts: a first part that sets up `async_stream` and a timely
+    // source operator that the continuously reads from that stream.
+    //
+    // It is split that way because there is currently no easy way of setting up an async source
+    // operator in materialize/timely.
+
+    // This is a generator that sets up an async `Stream` that can be continously polled to get the
+    // values that are `yield`-ed from it's body.
+    let async_stream = async_stream::try_stream!({
+        // Only one worker is responsible for distributing batches
+        if worker_index != chosen_worker {
+            trace!(
+                "We are not the chosen worker ({}), exiting...",
+                chosen_worker
+            );
+            return;
+        }
+
+        let read = persist_clients
+            .lock()
+            .await
+            .open(metadata.persist_location)
+            .await
+            .expect("could not open persist client")
+            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(metadata.data_shard)
+            .await
+            .expect("could not open persist shard");
+
+        let mut subscription = read
+            .subscribe(as_of)
+            .await
+            .expect("cannot serve requested as_of");
+
+        loop {
+            for event in subscription.next_listen_events().await {
+                yield event;
+            }
+        }
+    });
+
+    let mut pinned_stream = Box::pin(async_stream);
+
+    let (timely_stream, token) =
+        crate::source::util::source(scope, "persist_source".to_string(), move |info| {
+            let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+            let waker = futures_util::task::waker(waker_activator);
+
+            move |cap_set, output| {
+                let mut context = Context::from_waker(&waker);
+
+                while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
+                    match item {
+                        Some(Ok(ListenEvent::Progress(upper))) => {
+                            cap_set.downgrade(upper.iter());
+
+                            if upper.is_empty() {
+                                // Return early because we're done now.
+                                return;
+                            }
+                        }
+                        Some(Ok(ListenEvent::Updates(mut updates))) => {
+                            // This operator guarantees that its output has been advanced by `as_of.
+                            // The persist SnapshotIter already has this contract, so nothing to do
+                            // here.
+
+                            if updates.is_empty() {
+                                continue;
+                            }
+
+                            // Swing through all the capabilities we have and
+                            // peel off updates that we can emit with it. For
+                            // the case of totally ordered times, we have at
+                            // most on capability and will peel off all updates
+                            // in one go.
+                            //
+                            // NOTE: We use this seemingly complicated approach
+                            // such that the code is ready to deal with
+                            // partially ordered times.
+                            for cap in cap_set.iter() {
+                                // NOTE: The nightly `drain_filter()` would use
+                                // less allocations than this. Should switch to
+                                // it once it's available in stable rust.
+                                let (mut to_emit, remaining_updates) =
+                                    updates.into_iter().partition(|(_update, ts, _diff)| {
+                                        PartialOrder::less_equal(cap.time(), ts)
+                                    });
+                                updates = remaining_updates;
+
+                                let mut session = output.session(&cap);
+                                session.give_vec(&mut to_emit);
+                            }
+
+                            assert!(
+                                updates.is_empty(),
+                                "did not have matching Capability for updates: {:?}",
+                                updates
+                            );
+                        }
+                        Some(Err::<_, ExternalError>(e)) => {
+                            // TODO(petrosagg): error handling
+                            panic!("unexpected error from persist {e}");
+                        }
+                        None => {
+                            // Empty out the `CapabilitySet` to indicate that we're done.
+                            cap_set.downgrade(&[]);
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+    let (ok_stream, err_stream) = timely_stream.ok_err(|x| match x {
+        ((Ok(SourceData(Ok(row))), Ok(())), ts, diff) => Ok((row, ts, diff)),
+        ((Ok(SourceData(Err(err))), Ok(())), ts, diff) => Err((err, ts, diff)),
+        // TODO(petrosagg): error handling
+        _ => panic!("decoding failed"),
+    });
+
+    let token = Rc::new(token);
+
+    (ok_stream, err_stream, token)
+}
+
+/// Creates a new source that reads from a persist shard, distributing the work
+/// of reading data to all timely workers.
+///
+/// TODO: fix issue of using multiple `ReadHandles`.
+///
+/// All times emitted will have been [advanced by] the given `as_of` frontier.
+///
+/// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
+pub fn persist_source_sharded<G>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
