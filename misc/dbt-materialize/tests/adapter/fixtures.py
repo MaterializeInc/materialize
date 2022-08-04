@@ -38,9 +38,9 @@ test_view_index = """
 """
 
 test_source = """
-{{ config(materialized='source') }}
+{{ config(materialized='source', database='materialize') }}
 
-    CREATE SOURCE {{ mz_generate_name('test_source') }}
+    CREATE SOURCE {{ this }}
     FROM KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-source'
     FORMAT BYTES
 """
@@ -66,7 +66,7 @@ test_source_index = """
 test_sink = """
 {{ config(materialized='sink') }}
 
-    CREATE SINK {{ mz_generate_name('test_sink') }}
+    CREATE SINK {{ this }}
     FROM {{ ref('test_materialized_view') }}
     INTO KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-sink'
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'
