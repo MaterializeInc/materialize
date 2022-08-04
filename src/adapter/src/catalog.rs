@@ -44,8 +44,8 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogType, CatalogTypeDetails,
-    IdReference, NameReference, SessionCatalog, TypeReference,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
+    CatalogTypeDetails, IdReference, NameReference, SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -1251,14 +1251,20 @@ impl CatalogItem {
     ) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         match &self {
             CatalogItem::Func(func) => Ok(func.inner),
-            _ => Err(SqlCatalogError::UnknownFunction(name.item.to_string())),
+            _ => Err(SqlCatalogError::UnexpectedType(
+                name.item.to_string(),
+                CatalogItemType::Func,
+            )),
         }
     }
 
     pub fn source_desc(&self, name: &QualifiedObjectName) -> Result<&SourceDesc, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => Ok(&source.source_desc),
-            _ => Err(SqlCatalogError::UnknownSource(name.item.clone())),
+            _ => Err(SqlCatalogError::UnexpectedType(
+                name.item.clone(),
+                CatalogItemType::Source,
+            )),
         }
     }
 
