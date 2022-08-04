@@ -292,7 +292,7 @@ where
     let result_stream = stream.binary_frontier(
         &previous_ok.inner,
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
-        Exchange::new(|((key, _v), _t, _r)| Some(Ok::<_, Infallible>(key)).hashed()),
+        Exchange::new(|((key, _v), _t, _r)| Ok::<_, Infallible>(key).hashed()),
         "Upsert",
         move |_cap, _info| {
             // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
@@ -344,6 +344,7 @@ where
                     // See the detailed discussion [here](https://materializeinc.slack.com/archives/C01CFKM1QRF/p1659063332027139).
                     // This is thought to be fine for our current purposes, but we will need to rethink it once the Persist team has
                     // thought harder about what guarantees/APIs they want to offer relating to bounded-memory consolidation.
+                    // Tracked here: https://github.com/MaterializeInc/materialize/issues/14086
                     //
                     // TODO[btv] Note that we're only looking at `Ok` records here -- the `Err` entries go directly to the error
                     // stream during source rendering before we ever get here. That means that if an `Err` made it into the
@@ -351,15 +352,13 @@ where
                     // and the source will be permanently dead. In my opinion, this should be considered a bug and fixed before GA,
                     // but fixing it will require a bit of surgery, because right now the type of errors we store in persist don't
                     // allow us to recover the original key and value separately.
+                    // Tracked here: https://github.com/MaterializeInc/materialize/issues/14084
                     previous_input.for_each(|_cap, data| {
                         data.swap(&mut scratch_vector2);
                         initial_values_multiset.extend(
                             scratch_vector2
                                 .drain(..)
-                                .filter(|(_d, t, _r)| match as_of_frontier.as_option() {
-                                    Some(start) => t < start,
-                                    None => false,
-                                })
+                                .filter(|(_d, t, _r)| !as_of_frontier.less_equal(t))
                                 .map(|(d, _t, r)| (d, r)),
                         );
                     });
