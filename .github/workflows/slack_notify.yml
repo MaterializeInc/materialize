@@ -35,7 +35,7 @@ jobs:
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           message: |
-            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (https://github.com/MaterializeInc/materialize/issues/${{ github.event.issue.number }}).
+            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (${{ github.event.issue.html_url }}).
           channel: github-p1
           color: red
           verbose: false
@@ -44,7 +44,7 @@ jobs:
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           message: |
-            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (https://github.com/MaterializeInc/materialize/issues/${{ github.event.issue.number }}).
+            `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (${{ github.event.issue.html_url }}).
           channel: github-triage
           color: red
           verbose: false
