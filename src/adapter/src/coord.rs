@@ -147,9 +147,6 @@ pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
 /// specified.
 pub const DUMMY_AVAILABILITY_ZONE: &str = "";
 
-/// The default interval to collect storage usage information
-pub const DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS: u64 = 300;
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),

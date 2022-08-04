@@ -19,6 +19,9 @@ use mz_storage::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
 
+/// The default interval to collect storage usage information
+pub const DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS: &str = "300";
+
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a, S> {

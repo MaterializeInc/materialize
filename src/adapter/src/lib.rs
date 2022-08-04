@@ -47,7 +47,5 @@ pub mod session;
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{Canceled, ExecuteResponse, RowsFuture, StartupMessage, StartupResponse};
 pub use crate::coord::peek::PeekResponseUnary;
-pub use crate::coord::{
-    serve, Config, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS, DUMMY_AVAILABILITY_ZONE,
-};
+pub use crate::coord::{serve, Config, DUMMY_AVAILABILITY_ZONE};
 pub use crate::error::AdapterError;
