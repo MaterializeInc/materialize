@@ -1246,7 +1246,23 @@ DROP CLUSTER REPLICA IF EXISTS cluster.replica
 ----
 DROP CLUSTER REPLICA IF EXISTS cluster.replica
 =>
-DropClusterReplicas(DropClusterReplicasStatement { if_exists: true, names: [QualifiedReplica { cluster: Ident("cluster"), replica: Ident("replica") }] })
+DropClusterReplicas(DropClusterReplicasStatement { if_exists: true, names: [QualifiedReplica { cluster: Ident("cluster"), replica: Ident("replica") }], cascade: false })
+
+parse-statement
+DROP CLUSTER REPLICA cluster.replica CASCADE
+----
+DROP CLUSTER REPLICA cluster.replica CASCADE
+=>
+DropClusterReplicas(DropClusterReplicasStatement { if_exists: false, names: [QualifiedReplica { cluster: Ident("cluster"), replica: Ident("replica") }], cascade: true })
+
+
+
+parse-statement
+DROP CLUSTER REPLICA IF EXISTS cluster.replica CASCADE
+----
+DROP CLUSTER REPLICA IF EXISTS cluster.replica CASCADE
+=>
+DropClusterReplicas(DropClusterReplicasStatement { if_exists: true, names: [QualifiedReplica { cluster: Ident("cluster"), replica: Ident("replica") }], cascade: true })
 
 parse-statement
 DROP CLUSTER REPLICA IF EXISTS replica

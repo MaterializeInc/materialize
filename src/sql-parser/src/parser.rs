@@ -2979,8 +2979,16 @@ impl<'a> Parser<'a> {
             let replica = p.parse_identifier()?;
             Ok(QualifiedReplica { cluster, replica })
         })?;
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
         Ok(Statement::DropClusterReplicas(
-            DropClusterReplicasStatement { if_exists, names },
+            DropClusterReplicasStatement {
+                if_exists,
+                names,
+                cascade,
+            },
         ))
     }
 
