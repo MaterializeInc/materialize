@@ -2103,8 +2103,13 @@ impl<S: Append> Catalog<S> {
 
         for (logview, id) in persisted_logs.get_views() {
             let (sql_template, name_template) = logview.get_template();
-            let sql = sql_template.replace("{}", &replica_id.to_string());
+            assert!(sql_template.find("{}").is_some());
+            assert!(name_template.find("{}").is_some());
             let name = name_template.replace("{}", &replica_id.to_string());
+            let sql = "CREATE VIEW mz_catalog.".to_string()
+                + &name
+                + " AS "
+                + &sql_template.replace("{}", &replica_id.to_string());
 
             let item = self
                 .parse_item_state(state, sql, None)
