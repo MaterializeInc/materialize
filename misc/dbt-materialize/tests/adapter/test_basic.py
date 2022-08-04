@@ -35,7 +35,7 @@ from dbt.tests.util import (
 )
 
 
-class TestSimpleMaterializations(BaseSimpleMaterializations):
+class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
     # Custom base test that removes the incremental portion and overrides the expected relations
     def test_base(self, project):
 
@@ -94,15 +94,15 @@ class TestSimpleMaterializations(BaseSimpleMaterializations):
         check_relation_types(project.adapter, expected)
 
 
-class TestSingularTests(BaseSingularTests):
+class TestSingularTestsMaterialize(BaseSingularTests):
     pass
 
 
-class TestSingularTestsEphemeral(BaseSingularTestsEphemeral):
+class TestSingularTestsEphemeralMaterialize(BaseSingularTestsEphemeral):
     pass
 
 
-class TestEmpty(BaseEmpty):
+class TestEmptyMaterialize(BaseEmpty):
     pass
 
 
@@ -111,23 +111,23 @@ class TestEphemeral(BaseEphemeral):
 
 
 @pytest.mark.skip(reason="dbt-materialize does not support incremental models")
-class TestIncremental(BaseIncremental):
+class TestIncrementalMaterialize(BaseIncremental):
     pass
 
 
-class TestGenericTests(BaseGenericTests):
-    pass
-
-
-@pytest.mark.skip(reason="dbt-materialize does not support snapshots")
-class TestSnapshotCheckCols(BaseSnapshotCheckCols):
+class TestGenericTestsMaterialize(BaseGenericTests):
     pass
 
 
 @pytest.mark.skip(reason="dbt-materialize does not support snapshots")
-class TestSnapshotTimestamp(BaseSnapshotTimestamp):
+class TestSnapshotCheckColsMaterialize(BaseSnapshotCheckCols):
     pass
 
 
-class TestBaseAdapterMethod(BaseAdapterMethod):
+@pytest.mark.skip(reason="dbt-materialize does not support snapshots")
+class TestSnapshotTimestampMaterialize(BaseSnapshotTimestamp):
+    pass
+
+
+class TestBaseAdapterMethodMaterialize(BaseAdapterMethod):
     pass
