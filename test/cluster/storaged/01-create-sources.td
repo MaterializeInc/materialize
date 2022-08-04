@@ -30,3 +30,93 @@ one
 one
 > SELECT * from remote2
 one
+
+$ set keyschema={
+    "type": "record",
+    "name": "Key",
+    "fields": [
+        {"name": "id", "type": "long"}
+    ]
+  }
+
+$ set schema={
+    "type" : "record",
+    "name" : "envelope",
+    "fields" : [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {
+                  "name": "id",
+                  "type": "long"
+              },
+              {
+                "name": "creature",
+                "type": "string"
+              }]
+           },
+           "null"
+         ]
+      },
+      { "name": "op", "type": "string" },
+      {
+        "name": "after",
+        "type": ["row", "null"]
+      },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "io.debezium.connector.mysql",
+          "fields": [
+            {
+              "name": "file",
+              "type": "string"
+            },
+            {
+              "name": "pos",
+              "type": "long"
+            },
+            {
+              "name": "row",
+              "type": "int"
+            },
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "boolean",
+                  "connect.default": false
+                },
+                "null"
+              ],
+              "default": false
+            }
+          ],
+          "connect.name": "io.debezium.connector.mysql.Source"
+        }
+      }
+    ]
+  }
+
+$ kafka-create-topic topic=dbzupsert partitions=1
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
+{"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}, "op": "u", "source": {"file": "binlog1", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
+{"id": 1} {"before": {"row": {"id": 1, "creature": "mudskipper"}}, "after": {"row": {"id": 1, "creature": "salamander"}}, "op": "u", "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
+{"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}, "op": "u", "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
+
+> CREATE SOURCE dbz_upsert
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM UPSERT
+
+> SELECT * FROM dbz_upsert
+id creature
+-----------
+1  lizard

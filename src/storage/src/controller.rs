@@ -51,6 +51,7 @@ use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_stash::{self, StashError, TypedCollection};
+use tracing::error;
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::protocol::client::{
@@ -556,7 +557,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin + Debug,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 
@@ -679,6 +680,7 @@ where
                     .await
                     .unwrap();
                 for t in remap_write.upper().elements() {
+                    error!("[btv] inserting {t:?} for remap shard");
                     resume_upper.insert(t.clone());
                 }
                 let data_write = self
@@ -687,8 +689,9 @@ where
                     .await
                     .unwrap();
                 for t in data_write.upper().elements() {
+                    error!("[btv] inserting {t:?} for data shard");
                     resume_upper.insert(t.clone());
-                }
+                }                
 
                 // Check if this ingestion is using any operators that are stateful AND are not
                 // storing their state in persist shards. This whole section should be eventually
@@ -702,6 +705,7 @@ where
                     // Otherwise re-ingest everything
                     _ => Antichain::from_elem(T::minimum()),
                 };
+                error!("[btv] resume_upper is {resume_upper:?}");
 
                 let augmented_ingestion = IngestSourceCommand {
                     id,

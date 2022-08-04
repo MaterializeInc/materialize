@@ -310,8 +310,15 @@ where
             let mut kdv = DatumVec::new();
             // this is a map of (decoded key) -> (decoded_value). We store the
             // latest value for a given key that way we know what to retract if
-            // a new value with the same key comes along
-            let mut current_values = None;
+            // a new value with the same key comes along.
+            //
+            // If `previous_token` is true, we need to rehydrate this from the last good input,
+            // so set it to `None` for now.
+            let mut current_values = if previous_token.is_some() {
+                None
+            } else {
+                Some(HashMap::default())
+            };
 
             let mut initial_values_multiset: HashMap<(Row, Row), Diff> = HashMap::default();
             move |data_input, previous_input, output| {
