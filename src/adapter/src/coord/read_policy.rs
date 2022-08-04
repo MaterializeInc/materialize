@@ -15,11 +15,13 @@
 //! remain "readable" at a specific time, as long as the hold is held.
 
 use std::collections::{BTreeMap, BTreeSet};
+use timely::PartialOrder;
 
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 use mz_compute_client::controller::ComputeInstanceId;
+use mz_ore::collections::CollectionExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_stash::Append;
 use mz_storage::controller::ReadPolicy;
@@ -154,16 +156,34 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         .read_capabilities
                         .frontier()
                         .to_owned();
-                    let TimelineState { read_holds, .. } =
-                        self.ensure_timeline_state(timeline).await;
+                    let TimelineState {
+                        mut read_holds,
+                        mut oracle,
+                    } = self.ensure_and_take_timeline_state(timeline.clone()).await;
+
                     if !initial_frontier.less_equal(&read_holds.time) {
-                        // This error *SHOULD* be fatal, but it is not currently maintained and cannot merge as an assert.
-                        tracing::error!("Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal to read_hold.time: {:?}",
-                            id,
-                            compute_instance,
-                            initial_frontier,
-                            read_holds.time,
-                        );
+                        if initial_frontier.is_empty() {
+                            panic!("Compute collection {:?} (instance {:?}) has empty read frontier {:?}", id,
+                                   compute_instance,
+                                   initial_frontier);
+                        } else {
+                            // If we create an object in a timeline that has an initial read
+                            // frontier greater than the current timestamp of the timeline, then we
+                            // need to advance the entire timeline to the frontier of that object.
+                            //
+                            // The alternative would be to wait until the timeline catches up to the
+                            // object and then add the object to the timeline.
+                            let timestamp = initial_frontier.into_element();
+                            oracle
+                                .fast_forward(timestamp, |ts| {
+                                    self.catalog.persist_timestamp(&timeline, ts)
+                                })
+                                .await;
+                            let read_ts = oracle.read_ts();
+                            if read_holds.time.less_than(&read_ts) {
+                                read_holds = self.update_read_hold(read_holds, read_ts).await;
+                            }
+                        }
                     }
                     read_capability
                         .holds
@@ -174,6 +194,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         .entry(*compute_instance)
                         .or_default()
                         .insert(*id);
+                    self.global_timelines
+                        .insert(timeline, TimelineState { read_holds, oracle });
                 }
 
                 self.read_capability.insert(*id, read_capability);
@@ -205,19 +227,39 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     .read_capabilities
                     .frontier()
                     .to_owned();
-                let TimelineState { read_holds, .. } = self.ensure_timeline_state(timeline).await;
-                if !initial_frontier.less_equal(&read_holds.time) {
-                    // This error *SHOULD* be fatal, but it is not currently maintained and cannot merge as an assert.
-                    tracing::error!("Storage collection {:?} has read frontier {:?} not less-equal to read_hold.time: {:?}",
-                        id,
-                        initial_frontier,
-                        read_holds.time,
+                let TimelineState {
+                    mut read_holds,
+                    mut oracle,
+                } = self.ensure_and_take_timeline_state(timeline.clone()).await;
+                if initial_frontier.is_empty() {
+                    panic!(
+                        "Storage collection {:?} has empty read frontier {:?}",
+                        id, initial_frontier
                     );
+                } else {
+                    // If we create an object in a timeline that has an initial read
+                    // frontier greater than the current timestamp of the timeline, then we
+                    // need to advance the entire timeline to the frontier of that object.
+                    //
+                    // The alternative would be to wait until the timeline catches up to the
+                    // object and then add the object to the timeline.
+                    let timestamp = initial_frontier.into_element();
+                    oracle
+                        .fast_forward(timestamp, |ts| {
+                            self.catalog.persist_timestamp(&timeline, ts)
+                        })
+                        .await;
+                    let read_ts = oracle.read_ts();
+                    if read_holds.time.less_than(&read_ts) {
+                        read_holds = self.update_read_hold(read_holds, read_ts).await;
+                    }
                 }
                 read_capability
                     .holds
                     .update_iter(Some((read_holds.time, 1)));
                 read_holds.id_bundle.storage_ids.insert(*id);
+                self.global_timelines
+                    .insert(timeline, TimelineState { read_holds, oracle });
             }
 
             self.read_capability.insert(*id, read_capability);
@@ -322,7 +364,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     storage_ids,
                     compute_ids,
                 },
-        } = &read_holds;
+        } = &mut read_holds;
 
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();

@@ -422,6 +422,17 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("inserted above")
     }
 
+    /// Ensures that a global timeline state exists for `timeline`.
+    pub(crate) async fn ensure_and_take_timeline_state(
+        &mut self,
+        timeline: Timeline,
+    ) -> TimelineState<Timestamp> {
+        self.ensure_timeline_state(timeline.clone()).await;
+        self.global_timelines
+            .remove(&timeline)
+            .expect("inserted above")
+    }
+
     pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = GlobalId>,
