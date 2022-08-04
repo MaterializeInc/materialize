@@ -154,6 +154,7 @@ where
             val_codec: V::codec_name(),
             ts_codec: T::codec_name(),
             diff_codec: D::codec_name(),
+            last_gc_req: self.collections.last_gc_req.into_proto(),
             readers: self
                 .collections
                 .readers
@@ -232,6 +233,7 @@ where
             );
         }
         let collections = StateCollections {
+            last_gc_req: x.last_gc_req.into_rust()?,
             readers,
             writers,
             trace: x.trace.into_rust_if_some("trace")?,

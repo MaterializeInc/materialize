@@ -541,7 +541,11 @@ pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
 pub enum TransactionStatus<T> {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
-    /// Running a single-query transaction. Matches `TBLOCK_STARTED`.
+    /// Running a possibly single-query transaction. Matches
+    /// `TBLOCK_STARTED`. WARNING: This might not actually be
+    /// a single statement due to the extended protocol. Thus,
+    /// we should not perform optimizations based on this.
+    /// See: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
     Started(Transaction<T>),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
     InTransaction(Transaction<T>),

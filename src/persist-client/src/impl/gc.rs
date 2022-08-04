@@ -96,33 +96,17 @@ impl GarbageCollector {
         }
     }
 
-    pub fn gc_and_truncate_background(&self, req: GcReq) -> Option<JoinHandle<()>> {
-        // This is an arbitrary-ish threshold that scales with seqno, but never
-        // gets particularly big. It probably could be much bigger and certainly
-        // could use a tuning pass at some point.
-        let gc_threshold = std::cmp::max(
-            1,
-            u64::from(req.new_seqno_since.0.next_power_of_two().trailing_zeros()),
-        );
-
-        // We don't have to be super prompt about GC, only run it when the
-        // seqno_since crosses some threshold.
-        let should_gc =
-            req.new_seqno_since.0 / gc_threshold != req.old_seqno_since.0 / gc_threshold;
-        if !should_gc {
-            self.metrics.gc.skipped.inc();
-            return None;
-        }
-
+    pub fn gc_and_truncate_background(&self, req: GcReq) -> JoinHandle<()> {
         // Spawn GC in a background task, so the state change that triggered it
-        // isn't blocked on it.
+        // isn't blocked on it. Note that unlike compaction, GC maintenance
+        // intentionally has no "skipped" heuristic.
         let gc_span = debug_span!(parent: None, "gc_and_truncate", shard_id=%req.shard_id);
         gc_span.follows_from(&Span::current());
 
         let consensus = Arc::clone(&self.consensus);
         let blob = Arc::clone(&self.blob);
         let metrics = Arc::clone(&self.metrics);
-        Some(mz_ore::task::spawn(
+        mz_ore::task::spawn(
             || "persist::gc_and_truncate",
             async move {
                 let start = Instant::now();
@@ -132,7 +116,7 @@ impl GarbageCollector {
                 metrics.gc.seconds.inc_by(start.elapsed().as_secs_f64());
             }
             .instrument(gc_span),
-        ))
+        )
     }
 
     pub async fn gc_and_truncate(

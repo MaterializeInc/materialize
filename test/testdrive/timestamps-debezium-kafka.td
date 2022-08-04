@@ -189,17 +189,6 @@ b  sum
 ------
 1  10
 
-# Under weaker isolation levels we can see the row at time 2 before all objects have closed time 2.
-> SET transaction_isolation = serializable
-
-> SELECT * FROM bar;
-b  sum
-------
-1  10
-3  30
-
-> SET transaction_isolation = 'strict serializable'
-
 > SELECT * FROM join;
 b foo_sum bar_sum
 -----------------

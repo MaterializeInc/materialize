@@ -34,7 +34,7 @@ use mz_expr::{
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
-use mz_repr::explain_new::Explain;
+use mz_repr::explain_new::{Explain, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
@@ -579,15 +579,19 @@ impl<S: Append + 'static> Coordinator<S> {
         }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
-        let introspection_sources = if compute_instance_config.is_some() {
+        let introspection_source_indexes = if compute_instance_config.is_some() {
             self.catalog.allocate_introspection_source_indexes().await
         } else {
             Vec::new()
         };
+        let introspection_source_index_ids: Vec<_> = introspection_source_indexes
+            .iter()
+            .map(|(_, id)| *id)
+            .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
             config: compute_instance_config.clone(),
-            introspection_sources,
+            introspection_source_indexes,
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -690,6 +694,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap();
         }
 
+        if !introspection_source_index_ids.is_empty() {
+            self.initialize_compute_read_policies(
+                introspection_source_index_ids,
+                instance.id,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
+        }
         if !introspection_collection_ids.is_empty() {
             self.initialize_storage_read_policies(
                 introspection_collection_ids,
@@ -1780,20 +1792,16 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
-        let in_transaction = matches!(
-            session.transaction(),
-            &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
-        );
         // Queries are independent of the logical timestamp iff there are no referenced
         // sources or indexes and there is no reference to `mz_logical_timestamp()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
-        // For explicit or implicit transactions that do not use AS OF, get the
+        // For queries that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
-        // query, we don't care about any possible transaction timestamp. If this is a
-        // single-statement transaction (TransactionStatus::Started), we don't need to
-        // worry about preventing compaction or choosing a valid timestamp for future
-        // queries.
-        let timestamp = if in_transaction && when == QueryWhen::Immediately {
+        // query, we don't care about any possible transaction timestamp. We do
+        // not do any optimization of the so-called single-statement transactions
+        // (TransactionStatus::Started) because multiple statements can actually be
+        // executed there in the extended protocol.
+        let timestamp = if when == QueryWhen::Immediately {
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
             if let Some(read_txn) = self.txn_reads.get(&conn_id) {
@@ -1934,31 +1942,31 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
-        let fast_path = peek::create_plan(
+        let peek_plan = self.create_peek_plan(
             dataflow,
             view_id,
+            compute_instance,
             index_id,
             key,
             permutation,
             thinning.len(),
         )?;
 
-        // Finalization optimizes the dataflow as much as possible.
-        let fast_path =
-            fast_path.finalize(|dataflow| self.finalize_dataflow(dataflow, compute_instance));
-
         // We only track the peeks in the session if the query doesn't use AS OF, it's a
         // non-constant or timestamp dependent query.
         if when == QueryWhen::Immediately
-            && (!matches!(fast_path, peek::Plan::Constant(_)) || !timestamp_independent)
+            && (!matches!(
+                peek_plan,
+                peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
+            ) || !timestamp_independent)
         {
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
         }
 
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_fast_path_peek(
-                fast_path,
+            .implement_peek_plan(
+                peek_plan,
                 timestamp,
                 finishing,
                 conn_id,
@@ -2101,6 +2109,7 @@ impl<S: Append + 'static> Coordinator<S> {
             stage,
             format,
             config,
+            explainee,
         } = plan;
 
         let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
@@ -2200,12 +2209,19 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = optimize(self, decorrelated_plan)?;
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
+                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                    }
+                    _ => None,
+                };
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: UsedIndexes::new(used_indexes),
                     finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                    fast_path_plan,
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -2214,7 +2230,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 // run partial pipeline
                 let decorrelated_plan = decorrelate(raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(self, decorrelated_plan)?;
+                let mut dataflow = optimize(self, decorrelated_plan)?;
+                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                    }
+                    _ => None,
+                };
                 let mut dataflow_plan =
                     mz_compute_client::plan::Plan::<mz_repr::Timestamp>::finalize_dataflow(
                         dataflow,
@@ -2225,9 +2248,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: UsedIndexes::new(used_indexes),
                     finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                    fast_path_plan,
                 };
                 // explain plan
                 Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
@@ -2257,6 +2280,7 @@ impl<S: Append + 'static> Coordinator<S> {
             row_set_finishing,
             stage,
             options,
+            view_id,
         } = plan;
 
         struct Timings {
@@ -2290,12 +2314,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
                 coord
                     .dataflow_builder(compute_instance)
-                    .import_view_into_dataflow(
-                        // TODO: If explaining a view, pipe the actual id of the view.
-                        &GlobalId::Explain,
-                        &optimized_plan,
-                        &mut dataflow,
-                    )?;
+                    .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;
                 mz_transform::optimize_dataflow(
                     &mut dataflow,
                     &coord.index_oracle(compute_instance),
@@ -2343,7 +2362,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStageOld::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
+                let mut dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
                 let formatter = DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
@@ -2351,7 +2370,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
-                explanation.to_string()
+                let mut explanation = explanation.to_string();
+                if view_id == GlobalId::Explain {
+                    let fast_path_plan = peek::create_fast_path_plan(&mut dataflow, view_id)
+                        .expect("Fast path planning failed; unrecoverable error");
+                    if let Some(fast_path_plan) = fast_path_plan {
+                        explanation = fast_path_plan.explain_old(&catalog, options.typed);
+                    }
+                }
+                explanation
             }
             ExplainStageOld::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
@@ -2373,11 +2400,24 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStageOld::Timestamp => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                self.validate_timeline(optimized_plan.depends_on())?;
+                let timeline = self.validate_timeline(optimized_plan.depends_on())?;
                 let source_ids = optimized_plan.depends_on();
-                let id_bundle = self
-                    .index_oracle(compute_instance)
-                    .sufficient_collections(&source_ids);
+                let id_bundle = if session.vars().transaction_isolation()
+                    == &IsolationLevel::StrictSerializable
+                    && timeline.is_some()
+                {
+                    self.index_oracle(compute_instance)
+                        .sufficient_collections(&source_ids)
+                } else {
+                    // Determine a timestamp that will be valid for anything in any schema
+                    // referenced by the query.
+                    self.timedomain_for(
+                        &source_ids,
+                        &timeline,
+                        session.conn_id(),
+                        compute_instance,
+                    )?
+                };
                 // TODO: determine_timestamp takes a mut self to track table linearizability,
                 // so explaining a plan involving tables has side effects. Removing those side
                 // effects would be good.

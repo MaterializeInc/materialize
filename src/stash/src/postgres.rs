@@ -210,6 +210,7 @@ impl Postgres {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, StashError>
     where
         F: for<'a> Fn(&'a mut Transaction) -> BoxFuture<'a, Result<T, StashError>>,
@@ -504,6 +505,7 @@ impl Stash for Postgres {
         .await
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn iter_key<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
@@ -679,6 +681,7 @@ impl Stash for Postgres {
     }
 
     /// Reports the current since frontier.
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn since<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
@@ -692,6 +695,7 @@ impl Stash for Postgres {
     }
 
     /// Reports the current upper frontier.
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn upper<K, V>(
         &mut self,
         collection: StashCollection<K, V>,

@@ -143,8 +143,11 @@ impl<S: Append + 'static> Coordinator<S> {
             params,
             depends_on,
             original_stmt,
+            otel_ctx,
         }: CreateSourceStatementReady,
     ) {
+        otel_ctx.attach_as_parent();
+
         let stmt = match result {
             Ok(stmt) => stmt,
             Err(e) => return tx.send(Err(e), session),

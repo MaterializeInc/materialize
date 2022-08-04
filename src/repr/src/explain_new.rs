@@ -32,9 +32,9 @@
 
 use std::{collections::HashSet, fmt};
 
-use mz_ore::{stack::RecursionLimitError, str::Indent};
+use mz_ore::{stack::RecursionLimitError, str::Indent, str::IndentLike};
 
-use crate::{ColumnType, GlobalId, ScalarType};
+use crate::{ColumnType, GlobalId, Row, ScalarType};
 
 /// Wraps a reference to a type that implements `Display$Format` for a specific
 /// [`ExplainFormat`] and implements [`fmt::Display`] by delegating to this
@@ -378,6 +378,16 @@ impl TryFrom<HashSet<String>> for ExplainConfig {
     }
 }
 
+/// The type of object to be explained
+#[derive(Debug)]
+pub enum Explainee {
+    /// An object that will be served using a dataflow
+    Dataflow(GlobalId),
+    /// The object to be explained is a one-off query and may or may not served
+    /// using a dataflow.
+    Query,
+}
+
 /// A trait that provides a unified interface for objects that
 /// can be explained.
 ///
@@ -509,6 +519,12 @@ impl<'a> AsMut<Indent> for RenderingContext<'a> {
     }
 }
 
+impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
+    fn as_ref(&self) -> &&'a dyn ExprHumanizer {
+        &self.humanizer
+    }
+}
+
 /// A trait for humanizing components of an expression.
 ///
 /// This will be most often used as part of the rendering context
@@ -550,6 +566,56 @@ impl ExprHumanizer for DummyHumanizer {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
     }
+}
+
+fn write_first_rows(
+    f: &mut fmt::Formatter<'_>,
+    first_rows: &Vec<(&Row, &crate::Diff)>,
+    ctx: &mut Indent,
+) -> fmt::Result {
+    ctx.indented(move |ctx| {
+        for (row, diff) in first_rows {
+            if **diff == 1 {
+                writeln!(f, "{}- {}", ctx, row)?;
+            } else {
+                writeln!(f, "{}- ({} x {})", ctx, row, diff)?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+pub fn fmt_text_constant_rows<'a, I>(
+    f: &mut fmt::Formatter<'_>,
+    mut rows: I,
+    ctx: &mut Indent,
+) -> fmt::Result
+where
+    I: Iterator<Item = (&'a Row, &'a crate::Diff)>,
+{
+    writeln!(f, "{}Constant", ctx)?;
+    let mut row_count = 0;
+    let mut first_rows = Vec::with_capacity(20);
+    for _ in 0..20 {
+        if let Some((row, diff)) = rows.next() {
+            row_count += diff;
+            first_rows.push((row, diff));
+        }
+    }
+    let rest_of_row_count = rows.into_iter().map(|(_, diff)| diff).sum::<crate::Diff>();
+    if rest_of_row_count != 0 {
+        ctx.indented(move |ctx| {
+            writeln!(f, "{}total_rows: {}", ctx, row_count + rest_of_row_count)?;
+            writeln!(f, "{}first_rows:", ctx)?;
+            write_first_rows(f, &first_rows, ctx)?;
+            Ok(())
+        })?;
+    } else {
+        write_first_rows(f, &first_rows, ctx)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

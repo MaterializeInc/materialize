@@ -262,24 +262,6 @@ async fn migrate<S: Append>(
             })?;
             Ok(())
         },
-        // Add new migrations here.
-        //
-        // Migrations should be preceded with a comment of the following form:
-        //
-        //     > Short summary of migration's purpose.
-        //     >
-        //     > Introduced in <VERSION>.
-        //     >
-        //     > Optional additional commentary about safety or approach.
-        //
-        // Please include @mjibson and @jkosh44 on any code reviews that add or
-        // edit migrations.
-        // Migrations must preserve backwards compatibility with all past releases
-        // of Materialize. Migrations can be edited up until they ship in a
-        // release, after which they must never be removed, only patched by future
-        // migrations. Migrations must be transactional or idempotent (in case of
-        // midway failure).
-
         // Fill in non-optional availability zone
         // Introduced in alpha.4
         |txn: &mut Transaction<'_, S>, bootstrap_args| {
@@ -337,6 +319,23 @@ async fn migrate<S: Append>(
             })?;
             Ok(())
         },
+        // Add new migrations here.
+        //
+        // Migrations should be preceded with a comment of the following form:
+        //
+        //     > Short summary of migration's purpose.
+        //     >
+        //     > Introduced in <VERSION>.
+        //     >
+        //     > Optional additional commentary about safety or approach.
+        //
+        // Please include @mjibson and @jkosh44 on any code reviews that add or
+        // edit migrations.
+        // Migrations must preserve backwards compatibility with all past releases
+        // of Materialize. Migrations can be edited up until they ship in a
+        // release, after which they must never be removed, only patched by future
+        // migrations. Migrations must be transactional or idempotent (in case of
+        // midway failure).
     ];
 
     let mut txn = transaction(stash).await?;
@@ -765,6 +764,7 @@ impl<S: Append> Connection<S> {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<'a, S>, Error> {
     let databases = COLLECTION_DATABASE.peek_one(stash).await?;
     let schemas = COLLECTION_SCHEMA.peek_one(stash).await?;
@@ -918,7 +918,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         &mut self,
         cluster_name: &str,
         config: &Option<ComputeInstanceIntrospectionConfig>,
-        introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         let id = self.get_and_increment_id(COMPUTE_ID_ALLOC_KEY.to_string())?;
         let config = serde_json::to_string(config)
@@ -935,7 +935,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             )));
         };
 
-        for (builtin, index_id) in introspection_sources {
+        for (builtin, index_id) in introspection_source_indexes {
             let index_id = if let GlobalId::System(id) = index_id {
                 *id
             } else {

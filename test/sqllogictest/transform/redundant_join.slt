@@ -37,7 +37,7 @@ EXPLAIN
 SELECT * FROM v1, (SELECT DISTINCT (v1.t1).f1 as f1 FROM v1) Y WHERE (v1.t1).f1 = y.f1;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Map record_get[0](#0)
 | Filter (#1) IS NOT NULL
 
