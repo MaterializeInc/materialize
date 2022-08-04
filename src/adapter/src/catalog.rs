@@ -337,6 +337,10 @@ impl CatalogState {
         self.entry_by_id.get(id)
     }
 
+    pub fn try_get_entry_mut(&mut self, id: &GlobalId) -> Option<&mut CatalogEntry> {
+        self.entry_by_id.get_mut(id)
+    }
+
     /// Returns all indexes on the given object and compute instance known in
     /// the catalog.
     pub fn get_indexes_on(
@@ -1148,7 +1152,11 @@ pub struct Sink {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum SinkConnectionState {
+    // The sink is currently being built
     Pending(SinkConnectionBuilder),
+    // The temporary sink is being replaced with the proper sink
+    Finalizing(SinkConnection),
+    // The sink is ready for use
     Ready(SinkConnection),
 }
 
@@ -1297,7 +1305,7 @@ impl CatalogItem {
             | CatalogItem::Connection(_)
             | CatalogItem::StorageCollection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
-                SinkConnectionState::Pending(_) => true,
+                SinkConnectionState::Pending(_) | SinkConnectionState::Finalizing(_) => true,
                 SinkConnectionState::Ready(_) => false,
             },
         }
@@ -1471,6 +1479,11 @@ impl CatalogEntry {
     /// Returns the `CatalogItem` associated with this catalog entry.
     pub fn item(&self) -> &CatalogItem {
         &self.item
+    }
+
+    /// Returns the `CatalogItem` associated with this catalog entry.
+    pub fn item_mut(&mut self) -> &mut CatalogItem {
+        &mut self.item
     }
 
     /// Returns the global ID of this catalog entry.
@@ -2674,6 +2687,10 @@ impl<S: Append> Catalog<S> {
 
     pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
         self.state.try_get_entry(id)
+    }
+
+    pub fn try_get_entry_mut(&mut self, id: &GlobalId) -> Option<&mut CatalogEntry> {
+        self.state.try_get_entry_mut(id)
     }
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {

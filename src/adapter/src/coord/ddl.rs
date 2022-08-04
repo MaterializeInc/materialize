@@ -62,6 +62,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut sinks_to_drop = vec![];
+        let mut temporary_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
@@ -94,12 +95,18 @@ impl<S: Append + 'static> Coordinator<S> {
                         }
                     }
                     CatalogItem::Sink(catalog::Sink {
-                        connection: SinkConnectionState::Ready(_),
+                        connection,
                         compute_instance,
                         ..
-                    }) => {
-                        sinks_to_drop.push((*compute_instance, *id));
-                    }
+                    }) => match connection {
+                        SinkConnectionState::Ready(_) => {
+                            sinks_to_drop.push((*compute_instance, *id));
+                        }
+                        SinkConnectionState::Finalizing(_) => {
+                            temporary_sinks_to_drop.push((*compute_instance, *id));
+                        }
+                        SinkConnectionState::Pending(_) => (),
+                    },
                     CatalogItem::Index(catalog::Index {
                         compute_instance, ..
                     }) => {
@@ -176,8 +183,14 @@ impl<S: Append + 'static> Coordinator<S> {
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop).await;
             }
-            if !sinks_to_drop.is_empty() {
-                self.drop_sinks(sinks_to_drop).await;
+            if !sinks_to_drop.is_empty() || !temporary_sinks_to_drop.is_empty() {
+                self.drop_sinks(
+                    sinks_to_drop
+                        .into_iter()
+                        .chain(temporary_sinks_to_drop.into_iter())
+                        .collect::<Vec<_>>(),
+                )
+                .await;
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
@@ -324,13 +337,25 @@ impl<S: Append + 'static> Coordinator<S> {
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
-        let entry = self.catalog.get_entry(&id);
+        let entry = self
+            .catalog
+            .try_get_entry_mut(&id)
+            .expect("invalid id sink ready");
         let name = entry.name().clone();
-        let mut sink = match entry.item() {
-            CatalogItem::Sink(sink) => sink.clone(),
+        let mut sink = match entry.item_mut() {
+            CatalogItem::Sink(sink) => sink,
             _ => unreachable!(),
         };
-        sink.connection = catalog::SinkConnectionState::Ready(connection.clone());
+        // We want the catalog to have a `SinkConnectionState::Finalizing` so that we properly
+        // update the catalog as well as drop the temporary sink.
+        sink.connection = catalog::SinkConnectionState::Finalizing(connection.clone());
+        let sink = catalog::Sink {
+            connection: SinkConnectionState::Ready(connection.clone()),
+            ..sink.clone()
+        };
+        // Make clear that we're no longer updating catalog state once we have our local copy
+        drop(entry);
+
         // We don't try to linearize the as of for the sink; we just pick the
         // least valid read timestamp. If users want linearizability across
         // Materialize and their sink, they'll need to reason about the

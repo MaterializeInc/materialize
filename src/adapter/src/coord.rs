@@ -539,7 +539,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
                         SinkConnectionState::Pending(builder) => builder,
-                        SinkConnectionState::Ready(_) => {
+                        SinkConnectionState::Finalizing(_) | SinkConnectionState::Ready(_) => {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
