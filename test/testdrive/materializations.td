@@ -10,6 +10,8 @@
 # Test creating and dropping various views and sources that depend upon
 # on another, and indices on those views and sources.
 
+$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+
 $ set schema={
     "type": "record",
     "name": "row",
@@ -45,7 +47,7 @@ test1
 > SHOW FULL MATERIALIZED VIEWS
 cluster   name     type
 -----------------------
-default   test1    user
+<CLUSTER_NAME>   test1    user
 
 > SELECT * FROM test1
 b  sum
@@ -75,7 +77,7 @@ data_view
 > SHOW CREATE MATERIALIZED VIEW test1
 "Materialized View"       "Create Materialized View"
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"default\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
+materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"<CLUSTER_NAME>\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
 # Materialized view can be built on a not-materialized view.
 > CREATE MATERIALIZED VIEW test2 AS

@@ -182,7 +182,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
-          run: default
+          run: test-cluster
           args: [testdrive/*.td]
 
   - id: testdrive-workers-1

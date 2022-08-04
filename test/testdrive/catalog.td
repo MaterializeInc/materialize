@@ -345,87 +345,56 @@ d2
  name
 ------
 
-# Check default sources, tables, and views in mz_catalog.
+# Check default sources, tables, and views in mz_catalog. Ignore any sources
+# pertaining to a second replica, if any.
 
-> SHOW SOURCES FROM mz_catalog
-mz_arrangement_batches_internal
-mz_arrangement_batches_internal_1
-mz_arrangement_records_internal
-mz_arrangement_records_internal_1
-mz_arrangement_sharing_internal
-mz_arrangement_sharing_internal_1
-mz_dataflow_channels
-mz_dataflow_channels_1
-mz_dataflow_operator_addresses
-mz_dataflow_operator_addresses_1
-mz_dataflow_operator_reachability_internal
-mz_dataflow_operator_reachability_internal_1
-mz_dataflow_operators
-mz_dataflow_operators_1
-mz_materialization_dependencies
-mz_materialization_dependencies_1
-mz_materializations
-mz_materializations_1
-mz_message_counts_received_internal
-mz_message_counts_received_internal_1
-mz_message_counts_sent_internal
-mz_message_counts_sent_internal_1
+> SELECT name FROM mz_sources WHERE schema_id = 1 AND name NOT LIKE '%_2' AND name NOT LIKE '%_3';
 mz_peek_active
 mz_peek_active_1
 mz_peek_durations
+mz_materializations
 mz_peek_durations_1
+mz_dataflow_channels
+mz_dataflow_operators
+mz_materializations_1
+mz_dataflow_channels_1
+mz_dataflow_operators_1
+mz_source_status_history
+mz_scheduling_parks_internal
+mz_dataflow_operator_addresses
 mz_scheduling_elapsed_internal
+mz_scheduling_parks_internal_1
+mz_arrangement_batches_internal
+mz_arrangement_records_internal
+mz_arrangement_sharing_internal
+mz_materialization_dependencies
+mz_message_counts_sent_internal
+mz_dataflow_operator_addresses_1
 mz_scheduling_elapsed_internal_1
 mz_scheduling_histogram_internal
-mz_scheduling_histogram_internal_1
-mz_scheduling_parks_internal
-mz_scheduling_parks_internal_1
-mz_source_status_history
 mz_worker_materialization_delays
+mz_arrangement_batches_internal_1
+mz_arrangement_records_internal_1
+mz_arrangement_sharing_internal_1
+mz_materialization_dependencies_1
+mz_message_counts_sent_internal_1
+mz_scheduling_histogram_internal_1
 mz_worker_materialization_delays_1
+mz_message_counts_received_internal
 mz_worker_materialization_frontiers
+mz_message_counts_received_internal_1
 mz_worker_materialization_frontiers_1
+mz_dataflow_operator_reachability_internal
+mz_dataflow_operator_reachability_internal_1
 
-> SHOW FULL SOURCES FROM mz_catalog
-name                                          type   type
----------------------------------------------------------
-mz_arrangement_batches_internal               system log
-mz_arrangement_batches_internal_1             system log
-mz_arrangement_records_internal               system log
-mz_arrangement_records_internal_1             system log
-mz_arrangement_sharing_internal               system log
-mz_arrangement_sharing_internal_1             system log
-mz_dataflow_channels                          system log
-mz_dataflow_channels_1                        system log
-mz_dataflow_operator_addresses                system log
-mz_dataflow_operator_addresses_1              system log
-mz_dataflow_operator_reachability_internal    system log
-mz_dataflow_operator_reachability_internal_1  system log
-mz_dataflow_operators                         system log
-mz_dataflow_operators_1                       system log
-mz_materialization_dependencies               system log
-mz_materialization_dependencies_1             system log
-mz_materializations                           system log
-mz_materializations_1                         system log
-mz_message_counts_received_internal           system log
-mz_message_counts_received_internal_1         system log
-mz_message_counts_sent_internal               system log
-mz_message_counts_sent_internal_1             system log
-mz_peek_active                                system log
-mz_peek_active_1                              system log
-mz_peek_durations                             system log
-mz_peek_durations_1                           system log
-mz_scheduling_elapsed_internal                system log
-mz_scheduling_elapsed_internal_1              system log
-mz_scheduling_histogram_internal              system log
-mz_scheduling_histogram_internal_1            system log
-mz_scheduling_parks_internal                  system log
-mz_scheduling_parks_internal_1                system log
-mz_source_status_history                      system "storage collection"
-mz_worker_materialization_delays              system log
-mz_worker_materialization_delays_1            system log
-mz_worker_materialization_frontiers           system log
-mz_worker_materialization_frontiers_1         system log
+# Most sources are dependent on the number of replicas, so we query for specific ones
+> SHOW SOURCES FROM mz_catalog LIKE 'mz_source_status_history';
+mz_source_status_history
+
+> SHOW FULL SOURCES FROM mz_catalog LIKE 'mz_source_status_history';
+name             type          type
+------------------------------------------------------
+mz_source_status_history  system  "storage collection"
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -567,8 +536,9 @@ test_table
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
 29
 
-# There is one entry in mz_indexes for each field_number/expression of the index.
-> SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
+# There is one entry in mz_indexes for each field_number/expression of the index,
+# ignoring the potential presence of a second replica
+> SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%' AND name NOT LIKE '%_2_%' AND name NOT LIKE '%_3_%';
 18
 
 > SHOW VIEWS FROM mz_catalog
@@ -619,10 +589,18 @@ mz_scheduling_elapsed             system
 mz_scheduling_histogram           system
 mz_scheduling_parks               system
 
-> SHOW SOURCES FROM mz_catalog LIKE '%peek%';
+
+# Those queries focus on the first replica, in case a second one is present
+> SHOW SOURCES FROM mz_catalog LIKE '%peek_active';
 mz_peek_active
+
+> SHOW SOURCES FROM mz_catalog LIKE '%peek_active_1';
 mz_peek_active_1
+
+> SHOW SOURCES FROM mz_catalog LIKE '%mz_peek_durations';
 mz_peek_durations
+
+> SHOW SOURCES FROM mz_catalog LIKE '%mz_peek_durations_1';
 mz_peek_durations_1
 
 > SHOW VIEWS FROM mz_catalog LIKE '%peek%';
