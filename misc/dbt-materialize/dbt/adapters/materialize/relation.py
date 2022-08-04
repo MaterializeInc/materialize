@@ -15,10 +15,11 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Type
 
 from dbt.adapters.postgres import PostgresRelation
 from dbt.dataclass_schema import StrEnum
+from dbt.utils import classproperty
 
 
 class MaterializeRelationType(StrEnum):
@@ -38,3 +39,7 @@ class MaterializeRelationType(StrEnum):
 @dataclass(frozen=True, eq=False, repr=False)
 class MaterializeRelation(PostgresRelation):
     type: Optional[MaterializeRelationType] = None
+
+    @classproperty
+    def get_relation_type(cls) -> Type[MaterializeRelationType]:
+        return MaterializeRelationType

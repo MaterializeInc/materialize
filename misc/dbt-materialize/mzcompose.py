@@ -11,21 +11,12 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Service,
-    TestCerts,
-    Zookeeper,
-)
+from materialize.mzcompose.services import Materialized, Redpanda, Service, TestCerts
 
 SERVICES = [
     TestCerts(),
     Materialized(),
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Redpanda(),
     Service(
         "dbt-test",
         {
@@ -94,9 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             with c.test_case(test_case.name):
                 with c.override(materialized):
                     c.down()
-                    c.start_and_wait_for_tcp(
-                        services=["zookeeper", "kafka", "schema-registry"]
-                    )
+                    c.start_and_wait_for_tcp(services=["redpanda"])
                     c.up("materialized")
                     c.wait_for_tcp(host="materialized", port=6875)
                     c.run(
@@ -105,7 +94,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "dbt-materialize/test",
                         env_extra={
                             "DBT_HOST": "materialized",
-                            "KAFKA_ADDR": "kafka:9092",
+                            "KAFKA_ADDR": "redpanda:9092",
                             "SCHEMA_REGISTRY_URL": "http://schema-registry:8081",
                             **test_case.dbt_env,
                         },

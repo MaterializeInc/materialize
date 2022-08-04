@@ -29,15 +29,17 @@
         """
     )}}
   {%- set identifier = model['alias'] -%}
+  {%- set old_relation = adapter.get_relation(identifier=identifier,
+                                              schema=schema,
+                                              database=database) -%}
   {%- set target_relation = api.Relation.create(identifier=identifier,
                                                 schema=schema,
                                                 database=database,
                                                 type='index') -%}
 
-  {% set index_name %}
-      {{ mz_generate_name(identifier) }}
-  {% endset %}
-  {{ materialize__drop_index(index_name) }}
+  {% if old_relation %}
+    {{ adapter.drop_relation(old_relation) }}
+  {% endif %}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
   {{ run_hooks(pre_hooks, inside_transaction=True) }}
