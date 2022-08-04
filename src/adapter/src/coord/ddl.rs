@@ -63,6 +63,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
+        let mut storage_temporary_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
@@ -94,11 +95,21 @@ impl<S: Append + 'static> Coordinator<S> {
                             _ => {}
                         }
                     }
-                    CatalogItem::Sink(catalog::Sink {
-                        connection: StorageSinkConnectionState::Ready(_),
-                        ..
-                    }) => {
-                        storage_sinks_to_drop.push(*id);
+                    CatalogItem::Sink(catalog::Sink { connection, .. }) => {
+                        match connection {
+                            StorageSinkConnectionState::Ready(_) => {
+                                storage_sinks_to_drop.push(*id);
+                            }
+                            StorageSinkConnectionState::Finalizing(_) => {
+                                storage_temporary_sinks_to_drop.push(*id);
+                            }
+                            // XXX(chae): Should we just ignore a drop if we're still pending (haven't started processing
+                            // the sink ready message)?? I'm worried that if we don't ignore, we'd have a panic if we get
+                            // a `DROP SINK` between processing the `CREATE SINK` and handling the sink ready message
+                            // (because the sink ready message assumes the sink does exists / tries to drop it)
+                            // N.B. this is the old behavior
+                            StorageSinkConnectionState::Pending(_) => (),
+                        }
                     }
                     CatalogItem::Index(catalog::Index {
                         compute_instance, ..
@@ -177,8 +188,14 @@ impl<S: Append + 'static> Coordinator<S> {
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop).await;
             }
-            if !storage_sinks_to_drop.is_empty() {
-                self.drop_storage_sinks(storage_sinks_to_drop).await;
+            if !storage_sinks_to_drop.is_empty() || !storage_temporary_sinks_to_drop.is_empty() {
+                self.drop_storage_sinks(
+                    storage_sinks_to_drop
+                        .into_iter()
+                        .chain(storage_temporary_sinks_to_drop)
+                        .collect::<Vec<_>>(),
+                )
+                .await;
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
@@ -337,18 +354,27 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn handle_sink_connection_ready(
         &mut self,
         id: GlobalId,
-        _oid: u32,
+        oid: u32,
         connection: StorageSinkConnection<()>,
         compute_instance: ComputeInstanceId,
-        _session: Option<&Session>,
+        session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
-        let entry = self.catalog.get_entry(&id);
-        let mut sink = match entry.item() {
-            CatalogItem::Sink(sink) => sink.clone(),
+        let entry = self.catalog.try_get_entry_mut(&id).unwrap();
+        let name = entry.name().clone();
+        let mut sink = match entry.item_mut() {
+            CatalogItem::Sink(sink) => sink,
             _ => unreachable!(),
         };
-        sink.connection = StorageSinkConnectionState::Ready(connection.clone());
+        sink.connection = StorageSinkConnectionState::Finalizing(connection.clone());
+
+        let sink = catalog::Sink {
+            connection: StorageSinkConnectionState::Ready(connection.clone()),
+            ..sink.clone()
+        };
+        // Make clear that we're no longer updating catalog state once we have our local copy
+        drop(entry);
+
         // We don't try to linearize the as of for the sink; we just pick the
         // least valid read timestamp. If users want linearizability across
         // Materialize and their sink, they'll need to reason about the
@@ -364,6 +390,17 @@ impl<S: Append + 'static> Coordinator<S> {
             strict: !sink.with_snapshot,
         };
 
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem {
+                id,
+                oid,
+                name: name.clone(),
+                item: CatalogItem::Sink(sink.clone()),
+            },
+        ];
+
+        let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
         self.create_storage_export(id, &sink, connection, as_of)
             .await
     }

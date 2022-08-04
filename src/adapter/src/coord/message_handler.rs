@@ -266,7 +266,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         Some(&session),
                     )
                     .await
-                    // XXX(chae): how to handle error when creating on top of view?
+                    // XXX(chae): I really don't liek this -- especially as we're now doing cross
+                    // process calls to start a sink.
                     .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were

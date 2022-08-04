@@ -974,7 +974,7 @@ impl<S: Append + 'static> Coordinator<S> {
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
         let CreateSinkPlan {
-            name: _,
+            name,
             sink,
             with_snapshot,
             if_not_exists,
@@ -1021,22 +1021,38 @@ impl<S: Append + 'static> Coordinator<S> {
             compute_instance,
         };
 
-        let storage_result = self
-            .create_storage_export(
-                id,
-                &catalog_sink,
-                StorageSinkConnection::Dummy(DummySinkConnection {
-                    storage_metadata: (),
-                }),
-                // XXX(chae): find better asof for dummy sink
-                SinkAsOf {
-                    frontier: Antichain::from_elem(Timestamp::minimum()),
-                    strict: false,
-                },
-            )
-            .await;
+        let ops = vec![catalog::Op::CreateItem {
+            id,
+            oid,
+            name,
+            item: CatalogItem::Sink(catalog_sink.clone()),
+        }];
 
-        match storage_result {
+        // Result combinators can't use async functions; Futures combinators don't work because requires two mutable
+        // borrows to `self.`
+        let result = match self
+            .catalog_transact(Some(&session), ops, move |_| Ok(()))
+            .await
+        {
+            Ok(()) => {
+                self.create_storage_export(
+                    id,
+                    &catalog_sink,
+                    StorageSinkConnection::Dummy(DummySinkConnection {
+                        storage_metadata: (),
+                    }),
+                    // XXX(chae): find better asof for dummy sink
+                    SinkAsOf {
+                        frontier: Antichain::from_elem(Timestamp::minimum()),
+                        strict: false,
+                    },
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        };
+
+        match result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),

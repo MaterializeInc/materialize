@@ -772,12 +772,16 @@ where
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        self.validate_ids(identifiers.iter().cloned())?;
-        let policies = identifiers
-            .into_iter()
-            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
-            .collect();
-        self.set_read_policy(policies).await?;
+        // XXX(chae): what does dropping sinks mean??
+        //self.validate_ids(identifiers.iter().cloned())?;
+        //let policies = identifiers
+        //    .into_iter()
+        //    .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
+        //    .collect();
+        //self.set_read_policy(policies).await?;
+        for id in identifiers {
+            self.hosts.deprovision(id).await.unwrap();
+        }
         Ok(())
     }
 
