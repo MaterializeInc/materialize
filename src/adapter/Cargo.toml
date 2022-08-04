@@ -14,6 +14,7 @@ const_format = "0.2.26"
 dec = "0.4.8"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+enum-kinds = "0.5.1"
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
 itertools = "0.10.3"

@@ -17,14 +17,15 @@ use uuid::Uuid;
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
+use mz_ore::soft_assert;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
 use crate::catalog::SYSTEM_USER;
 use crate::command::{
-    Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
-    StartupResponse,
+    Canceled, Command, ExecuteResponse, ExecuteResponseKind, Response, SimpleExecuteResponse,
+    SimpleResult, StartupResponse,
 };
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
@@ -385,6 +386,77 @@ impl SessionClient {
         .await
     }
 
+    /// Describes whether the type of statement can be executed in a simple
+    /// execution, such as that offered by the /api/sql endpoint.
+    ///
+    /// The following `ExecuteResponse` types are disallowed in simple
+    /// execution.
+    /// - [ExecuteResponse::ClosedCursor]
+    /// - [ExecuteResponse::CopyFrom]
+    /// - [ExecuteResponse::CopyTo]
+    /// - [ExecuteResponse::DeclaredCursor]
+    /// - [ExecuteResponse::Fetch]
+    /// - [ExecuteResponse::Raise]
+    /// - [ExecuteResponse::SetVariable]
+    /// - [ExecuteResponse::Tailing]
+    pub fn prohibited_in_simple_execute(potential_responses: &[ExecuteResponseKind]) -> bool {
+        potential_responses.is_empty()
+            || potential_responses.iter().any(|r| match r {
+                ExecuteResponseKind::CopyFrom
+                | ExecuteResponseKind::CopyTo
+                | ExecuteResponseKind::ClosedCursor
+                | ExecuteResponseKind::DeclaredCursor
+                | ExecuteResponseKind::Fetch
+                | ExecuteResponseKind::Raise
+                | ExecuteResponseKind::SetVariable
+                | ExecuteResponseKind::Tailing => true,
+                ExecuteResponseKind::AlteredIndexLogicalCompaction
+                | ExecuteResponseKind::AlteredObject
+                | ExecuteResponseKind::AlteredSystemConfiguraion
+                | ExecuteResponseKind::Canceled
+                | ExecuteResponseKind::CreatedComputeInstance
+                | ExecuteResponseKind::CreatedComputeInstanceReplica
+                | ExecuteResponseKind::CreatedConnection
+                | ExecuteResponseKind::CreatedDatabase
+                | ExecuteResponseKind::CreatedIndex
+                | ExecuteResponseKind::CreatedMaterializedView
+                | ExecuteResponseKind::CreatedRole
+                | ExecuteResponseKind::CreatedSchema
+                | ExecuteResponseKind::CreatedSecret
+                | ExecuteResponseKind::CreatedSink
+                | ExecuteResponseKind::CreatedSource
+                | ExecuteResponseKind::CreatedSources
+                | ExecuteResponseKind::CreatedTable
+                | ExecuteResponseKind::CreatedType
+                | ExecuteResponseKind::CreatedView
+                | ExecuteResponseKind::Deallocate
+                | ExecuteResponseKind::Deleted
+                | ExecuteResponseKind::DiscardedAll
+                | ExecuteResponseKind::DiscardedTemp
+                | ExecuteResponseKind::DroppedComputeInstance
+                | ExecuteResponseKind::DroppedComputeInstanceReplicas
+                | ExecuteResponseKind::DroppedConnection
+                | ExecuteResponseKind::DroppedDatabase
+                | ExecuteResponseKind::DroppedIndex
+                | ExecuteResponseKind::DroppedMaterializedView
+                | ExecuteResponseKind::DroppedRole
+                | ExecuteResponseKind::DroppedSchema
+                | ExecuteResponseKind::DroppedSecret
+                | ExecuteResponseKind::DroppedSink
+                | ExecuteResponseKind::DroppedSource
+                | ExecuteResponseKind::DroppedTable
+                | ExecuteResponseKind::DroppedType
+                | ExecuteResponseKind::DroppedView
+                | ExecuteResponseKind::EmptyQuery
+                | ExecuteResponseKind::Inserted
+                | ExecuteResponseKind::Prepare
+                | ExecuteResponseKind::SendingRows
+                | ExecuteResponseKind::StartedTransaction
+                | ExecuteResponseKind::TransactionExited
+                | ExecuteResponseKind::Updated => false,
+            })
+    }
+
     /// Executes SQL statements using a simple protocol that does not involve
     /// portals.
     ///
@@ -404,6 +476,14 @@ impl SessionClient {
         const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
         for stmt in stmts {
+            let potential_responses = ExecuteResponse::expected_statement_responses(&stmt);
+            if Self::prohibited_in_simple_execute(potential_responses) {
+                results.push(SimpleResult::err(
+                    "executing statements of this type is unsupported via this API",
+                ));
+                break;
+            }
+
             // Mirror the behavior of the PostgreSQL simple query protocol.
             // See the pgwire::protocol::StateMachine::query method for details.
             self.start_transaction(Some(num_stmts)).await?;
@@ -431,6 +511,14 @@ impl SessionClient {
                     continue;
                 }
             };
+
+            soft_assert!(
+                potential_responses.contains(&ExecuteResponseKind::from(&res)),
+                "ExecuteResponse::expected_statement_responses out of date. \
+                expected one of responses {:?}, got response {:?}",
+                potential_responses,
+                res
+            );
 
             match res {
                 ExecuteResponse::Canceled => {
@@ -522,15 +610,7 @@ impl SessionClient {
                 | ExecuteResponse::Raise { .. }
                 | ExecuteResponse::DeclaredCursor
                 | ExecuteResponse::ClosedCursor => {
-                    // NOTE(benesch): it is a bit scary to ignore the response
-                    // to these types of planning *after* they have been
-                    // planned, as they may have mutated state. On a quick
-                    // glance, though, ignoring the execute response in all of
-                    // the above situations seems safe enough, and it's a more
-                    // target allowlist than the code that was here before.
-                    results.push(SimpleResult::err(
-                        "executing statements of this type is unsupported via this API",
-                    ));
+                    unreachable!("already errored for statements that generate these responses")
                 }
             };
         }

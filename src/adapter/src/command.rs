@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use derivative::Derivative;
+use enum_kinds::EnumKind;
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -20,6 +21,7 @@ use tokio::sync::watch;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{GlobalId, Row, ScalarType};
+use mz_sql::ast::AstInfo;
 use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
 
@@ -155,8 +157,9 @@ impl fmt::Display for StartupMessage {
 }
 
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).
-#[derive(Derivative)]
+#[derive(Derivative, EnumKind)]
 #[derivative(Debug)]
+#[enum_kind(ExecuteResponseKind)]
 pub enum ExecuteResponse {
     /// The active transaction was exited.
     TransactionExited {
@@ -318,6 +321,121 @@ pub enum ExecuteResponse {
     Raise {
         severity: NoticeSeverity,
     },
+}
+
+impl ExecuteResponse {
+    /// Describes the potential set of `ExcecuteResponse` values a `Statement`
+    /// can return.
+    ///
+    /// The primary usecase of this is prohibiting statements in the HTTP API,
+    /// so we include some of those semantics here in that we return empty
+    /// slices to indicate that a statement is prohibited. If other uses of this
+    /// function grow, this should be reconsidered.
+    pub fn expected_statement_responses<'stmt, 'res, T: AstInfo>(
+        statement: &'stmt Statement<T>,
+    ) -> &'res [ExecuteResponseKind] {
+        match statement {
+            Statement::Close(_) => &[ExecuteResponseKind::ClosedCursor],
+            Statement::Copy(_) => &[ExecuteResponseKind::CopyFrom, ExecuteResponseKind::Tailing],
+            Statement::Declare(_) => &[ExecuteResponseKind::DeclaredCursor],
+            Statement::Fetch(_) => &[ExecuteResponseKind::Fetch],
+            Statement::Raise(_) => &[ExecuteResponseKind::Raise],
+            Statement::SetVariable(_) | Statement::ResetVariable(_) => {
+                &[ExecuteResponseKind::SetVariable]
+            }
+            Statement::Tail(_) => &[ExecuteResponseKind::Tailing],
+            // Hack to prohibit EXECUTE in simple execution
+            Statement::Execute(_) => &[],
+            // Unsupported
+            Statement::SetTransaction(_) => &[],
+
+            Statement::AlterIndex(_) => &[
+                ExecuteResponseKind::AlteredIndexLogicalCompaction,
+                ExecuteResponseKind::AlteredObject,
+            ],
+            Statement::AlterSystemReset(_)
+            | Statement::AlterSystemResetAll(_)
+            | Statement::AlterObjectRename(_)
+            | Statement::AlterSecret(_)
+            | Statement::AlterSource(_)
+            | Statement::AlterSystemSet(_) => &[ExecuteResponseKind::AlteredObject],
+            Statement::Commit(_) | Statement::Rollback(_) => {
+                &[ExecuteResponseKind::TransactionExited]
+            }
+            Statement::CreateCluster(_) => &[ExecuteResponseKind::CreatedComputeInstance],
+            Statement::CreateClusterReplica(_) => {
+                &[ExecuteResponseKind::CreatedComputeInstanceReplica]
+            }
+            Statement::CreateConnection(_) => &[ExecuteResponseKind::CreatedConnection],
+            Statement::CreateDatabase(_) => &[ExecuteResponseKind::CreatedDatabase],
+            Statement::CreateIndex(_) => &[ExecuteResponseKind::CreatedIndex],
+            Statement::CreateMaterializedView(_) => &[ExecuteResponseKind::CreatedMaterializedView],
+            Statement::CreateRole(_) => &[ExecuteResponseKind::CreatedRole],
+            Statement::CreateSchema(_) => &[ExecuteResponseKind::CreatedSchema],
+            Statement::CreateSecret(_) => &[ExecuteResponseKind::CreatedSecret],
+            Statement::CreateSink(_) => &[ExecuteResponseKind::CreatedSink],
+            Statement::CreateSource(_) => &[ExecuteResponseKind::CreatedSource],
+            Statement::CreateTable(_) => &[ExecuteResponseKind::CreatedTable],
+            Statement::CreateType(_) => &[ExecuteResponseKind::CreatedType],
+            Statement::CreateView(_) | Statement::CreateViews(_) => {
+                &[ExecuteResponseKind::CreatedView]
+            }
+            Statement::Deallocate(_) => &[ExecuteResponseKind::Deallocate],
+            Statement::Delete(_) => &[
+                ExecuteResponseKind::Deleted,
+                ExecuteResponseKind::SendingRows,
+            ],
+            Statement::Discard(_) => &[
+                ExecuteResponseKind::DiscardedAll,
+                ExecuteResponseKind::DiscardedTemp,
+            ],
+            Statement::DropClusterReplicas(_) => {
+                &[ExecuteResponseKind::DroppedComputeInstanceReplicas]
+            }
+            Statement::DropClusters(_) => &[ExecuteResponseKind::DroppedComputeInstance],
+            Statement::DropDatabase(_) => &[ExecuteResponseKind::DroppedDatabase],
+            Statement::DropObjects(_) => &[
+                ExecuteResponseKind::DroppedConnection,
+                ExecuteResponseKind::DroppedComputeInstance,
+                ExecuteResponseKind::DroppedComputeInstanceReplicas,
+                ExecuteResponseKind::DroppedDatabase,
+                ExecuteResponseKind::DroppedSource,
+                ExecuteResponseKind::DroppedTable,
+                ExecuteResponseKind::DroppedView,
+                ExecuteResponseKind::DroppedMaterializedView,
+                ExecuteResponseKind::DroppedIndex,
+                ExecuteResponseKind::DroppedSink,
+                ExecuteResponseKind::DroppedType,
+                ExecuteResponseKind::DroppedSecret,
+            ],
+            Statement::DropRoles(_) => &[ExecuteResponseKind::DroppedRole],
+            Statement::DropSchema(_) => &[ExecuteResponseKind::DroppedSchema],
+
+            Statement::Explain(_)
+            | Statement::Select(_)
+            | Statement::ShowColumns(_)
+            | Statement::ShowCreateConnection(_)
+            | Statement::ShowCreateIndex(_)
+            | Statement::ShowCreateMaterializedView(_)
+            | Statement::ShowCreateSink(_)
+            | Statement::ShowCreateSource(_)
+            | Statement::ShowCreateTable(_)
+            | Statement::ShowCreateView(_)
+            | Statement::ShowDatabases(_)
+            | Statement::ShowIndexes(_)
+            | Statement::ShowObjects(_)
+            | Statement::ShowSchemas(_)
+            | Statement::ShowVariable(_) => &[ExecuteResponseKind::SendingRows],
+            Statement::Insert(_) => &[
+                ExecuteResponseKind::Inserted,
+                ExecuteResponseKind::SendingRows,
+            ],
+            Statement::Prepare(_) => &[ExecuteResponseKind::Prepare],
+
+            Statement::StartTransaction(_) => &[ExecuteResponseKind::StartedTransaction],
+            Statement::Update(_) => &[ExecuteResponseKind::Updated],
+        }
+    }
 }
 
 /// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
