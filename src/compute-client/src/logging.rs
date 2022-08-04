@@ -549,7 +549,7 @@ impl LogView {
                 GROUP BY
                     mz_records_per_dataflow_{}.id,
                     mz_records_per_dataflow_{}.name",
-                    "mz_records_per_dataflow_global_{}"),
+                "mz_records_per_dataflow_global_{}"),
 
             LogView::MzSchedulingElapsed =>  (
                 "SELECT
@@ -567,40 +567,17 @@ impl LogView {
                     mz_catalog.mz_scheduling_histogram_internal_{}
                 GROUP BY
                     id, worker, duration_ns",
-                    "mz_scheduling_histogram_{}"),
+                "mz_scheduling_histogram_{}"),
 
 
             LogView::MzSchedulingParks =>  (
-                "WITH sent_cte AS (
-                    SELECT
-                        channel,
-                        source_worker,
-                        target_worker,
-                        pg_catalog.count(*) AS sent
-                    FROM
-                        mz_catalog.mz_message_counts_sent_internal_{}
-                    GROUP BY
-                        channel, source_worker, target_worker
-                 ),
-                 received_cte AS (
-                    SELECT
-                        channel,
-                        source_worker,
-                        target_worker,
-                        pg_catalog.count(*) AS received
-                    FROM
-                        mz_catalog.mz_message_counts_received_internal_{}
-                    GROUP BY
-                        channel, source_worker, target_worker
-                 )
-                 SELECT
-                     sent_cte.channel,
-                     sent_cte.source_worker,
-                     sent_cte.target_worker,
-                     sent_cte.sent,
-                     received_cte.received
-                 FROM sent_cte JOIN received_cte USING (channel, source_worker, target_worker)",
-                 "mz_message_counts_{}"),
+                "SELECT
+                    worker, slept_for, requested, pg_catalog.count(*) AS count
+                FROM
+                    mz_catalog.mz_scheduling_parks_internal_{}
+                GROUP BY
+                    worker, slept_for, requested",
+                "mz_scheduling_parks_{}"),
 
         }
     }
