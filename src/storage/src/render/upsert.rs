@@ -212,11 +212,18 @@ fn evaluate(
     Ok(Some(row_buf.clone()))
 }
 
+/// Given a stream of rows and a description of the columns that form their key,
+/// produce a stream of keys and thinned values.
 fn extract_kv<G: Scope>(
     records: Collection<G, Row, Diff>,
     key_indices_sorted: Vec<usize>,
     key_indices: &[usize],
 ) -> Collection<G, (Row, Row), Diff> {
+    debug_assert!({
+        let mut verified_sorted = key_indices.to_vec();
+        verified_sorted.sort_unstable();
+        key_indices_sorted == verified_sorted
+    });
     let key_cols_are_sorted = &key_indices_sorted == key_indices;
 
     let mut row_buf = Row::default();
