@@ -76,18 +76,17 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn storage_usage_update(&mut self) {
         let object_id = None;
-        let shard_sizes = self.storageusageclient.shard_sizes().await;
+        let shard_sizes = self.storage_usage_client.shard_sizes().await;
 
-        let mut unk_storage = 0u64;
-        let mut known_storage = 0u64;
-        for (key, val) in shard_sizes.iter() {
-            if key.is_some() {
-                known_storage += val;
-                continue;
+        let mut unk_storage = 0;
+        let mut known_storage = 0;
+        for (key, val) in shard_sizes {
+            match key {
+                Some(_) => known_storage += val,
+                None => unk_storage += val,
             }
-            unk_storage += val
         }
-        // TODO: What, if anything, do we want to do with orphaned storage?
+        // TODO(jpepin): What, if anything, do we want to do with orphaned storage?
         if unk_storage > 0 {
             tracing::debug!("Found {} bytes of orphaned storage", unk_storage);
         }

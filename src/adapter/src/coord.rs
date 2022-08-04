@@ -215,7 +215,7 @@ pub struct Config<S> {
     pub storage_host_sizes: StorageHostSizeMap,
     pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
-    pub storageusageclient: StorageUsageClient,
+    pub storage_usage_client: StorageUsageClient,
     pub storage_metric_interval: u64,
 }
 
@@ -335,7 +335,7 @@ pub struct Coordinator<S> {
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 
     // Persist client for fetching storage metadata such as size metrics
-    storageusageclient: StorageUsageClient,
+    storage_usage_client: StorageUsageClient,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -839,7 +839,7 @@ pub async fn serve<S: Append + 'static>(
         default_storage_host_size,
         mut availability_zones,
         connection_context,
-        storageusageclient,
+        storage_usage_client,
         storage_metric_interval,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
@@ -941,7 +941,7 @@ pub async fn serve<S: Append + 'static>(
                 secrets_controller,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
-                storageusageclient,
+                storage_usage_client,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));

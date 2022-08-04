@@ -242,15 +242,15 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     )
     .await?;
 
-    // set up storage usage client for storage metrics
-    let storage_usage_response = StorageUsageClient::open(
-        // TODO: Is this the correct handling for this client?
-        config.controller.persist_location.blob_uri.clone(),
-        Arc::<tokio::sync::Mutex<mz_persist_client::cache::PersistClientCache>>::clone(
-            &config.controller.persist_clients,
-        ),
-    )
-    .await;
+    // set up storage usage client for collecting storage metrics
+    let storage_usage_response = {
+        let mut client_cache = config.controller.persist_clients.lock().await;
+        StorageUsageClient::open(
+            config.controller.persist_location.blob_uri.clone(),
+            &mut client_cache,
+        )
+        .await
+    };
     info!(
         "collecting storage metrics every {:?} seconds",
         config.storage_metric_collection_interval
@@ -276,7 +276,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
-        storageusageclient: storage_usage_client,
+        storage_usage_client,
         storage_metric_interval: config.storage_metric_collection_interval,
     })
     .await?;
