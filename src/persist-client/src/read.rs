@@ -172,6 +172,35 @@ where
             None => self.listen.next_batch().await,
         }
     }
+
+    /// Attempt to pull out the next values of this subscription. For more
+    /// details, see [`Listen::next`].
+    ///
+    /// TODO: delete this method when refactoring
+    /// `storage::source::persist_source::persist_source_sharded`.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
+    pub async fn next_listen_events(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
+        trace!(
+            "Subscribe::next as_of={:?}, frontier={:?}",
+            self.listen.as_of,
+            self.listen.frontier
+        );
+        // This is odd, but we move our handle into a `Listen`.
+        self.listen.handle.maybe_heartbeat_reader().await;
+
+        match self.snapshot_batches.pop_front() {
+            Some(batch) => {
+                let updates = self
+                    .listen
+                    .handle
+                    .fetch_batch(batch)
+                    .await
+                    .expect("must accept self-generated batch");
+                vec![ListenEvent::Updates(updates)]
+            }
+            None => self.listen.next().await,
+        }
+    }
 }
 
 /// Data and progress events of a shard subscription.
