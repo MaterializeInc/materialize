@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::From;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,7 +18,7 @@ use uuid::Uuid;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_repr::{Datum, GlobalId, Row, ScalarType};
+use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
 use crate::catalog::SYSTEM_USER;
@@ -397,59 +398,6 @@ impl SessionClient {
         &mut self,
         stmts: &str,
     ) -> Result<SimpleExecuteResponse, AdapterError> {
-        // Convert most floats to a JSON Number. JSON Numbers don't support NaN or
-        // Infinity, so those will still be rendered as strings.
-        fn float_to_json(f: f64) -> serde_json::Value {
-            match serde_json::Number::from_f64(f) {
-                Some(n) => serde_json::Value::Number(n),
-                None => serde_json::Value::String(f.to_string()),
-            }
-        }
-
-        fn datum_to_json(datum: &Datum) -> serde_json::Value {
-            match datum {
-                // Convert some common things to a native JSON value. This doesn't need to be
-                // too exhaustive because the SQL-over-HTTP interface is currently not hooked
-                // up to arbitrary external user queries.
-                Datum::Null | Datum::JsonNull => serde_json::Value::Null,
-                Datum::False => serde_json::Value::Bool(false),
-                Datum::True => serde_json::Value::Bool(true),
-                Datum::Int16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
-                Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
-                Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
-                Datum::Float32(n) => float_to_json(n.into_inner() as f64),
-                Datum::Float64(n) => float_to_json(n.into_inner()),
-                Datum::Numeric(d) => {
-                    // serde_json requires floats to be finite
-                    if d.0.is_infinite() {
-                        serde_json::Value::String(d.0.to_string())
-                    } else {
-                        serde_json::Value::Number(
-                            serde_json::Number::from_f64(f64::try_from(d.0).unwrap()).unwrap(),
-                        )
-                    }
-                }
-                Datum::String(s) => serde_json::Value::String(s.to_string()),
-                Datum::List(list) => serde_json::Value::Array(
-                    list.iter().map(|entry| datum_to_json(&entry)).collect(),
-                ),
-                Datum::Array(array) => serde_json::Value::Array(
-                    array
-                        .elements()
-                        .iter()
-                        .map(|entry| datum_to_json(&entry))
-                        .collect(),
-                ),
-                Datum::Map(map) => serde_json::Value::Object(
-                    map.iter()
-                        .map(|(k, v)| (k.to_owned(), datum_to_json(&v)))
-                        .collect(),
-                ),
-                Datum::Dummy => unreachable!(),
-                _ => serde_json::Value::String(datum.to_string()),
-            }
-        }
-
         let stmts =
             mz_sql::parse::parse(&stmts).map_err(|e| AdapterError::Unstructured(e.into()))?;
         let num_stmts = stmts.len();
@@ -559,7 +507,7 @@ impl SessionClient {
                     let mut datum_vec = mz_repr::DatumVec::new();
                     for row in rows {
                         let datums = datum_vec.borrow_with(&row);
-                        sql_rows.push(datums.iter().map(datum_to_json).collect());
+                        sql_rows.push(datums.iter().map(From::from).collect());
                     }
                     results.push(SimpleResult::Rows {
                         rows: sql_rows,
