@@ -23,7 +23,7 @@ use timely::dataflow::operators::{Capability, CapabilityRef, Concat, OkErr, Oper
 use timely::dataflow::{Scope, Stream};
 use timely::order::PartialOrder;
 use timely::progress::frontier::AntichainRef;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, ChangeBatch};
 use tracing::error;
 
 use mz_expr::{EvalError, MirScalarExpr};
@@ -320,7 +320,7 @@ where
                 Some(HashMap::default())
             };
 
-            let mut initial_values_multiset: HashMap<(Row, Row), Diff> = HashMap::default();
+            let mut initial_values_multiset = ChangeBatch::default();
             move |data_input, previous_input, output| {
                 if previous_token.is_some() {
                     assert!(current_values.is_none());
@@ -346,29 +346,15 @@ where
                     // allow us to recover the original key and value separately.
                     previous_input.for_each(|_cap, data| {
                         data.swap(&mut scratch_vector2);
-                        for ((k, v), t, r) in scratch_vector2.drain(..) {
-                            let is_relevant = match as_of_frontier.as_option() {
-                                Some(&start) => t < start,
-                                None => false,
-                            };
-                            if is_relevant {
-                                match initial_values_multiset.entry((k, v)) {
-                                    Entry::Occupied(mut oe) => {
-                                        let new_diff = r + *oe.get();
-                                        if new_diff == 0 {
-                                            oe.remove();
-                                        } else {
-                                            oe.insert(new_diff);
-                                        }
-                                    }
-                                    Entry::Vacant(ve) => {
-                                        if r != 0 {
-                                            ve.insert(r);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        initial_values_multiset.extend(
+                            scratch_vector2
+                                .drain(..)
+                                .filter(|(_d, t, _r)| match as_of_frontier.as_option() {
+                                    Some(start) => t < start,
+                                    None => false,
+                                })
+                                .map(|(d, _t, r)| (d, r)),
+                        );
                     });
                     if PartialOrder::less_equal(
                         &AntichainRef::new(&as_of_frontier),
