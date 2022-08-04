@@ -49,6 +49,7 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
+pub mod threshold_elision;
 pub mod topk_elision;
 pub mod union_cancel;
 pub mod update_let;
@@ -367,6 +368,13 @@ impl Optimizer {
             Box::new(crate::inline_let::InlineLet::new(false)),
             Box::new(crate::update_let::UpdateLet::default()),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+            // Remove threshold operators which have no effect.
+            // Must be done at the very end of the physical pass, because before
+            // that (at least at the moment) we cannot be sure that all trees
+            // are simplified equally well so they are structurally almost
+            // identical. Check the `threshold_elision.slt` tests that fail if
+            // you remove this transform for examples.
+            Box::new(crate::threshold_elision::ThresholdElision),
         ];
         Self {
             name: "mir_physical_optimizer",
@@ -383,6 +391,8 @@ impl Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
+                    // Remove threshold operators which have no effect.
+                    Box::new(crate::threshold_elision::ThresholdElision),
                     // Projection pushdown may unblock fusing joins and unions.
                     Box::new(crate::fusion::join::Join),
                     Box::new(crate::redundant_join::RedundantJoin::default()),
