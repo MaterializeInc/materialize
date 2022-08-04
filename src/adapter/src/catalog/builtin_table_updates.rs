@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, Utc};
 
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageMetrics};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
@@ -750,15 +750,13 @@ impl CatalogState {
 
     pub fn pack_storage_usage_update(
         &self,
-        event: &EventDetails,
+        event: &VersionedStorageMetrics,
     ) -> Result<BuiltinTableUpdate, Error> {
         let (id, object_id, size_bytes, collection_timestamp): (u64, &Option<String>, u64, u64) =
             match event {
-                EventDetails::StorageMetricsV1(ev) => {
+                VersionedStorageMetrics::V1(ev) => {
                     (ev.id, &ev.object_id, ev.size_bytes, ev.collection_timestamp)
                 }
-
-                _ => panic!("unsupported event type for storage usage row"),
             };
 
         let valid_id = i64::try_from(id).map_err(|e| {
@@ -785,7 +783,6 @@ impl CatalogState {
             ),
             Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
         ]);
-        // TODO: what should this be? Table is append-only
         let diff = 1;
         Ok(BuiltinTableUpdate {
             id: table,

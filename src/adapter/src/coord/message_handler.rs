@@ -89,7 +89,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         // TODO: What, if anything, do we want to do with orphaned storage?
         if unk_storage > 0 {
-            println!("Found {} bytes of orphaned storage", unk_storage);
+            tracing::debug!("Found {} bytes of orphaned storage", unk_storage);
         }
         self.catalog_transact(
             None,
@@ -100,7 +100,11 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
         )
         .await
-        .expect("updating storage usage status cannot fail");
+        .map_err(|e| {
+            tracing::warn!("Failed to update storage metrics: {:?}", e);
+            e
+        })
+        .ok();
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

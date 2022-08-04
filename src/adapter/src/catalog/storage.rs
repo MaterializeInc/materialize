@@ -19,7 +19,7 @@ use timely::progress::Timestamp;
 use uuid::Uuid;
 
 use crate::catalog;
-use mz_audit_log::{EventDetails, VersionedEvent};
+use mz_audit_log::{VersionedEvent, VersionedStorageMetrics};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::ConcreteComputeInstanceReplicaConfig;
@@ -561,7 +561,7 @@ impl<S: Append> Connection<S> {
             .peek_one(&mut self.stash)
             .await?
             .into_keys()
-            .map(|ev| ev.event))
+            .map(|ev| ev.metric))
     }
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
@@ -880,10 +880,10 @@ impl<'a, S: Append> Transaction<'a, S> {
         self.audit_log_updates.push((AuditLogKey { event }, (), 1));
     }
 
-    pub fn insert_storage_metrics_event(&mut self, event: EventDetails) {
-        let event = serde_json::to_vec(&event).expect("must serialize");
+    pub fn insert_storage_metrics_event(&mut self, metric: VersionedStorageMetrics) {
+        let metric = metric.serialize();
         self.storage_usage_updates
-            .push((StorageMetricsKey { event }, (), 1));
+            .push((StorageMetricsKey { metric }, (), 1));
     }
 
     pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
@@ -1625,7 +1625,7 @@ impl_codec!(AuditLogKey);
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct StorageMetricsKey {
     #[prost(bytes)]
-    event: Vec<u8>,
+    metric: Vec<u8>,
 }
 impl_codec!(StorageMetricsKey);
 

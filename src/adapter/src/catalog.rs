@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
 
-use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent};
+use mz_audit_log::{
+    EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent, VersionedStorageMetrics,
+};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
@@ -73,7 +75,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::storage::BootstrapArgs;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
-use crate::{AdapterError, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS, DUMMY_AVAILABILITY_ZONE};
+use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
 mod builtin_table_updates;
 mod config;
@@ -84,7 +86,9 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
+pub use crate::catalog::config::{
+    ClusterReplicaSizeMap, Config, StorageHostSizeMap, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
+};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::client::ConnectionId;
 use crate::util::index_sql;
@@ -2008,7 +2012,7 @@ impl<S: Append> Catalog<S> {
 
         let storage_metric_events = catalog.storage().await.load_storage_metrics().await?;
         for event in storage_metric_events {
-            let event = serde_json::from_slice(&event).unwrap();
+            let event = VersionedStorageMetrics::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 
@@ -2434,6 +2438,9 @@ impl<S: Append> Catalog<S> {
             },
         )
         .await?;
+        let storage_metric_interval: u64 = DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS
+            .parse()
+            .unwrap_or(300);
         let (catalog, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -2445,7 +2452,7 @@ impl<S: Append> Catalog<S> {
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: vec![],
-            storage_metric_interval: DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
+            storage_metric_interval,
         })
         .await?;
         Ok(catalog)
@@ -2905,12 +2912,8 @@ impl<S: Append> Catalog<S> {
         let collection_timestamp = (self.state.config.now)();
         let id = tx.get_and_increment_id(storage::STORAGE_METRICS_ID_ALLOC_KEY.to_string())?;
 
-        let event_details = EventDetails::StorageMetricsV1(mz_audit_log::StorageMetricsV1 {
-            id,
-            object_id,
-            size_bytes,
-            collection_timestamp,
-        });
+        let event_details =
+            VersionedStorageMetrics::new(id, object_id, size_bytes, collection_timestamp);
         builtin_table_updates.push(self.state.pack_storage_usage_update(&event_details)?);
         tx.insert_storage_metrics_event(event_details);
         Ok(())

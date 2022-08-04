@@ -39,7 +39,7 @@ use mz_ore::tracing::OpenTelemetryEnableCallback;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::tcp_connection::ConnectionHandler;
 
@@ -251,6 +251,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         ),
     )
     .await;
+    info!(
+        "collecting storage metrics every {:?} seconds",
+        config.storage_metric_collection_interval
+    );
+
     let storage_usage_client = match storage_usage_response {
         Ok(storageusageclient) => storageusageclient,
         Err(error) => panic!("Problem opening storage usage client: {}", error),

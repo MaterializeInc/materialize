@@ -703,10 +703,6 @@ max log level: {max_log_level}",
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
     );
-    println!(
-        " Storage Usage metrics interval: {}",
-        args.default_storage_metrics_interval
-    );
 
     // Block forever.
     loop {

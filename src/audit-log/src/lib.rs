@@ -105,7 +105,6 @@ pub enum EventDetails {
     FullNameV1(FullNameV1),
     NameV1(NameV1),
     RenameItemV1(RenameItemV1),
-    StorageMetricsV1(StorageMetricsV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -139,14 +138,6 @@ pub struct CreateComputeInstanceReplicaV1 {
     pub logical_size: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StorageMetricsV1 {
-    pub id: u64,
-    pub object_id: Option<String>,
-    pub size_bytes: u64,
-    pub collection_timestamp: EpochMillis,
-}
-
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
@@ -159,7 +150,6 @@ impl EventDetails {
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::NameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::FullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
-            EventDetails::StorageMetricsV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
@@ -225,4 +215,66 @@ fn test_audit_log() -> Result<(), anyhow::Error> {
     }
 
     Ok(())
+}
+
+/// VersionedStorageMetrics describes the state of storage
+/// for the environment, such as storage used, at a point in time.
+/// These metrics are persisted in the catalog across restarts,
+/// so any updates to the schema will require a new version.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum VersionedStorageMetrics {
+    V1(StorageMetricsV1),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageMetricsV1 {
+    pub id: u64,
+    pub object_id: Option<String>,
+    pub size_bytes: u64,
+    pub collection_timestamp: EpochMillis,
+}
+
+impl StorageMetricsV1 {
+    pub fn new(
+        id: u64,
+        object_id: Option<String>,
+        size_bytes: u64,
+        collection_timestamp: EpochMillis,
+    ) -> StorageMetricsV1 {
+        StorageMetricsV1 {
+            id,
+            object_id,
+            size_bytes,
+            collection_timestamp,
+        }
+    }
+}
+
+impl VersionedStorageMetrics {
+    /// Create a new metric snapshot.
+    /// This function must always require and produce the most
+    /// recent variant of VersionedStorageMetrics.
+    pub fn new(
+        id: u64,
+        object_id: Option<String>,
+        size_bytes: u64,
+        collection_timestamp: EpochMillis,
+    ) -> Self {
+        Self::V1(StorageMetricsV1::new(
+            id,
+            object_id,
+            size_bytes,
+            collection_timestamp,
+        ))
+    }
+
+    // Implement deserialize and serialize so writers and readers don't have to
+    // coordinate about which Serializer to use.
+    pub fn deserialize(data: &[u8]) -> Result<Self, anyhow::Error> {
+        Ok(serde_json::from_slice(data)?)
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("must serialize")
+    }
 }
