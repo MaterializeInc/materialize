@@ -569,8 +569,8 @@ impl fmt::Display for CatalogError {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::UnexpectedType(name, cit) => {
-                write!(f, "\"{name}\" is not of type {cit}")
+            Self::UnexpectedType(name, item_type) => {
+                write!(f, "\"{name}\" is not of type {item_type}")
             }
             Self::InvalidDependency { name, typ } => write!(
                 f,
