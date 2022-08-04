@@ -1155,7 +1155,7 @@ mod tests {
                 .expect("invalid usage")
                 .expect("unexpected upper");
             writer_maintenance
-                .perform_awaitable(&write.machine, &write.gc, write.compact.as_ref())
+                .perform(&write.machine, &write.gc, write.compact.as_ref())
                 .await;
         }
         let key = write.machine.shard_id().to_string();
