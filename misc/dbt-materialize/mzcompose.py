@@ -91,7 +91,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.run(
                         "dbt-test",
                         "pytest",
-                        "dbt-materialize/test",
+                        "dbt-materialize/tests",
                         env_extra={
                             "DBT_HOST": "materialized",
                             "KAFKA_ADDR": "redpanda:9092",
