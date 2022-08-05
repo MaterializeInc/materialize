@@ -45,6 +45,7 @@ steps:
           - { value: checks-oneatatime-restart-environmentd-storaged }
           - { value: checks-oneatatime-kill-storaged }
           - { value: checks-oneatatime-restart-postgres-backend }
+          - { value: checks-oneatatime-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-computed-first }
           - { value: checks-upgrade-computed-last }
@@ -380,6 +381,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartPostgresBackend, --execution-mode=oneatatime]
+
+  - id: checks-oneatatime-restart-redpanda
+    label: "Checks oneatatime + restart Redpanda"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartRedpanda, --execution-mode=oneatatime]
 
   - id: checks-upgrade-entire-mz
     label: "Upgrade entire Mz from v0.27.0-alpha.23"

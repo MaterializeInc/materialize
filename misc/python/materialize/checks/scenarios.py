@@ -29,6 +29,9 @@ from materialize.checks.mzcompose_actions import (
     RestartPostgresBackend as RestartPostgresBackendAction,
 )
 from materialize.checks.mzcompose_actions import (
+    RestartRedpanda as RestartRedpandaAction,
+)
+from materialize.checks.mzcompose_actions import (
     RestartSourcePostgres as RestartSourcePostgresAction,
 )
 from materialize.checks.mzcompose_actions import StartComputed, StartMz, UseComputed
@@ -169,5 +172,19 @@ class RestartSourcePostgres(Scenario):
             RestartSourcePostgresAction(),
             Manipulate(self.checks, phase=2),
             RestartSourcePostgresAction(),
+            Validate(self.checks),
+        ]
+
+
+class RestartRedpanda(Scenario):
+    def actions(self) -> List[Action]:
+        return [
+            StartMz(),
+            Initialize(self.checks),
+            RestartRedpandaAction(),
+            Manipulate(self.checks, phase=1),
+            RestartRedpandaAction(),
+            Manipulate(self.checks, phase=2),
+            RestartRedpandaAction(),
             Validate(self.checks),
         ]
