@@ -258,7 +258,7 @@ pub fn construct<A: Allocate>(
                                         Datum::Int64(logical as i64),
                                     ]),
                                     time_ms,
-                                    delta as i64,
+                                    i64::from(delta),
                                 ));
                                 if delta > 0 {
                                     // we should record the source frontier here only if
