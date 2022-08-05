@@ -122,13 +122,13 @@ $ kafka-verify format=avro sink=materialize.public.snk2 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}}
 {"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}}
 
-$ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
-{"before": null, "after": {"row":{"c": "goofusgallant"}}}
-{"before": null, "after": {"row":{"c": "jackjill"}}}
-
-$ kafka-verify format=avro sink=materialize.public.snk4 sort-messages=true
-{"before": null, "after": {"row":{"c": "goofusgallant"}}}
-{"before": null, "after": {"row":{"c": "jackjill"}}}
+#$ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
+#{"before": null, "after": {"row":{"c": "goofusgallant"}}}
+#{"before": null, "after": {"row":{"c": "jackjill"}}}
+#
+#$ kafka-verify format=avro sink=materialize.public.snk4 sort-messages=true
+#{"before": null, "after": {"row":{"c": "goofusgallant"}}}
+#{"before": null, "after": {"row":{"c": "jackjill"}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk5 sort-messages=true
 {"before": null, "after": {"row":{"c": "goofusgallant"}}}
