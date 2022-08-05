@@ -17,15 +17,12 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
-
 SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Materialized(),
     Testdrive(),
-    testdrive_no_reset,
     Postgres(),
 ]
 
