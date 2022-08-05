@@ -50,7 +50,7 @@ Applied Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting
 ====
 No change: ProjectionPushdown, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map
 ====
-Applied Fixpoint { transforms: [Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Project, Union, UnionBranchCancellation, RelationCSE, InlineLet { inline_mfp: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }], limit: 100 }:
+Applied Fixpoint { transforms: [ThresholdElision, Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Project, Union, UnionBranchCancellation, RelationCSE, InlineLet { inline_mfp: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }], limit: 100 }:
 %0 =
 | Get x (u0)
 | Filter #0
@@ -98,7 +98,7 @@ Applied UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 
 | Union %0 %0
 
 ====
-No change: FoldConstants { limit: Some(10000) }
+No change: FoldConstants { limit: Some(10000) }, ThresholdElision
 ====
 Final:
 %0 = Let l0 =
@@ -133,7 +133,7 @@ Applied Fixpoint { transforms: [PredicatePushdown { recursion_guard: RecursionGu
 (Join [(get u1) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] Unimplemented)
 
 ====
-No change: Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RelationCSE, InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map, Negate, Filter, FlatMapToMap, Project, Join, TopK, InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Reduce, Union, UnionBranchCancellation, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map, Fixpoint { transforms: [Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Project, Union, UnionBranchCancellation, RelationCSE, InlineLet { inline_mfp: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }], limit: 100 }
+No change: Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RelationCSE, InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map, Negate, Filter, FlatMapToMap, Project, Join, TopK, InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Reduce, Union, UnionBranchCancellation, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Map, Fixpoint { transforms: [ThresholdElision, Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Project, Union, UnionBranchCancellation, RelationCSE, InlineLet { inline_mfp: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }], limit: 100 }
 ====
 Applied Fixpoint { transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }:
 (Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]]))
@@ -149,7 +149,7 @@ Applied InlineLet { inline_mfp: false, recursion_guard: RecursionGuard { depth: 
 (Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]]))
 
 ====
-No change: UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }
+No change: UpdateLet { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, ThresholdElision
 ====
 Final:
 (Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]]))

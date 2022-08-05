@@ -1,0 +1,235 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+DROP TABLE IF EXISTS band_members;
+
+statement ok
+DROP TABLE IF EXISTS people;
+
+statement ok
+DROP TABLE IF EXISTS bands;
+
+statement ok
+CREATE TABLE bands (
+    id INT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL
+)
+
+statement ok
+CREATE TABLE people (
+    id INT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    born DATE NOT NULL,
+    died DATE
+)
+
+statement ok
+CREATE TABLE band_members (
+    b_id INT NOT NULL, -- REFERENCES bands(id),
+    p_id INT NOT NULL -- REFERENCES people(id)
+)
+
+statement ok
+INSERT INTO bands VALUES
+    (1, 'The Beatles')
+
+statement ok
+INSERT INTO people VALUES
+    (1, 'John Lennon', '1940-10-09', '1980-12-08'),
+    (2, 'George Harrison', '1943-02-25', '2001-11-29'),
+    (3, 'Paul McCartney', '1942-06-18', NULL),
+    (4, 'Richard Starkey', '1940-07-07', NULL)
+
+statement ok
+INSERT INTO band_members VALUES
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4)
+
+# simple case: EXCEPT ALL
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+(
+    SELECT id FROM people
+)
+EXCEPT ALL
+(
+    SELECT id FROM people WHERE died IS NOT NULL
+)
+----
+Source materialize.public.people (u2):
+| Project (#0, #3)
+
+Query:
+%0 =
+| Get materialize.public.people (u2)
+| Project (#0)
+
+%1 =
+| Get materialize.public.people (u2)
+| Filter (#3) IS NOT NULL
+| Project (#0)
+| Negate
+
+%2 =
+| Union %0 %1
+
+EOF
+
+# simple case: EXCEPT
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT name FROM people
+EXCEPT
+SELECT name FROM people WHERE id > 1
+----
+Source materialize.public.people (u2):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.people (u2)
+| Project (#1)
+| Distinct group=(#0)
+
+%1 =
+| Get materialize.public.people (u2)
+| Filter (#0 > 1)
+| Project (#1)
+| Distinct group=(#0)
+| Negate
+
+%2 =
+| Union %0 %1
+
+EOF
+
+# negative example: EXCEPT ALL that should not be confused for an EXCEPT
+# the two inputs have a Reduce *with aggregates*
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT MAX(id) FROM people GROUP BY name
+EXCEPT ALL
+SELECT MAX(id) FROM (SELECT * FROM people WHERE id > 1) GROUP BY name
+----
+Source materialize.public.people (u2):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.people (u2)
+| Project (#0, #1)
+| Reduce group=(#1)
+| | agg max(#0)
+| Project (#1)
+
+%1 =
+| Get materialize.public.people (u2)
+| Filter (#0 > 1)
+| Project (#0, #1)
+| Reduce group=(#1)
+| | agg max(#0)
+| Project (#1)
+| Negate
+
+%2 =
+| Union %0 %1
+| Threshold
+
+EOF
+
+# complex example: EXCEPT ALL
+# here ThresholdElision can only match in after some prior simplifications
+# and for some reason (TBD later) this means that we need to run it ad the
+# end of the physical pass
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+(
+    SELECT
+        id, name
+    FROM
+        people
+)
+EXCEPT ALL
+(
+    SELECT
+        *
+    FROM
+        (SELECT DISTINCT id FROM people) people_ids,
+        LATERAL (
+            SELECT name FROM people
+            WHERE people.id = people_ids.id
+            LIMIT 1
+        )
+)
+----
+Source materialize.public.people (u2):
+| Project (#0, #1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.people (u2)
+| Project (#0, #1)
+
+%1 =
+| Get %0 (l0)
+| TopK group=(#0) order=() limit=1 offset=0
+| Negate
+
+%2 =
+| Union %0 %1
+
+EOF
+
+# complex example: EXCEPT
+# here ThresholdElision can only match in after some prior simplifications
+# and for some reason (TBD later) this means that we need to run it ad the
+# end of the physical pass
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+(
+    SELECT
+        id, name
+    FROM
+        people
+)
+EXCEPT
+(
+    SELECT
+        *
+    FROM
+        (SELECT DISTINCT id FROM people) people_ids,
+        LATERAL (
+            SELECT name FROM people
+            WHERE people.id = people_ids.id
+            LIMIT 1
+        )
+)
+----
+Source materialize.public.people (u2):
+| Project (#0, #1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.people (u2)
+| Project (#0, #1)
+
+%1 =
+| Get %0 (l0)
+| TopK group=(#0) order=() limit=1 offset=0
+| Negate
+
+%2 =
+| Union %0 %1
+
+EOF
