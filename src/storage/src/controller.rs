@@ -691,7 +691,7 @@ where
                 for t in data_write.upper().elements() {
                     error!("[btv] inserting {t:?} for data shard");
                     resume_upper.insert(t.clone());
-                }                
+                }
 
                 // Check if this ingestion is using any operators that are stateful AND are not
                 // storing their state in persist shards. This whole section should be eventually
