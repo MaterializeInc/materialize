@@ -140,12 +140,6 @@ async fn migrate<S: Append>(
                 },
                 IdAllocValue { next_id: 1 },
             )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: STORAGE_METRICS_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue { next_id: 1 },
-            )?;
             txn.databases.insert(
                 DatabaseKey {
                     id: MATERIALIZE_DATABASE_ID,
@@ -326,7 +320,18 @@ async fn migrate<S: Append>(
             })?;
             Ok(())
         },
-        // Add new migrations here.
+        // Add a transaction id for the new storage usage metrics table.
+        // Added in alpha.10
+        |txn: &mut Transaction<'_, S>, _bootstrap_args| {
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: STORAGE_METRICS_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue { next_id: 1 },
+            )?;
+            Ok(())
+        },
+        // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
         //

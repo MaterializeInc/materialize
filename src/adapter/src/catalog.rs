@@ -1648,7 +1648,7 @@ impl<S: Append> Catalog<S> {
                     build_info: config.build_info,
                     timestamp_frequency: Duration::from_secs(1),
                     storage_metrics_collection_interval: Duration::from_secs(
-                        config.storage_metric_interval,
+                        DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
                     ),
                     now: config.now.clone(),
                 },
@@ -2438,9 +2438,6 @@ impl<S: Append> Catalog<S> {
             },
         )
         .await?;
-        let storage_metric_interval: u64 = DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS
-            .parse()
-            .unwrap_or(300);
         let (catalog, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -2452,7 +2449,6 @@ impl<S: Append> Catalog<S> {
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: vec![],
-            storage_metric_interval,
         })
         .await?;
         Ok(catalog)

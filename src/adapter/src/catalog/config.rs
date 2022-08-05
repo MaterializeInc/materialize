@@ -19,8 +19,8 @@ use mz_storage::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
 
-/// The default interval to collect storage usage information
-pub const DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS: &str = "3600";
+/// The default interval to collect storage usage information in seconds
+pub const DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS: u64 = 3600;
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -45,8 +45,6 @@ pub struct Config<'a, S> {
     pub default_storage_host_size: Option<String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
-    /// How often in seconds to collect storage usage metrics.
-    pub storage_metric_interval: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

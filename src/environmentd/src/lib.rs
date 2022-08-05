@@ -109,10 +109,6 @@ pub struct Config {
     /// A callback to enable or disable the OpenTelemetry tracing collector.
     pub otel_enable_callback: OpenTelemetryEnableCallback,
 
-    // === Metrics Options. ===
-    /// How frequently to collect storage usage metrics.
-    pub storage_metric_collection_interval: u64,
-
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
@@ -253,7 +249,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     };
     info!(
         "collecting storage metrics every {:?} seconds",
-        config.storage_metric_collection_interval
+        mz_adapter::catalog::DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS
     );
 
     let storage_usage_client = match storage_usage_response {
@@ -277,7 +273,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
         storage_usage_client,
-        storage_metric_interval: config.storage_metric_collection_interval,
     })
     .await?;
 

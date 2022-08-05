@@ -36,9 +36,7 @@ use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
-use mz_adapter::catalog::{
-    ClusterReplicaSizeMap, StorageHostSizeMap, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
-};
+use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
@@ -359,10 +357,6 @@ pub struct Args {
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
-
-    // === Metrics options. ===
-    #[clap(long, env = "STORAGE_USAGE_COLLECTION_INTERVAL", default_value = DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS)]
-    default_storage_metrics_interval: u64,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -686,7 +680,6 @@ max log level: {max_log_level}",
             secrets_reader,
         ),
         otel_enable_callback,
-        storage_metric_collection_interval: args.default_storage_metrics_interval,
     }))?;
 
     println!(

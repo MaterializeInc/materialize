@@ -216,7 +216,6 @@ pub struct Config<S> {
     pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
-    pub storage_metric_interval: u64,
 }
 
 /// Soft-state metadata about a compute replica
@@ -840,7 +839,6 @@ pub async fn serve<S: Append + 'static>(
         mut availability_zones,
         connection_context,
         storage_usage_client,
-        storage_metric_interval,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -873,7 +871,6 @@ pub async fn serve<S: Append + 'static>(
             storage_host_sizes,
             default_storage_host_size,
             availability_zones,
-            storage_metric_interval,
         })
         .await?;
     let cluster_id = catalog.config().cluster_id;

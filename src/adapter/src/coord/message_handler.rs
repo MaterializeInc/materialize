@@ -90,20 +90,19 @@ impl<S: Append + 'static> Coordinator<S> {
         if unk_storage > 0 {
             tracing::debug!("Found {} bytes of orphaned storage", unk_storage);
         }
-        self.catalog_transact(
-            None,
-            vec![catalog::Op::UpdateStorageMetrics {
-                object_id,
-                size_bytes: known_storage,
-            }],
-            |_| Ok(()),
-        )
-        .await
-        .map_err(|e| {
-            tracing::warn!("Failed to update storage metrics: {:?}", e);
-            e
-        })
-        .ok();
+        if let Err(err) = self
+            .catalog_transact(
+                None,
+                vec![catalog::Op::UpdateStorageMetrics {
+                    object_id,
+                    size_bytes: known_storage,
+                }],
+                |_| Ok(()),
+            )
+            .await
+        {
+            tracing::warn!("Failed to update storage metrics: {:?}", err);
+        }
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
