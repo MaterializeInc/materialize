@@ -72,7 +72,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
-        let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
+        let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut timelines_to_drop = vec![];
 
@@ -120,6 +120,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Secret(_) => {
                         secrets_to_drop.push(*id);
+                    }
+                    CatalogItem::Connection(catalog::Connection { connection, .. }) => {
+                        // SSH connections have an associated secret that should be dropped
+                        match connection {
+                            mz_storage::types::connections::Connection::Ssh(_) => {
+                                secrets_to_drop.push(*id);
+                            }
+                            _ => {}
+                        }
                     }
                     _ => (),
                 }
@@ -573,7 +582,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
-                | Op::UpdateItem { .. } => {}
+                | Op::UpdateItem { .. }
+                | Op::UpdateRotatedKeys { .. } => {}
             }
         }
 

@@ -64,8 +64,8 @@ use mz_storage::types::sources::{
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
-    AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
-    AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
+    AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
+    AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
     AwsConnectionOptionName, ClusterOption, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
@@ -106,8 +106,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
-    StorageHostConfig, Table, Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, RotateKeysPlan, Secret,
+    Sink, Source, StorageHostConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -3017,7 +3017,7 @@ generate_extracted_config!(
     (Host, String),
     (Password, with_options::Secret),
     (Port, u16, Default(5432_u16)),
-    (SshTunnel, String),
+    (SshTunnel, with_options::Object),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
     (SslKey, with_options::Secret),
@@ -3025,20 +3025,19 @@ generate_extracted_config!(
     (User, StringOrSecret)
 );
 
-impl TryFrom<PostgresConnectionOptionExtracted>
-    for mz_storage::types::connections::PostgresConnection
-{
-    type Error = PlanError;
-
-    fn try_from(options: PostgresConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        let cert = options.ssl_certificate;
-        let key = options.ssl_key.map(|secret| secret.into());
+impl PostgresConnectionOptionExtracted {
+    fn to_connection(
+        self,
+        scx: &StatementContext,
+    ) -> Result<mz_storage::types::connections::PostgresConnection, PlanError> {
+        let cert = self.ssl_certificate;
+        let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
             (None, None) => None,
             (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
             _ => sql_bail!("invalid CONNECTION: both SSL KEY and SSL CERTIFICATE are required"),
         };
-        let tls_mode = match options.ssl_mode.as_ref().map(|m| m.as_str()) {
+        let tls_mode = match self.ssl_mode.as_ref().map(|m| m.as_str()) {
             None | Some("disable") => tokio_postgres::config::SslMode::Disable,
             // "prefer" intentionally omitted because it has dubious security
             // properties.
@@ -3049,20 +3048,34 @@ impl TryFrom<PostgresConnectionOptionExtracted>
             }
             Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
         };
+
+        // Validate that the SSH tunnel ID is indeed an SSH connection
+        let ssh_tunnel_id = self.ssh_tunnel.map(|ssh_tunnel| ssh_tunnel.into());
+        let ssh_tunnel = if let Some(ref ssh_tunnel) = ssh_tunnel_id {
+            let ssh_tunnel = scx.catalog.get_item(ssh_tunnel);
+            match ssh_tunnel.connection()? {
+                Connection::Ssh(ssh) => Some(ssh.clone()),
+                _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
+            }
+        } else {
+            None
+        };
+
         Ok(mz_storage::types::connections::PostgresConnection {
-            database: options
+            database: self
                 .database
                 .ok_or_else(|| sql_err!("DATABASE option is required"))?,
-            host: options
+            host: self
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
-            password: options.password.map(|password| password.into()),
-            port: options.port,
-            ssh_tunnel: options.ssh_tunnel,
+            password: self.password.map(|password| password.into()),
+            port: self.port,
+            ssh_tunnel_id,
+            ssh_tunnel,
             tls_mode,
-            tls_root_cert: options.ssl_certificate_authority,
+            tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
-            user: options
+            user: self
                 .user
                 .ok_or_else(|| sql_err!("USER option is required"))?,
         })
@@ -3072,7 +3085,7 @@ impl TryFrom<PostgresConnectionOptionExtracted>
 generate_extracted_config!(
     SshConnectionOption,
     (Host, String),
-    (Port, i32),
+    (Port, u16, Default(22_u16)),
     (User, String)
 );
 
@@ -3084,14 +3097,11 @@ impl TryFrom<SshConnectionOptionExtracted> for mz_storage::types::connections::S
             host: options
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
-            port: options
-                .port
-                .ok_or_else(|| sql_err!("PORT option is required"))?,
+            port: options.port,
             user: options
                 .user
                 .ok_or_else(|| sql_err!("USER option is required"))?,
-            public_key: "TODO".to_string(),
-            private_key: GlobalId::Transient(0),
+            public_keys: None,
         })
     }
 }
@@ -3142,7 +3152,7 @@ pub fn plan_create_connection(
         }
         CreateConnection::Postgres { with_options } => {
             let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage::types::connections::PostgresConnection::try_from(c)?;
+            let connection = c.to_connection(scx)?;
             Connection::Postgres(connection)
         }
         CreateConnection::Aws { with_options } => {
@@ -3717,6 +3727,13 @@ pub fn describe_alter_source(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_alter_connection(
+    _: &StatementContext,
+    _: AlterConnectionStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn plan_alter_source(
     scx: &StatementContext,
     stmt: AlterSourceStatement<Aug>,
@@ -3847,4 +3864,30 @@ pub fn plan_alter_system_reset_all(
     _: AlterSystemResetAllStatement,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::AlterSystemResetAll(AlterSystemResetAllPlan {}))
+}
+
+pub fn plan_alter_connection(
+    scx: &StatementContext,
+    stmt: AlterConnectionStatement,
+) -> Result<Plan, PlanError> {
+    let AlterConnectionStatement { name, if_exists } = stmt;
+    let name = normalize::unresolved_object_name(name)?;
+    let entry = match scx.catalog.resolve_item(&name) {
+        Ok(connection) => connection,
+        Err(_) if if_exists => {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Connection,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if !matches!(entry.connection()?, Connection::Ssh(_)) {
+        sql_bail!(
+            "{} is not an SSH connection",
+            scx.catalog.resolve_full_name(entry.name())
+        )
+    }
+
+    let id = entry.id();
+    Ok(Plan::RotateKeys(RotateKeysPlan { id }))
 }

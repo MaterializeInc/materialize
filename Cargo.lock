@@ -203,6 +203,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-ssh2-lite"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69832303b1bdcfa73a74e30632e227f1f49ecc9d5da23bc1f2e1c268a1e7aad9"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "ssh2",
+ "tokio",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -732,6 +744,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 
 [[package]]
+name = "base64ct"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bdca834647821e0b13d9539a8634eb62d3501b6b6c2cec1722786ee6671b851"
+
+[[package]]
 name = "bigdecimal"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1136,6 +1154,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-oid"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4c78c047431fee22c1a7bb92e00ad095a02a983affe4d8a72e2a2c62c1b94f3"
+
+[[package]]
 name = "const_format"
 version = "0.2.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1486,6 +1510,15 @@ checksum = "76a99b958f19724bc0a2202086d135c2e7ed098e95cdae778546e965648fa47b"
 dependencies = [
  "cc",
  "libc",
+]
+
+[[package]]
+name = "der"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6919815d73839e7ad218de758883aae3a257ba6759ce7a9992501efbb53d705c"
+dependencies = [
+ "const-oid",
 ]
 
 [[package]]
@@ -2391,9 +2424,12 @@ dependencies = [
 
 [[package]]
 name = "instant"
-version = "0.1.6"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b141fdc7836c525d4d594027d318c84161ca17aaf8113ab1f81ab93ae897485"
+checksum = "7a5bbe824c507c5da5956355e86a746d82e0e1464f65d862cc5e71da70e94b2c"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "integer-encoding"
@@ -2714,6 +2750,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8664486da51de68fbb3331d37c2a0fff4b60e988f284670a6a0833a8e6406ad"
 dependencies = [
  "cc",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
+name = "libssh2-sys"
+version = "0.2.23"
+source = "git+https://github.com/MaterializeInc/ssh2-rs#cf435572dec61b0bc0945b23121de23dc80aa75d"
+dependencies = [
+ "cc",
+ "libc",
+ "libz-sys",
+ "openssl-sys",
  "pkg-config",
  "vcpkg",
 ]
@@ -3622,7 +3671,9 @@ dependencies = [
  "pin-project",
  "prometheus",
  "serde",
+ "serde_json",
  "smallvec",
+ "ssh-key",
  "stacker",
  "tokio",
  "tokio-native-tls",
@@ -3822,6 +3873,7 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-ssh2-lite",
  "mz-ore",
  "mz-proto",
  "openssl",
@@ -3830,6 +3882,7 @@ dependencies = [
  "prost",
  "protobuf-src",
  "serde",
+ "tokio",
  "tokio-postgres",
  "tonic-build",
 ]
@@ -4792,6 +4845,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pem-rfc7468"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d159833a9105500e0398934e205e0773f0b27529557134ecfc51c27646adac"
+dependencies = [
+ "base64ct",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5630,6 +5692,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96311ef4a16462c757bb6a39152c40f58f31cd2602a40fceb937e2bc34e6cbab"
 
 [[package]]
+name = "sec1"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08da66b8b0965a5555b6bd6639e68ccba85e1e2506f5fbb089e93f8a04e1a2d1"
+dependencies = [
+ "der",
+ "generic-array",
+]
+
+[[package]]
 name = "secrecy"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5806,6 +5878,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "signature"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f054c6c1a6e95179d6f23ed974060dcefb2d9388bb7256900badad682c499de4"
+
+[[package]]
 name = "simdutf8"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5871,6 +5949,32 @@ name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
+
+[[package]]
+name = "ssh-key"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e09d8b0ff2fca365c89ad535055c17adbd9fb0a5daf338299049882e95b6931"
+dependencies = [
+ "base64ct",
+ "pem-rfc7468",
+ "rand_core",
+ "sec1",
+ "sha2",
+ "signature",
+ "zeroize",
+]
+
+[[package]]
+name = "ssh2"
+version = "0.9.3"
+source = "git+https://github.com/MaterializeInc/ssh2-rs#cf435572dec61b0bc0945b23121de23dc80aa75d"
+dependencies = [
+ "bitflags",
+ "libc",
+ "libssh2-sys",
+ "parking_lot",
+]
 
 [[package]]
 name = "stable_deref_trait"

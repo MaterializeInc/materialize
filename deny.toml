@@ -183,4 +183,7 @@ allow-git = [
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",
+
+    # Waiting on https://github.com/alexcrichton/ssh2-rs/pull/257
+    "https://github.com/MaterializeInc/ssh2-rs",
 ]

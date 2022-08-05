@@ -157,6 +157,12 @@ pub fn options(
             Some(WithOptionValue::Secret(_)) => {
                 panic!("SECRET option {} must be Object", option.key)
             }
+            Some(WithOptionValue::Object(ResolvedObjectName::Object { id, .. })) => {
+                SqlValueOrSecret::Secret(*id)
+            }
+            Some(WithOptionValue::Object(_)) => {
+                panic!("Object option {} must be Object", option.key)
+            }
             None => {
                 sql_bail!("option {} requires a value", option.key);
             }

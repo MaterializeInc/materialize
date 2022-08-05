@@ -105,4 +105,5 @@ mysql_common = { git = "https://github.com/blackbeam/rust_mysql_common.git" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tungstenite = { git = "https://github.com/snapview/tungstenite-rs.git" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+ssh2 = { git = "https://github.com/MaterializeInc/ssh2-rs" }
 vte = { git = "https://github.com/alacritty/vte" }

@@ -151,7 +151,7 @@ pub struct PostgresSourceReader {
 /// An internal struct held by the spawned tokio task
 struct PostgresTaskInfo {
     source_id: GlobalId,
-    connection_config: tokio_postgres::Config,
+    connection_config: mz_postgres_util::Config,
     publication: String,
     slot: String,
     /// Our cursor into the WAL
@@ -493,9 +493,7 @@ impl PostgresTaskInfo {
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
-        let client = try_recoverable!(
-            mz_postgres_util::connect_replication(self.connection_config.clone()).await
-        );
+        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
 
         // We're initializing this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
@@ -638,9 +636,7 @@ impl PostgresTaskInfo {
     async fn produce_replication(&mut self) -> Result<(), ReplicationError> {
         use ReplicationError::*;
 
-        let client = try_recoverable!(
-            mz_postgres_util::connect_replication(self.connection_config.clone()).await
-        );
+        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}

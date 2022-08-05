@@ -257,10 +257,10 @@ importee1  importee2
     USER 'user',
     PORT 1
 
-> SELECT name, public_key from mz_ssh_tunnel_connections
-name public_key
+> SELECT name, public_key_1 LIKE 'ssh-ed25519%' public_key_1 from mz_ssh_tunnel_connections
+name public_key_1
 -----------
-ssh_conn TODO
+ssh_conn true
 
 # Test invalid connection parameter combinations
 
