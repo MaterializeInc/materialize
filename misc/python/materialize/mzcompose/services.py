@@ -459,13 +459,12 @@ class Postgres(Service):
     def __init__(
         self,
         name: str = "postgres",
-        mzbuild: str = "postgres",
-        image: Optional[str] = None,
+        image: str = "postgres:14.4",
         port: int = 5432,
         command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20 -c max_connections=5000",
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
     ) -> None:
-        config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
+        config: ServiceConfig = {"image": image}
         config.update(
             {
                 "command": command,

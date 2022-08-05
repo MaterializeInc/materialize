@@ -99,9 +99,8 @@ def workflow_stash(c: Composition) -> None:
     materialized = Materialized(
         options=["--adapter-stash-url", "postgres://postgres:postgres@postgres"],
     )
-    postgres = Postgres(image="postgres:14.4")
 
-    with c.override(materialized, postgres):
+    with c.override(materialized):
         c.up("postgres")
         c.wait_for_postgres()
         c.start_and_wait_for_tcp(services=["materialized"])

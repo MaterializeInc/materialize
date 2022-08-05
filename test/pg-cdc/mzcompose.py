@@ -14,7 +14,8 @@ SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
     Testdrive(),
     TestCerts(),
-    Postgres(),
+    # TODO: Use the default Postgres image.
+    Postgres(image="postgres:10.21"),
 ]
 
 
