@@ -44,5 +44,6 @@ warn_unreachable = true
 # Allow pyright to find imports for python files
 # in random folders, e.g. mzcompose.py files
 extraPaths = ["misc/python"]
-venvPath = ["./misc/python/venv"]
+venvPath = "./misc/python"
+venv = "venv"
 exclude = ["./misc/python/venv"]
