@@ -1448,8 +1448,23 @@ CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT 
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }] })
 
 parse-statement
+CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE 'johto:42')
+----
+CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE = 'johto:42')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
+
+
+parse-statement
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE large, REMOTE 'johto:42')
 ----
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = large, REMOTE = 'johto:42')
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }, CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
+
+parse-statement
+CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE 'johto:42', SIZE large)
+----
+CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE = 'johto:42', SIZE = large)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }, CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }] })
