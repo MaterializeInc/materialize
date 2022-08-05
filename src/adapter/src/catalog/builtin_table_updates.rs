@@ -314,16 +314,25 @@ impl CatalogState {
             diff,
         }];
         if let mz_storage::types::connections::Connection::Ssh(ssh) = &connection.connection {
-            updates.extend(self.pack_ssh_tunnel_connection_update(id, name, &ssh.public_key, diff));
+            if let Some(public_keypair) = ssh.public_keys.as_ref() {
+                updates.extend(self.pack_ssh_tunnel_connection_update(
+                    id,
+                    name,
+                    public_keypair,
+                    diff,
+                ));
+            } else {
+                tracing::error!("does this even happen?");
+            }
         }
         updates
     }
 
-    fn pack_ssh_tunnel_connection_update(
+    pub(crate) fn pack_ssh_tunnel_connection_update(
         &self,
         id: GlobalId,
         name: &str,
-        public_key: &str,
+        (public_key_primary, public_key_secondary): &(String, String),
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -331,7 +340,8 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(name),
-                Datum::String(public_key),
+                Datum::String(&public_key_primary),
+                Datum::String(&public_key_secondary),
             ]),
             diff,
         }]

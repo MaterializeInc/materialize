@@ -565,7 +565,7 @@ CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHO
 ----
 CREATE CONNECTION pgconn FOR POSTGRES HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Ident(Ident("tun"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("tun")])))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red';

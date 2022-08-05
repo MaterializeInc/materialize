@@ -1121,7 +1121,8 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("public_key", ScalarType::String.nullable(false)),
+        .with_column("public_key_1", ScalarType::String.nullable(false))
+        .with_column("public_key_2", ScalarType::String.nullable(false)),
 });
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",

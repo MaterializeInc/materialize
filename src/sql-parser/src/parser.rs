@@ -2163,10 +2163,12 @@ impl<'a> Parser<'a> {
         };
 
         let _ = self.consume_token(&Token::Eq);
-        Ok(PostgresConnectionOption {
-            name,
-            value: self.parse_opt_with_option_value(false)?,
-        })
+        let value = match &name {
+            // Only objects (in particular, SSH connections) are valid parameters for SSH tunnels
+            PostgresConnectionOptionName::SshTunnel => Some(self.parse_with_option_value_object()?),
+            _ => self.parse_opt_with_option_value(false)?,
+        };
+        Ok(PostgresConnectionOption { name, value })
     }
 
     fn parse_aws_connection_options(&mut self) -> Result<AwsConnectionOption<Raw>, ParserError> {
@@ -2872,7 +2874,6 @@ impl<'a> Parser<'a> {
             options,
         }))
     }
-
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
             AVAILABILITY => {
@@ -3377,7 +3378,7 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(SECRET) {
             // HACK(benesch): temporarily allow secret references of the form
             // `KEY = SECRET db.schema.item`. `KEY = SECRET` is still allowed
-            // for backwards copmatibility and parses as the ident `secret`.
+            // for backwards compatibility and parses as the ident `secret`.
             // Once we have connections with explicit fields for secret
             // references, we can remove this hack.
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
@@ -3394,6 +3395,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_with_option_value_object(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        if let Some(obj) = self.maybe_parse(Parser::parse_raw_name) {
+            Ok(WithOptionValue::Object(obj))
+        } else {
+            return self.expected(self.peek_pos(), "object", self.peek_token());
+        }
+    }
+
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = match self.expect_one_of_keywords(&[
             SINK,
@@ -3404,6 +3413,7 @@ impl<'a> Parser<'a> {
             INDEX,
             SECRET,
             SYSTEM,
+            CONNECTION,
         ])? {
             SINK => ObjectType::Sink,
             SOURCE => return self.parse_alter_source(),
@@ -3416,6 +3426,7 @@ impl<'a> Parser<'a> {
             INDEX => return self.parse_alter_index(),
             SECRET => return self.parse_alter_secret(),
             SYSTEM => return self.parse_alter_system(),
+            CONNECTION => return self.parse_alter_connection(),
             _ => unreachable!(),
         };
 
@@ -3569,6 +3580,30 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn parse_alter_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_object_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[RENAME, ROTATE])? {
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Secret,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            ROTATE => {
+                self.expect_keyword(KEYS)?;
+                Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
+            }
+            _ => unreachable!(),
+        })
     }
 
     /// Parse a copy statement

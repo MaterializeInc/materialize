@@ -32,6 +32,7 @@ use mz_expr::{
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::collections::CollectionExt;
+use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
@@ -52,7 +53,7 @@ use mz_sql::plan::{
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{CreateSourceOption, CreateSourceOptionName, Statement, WithOptionValue};
@@ -406,6 +407,9 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::Raise(RaisePlan { severity }) => {
                 tx.send(Ok(ExecuteResponse::Raise { severity }), session);
             }
+            Plan::RotateKeys(RotateKeysPlan { id }) => {
+                tx.send(self.sequence_rotate_keys(&session, id).await, session);
+            }
         }
     }
 
@@ -504,22 +508,58 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
+        let mut connection = plan.connection.connection.clone();
+
+        if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) = connection {
+            let keyset = SshKeyset::new()?;
+            self.secrets_controller
+                .ensure(connection_gid, &keyset.to_bytes())
+                .await?;
+
+            ssh.public_keys = Some(keyset.public_keys());
+        }
+
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             oid: connection_oid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: plan.connection.connection,
+                connection,
                 depends_on,
             }),
         }];
+
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection { existed: false }),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_rotate_keys(
+        &mut self,
+        session: &Session,
+        id: GlobalId,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let secret = self.secrets_controller.reader().read(id).await?;
+        let previous_keyset = SshKeyset::from_bytes(&secret)?;
+        let new_keyset = previous_keyset.rotate()?;
+        self.secrets_controller
+            .ensure(id, &new_keyset.to_bytes())
+            .await?;
+
+        let ops = vec![catalog::Op::UpdateRotatedKeys {
+            id,
+            previous_public_keypair: previous_keyset.public_keys(),
+            new_public_keypair: new_keyset.public_keys(),
+        }];
+
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
             Err(err) => Err(err),
         }
     }

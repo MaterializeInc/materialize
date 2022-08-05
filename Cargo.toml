@@ -102,4 +102,5 @@ csv-core = { git = "https://github.com/BurntSushi/rust-csv.git" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+ssh2 = { git = "https://github.com/MaterializeInc/ssh2-rs" }
 vte = { git = "https://github.com/alacritty/vte" }

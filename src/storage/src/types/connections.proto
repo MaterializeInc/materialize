@@ -76,5 +76,18 @@ message ProtoPostgresConnection {
     mz_proto.tokio_postgres.ProtoSslMode tls_mode = 6;
     ProtoStringOrSecret tls_root_cert = 7;
     ProtoTlsIdentity tls_identity = 8;
-    optional string ssh_tunnel = 9;
+    mz_repr.global_id.ProtoGlobalId ssh_tunnel_id = 9;
+    ProtoSshConnection ssh_tunnel = 10;
+}
+
+message ProtoSshConnection {
+    message ProtoPublicKeys {
+        string primary_public_key = 1;
+        string secondary_public_key = 2;
+    }
+
+    string host = 1;
+    uint32 port = 2;
+    string user = 3;
+    ProtoPublicKeys public_keys = 4;
 }
