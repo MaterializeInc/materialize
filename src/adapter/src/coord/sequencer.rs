@@ -1261,13 +1261,13 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
+                self.ship_dataflow(df, compute_instance).await;
+
                 self.initialize_storage_read_policies(
                     vec![id],
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
                 )
                 .await;
-
-                self.ship_dataflow(df, compute_instance).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView { existed: false })
             }
