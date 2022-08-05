@@ -17,6 +17,7 @@ from materialize.checks.constant_plan import *  # noqa: F401 F403
 from materialize.checks.create_index import *  # noqa: F401 F403
 from materialize.checks.create_table import *  # noqa: F401 F403
 from materialize.checks.databases import *  # noqa: F401 F403
+from materialize.checks.debezium import *  # noqa: F401 F403
 from materialize.checks.delete import *  # noqa: F401 F403
 from materialize.checks.drop_index import *  # noqa: F401 F403
 from materialize.checks.drop_table import *  # noqa: F401 F403
@@ -53,18 +54,19 @@ from materialize.checks.upsert import *  # noqa: F401 F403
 from materialize.checks.users import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Postgres, Redpanda
+from materialize.mzcompose.services import Debezium, Materialized, Postgres, Redpanda
 from materialize.mzcompose.services import Testdrive as TestdriveService
 
 SERVICES = [
-    Postgres(name="postgres-stash"),
-    Redpanda(),
+    Postgres(name="postgres"),
+    Redpanda(auto_create_topics=True),
+    Debezium(),
     Materialized(
         options=" ".join(
             [
-                "--persist-consensus-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=consensus",
-                "--storage-stash-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=storage",
-                "--adapter-stash-url=postgresql://postgres:postgres@postgres-stash:5432?options=--search_path=adapter",
+                "--persist-consensus-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus",
+                "--storage-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=storage",
+                "--adapter-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=adapter",
             ]
         )
     ),
@@ -85,15 +87,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("testdrive", persistent=True)
 
-    c.start_and_wait_for_tcp(services=["redpanda", "postgres-stash"])
-    c.wait_for_postgres(service="postgres-stash")
+    c.start_and_wait_for_tcp(services=["redpanda", "postgres", "debezium"])
+    c.wait_for_postgres(service="postgres")
     c.sql(
         sql=f"""
        CREATE SCHEMA IF NOT EXISTS consensus;
        CREATE SCHEMA IF NOT EXISTS storage;
        CREATE SCHEMA IF NOT EXISTS adapter;
     """,
-        service="postgres-stash",
+        service="postgres",
         user="postgres",
         password="postgres",
     )
