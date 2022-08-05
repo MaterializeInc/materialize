@@ -46,7 +46,8 @@ impl ThresholdElision {
                 if inputs.len() == 1 {
                     if let MirRelationExpr::Negate { input } = &inputs[0] {
                         let mut safe_lets = HashSet::default();
-                        if non_negative(base, &mut safe_lets) && subset_of(base, &*input) {
+                        if non_negative(base, &mut safe_lets) && lhs_superset_of_rhs(base, &*input)
+                        {
                             should_replace = true;
                         }
                     }
@@ -60,55 +61,75 @@ impl ThresholdElision {
     }
 }
 
-/// Return true iff `relation` is believed to contain no negative multiplicities.
+/// Return true if `relation` is believed to contain no negative multiplicities.
 ///
-/// This relies on all `Get` bindings corresponding to collections without negative
+/// This method is a conservative approximation and is known to miss not-hard cases.
+///
+/// This assumes that all `Get` bindings correspond to collections without negative
 /// multiplicities. Local let bindings present in `safe_lets` are relied on to have
 /// no non-negative multiplicities.
 pub fn non_negative(relation: &MirRelationExpr, safe_lets: &mut HashSet<LocalId>) -> bool {
-    match relation {
-        MirRelationExpr::Constant { rows, .. } => {
-            if let Ok(rows) = rows {
-                rows.iter().all(|(_data, diff)| diff >= &0)
-            } else {
-                true
+    // This implementation is iterative.
+    // Before converting this implementation to recursive (e.g. to improve its accuracy)
+    // make sure to use the `CheckedRecursion` struct to avoid blowing the stack.
+    let mut to_check = vec![relation];
+    while let Some(expr) = to_check.pop() {
+        match expr {
+            MirRelationExpr::Constant { rows, .. } => {
+                if let Ok(rows) = rows {
+                    if rows.iter().any(|(_data, diff)| diff < &0) {
+                        return false;
+                    }
+                }
             }
-        }
-        MirRelationExpr::Negate { .. } => false,
-        MirRelationExpr::Get { id, .. } => match id {
-            Id::Global(_) => true,
-            Id::Local(local_id) => safe_lets.contains(local_id),
-        },
-        MirRelationExpr::Let { id, value, body } => {
-            let value_non_negative = non_negative(value, safe_lets);
-            if value_non_negative {
-                safe_lets.insert(id.clone());
+            MirRelationExpr::Negate { .. } => {
+                return false;
             }
-            let result = non_negative(body, safe_lets);
-            safe_lets.remove(id);
-            result
-        }
-        x => {
-            use mz_expr::visit::VisitChildren;
-            let mut all_non_negative = true;
-            x.visit_children(|e| all_non_negative &= non_negative(e, safe_lets));
-            all_non_negative
+            MirRelationExpr::Get { id, .. } => {
+                if let Id::Local(local_id) = id {
+                    if !safe_lets.contains(local_id) {
+                        return false;
+                    }
+                }
+            }
+            MirRelationExpr::Let { id, value, body } => {
+                // We will check both `value` and `body`, with the latter
+                // under the assumption that `value` works out. Of course,
+                // if `value` doesn't work out we'll return `false`.
+                if !safe_lets.insert(id.clone()) {
+                    // Return false conservatively if we detect identifier re-use.
+                    // Ideally this would be unreachable code.
+                    return false;
+                }
+                to_check.push(value);
+                to_check.push(body);
+            }
+            x => {
+                to_check.extend(x.children());
+            }
         }
     }
+    return true;
 }
 
-/// Returns true iff `b` is always a subset of `a`.
-pub fn subset_of(a: &MirRelationExpr, b: &MirRelationExpr) -> bool {
-    if a == b {
-        true
-    } else {
-        match b {
-            MirRelationExpr::Filter { input, .. } => subset_of(a, input),
-            MirRelationExpr::TopK { input, .. } => subset_of(a, input),
+/// Returns true iff `rhs` is always a subset of `lhs`.
+///
+/// This method is a conservative approximation and is known to miss not-hard cases.
+///
+/// We iteratively descend `rhs` through a few operators, looking for `lhs`.
+pub fn lhs_superset_of_rhs(lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
+    // This implementation is iterative.
+    // Before converting this implementation to recursive (e.g. to improve its accuracy)
+    // make sure to use the `CheckedRecursion` struct to avoid blowing the stack.
+    while lhs != rhs {
+        match rhs {
+            MirRelationExpr::Filter { input, .. } => rhs = &**input,
+            MirRelationExpr::TopK { input, .. } => rhs = &**input,
             _ => {
                 // TODO: Imagine more complex reasoning here!
-                false
+                return false;
             }
         }
     }
+    return true;
 }
