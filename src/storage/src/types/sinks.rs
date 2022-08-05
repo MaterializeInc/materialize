@@ -35,6 +35,8 @@ pub struct SinkDesc<S = (), T = mz_repr::Timestamp> {
     pub connection: SinkConnection<S>,
     pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf<T>,
+    // XXX(chae): make non-optional or move ??
+    pub from_storage_metadata: Option<CollectionMetadata>,
 }
 
 impl Arbitrary for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
@@ -48,14 +50,18 @@ impl Arbitrary for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
             any::<SinkConnection<CollectionMetadata>>(),
             any::<Option<SinkEnvelope>>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
+            any::<Option<CollectionMetadata>>(),
         )
-            .prop_map(|(from, from_desc, connection, envelope, as_of)| SinkDesc {
-                from,
-                from_desc,
-                connection,
-                envelope,
-                as_of,
-            })
+            .prop_map(
+                |(from, from_desc, connection, envelope, as_of, from_storage_metadata)| SinkDesc {
+                    from,
+                    from_desc,
+                    connection,
+                    envelope,
+                    as_of,
+                    from_storage_metadata,
+                },
+            )
             .boxed()
     }
 }
@@ -68,6 +74,7 @@ impl RustType<ProtoSinkDesc> for SinkDesc<CollectionMetadata, mz_repr::Timestamp
             from_desc: Some(self.from_desc.into_proto()),
             envelope: self.envelope.into_proto(),
             as_of: Some(self.as_of.into_proto()),
+            from_storage_metadata: self.from_storage_metadata.into_proto(),
         }
     }
 
@@ -82,6 +89,7 @@ impl RustType<ProtoSinkDesc> for SinkDesc<CollectionMetadata, mz_repr::Timestamp
                 .into_rust_if_some("ProtoSinkDesc::connection")?,
             envelope: proto.envelope.into_rust()?,
             as_of: proto.as_of.into_rust_if_some("ProtoSinkDesc::as_of")?,
+            from_storage_metadata: proto.from_storage_metadata.into_rust()?,
         })
     }
 }

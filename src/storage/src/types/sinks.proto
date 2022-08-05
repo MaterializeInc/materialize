@@ -25,6 +25,7 @@ message ProtoSinkDesc {
     ProtoSinkConnection connection = 3;
     optional ProtoSinkEnvelope envelope = 4;
     ProtoSinkAsOf as_of = 5;
+    optional mz_storage.controller.ProtoCollectionMetadata from_storage_metadata = 6;
 }
 
 message ProtoSinkEnvelope {

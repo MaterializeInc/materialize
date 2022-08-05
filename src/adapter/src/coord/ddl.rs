@@ -233,7 +233,6 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     pub(crate) async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
-        // TODO(chae): Drop storage sinks when they're moved over
         let by_compute_instance = sinks.into_iter().into_group_map();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
@@ -241,6 +240,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 compute.drop_sinks(ids).await.unwrap();
             }
         }
+        // XXX(chae): Drop storage sinks when they're moved over
+        //self.controller.storage_mut().drop_sinks(sinks).await.unwrap();
     }
 
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -371,10 +372,14 @@ impl<S: Append + 'static> Coordinator<S> {
                         .into_owned(),
                     connection: connection.clone(),
                     envelope: Some(sink.envelope),
-                    as_of,
+                    as_of: as_of.clone(),
+                    from_storage_metadata: None,
                 };
                 Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description)?)
             })
+            .await?;
+
+        self.create_storage_export(id, &sink, connection, as_of)
             .await?;
 
         Ok(self.ship_dataflow(df, compute_instance).await)

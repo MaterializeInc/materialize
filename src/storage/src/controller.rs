@@ -58,7 +58,7 @@ use crate::protocol::client::{
 };
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use crate::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
+use crate::types::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 use crate::types::sources::IngestionDescription;
 
 mod hosts;
@@ -99,8 +99,8 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExportDescription {
-    pub sink: SinkDesc,
+pub struct ExportDescription<T = mz_repr::Timestamp> {
+    pub sink: SinkDesc<(), T>,
     /// The address of a `storaged` process on which to install the source.
     ///
     /// If `None`, the controller manages the lifetime of the `storaged`
@@ -145,7 +145,7 @@ pub trait StorageController: Debug + Send {
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription)>,
+        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -705,7 +705,7 @@ where
 
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription)>,
+        exports: Vec<(GlobalId, ExportDescription<T>)>,
     ) -> Result<(), StorageError> {
         for (id, description) in exports {
             let augmented_sink_desc = SinkDesc {
@@ -723,16 +723,17 @@ where
                     }),
                 },
                 envelope: description.sink.envelope,
-                // TODO(chae): derive this (sink_description.as_of is hardcoded to u64 instead of general timestamp T)
-                as_of: SinkAsOf {
-                    frontier: Antichain::from_elem(T::minimum()),
-                    strict: description.sink.as_of.strict,
-                },
+                as_of: description.sink.as_of,
+                from_storage_metadata: Some(
+                    self.collection(description.sink.from)?
+                        .collection_metadata
+                        .clone(),
+                ),
             };
             let cmd = ExportSinkCommand {
                 id,
                 description: augmented_sink_desc,
-                // TODO(chae): derive this
+                // XXX(chae): derive this
                 resume_upper: Antichain::from_elem(T::minimum()),
             };
             // TODO: allow specifying a size parameter for sinks, tracked in #13889

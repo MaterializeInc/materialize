@@ -266,6 +266,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         Some(&session),
                     )
                     .await
+                    // XXX(chae): how to handle error when creating on top of view?
                     .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were

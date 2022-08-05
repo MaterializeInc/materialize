@@ -56,18 +56,19 @@ use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, Gau
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
-use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{
-    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
-    SinkEnvelope,
-};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use super::KafkaBaseMetrics;
+use crate::controller::CollectionMetadata;
 use crate::render::sinks::SinkRender;
+use crate::storage_state::StorageState;
+use crate::types::connections::{ConnectionContext, PopulateClientConfig};
+use crate::types::errors::DataflowError;
+use crate::types::sinks::{
+    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
+    SinkEnvelope,
+};
 
 impl<G> SinkRender<G> for KafkaSinkConnection
 where
@@ -89,7 +90,7 @@ where
 
     fn render_continuous_sink(
         &self,
-        compute_state: &mut crate::compute_state::ComputeState,
+        storage_state: &mut StorageState,
         sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
@@ -144,11 +145,12 @@ where
             sink.envelope,
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
-            &compute_state.sink_metrics.kafka,
-            &compute_state.connection_context,
+            &storage_state.sink_metrics.kafka,
+            &storage_state.connection_context,
         );
 
-        compute_state
+        // XXX(chae): think about whether we need/want this here
+        storage_state
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 
@@ -1125,9 +1127,11 @@ where
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
+    eprintln!("{:?}-{:?} INITIALIZING KAFKA STATE", name, scope.index());
+
     let mut s = KafkaSinkState::new(
         connection,
-        name,
+        name.clone(),
         &id,
         scope.index().to_string(),
         Arc::clone(&shutdown_flag),
@@ -1187,6 +1191,7 @@ where
 
             if is_active_worker {
                 if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
+                    eprintln!("{:?}-{:?} INITIALIZING KAFKA SINK", name.clone(), "");
                     if s.transactional {
                         bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
                     }

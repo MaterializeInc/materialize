@@ -441,6 +441,7 @@ where
                     connection,
                     envelope: se.envelope,
                     as_of: se.as_of,
+                    from_storage_metadata: None,
                 };
                 sink_exports.insert(id, desc);
             }

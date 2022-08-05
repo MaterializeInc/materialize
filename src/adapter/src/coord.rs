@@ -79,7 +79,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -104,7 +104,7 @@ use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ExportDescription};
 use mz_storage::types::connections::ConnectionContext;
-use mz_storage::types::sinks::{SinkAsOf, SinkConnection, TailSinkConnection};
+use mz_storage::types::sinks::{SinkAsOf, SinkConnection};
 use mz_storage::types::sources::{IngestionDescription, Timeline};
 use mz_transform::Optimizer;
 
@@ -790,8 +790,13 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    #[allow(dead_code)]
-    async fn create_storage_export(&mut self, id: GlobalId, sink: &Sink) {
+    async fn create_storage_export(
+        &mut self,
+        id: GlobalId,
+        sink: &Sink,
+        connection: SinkConnection,
+        as_of: SinkAsOf,
+    ) -> Result<(), AdapterError> {
         let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
         let storage_sink_desc = mz_storage::types::sinks::SinkDesc {
             from: sink.from,
@@ -802,16 +807,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 ))
                 .unwrap()
                 .into_owned(),
-            connection: SinkConnection::Tail(TailSinkConnection {}),
+            connection,
             envelope: Some(sink.envelope),
-            as_of: SinkAsOf {
-                frontier: Antichain::new(),
-                strict: false,
-            },
+            as_of,
+            // XXX(chae): do we want this field in this struct??
+            from_storage_metadata: None,
         };
 
-        // TODO(chae): This is where we'll create the export/sink in storaged
-        let _ = self
+        Ok(self
             .controller
             .storage_mut()
             .create_exports(vec![(
@@ -821,8 +824,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     remote_addr: None,
                 },
             )])
-            .await
-            .unwrap();
+            .await?)
     }
 }
 

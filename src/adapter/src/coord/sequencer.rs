@@ -1003,19 +1003,20 @@ impl<S: Append + 'static> Coordinator<S> {
         //
         // This placeholder catalog item reserves the name while we create
         // the sink connection, which could take an arbitrarily long time.
+        let catalog_sink = catalog::Sink {
+            create_sql: sink.create_sql,
+            from: sink.from,
+            connection: catalog::SinkConnectionState::Pending(sink.connection_builder.clone()),
+            envelope: sink.envelope,
+            with_snapshot,
+            depends_on,
+            compute_instance,
+        };
         let op = catalog::Op::CreateItem {
             id,
             oid,
             name,
-            item: CatalogItem::Sink(catalog::Sink {
-                create_sql: sink.create_sql,
-                from: sink.from,
-                connection: catalog::SinkConnectionState::Pending(sink.connection_builder.clone()),
-                envelope: sink.envelope,
-                with_snapshot,
-                depends_on,
-                compute_instance,
-            }),
+            item: CatalogItem::Sink(catalog_sink.clone()),
         };
 
         let transact_result = self
@@ -1047,6 +1048,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     frontier: Antichain::new(),
                                     strict: false,
                                 },
+                                from_storage_metadata: None,
                             },
                         )
                         .map(|_ok| ())
@@ -1054,7 +1056,19 @@ impl<S: Append + 'static> Coordinator<S> {
             )
             .await;
 
-        match transact_result {
+        let storage_result = self
+            .create_storage_export(
+                id,
+                &catalog_sink,
+                SinkConnection::Tail(TailSinkConnection {}),
+                SinkAsOf {
+                    frontier: Antichain::new(),
+                    strict: false,
+                },
+            )
+            .await;
+
+        match transact_result.and(storage_result) {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -2083,6 +2097,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,
                 },
+                from_storage_metadata: None,
             })
         };
 

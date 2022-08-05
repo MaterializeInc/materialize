@@ -99,7 +99,8 @@
 //! roughly "as correct as possible" even when errors are present in the errs
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
-
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use timely::communication::Allocate;
@@ -116,6 +117,7 @@ use crate::types::sources::IngestionDescription;
 
 mod debezium;
 mod persist_sink;
+pub mod sinks;
 pub mod sources;
 mod upsert;
 
@@ -171,9 +173,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 /// do the export dataflow thing
 pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
-    _storage_state: &mut StorageState,
+    storage_state: &mut StorageState,
     id: GlobalId,
-    _description: SinkDesc<CollectionMetadata, mz_repr::Timestamp>,
+    description: SinkDesc<CollectionMetadata, mz_repr::Timestamp>,
     _resume_upper: Antichain<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
@@ -190,6 +192,16 @@ pub fn build_export_dataflow<A: Allocate>(
                 timely::dataflow::scopes::Child<TimelyWorker<A>, _>,
                 mz_repr::Timestamp,
             > = region;
+            let mut tokens = BTreeMap::new();
+            let import_ids = BTreeSet::new();
+            crate::render::sinks::render_sink(
+                region,
+                storage_state,
+                &mut tokens,
+                import_ids,
+                id,
+                &description,
+            );
         })
     });
 }

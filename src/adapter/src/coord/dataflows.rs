@@ -407,6 +407,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 frontier: as_of,
                 strict: false,
             },
+            from_storage_metadata: None,
         };
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
 
