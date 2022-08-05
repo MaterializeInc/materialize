@@ -129,7 +129,7 @@ bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  2  worker  NULL
 bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  1  dataflow  NULL  false
 bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  2  source  NULL  false
 bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  3  worker  NULL  false
-bar  mz_materializations  mz_materializations_4_primary_idx  1  name  NULL  false
+bar  mz_materializations  mz_materializations_4_primary_idx  1  global_id  NULL  false
 bar  mz_materializations  mz_materializations_4_primary_idx  2  worker  NULL  false
 bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  1  channel  NULL  false
 bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  2  source_worker  NULL  false
@@ -149,13 +149,17 @@ bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primar
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  1  worker  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  2  slept_for  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  3  requested  NULL  false
-bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  1  dataflow  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  1  global_id  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  2  source  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  3  worker  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  4  delay_ns  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  1  global_id  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  2  worker  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  3  time  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  1  global_id  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  2  source  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  3  worker  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  4  time  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
 query TTTTTTT
@@ -301,11 +305,11 @@ DROP CLUSTER foo, foo2, foo3 CASCADE
 
 # Test that introspection source indexes are created and dropped correctly
 
-# There are 17 introspection sources
+# There are 19 introspection sources
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 1;
 ----
-18
+19
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 1;
@@ -318,7 +322,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-36
+38
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -326,7 +330,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-18
+19
 
 statement error nvalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;

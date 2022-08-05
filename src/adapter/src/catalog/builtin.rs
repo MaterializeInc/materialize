@@ -897,6 +897,12 @@ pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
 };
 
+pub const MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_materialization_source_frontiers",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
+};
+
 pub const MZ_WORKER_MATERIALIZATION_DELAYS: BuiltinLog = BuiltinLog {
     name: "mz_worker_materialization_delays",
     schema: MZ_CATALOG_SCHEMA,
@@ -1341,6 +1347,15 @@ pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
     global_id, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_frontiers
 GROUP BY global_id",
+};
+
+pub const MZ_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_materialization_source_frontiers",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_catalog.mz_materialization_source_frontiers AS SELECT
+    global_id, source, pg_catalog.min(time) AS time
+FROM mz_catalog.mz_worker_materialization_source_frontiers
+GROUP BY global_id, source",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -2178,6 +2193,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
         Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
+        Builtin::Log(&MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS),
         Builtin::Log(&MZ_WORKER_MATERIALIZATION_DELAYS),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
@@ -2218,6 +2234,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICAS),
         Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
+        Builtin::View(&MZ_MATERIALIZATION_SOURCE_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
         Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
         Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
