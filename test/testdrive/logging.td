@@ -153,7 +153,7 @@ SID   count       3           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   dataflow    1           text
+SID   global_id   1           text
 SID   source      2           text
 SID   worker      3           bigint
 SID   delay_ns    4           bigint
@@ -165,7 +165,7 @@ SID   count       5           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   dataflow    1           text
+SID   global_id   1           text
 SID   source      2           text
 SID   worker      3           bigint
 SID   time        4           bigint
