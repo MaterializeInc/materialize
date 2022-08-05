@@ -226,7 +226,7 @@ contains:reuse_topic requires that sink input dependencies are sources, material
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output7-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:source identifier is not present
+contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_view is not
 
 ! CREATE SINK output8 FROM input_values_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output8-view-${testdrive.seed}'

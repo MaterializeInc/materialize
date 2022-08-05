@@ -102,7 +102,7 @@ $ kafka-verify format=json sink=materialize.public.complex_type_sink key=false
 
 # testdrive will not automatically clean up types, so we need to do that ourselves
 
-> DROP VIEW complex_type_view CASCADE;
+> DROP MATERIALIZED VIEW complex_type_view CASCADE;
 
 > DROP TYPE int4_list_list;
 
