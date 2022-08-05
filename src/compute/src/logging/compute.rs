@@ -54,7 +54,7 @@ pub enum ComputeEvent {
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
     // Available frontier information for source instantiations.
-    SourceFrontier(GlobalId, GlobalId, Timestamp, i64),
+    SourceFrontier(GlobalId, GlobalId, Timestamp, i8),
 }
 
 /// A logged peek event.
@@ -258,7 +258,7 @@ pub fn construct<A: Allocate>(
                                         Datum::Int64(logical as i64),
                                     ]),
                                     time_ms,
-                                    delta,
+                                    delta as i64,
                                 ));
                                 if delta > 0 {
                                     // we should record the source frontier here only if

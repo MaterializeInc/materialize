@@ -23,6 +23,6 @@
     mz_materialization_frontiers AS frontiers
   WHERE
     views.name = 'mv' AND
-    views.id = mats.dataflow AND
-    mats.dataflow = frontiers.dataflow
+    views.id = mats.global_id AND
+    mats.global_id = frontiers.global_id
 true
