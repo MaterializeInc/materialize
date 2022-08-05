@@ -332,6 +332,7 @@ where
                         if let Some(previous_as_of) = previous_as_of {
                             let (ok, err, tok) = persist_source::persist_source(
                                 scope,
+                                id,
                                 persist_clients,
                                 description.storage_metadata.clone(),
                                 Antichain::from_elem(previous_as_of),
