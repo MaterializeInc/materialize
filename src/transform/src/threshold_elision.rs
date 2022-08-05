@@ -117,7 +117,7 @@ pub fn non_negative(relation: &MirRelationExpr, safe_lets: &mut HashSet<LocalId>
 /// This method is a conservative approximation and is known to miss not-hard cases.
 ///
 /// We iteratively descend `rhs` through a few operators, looking for `lhs`.
-pub fn lhs_superset_of_rhs(lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
+pub fn lhs_superset_of_rhs(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
     // This implementation is iterative.
     // Before converting this implementation to recursive (e.g. to improve its accuracy)
     // make sure to use the `CheckedRecursion` struct to avoid blowing the stack.
@@ -125,6 +125,42 @@ pub fn lhs_superset_of_rhs(lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> 
         match rhs {
             MirRelationExpr::Filter { input, .. } => rhs = &**input,
             MirRelationExpr::TopK { input, .. } => rhs = &**input,
+            // Descend in both sides if the current roots are
+            // projections with the same `outputs` vector.
+            MirRelationExpr::Project {
+                input: rhs_input,
+                outputs: rhs_outputs,
+            } => match lhs {
+                MirRelationExpr::Project {
+                    input: lhs_input,
+                    outputs: lhs_outputs,
+                } if lhs_outputs == rhs_outputs => {
+                    rhs = &**rhs_input;
+                    lhs = &**lhs_input;
+                }
+                _ => return false,
+            },
+            // Descend in both sides if the current roots are reduces with empty aggregates
+            // on the same set of keys (that is, a distinct operation on those keys).
+            MirRelationExpr::Reduce {
+                input: rhs_input,
+                group_key: rhs_group_key,
+                aggregates: rhs_aggregates,
+                monotonic: _,
+                expected_group_size: _,
+            } if rhs_aggregates.is_empty() => match lhs {
+                MirRelationExpr::Reduce {
+                    input: lhs_input,
+                    group_key: lhs_group_key,
+                    aggregates: lhs_aggregates,
+                    monotonic: _,
+                    expected_group_size: _,
+                } if lhs_aggregates.is_empty() && lhs_group_key == rhs_group_key => {
+                    rhs = &**rhs_input;
+                    lhs = &**lhs_input;
+                }
+                _ => return false,
+            },
             _ => {
                 // TODO: Imagine more complex reasoning here!
                 return false;
