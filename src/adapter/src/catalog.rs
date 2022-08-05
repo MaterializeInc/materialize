@@ -2315,8 +2315,7 @@ impl<S: Append> Catalog<S> {
 
         let id_fingerprint_map: HashMap<GlobalId, u64> = migrated_ids.into_iter().collect();
 
-        while !object_queue.is_empty() {
-            let id = object_queue.pop_front().unwrap();
+        while let Some(id) = object_queue.pop_front() {
             let entry = self.get_entry(&id);
 
             let new_id = match id {
