@@ -23,7 +23,7 @@ use crate::controller::CollectionMetadata;
 use crate::source::persist_source;
 use crate::storage_state::{SinkToken, StorageState};
 use crate::types::errors::DataflowError;
-use crate::types::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
+use crate::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkDesc};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 
@@ -36,7 +36,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
     import_ids: BTreeSet<GlobalId>,
     sink_id: GlobalId,
-    sink: &SinkDesc<CollectionMetadata>,
+    sink: &StorageSinkDesc<CollectionMetadata>,
 ) {
     let sink_render = get_sink_render_for(&sink.connection);
 
@@ -73,7 +73,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     let (ok_collection, err_collection, source_token) = persist_source::persist_source(
         scope,
         Arc::clone(&storage_state.persist_clients),
-        sink.from_storage_metadata.clone().unwrap(),
+        sink.from_storage_metadata.clone(),
         sink.as_of.frontier.clone(),
     );
     needed_tokens.push(source_token);
@@ -105,7 +105,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
 
 #[allow(clippy::borrowed_box)]
 fn apply_sink_envelope<G>(
-    sink: &SinkDesc<CollectionMetadata>,
+    sink: &StorageSinkDesc<CollectionMetadata>,
     sink_render: &Box<dyn SinkRender<G>>,
     collection: Collection<G, Row, Diff>,
 ) -> Collection<G, (Option<Row>, Option<Row>), Diff>
@@ -228,7 +228,7 @@ where
     fn render_continuous_sink(
         &self,
         storage_state: &mut StorageState,
-        sink: &SinkDesc<CollectionMetadata>,
+        sink: &StorageSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
@@ -258,7 +258,7 @@ where
     fn render_continuous_sink(
         &self,
         _storage_state: &mut StorageState,
-        _sink: &SinkDesc<CollectionMetadata>,
+        _sink: &StorageSinkDesc<CollectionMetadata>,
         _sink_id: GlobalId,
         _sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         _err_collection: Collection<G, DataflowError, Diff>,
@@ -270,12 +270,14 @@ where
     }
 }
 
-fn get_sink_render_for<G>(connection: &SinkConnection<CollectionMetadata>) -> Box<dyn SinkRender<G>>
+fn get_sink_render_for<G>(
+    connection: &StorageSinkConnection<CollectionMetadata>,
+) -> Box<dyn SinkRender<G>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     match connection {
-        SinkConnection::Kafka(connection) => Box::new(connection.clone()),
-        SinkConnection::Dummy(_) => Box::new(Dummy {}),
+        StorageSinkConnection::Kafka(connection) => Box::new(connection.clone()),
+        StorageSinkConnection::Dummy(_) => Box::new(Dummy {}),
     }
 }

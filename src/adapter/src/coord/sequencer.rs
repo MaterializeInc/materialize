@@ -22,7 +22,7 @@ use tracing::{event, warn, Level};
 use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
@@ -54,12 +54,15 @@ use mz_sql::plan::{
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy};
-use mz_storage::types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
+use mz_storage::types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, DummySinkConnection, SinkAsOf, StorageSinkConnection,
+    StorageSinkConnectionBuilder, TailSinkConnection,
+};
 use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection,
-    SerializedComputeInstanceReplicaLocation,
+    SerializedComputeInstanceReplicaLocation, StorageSinkConnectionState,
 };
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -309,7 +312,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(&session).await;
                     let drop_sinks = session.reset();
-                    self.drop_sinks(drop_sinks).await;
+                    self.drop_compute_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(AdapterError::OperationProhibitsTransaction(
@@ -971,14 +974,12 @@ impl<S: Append + 'static> Coordinator<S> {
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
         let CreateSinkPlan {
-            name,
+            name: _,
             sink,
             with_snapshot,
             if_not_exists,
         } = plan;
 
-        // The dataflow must (eventually) be built on a specific compute instance.
-        // Use this in `catalog_transact` and stash for eventual sink construction.
         let compute_instance = sink.compute_instance;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
@@ -997,78 +998,45 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
+        // Knowing that we're only handling kafka sinks here helps us simplify.
+        let StorageSinkConnectionBuilder::Kafka(connection_builder) =
+            sink.connection_builder.clone();
+
         // Then try to create a placeholder catalog item with an unknown
         // connection. If that fails, we're done, though if the client specified
         // `if_not_exists` we'll tell the client we succeeded.
         //
         // This placeholder catalog item reserves the name while we create
         // the sink connection, which could take an arbitrarily long time.
+
         let catalog_sink = catalog::Sink {
             create_sql: sink.create_sql,
             from: sink.from,
-            connection: catalog::SinkConnectionState::Pending(sink.connection_builder.clone()),
+            connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
+                connection_builder,
+            )),
             envelope: sink.envelope,
             with_snapshot,
             depends_on,
             compute_instance,
         };
-        let op = catalog::Op::CreateItem {
-            id,
-            oid,
-            name,
-            item: CatalogItem::Sink(catalog_sink.clone()),
-        };
-
-        let transact_result = self
-            .catalog_transact(
-                Some(&session),
-                vec![op],
-                |txn| -> Result<(), AdapterError> {
-                    let from_entry = txn.catalog.get_entry(&sink.from);
-                    // Insert a dummy dataflow to trigger validation before we try to actually create
-                    // the external sink resources (e.g. Kafka Topics)
-                    txn.dataflow_builder(sink.compute_instance)
-                        .build_sink_dataflow(
-                            "dummy".into(),
-                            id,
-                            mz_storage::types::sinks::SinkDesc {
-                                from: sink.from,
-                                from_desc: from_entry
-                                    .desc(
-                                        &txn.catalog.resolve_full_name(
-                                            from_entry.name(),
-                                            from_entry.conn_id(),
-                                        ),
-                                    )
-                                    .unwrap()
-                                    .into_owned(),
-                                connection: SinkConnection::Tail(TailSinkConnection {}),
-                                envelope: Some(sink.envelope),
-                                as_of: SinkAsOf {
-                                    frontier: Antichain::new(),
-                                    strict: false,
-                                },
-                                from_storage_metadata: None,
-                            },
-                        )
-                        .map(|_ok| ())
-                },
-            )
-            .await;
 
         let storage_result = self
             .create_storage_export(
                 id,
                 &catalog_sink,
-                SinkConnection::Tail(TailSinkConnection {}),
+                StorageSinkConnection::Dummy(DummySinkConnection {
+                    storage_metadata: (),
+                }),
+                // XXX(chae): find better asof for dummy sink
                 SinkAsOf {
-                    frontier: Antichain::new(),
+                    frontier: Antichain::from_elem(Timestamp::minimum()),
                     strict: false,
                 },
             )
             .await;
 
-        match transact_result.and(storage_result) {
+        match storage_result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -2088,16 +2056,15 @@ impl<S: Append + 'static> Coordinator<S> {
             let timestamp =
                 coord.determine_timestamp(session, &id_bundle, &when, compute_instance)?;
 
-            Ok::<_, AdapterError>(SinkDesc {
+            Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
-                connection: SinkConnection::Tail(TailSinkConnection::default()),
+                connection: ComputeSinkConnection::Tail(TailSinkConnection::default()),
                 envelope: None,
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,
                 },
-                from_storage_metadata: None,
             })
         };
 
@@ -2132,7 +2099,10 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let (sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
-        session.add_drop_sink(compute_instance, *sink_id);
+        session.add_drop_sink(ComputeSinkId {
+            compute_instance,
+            global_id: *sink_id,
+        });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails

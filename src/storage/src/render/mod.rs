@@ -112,7 +112,7 @@ use mz_repr::GlobalId;
 
 use crate::controller::CollectionMetadata;
 use crate::storage_state::StorageState;
-use crate::types::sinks::SinkDesc;
+use crate::types::sinks::StorageSinkDesc;
 use crate::types::sources::IngestionDescription;
 
 mod debezium;
@@ -175,7 +175,7 @@ pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     id: GlobalId,
-    description: SinkDesc<CollectionMetadata, mz_repr::Timestamp>,
+    description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
     _resume_upper: Antichain<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");

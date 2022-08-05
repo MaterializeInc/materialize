@@ -65,7 +65,9 @@ use mz_sql::plan::{
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
 use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sinks::{
+    SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
+};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 
@@ -1249,7 +1251,7 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection: SinkConnectionState,
+    pub connection: StorageSinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
@@ -1257,9 +1259,9 @@ pub struct Sink {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub enum SinkConnectionState {
-    Pending(SinkConnectionBuilder),
-    Ready(SinkConnection),
+pub enum StorageSinkConnectionState {
+    Pending(StorageSinkConnectionBuilder),
+    Ready(StorageSinkConnection),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1413,8 +1415,8 @@ impl CatalogItem {
             | CatalogItem::Connection(_)
             | CatalogItem::StorageCollection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
-                SinkConnectionState::Pending(_) => true,
-                SinkConnectionState::Ready(_) => false,
+                StorageSinkConnectionState::Pending(_) => true,
+                StorageSinkConnectionState::Ready(_) => false,
             },
         }
     }
@@ -4120,7 +4122,7 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connection: SinkConnectionState::Pending(sink.connection_builder),
+                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,

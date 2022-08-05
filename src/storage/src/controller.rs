@@ -58,7 +58,7 @@ use crate::protocol::client::{
 };
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use crate::types::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
+use crate::types::sinks::{DummySinkConnection, StorageSinkConnection, StorageSinkDesc};
 use crate::types::sources::IngestionDescription;
 
 mod hosts;
@@ -100,7 +100,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
-    pub sink: SinkDesc<(), T>,
+    pub sink: StorageSinkDesc<(), T>,
     /// The address of a `storaged` process on which to install the source.
     ///
     /// If `None`, the controller manages the lifetime of the `storaged`
@@ -708,27 +708,23 @@ where
         exports: Vec<(GlobalId, ExportDescription<T>)>,
     ) -> Result<(), StorageError> {
         for (id, description) in exports {
-            let augmented_sink_desc = SinkDesc {
+            let augmented_sink_desc = StorageSinkDesc {
                 from: description.sink.from,
                 from_desc: description.sink.from_desc,
                 connection: match description.sink.connection {
-                    SinkConnection::Kafka(k) => SinkConnection::Kafka(k),
-                    SinkConnection::Tail(t) => SinkConnection::Tail(t),
-                    SinkConnection::Persist(PersistSinkConnection {
-                        value_desc,
+                    StorageSinkConnection::Kafka(k) => StorageSinkConnection::Kafka(k),
+                    StorageSinkConnection::Dummy(DummySinkConnection {
                         storage_metadata: (),
-                    }) => SinkConnection::Persist(PersistSinkConnection {
-                        value_desc,
+                    }) => StorageSinkConnection::Dummy(DummySinkConnection {
                         storage_metadata: self.collection(id)?.collection_metadata.clone(),
                     }),
                 },
                 envelope: description.sink.envelope,
                 as_of: description.sink.as_of,
-                from_storage_metadata: Some(
+                from_storage_metadata:
                     self.collection(description.sink.from)?
                         .collection_metadata
                         .clone(),
-                ),
             };
             let cmd = ExportSinkCommand {
                 id,

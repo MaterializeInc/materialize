@@ -28,7 +28,7 @@ use crate::controller::CollectionMetadata;
 use crate::protocol::client::{StorageCommand, StorageResponse};
 use crate::sink::SinkBaseMetrics;
 use crate::types::connections::ConnectionContext;
-use crate::types::sinks::SinkDesc;
+use crate::types::sinks::StorageSinkDesc;
 use crate::types::sources::IngestionDescription;
 
 use crate::decode::metrics::DecodeMetrics;
@@ -69,7 +69,7 @@ pub struct StorageState {
     /// Descriptions of each installed ingestion.
     pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
-    pub exports: HashMap<GlobalId, SinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
+    pub exports: HashMap<GlobalId, StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.

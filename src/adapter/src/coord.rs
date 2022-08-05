@@ -104,14 +104,14 @@ use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ExportDescription};
 use mz_storage::types::connections::ConnectionContext;
-use mz_storage::types::sinks::{SinkAsOf, SinkConnection};
+use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{IngestionDescription, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, Sink, SinkConnectionState, StorageHostSizeMap,
+    ClusterReplicaSizeMap, Sink, StorageHostSizeMap, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -209,7 +209,7 @@ pub struct SinkConnectionReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
-    pub result: Result<SinkConnection, AdapterError>,
+    pub result: Result<StorageSinkConnection, AdapterError>,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -556,8 +556,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
-                        SinkConnectionState::Pending(builder) => builder,
-                        SinkConnectionState::Ready(_) => {
+                        StorageSinkConnectionState::Pending(builder) => builder,
+                        StorageSinkConnectionState::Ready(_) => {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
@@ -794,11 +794,11 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         id: GlobalId,
         sink: &Sink,
-        connection: SinkConnection,
+        connection: StorageSinkConnection,
         as_of: SinkAsOf,
     ) -> Result<(), AdapterError> {
         let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
-        let storage_sink_desc = mz_storage::types::sinks::SinkDesc {
+        let storage_sink_desc = mz_storage::types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
                 .desc(&self.catalog.resolve_full_name(
@@ -810,8 +810,7 @@ impl<S: Append + 'static> Coordinator<S> {
             connection,
             envelope: Some(sink.envelope),
             as_of,
-            // XXX(chae): do we want this field in this struct??
-            from_storage_metadata: None,
+            from_storage_metadata: (),
         };
 
         Ok(self

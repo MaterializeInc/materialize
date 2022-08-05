@@ -37,7 +37,7 @@ use mz_timely_util::progress::any_change_batch;
 use crate::controller::CollectionMetadata;
 use crate::protocol::client::proto_storage_client::ProtoStorageClient;
 use crate::protocol::client::proto_storage_server::ProtoStorage;
-use crate::types::sinks::SinkDesc;
+use crate::types::sinks::StorageSinkDesc;
 use crate::types::sources::IngestionDescription;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.protocol.client.rs"));
@@ -191,7 +191,7 @@ impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ExportSinkCommand<T> {
     pub id: GlobalId,
-    pub description: SinkDesc<CollectionMetadata, T>,
+    pub description: StorageSinkDesc<CollectionMetadata, T>,
     /// The upper frontier at which this export should resume.
     pub resume_upper: Antichain<T>,
 }

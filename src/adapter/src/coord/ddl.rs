@@ -17,15 +17,15 @@ use itertools::Itertools;
 use tracing::Level;
 use tracing::{event, warn};
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_stash::Append;
-use mz_storage::types::sinks::{SinkAsOf, SinkConnection};
+use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection};
 
-use crate::catalog::{CatalogItem, CatalogState, SinkConnectionState};
+use crate::catalog::{CatalogItem, CatalogState, StorageSinkConnectionState};
 use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::Session;
@@ -62,7 +62,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
-        let mut sinks_to_drop = vec![];
+        let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
@@ -95,11 +95,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         }
                     }
                     CatalogItem::Sink(catalog::Sink {
-                        connection: SinkConnectionState::Ready(_),
-                        compute_instance,
+                        connection: StorageSinkConnectionState::Ready(_),
                         ..
                     }) => {
-                        sinks_to_drop.push((*compute_instance, *id));
+                        storage_sinks_to_drop.push(*id);
                     }
                     CatalogItem::Index(catalog::Index {
                         compute_instance, ..
@@ -141,15 +140,15 @@ impl<S: Append + 'static> Coordinator<S> {
         timelines_to_drop = self.remove_storage_ids_from_timeline(
             sources_to_drop
                 .iter()
+                .chain(storage_sinks_to_drop.iter())
                 .chain(tables_to_drop.iter())
                 .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
                 .cloned(),
         );
         timelines_to_drop.extend(
             self.remove_compute_ids_from_timeline(
-                sinks_to_drop
+                indexes_to_drop
                     .iter()
-                    .chain(indexes_to_drop.iter())
                     .chain(materialized_views_to_drop.iter())
                     .cloned(),
             ),
@@ -178,8 +177,8 @@ impl<S: Append + 'static> Coordinator<S> {
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop).await;
             }
-            if !sinks_to_drop.is_empty() {
-                self.drop_sinks(sinks_to_drop).await;
+            if !storage_sinks_to_drop.is_empty() {
+                self.drop_storage_sinks(storage_sinks_to_drop).await;
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
@@ -232,16 +231,33 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
     }
 
-    pub(crate) async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
-        let by_compute_instance = sinks.into_iter().into_group_map();
+    pub(crate) async fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
+        let by_compute_instance = sinks
+            .into_iter()
+            .map(
+                |ComputeSinkId {
+                     compute_instance,
+                     global_id,
+                 }| (compute_instance, global_id),
+            )
+            .into_group_map();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
             if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
                 compute.drop_sinks(ids).await.unwrap();
             }
         }
-        // XXX(chae): Drop storage sinks when they're moved over
-        //self.controller.storage_mut().drop_sinks(sinks).await.unwrap();
+    }
+
+    pub(crate) async fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
+        for id in &sinks {
+            self.drop_read_policy(id);
+        }
+        self.controller
+            .storage_mut()
+            .drop_sinks(sinks)
+            .await
+            .unwrap();
     }
 
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -321,19 +337,18 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn handle_sink_connection_ready(
         &mut self,
         id: GlobalId,
-        oid: u32,
-        connection: SinkConnection<()>,
+        _oid: u32,
+        connection: StorageSinkConnection<()>,
         compute_instance: ComputeInstanceId,
-        session: Option<&Session>,
+        _session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
         let entry = self.catalog.get_entry(&id);
-        let name = entry.name().clone();
         let mut sink = match entry.item() {
             CatalogItem::Sink(sink) => sink.clone(),
             _ => unreachable!(),
         };
-        sink.connection = catalog::SinkConnectionState::Ready(connection.clone());
+        sink.connection = StorageSinkConnectionState::Ready(connection.clone());
         // We don't try to linearize the as of for the sink; we just pick the
         // least valid read timestamp. If users want linearizability across
         // Materialize and their sink, they'll need to reason about the
@@ -342,46 +357,14 @@ impl<S: Append + 'static> Coordinator<S> {
         let id_bundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(&[sink.from]);
+        // XXX(chae): generalize oracle to account for created a sink based on a source
         let frontier = self.least_valid_read(&id_bundle);
         let as_of = SinkAsOf {
             frontier,
             strict: !sink.with_snapshot,
         };
-        let ops = vec![
-            catalog::Op::DropItem(id),
-            catalog::Op::CreateItem {
-                id,
-                oid,
-                name: name.clone(),
-                item: CatalogItem::Sink(sink.clone()),
-            },
-        ];
-        let df = self
-            .catalog_transact(session, ops, |txn| {
-                let mut builder = txn.dataflow_builder(compute_instance);
-                let from_entry = builder.catalog.get_entry(&sink.from);
-                let sink_description = mz_storage::types::sinks::SinkDesc {
-                    from: sink.from,
-                    from_desc: from_entry
-                        .desc(
-                            &builder
-                                .catalog
-                                .resolve_full_name(from_entry.name(), from_entry.conn_id()),
-                        )
-                        .unwrap()
-                        .into_owned(),
-                    connection: connection.clone(),
-                    envelope: Some(sink.envelope),
-                    as_of: as_of.clone(),
-                    from_storage_metadata: None,
-                };
-                Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description)?)
-            })
-            .await?;
 
         self.create_storage_export(id, &sink, connection, as_of)
-            .await?;
-
-        Ok(self.ship_dataflow(df, compute_instance).await)
+            .await
     }
 }
