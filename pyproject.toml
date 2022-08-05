@@ -39,3 +39,10 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_return_any = true
 warn_unreachable = true
+
+[tool.pyright]
+# Allow pyright to find imports for python files
+# in random folders, e.g. mzcompose.py files
+extraPaths = ["misc/python"]
+venvPath = ["./misc/python/venv"]
+exclude = ["./misc/python/venv"]
