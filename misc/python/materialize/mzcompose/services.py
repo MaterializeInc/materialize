@@ -335,6 +335,7 @@ class Redpanda(Service):
         self,
         name: str = "redpanda",
         version: str = "v22.1.6",
+        auto_create_topics: bool = False,
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         ports: Optional[List[int]] = None,
@@ -366,7 +367,7 @@ class Redpanda(Service):
             "--check=false",
             '--set "redpanda.enable_transactions=true"',
             '--set "redpanda.enable_idempotence=true"',
-            '--set "redpanda.auto_create_topics_enabled=false"',
+            f'--set "redpanda.auto_create_topics_enabled={auto_create_topics}"',
             f"--advertise-kafka-addr kafka:{ports[0]}",
         ]
 
@@ -518,7 +519,6 @@ class Debezium(Service):
             "CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
             "CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
         ],
-        depends_on: List[str] = ["kafka", "schema-registry"],
     ) -> None:
         super().__init__(
             name=name,
@@ -526,7 +526,6 @@ class Debezium(Service):
                 "image": image,
                 "ports": [port],
                 "environment": environment,
-                "depends_on": depends_on,
             },
         )
 
