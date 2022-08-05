@@ -808,10 +808,10 @@ where
                 },
                 envelope: description.sink.envelope,
                 as_of: description.sink.as_of,
-                from_storage_metadata:
-                    self.collection(description.sink.from)?
-                        .collection_metadata
-                        .clone(),
+                from_storage_metadata: self
+                    .collection(description.sink.from)?
+                    .collection_metadata
+                    .clone(),
             };
             let cmd = ExportSinkCommand {
                 id,

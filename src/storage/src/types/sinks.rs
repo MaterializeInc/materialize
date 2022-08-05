@@ -92,7 +92,9 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_r
             as_of: proto
                 .as_of
                 .into_rust_if_some("ProtoStorageSinkDesc::as_of")?,
-            from_storage_metadata: proto.from_storage_metadata.into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
+            from_storage_metadata: proto
+                .from_storage_metadata
+                .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
         })
     }
 }

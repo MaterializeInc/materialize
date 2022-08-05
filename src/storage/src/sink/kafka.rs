@@ -1126,8 +1126,6 @@ where
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
-    eprintln!("{:?}-{:?} INITIALIZING KAFKA STATE", name, scope.index());
-
     let mut s = KafkaSinkState::new(
         connection,
         name.clone(),
@@ -1190,7 +1188,6 @@ where
 
             if is_active_worker {
                 if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
-                    eprintln!("{:?}-{:?} INITIALIZING KAFKA SINK", name.clone(), "");
                     if s.transactional {
                         bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
                     }

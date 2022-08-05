@@ -48,7 +48,6 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         }
     }
 
-
     let (ok_collection, err_collection, source_token) = persist_source::persist_source(
         scope,
         sink.from,
