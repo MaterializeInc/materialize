@@ -11,13 +11,3 @@ mod persist_sink;
 mod tail;
 
 pub(crate) use persist_sink::persist_sink;
-
-/// Undocumented
-#[derive(Clone)]
-pub struct SinkBaseMetrics;
-impl SinkBaseMetrics {
-    /// Undocumented
-    pub fn register_with(_: &mz_ore::metrics::MetricsRegistry) -> Self {
-        SinkBaseMetrics {}
-    }
-}
