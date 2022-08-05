@@ -48,30 +48,10 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         }
     }
 
-    // TODO[btv] - We should determine the key and permutation to use during planning,
-    // rather than at runtime.
-    //
-    // This is basically an inlined version of the old `as_collection`.
-    //let bundle = self
-    //    .lookup_id(mz_expr::Id::Global(sink.from))
-    //    .expect("Sink source collection not loaded");
-    //let (ok_collection, err_collection) = if let Some(collection) = &bundle.collection {
-    //    collection.clone()
-    //} else {
-    //    let (key, _arrangement) = bundle
-    //        .arranged
-    //        .iter()
-    //        .next()
-    //        .expect("Invariant violated: at least one collection must be present.");
-    //    let unthinned_arity = sink.from_desc.arity();
-    //    let (permutation, thinning) = permutation_for_arrangement(&key, unthinned_arity);
-    //    let mut mfp = MapFilterProject::new(unthinned_arity);
-    //    mfp.permute(permutation, thinning.len() + key.len());
-    //    bundle.as_collection_core(mfp, Some((key.clone(), None)))
-    //};
 
     let (ok_collection, err_collection, source_token) = persist_source::persist_source(
         scope,
+        sink.from,
         Arc::clone(&storage_state.persist_clients),
         sink.from_storage_metadata.clone(),
         sink.as_of.frontier.clone(),
@@ -94,13 +74,9 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         needed_tokens.push(sink_token);
     }
 
-    // XXX(chae): think about whether still need this
-    storage_state.sink_tokens.insert(
-        sink_id,
-        SinkToken {
-            token: Box::new(needed_tokens),
-        },
-    );
+    storage_state
+        .sink_tokens
+        .insert(sink_id, SinkToken::new(Box::new(needed_tokens)));
 }
 
 #[allow(clippy::borrowed_box)]

@@ -133,7 +133,7 @@ where
         // sink_write_frontier` below so we properly clear out default frontiers of
         // non-active workers.
         let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
-            Antichain::from_elem(0)
+            Antichain::from_elem(Timestamp::minimum())
         } else {
             Antichain::new()
         }));
@@ -149,7 +149,6 @@ where
             &storage_state.connection_context,
         );
 
-        // XXX(chae): think about whether we need/want this here
         storage_state
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);

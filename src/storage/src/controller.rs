@@ -108,6 +108,44 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub remote_addr: Option<String>,
 }
 
+impl<T: Timestamp> ExportDescription<T> {
+    fn is_valid_replacement_for(&self, old: &ExportDescription<T>) -> bool {
+        let ExportDescription {
+            sink:
+                StorageSinkDesc {
+                    from: ref old_from,
+                    from_desc: ref old_from_desc,
+                    connection: ref old_connection,
+                    envelope: ref old_envelope,
+                    as_of: ref old_as_of,
+                    from_storage_metadata: ref old_from_storage_metadata,
+                },
+            remote_addr: ref old_remote_addr,
+        } = old;
+        let ExportDescription {
+            sink:
+                StorageSinkDesc {
+                    from: ref new_from,
+                    from_desc: ref new_from_desc,
+                    connection: ref new_connection,
+                    envelope: ref new_envelope,
+                    as_of: ref new_as_of,
+                    from_storage_metadata: ref new_from_storage_metadata,
+                },
+            remote_addr: ref new_remote_addr,
+        } = self;
+
+        let required_matching_fields = old_from == new_from
+            && old_from_desc == new_from_desc
+            && old_envelope == new_envelope
+            && old_from_storage_metadata == new_from_storage_metadata
+            && old_remote_addr == new_remote_addr;
+        let optional_matching_fields = matches!(old_connection, StorageSinkConnection::Dummy(_))
+            || (old_as_of == new_as_of && old_connection == new_connection);
+        required_matching_fields && optional_matching_fields
+    }
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug + Send {
     type Timestamp;
@@ -142,6 +180,15 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
+    /// Acquire an immutable reference to the export state, should it exist.
+    fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError>;
+
+    /// Acquire a mutable reference to the export state, should it exist.
+    fn export_mut(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<&mut ExportState<Self::Timestamp>, StorageError>;
+
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
@@ -153,6 +200,13 @@ pub trait StorageController: Debug + Send {
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+
+    /// Drops the read capability for the sinks and allows their resources to be reclaimed.  This
+    /// doesn't require the sinks exists.
+    async fn try_drop_sinks(&mut self, mut identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        identifiers.retain(|id| self.export(*id).is_ok());
+        self.drop_sinks(identifiers).await
+    }
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     ///
@@ -417,6 +471,7 @@ pub struct StorageControllerState<
     /// This collection only grows, although individual collections may be rendered unusable.
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
+    pub(super) exports: BTreeMap<GlobalId, ExportState<T>>,
     pub(super) stash: S,
     /// Write handle for persist shards.
     pub(super) persist_write_handles: persist_write_handles::PersistWorker<T>,
@@ -544,6 +599,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
         let stash = mz_stash::Memory::new(stash);
         Self {
             collections: BTreeMap::default(),
+            exports: BTreeMap::default(),
             stash,
             persist_write_handles: persist_write_handles::PersistWorker::new(tx),
             persist_read_handles: persist_read_handles::PersistWorker::new(),
@@ -703,11 +759,42 @@ where
         Ok(())
     }
 
+    fn export(&self, id: GlobalId) -> Result<&ExportState<T>, StorageError> {
+        self.state
+            .exports
+            .get(&id)
+            .ok_or(StorageError::IdentifierMissing(id))
+    }
+
+    fn export_mut(&mut self, id: GlobalId) -> Result<&mut ExportState<T>, StorageError> {
+        self.state
+            .exports
+            .get_mut(&id)
+            .ok_or(StorageError::IdentifierMissing(id))
+    }
+
     async fn create_exports(
         &mut self,
         exports: Vec<(GlobalId, ExportDescription<T>)>,
     ) -> Result<(), StorageError> {
+        // Validate first, to avoid corrupting state.
+        let mut dedup_hashmap = HashMap::<&_, &_>::new();
+        for (id, desc) in exports.iter() {
+            if dedup_hashmap.insert(id, desc).is_some() {
+                return Err(StorageError::SourceIdReused(*id));
+            }
+            if let Ok(export) = self.export(*id) {
+                if !desc.is_valid_replacement_for(&export.description) {
+                    return Err(StorageError::SourceIdReused(*id));
+                }
+            }
+        }
+
         for (id, description) in exports {
+            self.state
+                .exports
+                .insert(id, ExportState::new(description.clone()));
+
             let augmented_sink_desc = StorageSinkDesc {
                 from: description.sink.from,
                 from_desc: description.sink.from_desc,
@@ -772,6 +859,7 @@ where
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        // XXX(chae): need to ensure we do this properly with the temp sink created from bootstrapping?? Restarting with sinks in catalog causes panic rn
         // XXX(chae): what does dropping sinks mean??
         //self.validate_ids(identifiers.iter().cloned())?;
         //let policies = identifiers
@@ -780,7 +868,11 @@ where
         //    .collect();
         //self.set_read_policy(policies).await?;
         for id in identifiers {
-            self.hosts.deprovision(id).await.unwrap();
+            let mut update = ChangeBatch::new();
+            let old_frontier = self.export(id)?.write_frontier.frontier();
+            update.extend(old_frontier.iter().map(|time| (time.clone(), -1)));
+            self.update_write_frontiers(&[(id, update)]).await?;
+            self.hosts.deprovision(id).await?;
         }
         Ok(())
     }
@@ -855,33 +947,39 @@ where
         updates: &[(GlobalId, ChangeBatch<T>)],
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
+        let mut read_policy_updates = vec![];
         for (id, changes) in updates.iter() {
-            let collection = self
-                .collection_mut(*id)
-                .expect("Reference to absent collection");
+            if let Ok(collection) = self.collection_mut(*id) {
+                collection
+                    .write_frontier
+                    .update_iter(changes.clone().drain());
 
-            collection
-                .write_frontier
-                .update_iter(changes.clone().drain());
-
-            let mut new_read_capability = collection
-                .read_policy
-                .frontier(collection.write_frontier.frontier());
-            if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
-                // TODO: reuse change batch above?
-                let mut update = ChangeBatch::new();
-                update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-                update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
-                if !update.is_empty() {
-                    read_capability_changes.insert(*id, update);
+                let mut new_read_capability = collection
+                    .read_policy
+                    .frontier(collection.write_frontier.frontier());
+                if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
+                    // TODO: reuse change batch above?
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+                    if !update.is_empty() {
+                        read_capability_changes.insert(*id, update);
+                    }
                 }
+            } else if let Ok(export) = self.export_mut(*id) {
+                export.write_frontier.update_iter(changes.clone().drain());
+                read_policy_updates.push(export.description.sink.from);
+            } else {
+                panic!("Reference to absent collection");
             }
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes)
                 .await?;
         }
+        // XXX(chae): do we need to tie read policies at this level? or done at higher level?
+        if !read_policy_updates.is_empty() {}
         Ok(())
     }
 
@@ -1059,6 +1157,28 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             collection_metadata: metadata,
+        }
+    }
+}
+
+/// State maintained about individual exports.
+#[derive(Debug)]
+pub struct ExportState<T> {
+    /// Description with which the export was created
+    pub description: ExportDescription<T>,
+
+    /// Reported progress in the write capabilities.
+    ///
+    /// Importantly, this is not a write capability, but what we have heard about the
+    /// write capabilities of others. All future writes will have times greater than or
+    /// equal to `write_frontier.frontier()`.
+    pub write_frontier: MutableAntichain<T>,
+}
+impl<T: Timestamp> ExportState<T> {
+    fn new(description: ExportDescription<T>) -> Self {
+        Self {
+            description,
+            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
         }
     }
 }

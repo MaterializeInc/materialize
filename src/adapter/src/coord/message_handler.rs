@@ -266,7 +266,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         Some(&session),
                     )
                     .await
-                    // XXX(chae): I really don't liek this -- especially as we're now doing cross
+                    // XXX(chae): I really don't like this -- especially as we're now doing cross
                     // process calls to start a sink.
                     .expect("sinks should be validated by sequence_create_sink");
                 } else {

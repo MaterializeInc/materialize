@@ -94,9 +94,12 @@ pub struct StorageState {
 }
 
 /// A token that keeps a sink alive.
-pub struct SinkToken {
-    /// The underlying token.
-    pub token: Box<dyn Any>,
+pub struct SinkToken(Box<dyn Any>);
+impl SinkToken {
+    /// Create new token
+    pub fn new(t: Box<dyn Any>) -> Self {
+        Self(t)
+    }
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -195,7 +198,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .exports
                         .insert(export.id, export.description.clone());
 
-                    // XXX(chae): do we need sink_uppers/since tracking??
+                    self.storage_state.sink_write_frontiers.insert(
+                        export.id,
+                        Rc::new(RefCell::new(Antichain::from_elem(
+                            mz_repr::Timestamp::minimum(),
+                        ))),
+                    );
 
                     crate::render::build_export_dataflow(
                         &mut self.timely_worker,
@@ -203,17 +211,23 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         export.id,
                         export.description,
                         export.resume_upper,
-                    )
+                    );
+
+                    self.storage_state.reported_frontiers.insert(
+                        export.id,
+                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                    );
                 }
             }
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
                     if frontier.is_empty() {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
-                        // Clean up per-source state.
+                        // Clean up per-source / per-sink state.
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
                         self.storage_state.source_tokens.remove(&id);
+                        self.storage_state.sink_tokens.remove(&id);
                     }
                 }
             }
@@ -234,7 +248,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut changes = Vec::new();
 
         // Check if any observed frontier should advance the reported frontiers.
-        for (id, frontier) in self.storage_state.source_uppers.iter() {
+        for (id, frontier) in self
+            .storage_state
+            .source_uppers
+            .iter()
+            .chain(self.storage_state.sink_write_frontiers.iter())
+        {
             let reported_frontier = self
                 .storage_state
                 .reported_frontiers
@@ -355,15 +374,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         }
 
-        // Synthesize a drop command to remove stale ingestions.
+        // Synthesize a drop command to remove stale ingestions and exports
         commands.push(StorageCommand::AllowCompaction(
             stale_ingestions
                 .into_iter()
+                .chain(stale_exports)
                 .map(|id| (*id, Antichain::new()))
                 .collect(),
         ));
-
-        // XXX(chae): figure out a drop command for stale exports
 
         // Reset the reported frontiers.
         for (_, frontier) in &mut self.storage_state.reported_frontiers {

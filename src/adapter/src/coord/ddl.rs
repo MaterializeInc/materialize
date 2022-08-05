@@ -188,14 +188,12 @@ impl<S: Append + 'static> Coordinator<S> {
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop).await;
             }
-            if !storage_sinks_to_drop.is_empty() || !storage_temporary_sinks_to_drop.is_empty() {
-                self.drop_storage_sinks(
-                    storage_sinks_to_drop
-                        .into_iter()
-                        .chain(storage_temporary_sinks_to_drop)
-                        .collect::<Vec<_>>(),
-                )
-                .await;
+            if !storage_sinks_to_drop.is_empty() {
+                self.drop_storage_sinks(storage_sinks_to_drop).await;
+            }
+            if !storage_temporary_sinks_to_drop.is_empty() {
+                self.try_drop_storage_sinks(storage_temporary_sinks_to_drop)
+                    .await;
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
@@ -273,6 +271,17 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .storage_mut()
             .drop_sinks(sinks)
+            .await
+            .unwrap();
+    }
+
+    pub(crate) async fn try_drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
+        for id in &sinks {
+            self.drop_read_policy(id);
+        }
+        self.controller
+            .storage_mut()
+            .try_drop_sinks(sinks)
             .await
             .unwrap();
     }
