@@ -180,14 +180,15 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                 self.data_dir.join(format!("{}.ports", process_file_name));
             port_metadata_file_locations[i] = Some(port_metadata_file_location.clone());
 
-            if pid_file_location.exists() && port_metadata_file_location.exists() {
+            if let (Ok(pid), Ok(port_metadata)) = (
+                PidFile::read(&pid_file_location),
+                PortMetadataFile::read(&port_metadata_file_location),
+            ) {
                 let system = system.get_or_insert_with(|| {
                     sysinfo::System::new_with_specifics(
                         RefreshKind::new().with_processes(Default::default()),
                     )
                 });
-                let pid = PidFile::read(&pid_file_location)?;
-                let port_metadata = PortMetadataFile::read(&port_metadata_file_location)?;
                 if let Some(process) = system.process(pid.into()) {
                     if process.exe() == path {
                         if process.status() == ProcessStatus::Dead

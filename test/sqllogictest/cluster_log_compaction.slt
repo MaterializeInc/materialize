@@ -1,0 +1,29 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Ensure correct log creation on `CREATE CLUSTER` initializes read policies for introspection source indexes.
+
+mode cockroach
+
+statement ok
+CREATE CLUSTER c1 REPLICAS (r (SIZE '1'));
+
+statement ok
+SET CLUSTER TO c1;
+
+statement ok
+BEGIN
+
+# Transaction will force a read hold on this index.
+query T rowsort
+SELECT * FROM mz_arrangement_batches_internal_2;
+----
+
+statement ok
+COMMIT

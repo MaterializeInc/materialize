@@ -297,6 +297,7 @@ where
                             let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                 persist_source::persist_source(
                                     scope,
+                                    id,
                                     persist_clients,
                                     tx_storage_metadata,
                                     as_of,

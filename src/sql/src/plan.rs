@@ -398,6 +398,7 @@ pub struct ExplainPlanNew {
     pub stage: ExplainStageNew,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
+    pub explainee: mz_repr::explain_new::Explainee,
 }
 
 #[derive(Debug)]
@@ -406,6 +407,7 @@ pub struct ExplainPlanOld {
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStageOld,
     pub options: ExplainOptions,
+    pub view_id: GlobalId,
 }
 
 #[derive(Debug)]

@@ -68,6 +68,10 @@ impl<P: AsRef<Path>> PortMetadataFile<P> {
 impl<P: AsRef<Path>> Drop for PortMetadataFile<P> {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+        // Best effort attempt to fsync the delete.
+        if let Some(parent_path) = self.path.as_ref().parent() {
+            let _ = std::fs::File::open(parent_path).and_then(|h| h.sync_all());
+        }
     }
 }
 

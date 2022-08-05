@@ -19,13 +19,13 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::RowSetFinishing;
 use mz_ore::str::{Indent, IndentLike};
-use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer};
+use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer, RenderingContext};
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
-use crate::coord::peek;
+use crate::coord::peek::{self, FastPathPlan};
 
 pub(crate) mod common;
 pub(crate) mod hir;
@@ -67,7 +67,7 @@ pub(crate) struct ExplainContext<'a> {
     pub(crate) humanizer: &'a dyn ExprHumanizer,
     pub(crate) used_indexes: UsedIndexes,
     pub(crate) finishing: Option<RowSetFinishing>,
-    pub(crate) fast_path_plan: Option<peek::Plan<OptimizedMirRelationExpr>>,
+    pub(crate) fast_path_plan: Option<peek::FastPathPlan>,
 }
 
 #[derive(Clone)]
@@ -93,10 +93,22 @@ impl UsedIndexes {
     }
 }
 
-// TODO (#13472)
-impl DisplayText<()> for UsedIndexes {
-    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        unimplemented!() // TODO (#13472)
+impl<'a, C> DisplayText<C> for UsedIndexes
+where
+    C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        write!(f, "{}used_indexes:", ctx.as_mut())?;
+        *ctx.as_mut() += 1;
+        for id in &self.0 {
+            let index_name = ctx
+                .as_ref()
+                .humanize_id(*id)
+                .unwrap_or_else(|| id.to_string());
+            write!(f, "{}- {}", ctx.as_mut(), index_name)?;
+        }
+        *ctx.as_mut() -= 1;
+        Ok(())
     }
 }
 
@@ -122,16 +134,33 @@ where
             self.context.config,
         );
 
+        fn fmt_plan<'a, T>(
+            ctx: &mut PlanRenderingContext<'a, T>,
+            f: &mut fmt::Formatter<'_>,
+            fast_path_plan: &Option<FastPathPlan>,
+            plan: &'a T,
+        ) -> fmt::Result
+        where
+            Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
+        {
+            if let Some(fast_path_plan) = fast_path_plan {
+                fast_path_plan.fmt_text(f, ctx)
+            } else {
+                Displayable::from(plan).fmt_text(f, ctx)
+            }
+        }
+
         if let Some(finishing) = &self.context.finishing {
             finishing.fmt_text(f, &mut ctx.indent)?;
-            ctx.indented(|ctx| Displayable::from(self.plan.plan).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| fmt_plan(ctx, f, &self.context.fast_path_plan, self.plan.plan))?;
         } else {
-            Displayable::from(self.plan.plan).fmt_text(f, &mut ctx)?;
+            fmt_plan(&mut ctx, f, &self.context.fast_path_plan, self.plan.plan)?;
         }
-        // writeln!(f, "")?;
 
-        // TODO (#13472)
-        // self.context.used_indexes.fmt_text(..., f)?;
+        if !self.context.used_indexes.0.is_empty() {
+            writeln!(f, "")?;
+            self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
 
         Ok(())
     }
@@ -157,16 +186,54 @@ impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
 where
     Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
 {
-    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         // TODO (#13472)
-        // let mut context = RenderingContext::new(Indent::default(), self.context.humanizer);
-        // self.context.finishing.fmt_text(f, &mut context.indent)?;
-        // writeln!(f, "")?;
-        // self.plans.fmt_text(..., f)?;
-        // writeln!(f, "")?;
-        // self.sources.used_indexes.fmt_text(..., f)?;
-        // writeln!(f, "")?;
-        // self.context.used_indexes.fmt_text(..., f)?;
+        let mut ctx = RenderingContext::new(Indent::default(), self.context.humanizer);
+
+        fn fmt_plan<'a, T>(
+            ctx: &mut RenderingContext<'a>,
+            f: &mut fmt::Formatter<'_>,
+            fast_path_plan: &Option<FastPathPlan>,
+            _plans: &Vec<AnnotatedPlan<'a, T>>,
+            _sources: &Vec<(String, LinearOperator)>,
+        ) -> fmt::Result
+        where
+            Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
+        {
+            if let Some(fast_path_plan) = fast_path_plan {
+                fast_path_plan.fmt_text(f, ctx)?;
+            } else {
+                // self.plans.fmt_text(..., f)?;
+                // writeln!(f, "")?;
+                // self.sources.fmt_text(..., f)?;
+            }
+            Ok(())
+        }
+
+        if let Some(finishing) = &self.context.finishing {
+            finishing.fmt_text(f, &mut ctx.indent)?;
+            ctx.indented(|ctx| {
+                fmt_plan(
+                    ctx,
+                    f,
+                    &self.context.fast_path_plan,
+                    &self.plans,
+                    &self.sources,
+                )
+            })?;
+        } else {
+            fmt_plan(
+                &mut ctx,
+                f,
+                &self.context.fast_path_plan,
+                &self.plans,
+                &self.sources,
+            )?;
+        }
+        if !self.context.used_indexes.0.is_empty() {
+            writeln!(f, "")?;
+            self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
 
         Ok(())
     }
@@ -201,5 +268,11 @@ impl<'a, T> PlanRenderingContext<'a, T> {
 impl<'a, T> AsMut<Indent> for PlanRenderingContext<'a, T> {
     fn as_mut(&mut self) -> &mut Indent {
         &mut self.indent
+    }
+}
+
+impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
+    fn as_ref(&self) -> &&'a dyn ExprHumanizer {
+        &self.humanizer
     }
 }

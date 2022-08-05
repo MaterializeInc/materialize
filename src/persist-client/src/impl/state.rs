@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
@@ -63,6 +64,8 @@ pub struct HollowBatch<T> {
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 pub struct StateCollections<T> {
+    pub(crate) last_gc_req: SeqNo,
+
     pub(crate) readers: HashMap<ReaderId, ReaderState<T>>,
     pub(crate) writers: HashMap<WriterId, WriterState>,
 
@@ -285,6 +288,7 @@ where
             shard_id,
             seqno: SeqNo::minimum(),
             collections: StateCollections {
+                last_gc_req: SeqNo::minimum(),
                 readers: HashMap::new(),
                 writers: HashMap::new(),
                 trace: Trace::default(),
@@ -309,12 +313,55 @@ where
         self.collections.trace.upper().clone()
     }
 
-    pub fn seqno_since(&self) -> SeqNo {
+    pub fn batch_count(&self) -> usize {
+        self.collections.trace.num_hollow_batches()
+    }
+
+    fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
         for cap in self.collections.readers.values() {
             seqno_since = std::cmp::min(seqno_since, cap.seqno);
         }
         seqno_since
+    }
+
+    // Returns whether the cmd proposing this state has been selected to perform
+    // background garbage collection work.
+    //
+    // If it was selected, this information is recorded in the state itself for
+    // commit along with the cmd's state transition. This helps us to avoid
+    // redundant work.
+    //
+    // Correctness does not depend on a gc assignment being executed, nor on
+    // them being executed in the order they are given. But it is expected that
+    // gc assignments are best-effort respected. In practice, cmds like
+    // register_foo or expire_foo, where it would be awkward, ignore gc.
+    pub fn maybe_gc(&mut self, is_write: bool) -> Option<(SeqNo, SeqNo)> {
+        // This is an arbitrary-ish threshold that scales with seqno, but never
+        // gets particularly big. It probably could be much bigger and certainly
+        // could use a tuning pass at some point.
+        let gc_threshold = std::cmp::max(
+            1,
+            u64::from(self.seqno.0.next_power_of_two().trailing_zeros()),
+        );
+        let seqno_since = self.seqno_since();
+        let should_gc =
+            seqno_since.0.saturating_sub(self.collections.last_gc_req.0) >= gc_threshold;
+        // Assign GC traffic preferentially to writers, falling back to anyone
+        // generating new state versions if there are no writers.
+        let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
+        if should_gc {
+            let req = (self.collections.last_gc_req, seqno_since);
+            self.collections.last_gc_req = seqno_since;
+            Some(req)
+        } else {
+            None
+        }
+    }
+
+    /// Return the number of gc-ineligible state versions.
+    pub fn seqnos_held(&self) -> usize {
+        usize::cast_from(self.seqno.0.saturating_sub(self.seqno_since().0))
     }
 
     pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> ControlFlow<E, (R, Self)>
@@ -798,5 +845,37 @@ mod tests {
             .collections
             .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_two)
             .is_continue());
+    }
+
+    #[test]
+    fn maybe_gc() {
+        mz_ore::test::init_logging();
+        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+
+        // Empty state doesn't need gc, regardless of is_write.
+        assert_eq!(state.maybe_gc(true), None);
+        assert_eq!(state.maybe_gc(false), None);
+
+        // Artificially advance the seqno so the seqno_since advances past our
+        // internal gc_threshold.
+        state.seqno = SeqNo(100);
+        assert_eq!(state.seqno_since(), SeqNo(100));
+
+        // When a writer is present, non-writes don't gc.
+        let writer_id = WriterId::new();
+        let _ = state.collections.register_writer(&writer_id, 0);
+        assert_eq!(state.maybe_gc(false), None);
+
+        // A write will gc though.
+        assert_eq!(state.maybe_gc(true), Some((SeqNo::minimum(), SeqNo(100))));
+
+        // Artificially advance the seqno (again) so the seqno_since advances
+        // past our internal gc_threshold (again).
+        state.seqno = SeqNo(200);
+        assert_eq!(state.seqno_since(), SeqNo(200));
+
+        // If there are no writers, even a non-write will gc.
+        let _ = state.collections.expire_writer(&writer_id);
+        assert_eq!(state.maybe_gc(true), Some((SeqNo(100), SeqNo(200))));
     }
 }

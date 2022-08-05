@@ -45,7 +45,7 @@ Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 3)
 | Project (#0..=#3)
 
-Query:
+View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#0 = 1), (#3 = 3)
@@ -65,7 +65,7 @@ Source materialize.public.data (UID):
 | Filter (#1 = 1)
 | Project (#1)
 
-Query:
+View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#1 = 1)
@@ -90,7 +90,7 @@ Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 4)
 | Project (#0, #1, #3)
 
-Query:
+View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#0 = 1), (#3 = 4)
@@ -111,7 +111,7 @@ Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 4)
 | Project (#0, #3)
 
-Query:
+View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#0 = 1), (#3 = 4)
@@ -129,7 +129,7 @@ Query:
 Source materialize.public.data (UID):
 | Project (#0, #1, #3)
 
-Query:
+View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#0) IS NOT NULL
@@ -164,7 +164,7 @@ Source materialize.public.data (UID):
 | Filter (#3 = 4)
 | Project (#0, #1, #3)
 
-Query:
+View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#3 = 4), (#0) IS NOT NULL
@@ -195,7 +195,7 @@ Source materialize.public.data (UID):
 | Filter (#0) IS NOT NULL
 | Project (#0, #2)
 
-Query:
+View materialize.public.v (UID):
 %0 = Let l0 =
 | Get materialize.public.data (UID)
 | Filter (#0) IS NOT NULL
@@ -232,7 +232,7 @@ Source materialize.public.data (UID):
 | Filter (#0 = 1)
 | Project (#0..=#2)
 
-Query:
+View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#0 = 1)
@@ -281,7 +281,7 @@ Source materialize.public.data2 (UID):
 | Filter (#3) IS NULL
 | Project (#0, #2, #3)
 
-Query:
+View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Project (#0, #2)

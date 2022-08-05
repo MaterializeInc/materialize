@@ -1,0 +1,70 @@
+# Regression test if the global timestamp has progressed during multiple
+# Parse/Bind/Execute commands that don't have a Sync between them.
+
+# This is a bit of an edge case in the Postgres protocol documentation and its
+# implementation and code comments. The protocol docs say:
+#
+# At completion of each series of extended-query messages, the frontend should
+# issue a Sync message. This parameterless message causes the backend to close
+# the current transaction...
+#
+# In postgres.c's exec_parse_message function, a transaction is started
+# via start_xact_command which will put the transaction into TBLOCK_STARTED
+# and set a boolean to prevent doing that a second time. The comments for
+# TBLOCK_STARTED say "running single-query transaction". The most common
+# scenario is after Parse, a user will Bind the portal, Execute the portal,
+# then Sync, which commits the transaction.
+#
+# However it is also completely within spec for clients to issue another
+# Parse/Bind/Execute trio before the Sync. The protocol docs (until recently)
+# don't specifically describe how the transaction handling should function
+# in this situation (in contrast to the simple query workflow, which has
+# a long description about how to handle multiple statements in the same
+# query string). The comments for TBLOCK_STARTED imply it's a single-query
+# transaction, but that is not always the case.
+#
+# In practice, the Npgsql .NET driver does exactly this on its startup when
+# fetching from the catalog tables. Our code previously made assumptions that
+# transactions in the TBLOCK_STARTED were always single statement, and would
+# thus skip some work. However it is possible that there are other stataments
+# issued in that block, so we should instead never perform those kinds of
+# optimizations because they are not in fact safe.
+#
+# The bug motivating this test was caused by sequence_peek adding a
+# second transaction operation at a different timestamp to an existing
+# transaction. The sleep here was required to force the global timestamp
+# forward, which was the cause of the initial panic. See:
+# https://github.com/MaterializeInc/materialize/blob/5afec7c55867d1d1a0a8f1e81c088b84dcff81d8/src/adapter/src/coord/sequencer.rs#L1955
+#
+# See: https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137
+# See: https://www.postgresql.org/message-id/flat/17434-d9f7a064ce2a88a3%40postgresql.org
+
+send
+Parse {"query": "SELECT 1 FROM pg_type LIMIT 1"}
+Bind
+Execute
+Parse {"query": "SELECT mz_internal.mz_sleep(1) FROM pg_type LIMIT 1"}
+Bind
+Execute
+Parse {"query": "SELECT 1 FROM pg_type LIMIT 1"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+DataRow {"fields":["NULL"]}
+CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

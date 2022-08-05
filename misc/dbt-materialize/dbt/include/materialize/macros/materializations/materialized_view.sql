@@ -25,7 +25,7 @@
                                                 type='materializedview') -%}
 
   {% if old_relation %}
-    {{ adapter.drop_relation(drop_relation) }}
+    {{ adapter.drop_relation(old_relation) }}
   {% endif %}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}

@@ -37,7 +37,7 @@ a
 # statement ok
 > CREATE OR REPLACE MATERIALIZED VIEW numeric_cast_ok AS
   SELECT 1
-  WHERE mz_logical_timestamp() > 1927418240000::numeric(38,0);
+  WHERE mz_logical_timestamp() < 18446744073709551615::numeric(38,0);
 
 > SELECT * FROM numeric_cast_ok;
 1
