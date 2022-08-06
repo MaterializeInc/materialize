@@ -24,7 +24,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::order::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, ChangeBatch};
-use tracing::error;
+use tracing::{error, info};
 
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::result::ResultExt;
@@ -71,6 +71,9 @@ pub(crate) fn upsert<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    if as_of_frontier != Antichain::from_elem(0) {
+        info!("upsert resuming from time {as_of_frontier:?}");
+    }
     // Currently, the upsert-specific transformations run in the
     // following order:
     // 1. Applies `as_of` frontier compaction. The compaction is important as

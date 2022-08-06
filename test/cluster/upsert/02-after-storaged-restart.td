@@ -46,4 +46,4 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > SELECT * FROM upsert
 id creature
 -----------
-1  komodo dragon
+1  dragon

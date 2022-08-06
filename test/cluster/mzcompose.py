@@ -166,12 +166,11 @@ def workflow_test_github_12251(c: Composition) -> None:
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+        Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
         c.down(destroy_volumes=True)
         dependencies = [
             "materialized",
-            "storaged",
             "zookeeper",
             "kafka",
             "schema-registry",
@@ -181,10 +180,7 @@ def workflow_test_upsert(c: Composition) -> None:
         )
 
         c.run("testdrive", "upsert/01-create-sources.td")
-
-        c.kill("storaged")
-        c.up("storaged")
-
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged`")
         c.run("testdrive", "upsert/02-after-storaged-restart.td")
 
 def workflow_test_remote_storaged(c: Composition) -> None:
