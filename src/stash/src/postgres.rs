@@ -13,7 +13,8 @@ use std::marker::PhantomData;
 use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
-use futures::future::BoxFuture;
+use futures::future::TryFutureExt;
+use futures::future::{self, BoxFuture};
 use futures::StreamExt;
 use postgres_openssl::MakeTlsConnector;
 use timely::progress::frontier::AntichainRef;
@@ -316,7 +317,12 @@ impl Postgres {
         let client = self.client.as_mut().unwrap();
         let stmts = self.statements.as_ref().unwrap();
         let tx = client.transaction().await?;
-        let row = tx.query_one(&stmts.select_epoch, &[]).await?;
+        // Pipeline the epoch query and closure.
+        let epoch_fut = tx
+            .query_one(&stmts.select_epoch, &[])
+            .map_err(|err| err.into());
+        let f_fut = f(stmts, &tx);
+        let (row, res) = future::try_join(epoch_fut, f_fut).await?;
         let current_epoch: i64 = row.get(0);
         if Some(current_epoch) != self.epoch {
             return Err(InternalStashError::Fence(format!(
@@ -329,7 +335,6 @@ impl Postgres {
         if current_nonce != self.nonce {
             return Err(InternalStashError::Fence("unexpected fence nonce".into()).into());
         }
-        let res = f(stmts, &tx).await?;
         tx.commit().await?;
         Ok(res)
     }
@@ -591,10 +596,13 @@ impl Stash for Postgres {
         self.transact(move |stmts, tx| {
             let key_buf = key_buf.clone();
             Box::pin(async move {
-                let since = match Self::since_tx(stmts, tx, collection.id)
-                    .await?
-                    .into_option()
-                {
+                let (since, rows) = future::try_join(
+                    Self::since_tx(stmts, tx, collection.id),
+                    tx.query(&stmts.iter_key, &[&collection.id, &key_buf])
+                        .map_err(|err| err.into()),
+                )
+                .await?;
+                let since = match since.into_option() {
                     Some(since) => since,
                     None => {
                         return Err(StashError::from(
@@ -602,9 +610,7 @@ impl Stash for Postgres {
                         ));
                     }
                 };
-                let mut rows = tx
-                    .query(&stmts.iter_key, &[&collection.id, &key_buf])
-                    .await?
+                let mut rows = rows
                     .into_iter()
                     .map(|row| {
                         let value_buf: Vec<_> = row.try_get("value")?;
