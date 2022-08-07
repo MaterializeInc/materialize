@@ -177,7 +177,7 @@ where
         for ingest in self.ingestions.values_mut() {
             ingest.resume_upper = ingest
                 .description
-                .get_resume_upper::<T>(self.persist.clone())
+                .get_resume_upper::<T>(Arc::clone(&self.persist))
                 .await;
         }
 

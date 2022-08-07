@@ -162,8 +162,11 @@ where
         info!("assigned storage object {id} to storage host {host_addr}");
         match self.hosts.entry(host_addr.clone()) {
             Entry::Vacant(entry) => {
-                let mut client =
-                    RehydratingStorageClient::new(host_addr, self.build_info, self.persist.clone());
+                let mut client = RehydratingStorageClient::new(
+                    host_addr,
+                    self.build_info,
+                    Arc::clone(&self.persist),
+                );
                 if self.initialized {
                     client.send(StorageCommand::InitializationComplete);
                 }

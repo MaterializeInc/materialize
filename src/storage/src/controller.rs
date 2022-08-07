@@ -679,7 +679,7 @@ where
                     desc: ingestion.desc,
                     typ: description.desc.typ().clone(),
                 };
-                let resume_upper = desc.get_resume_upper(self.persist.clone()).await;
+                let resume_upper = desc.get_resume_upper(Arc::clone(&self.persist)).await;
                 let augmented_ingestion = IngestSourceCommand {
                     id,
                     description: desc,
@@ -999,7 +999,7 @@ where
                     orchestrator,
                     storaged_image,
                 },
-                persist_clients.clone(),
+                Arc::clone(&persist_clients),
             ),
             internal_response_queue: rx,
             persist_location,
