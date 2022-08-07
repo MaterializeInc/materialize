@@ -163,6 +163,7 @@ def workflow_test_github_12251(c: Composition) -> None:
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
 
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
@@ -182,6 +183,7 @@ def workflow_test_upsert(c: Composition) -> None:
         c.run("testdrive", "upsert/01-create-sources.td")
         c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged`")
         c.run("testdrive", "upsert/02-after-storaged-restart.td")
+
 
 def workflow_test_remote_storaged(c: Composition) -> None:
     """Test creating sources in a remote storaged process."""
