@@ -21,26 +21,19 @@ mod regions;
 mod shell;
 mod utils;
 
-use profiles::get_profile_using_args;
-use regions::{parse_cloud_provider_region, print_region_enabled, print_region_status};
+use profiles::get_profile;
+use regions::{print_region_enabled, print_region_status};
 use serde::{Deserialize, Serialize};
 
 use clap::{ArgEnum, Args, Parser, Subcommand};
 use reqwest::Client;
 use shell::check_region_health;
-use utils::{exit_with_fail_message, run_loading_spinner};
+use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegion};
 
 use crate::login::{login_with_browser, login_with_console};
 use crate::profiles::{authenticate_profile, validate_profile};
 use crate::regions::{enable_region, list_cloud_providers, list_regions};
 use crate::shell::shell;
-
-#[derive(Debug, Clone, ArgEnum)]
-#[allow(non_camel_case_types)]
-enum CloudProviderRegion {
-    usEast_1,
-    euWest_1,
-}
 
 /// Command-line interface for Materialize.
 #[derive(Debug, Parser)]
@@ -56,20 +49,27 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Login to Materialize
-    Login(Login),
+    Login {
+        /// Login by typing your email and password
+        #[clap(short, long)]
+        interactive: bool,
+    },
     /// Enable or delete a region
     Regions(Regions),
     /// Connect to a region using a SQL shell
-    Shell,
+    Shell {
+        #[clap(possible_values = CloudProviderRegion::variants())]
+        cloud_provider_region: String,
+    },
 }
 
 #[derive(Debug, Args)]
 struct Login {
-    #[clap(subcommand)]
+    #[clap(short, long, arg_enum)]
     command: Option<LoginCommands>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, ArgEnum)]
 enum LoginCommands {
     /// Log in via the console using email and password.
     Interactive,
@@ -85,23 +85,23 @@ struct Regions {
 enum RegionsCommands {
     /// Enable a new region.
     Enable {
-        #[clap(arg_enum)]
-        cloud_provider_region: CloudProviderRegion,
+        #[clap(possible_values = CloudProviderRegion::variants())]
+        cloud_provider_region: String,
     },
     /// List all enabled regions.
     List,
     /// Check the status of a region.
     Status {
-        #[clap(arg_enum)]
-        cloud_provider_region: CloudProviderRegion,
+        #[clap(possible_values = CloudProviderRegion::variants())]
+        cloud_provider_region: String,
     },
     // ------------------------------------------------------------------------
     // Delete is currently disabled. Preserving the code for once is available.
     // ------------------------------------------------------------------------
     // Delete an existing region.
     // Delete {
-    //     #[clap(arg_enum)]
-    //     cloud_provider_region: CloudProviderRegion,
+    //     #[clap(possible_values = CloudProviderRegion::variants())]
+    //     cloud_provider_region: String,
     // },
 }
 
@@ -195,18 +195,22 @@ const PROFILE_NOT_FOUND_MESSAGE: &str =
 #[tokio::main]
 async fn main() {
     let args = Cli::parse();
-    let profile_arg: Option<String> = args.profile;
+    let mut profile_name = DEFAULT_PROFILE_NAME.to_string();
+    let preferedined_profile_arg: Option<String> = args.profile;
+    let predefined_profile_env: Option<&str> = option_env!("MZ_PROFILE");
+
+    if let Some(profile_env) = predefined_profile_env {
+        profile_name = profile_env.to_string();
+    } else if let Some(profile_arg) = preferedined_profile_arg {
+        profile_name = profile_arg;
+    }
 
     match args.command {
-        Commands::Login(login_cmd) => {
-            let mut profile_name = DEFAULT_PROFILE_NAME.to_string();
-            if let Some(some_profile_name) = profile_arg {
-                profile_name = some_profile_name;
-            }
-
-            match login_cmd.command {
-                Some(LoginCommands::Interactive) => login_with_console(profile_name).await.unwrap(),
-                _ => login_with_browser(profile_name).await.unwrap(),
+        Commands::Login { interactive } => {
+            if interactive {
+                login_with_console(&profile_name).await.unwrap()
+            } else {
+                login_with_browser(&profile_name).await.unwrap()
             }
         }
 
@@ -216,12 +220,18 @@ async fn main() {
             match regions_cmd.command {
                 RegionsCommands::Enable {
                     cloud_provider_region,
-                } => match validate_profile(profile_arg, &client).await {
+                } => match validate_profile(profile_name, &client).await {
                     Some(frontegg_auth_machine) => {
                         let loading_spinner = run_loading_spinner("Enabling region...".to_string());
+                        let parsed_cloud_provider_region =
+                            CloudProviderRegion::parse(cloud_provider_region);
 
-                        match enable_region(client, cloud_provider_region, frontegg_auth_machine)
-                            .await
+                        match enable_region(
+                            client,
+                            parsed_cloud_provider_region,
+                            frontegg_auth_machine,
+                        )
+                        .await
                         {
                             Ok(_) => loading_spinner.finish_with_message("Region enabled."),
                             Err(e) => exit_with_fail_message(ExitMessage::String(format!(
@@ -232,7 +242,7 @@ async fn main() {
                     }
                     None => {}
                 },
-                RegionsCommands::List => match validate_profile(profile_arg, &client).await {
+                RegionsCommands::List => match validate_profile(profile_name, &client).await {
                     Some(frontegg_auth_machine) => {
                         match list_cloud_providers(&client, &frontegg_auth_machine).await {
                             Ok(cloud_providers) => {
@@ -255,7 +265,7 @@ async fn main() {
                 },
                 RegionsCommands::Status {
                     cloud_provider_region,
-                } => match get_profile_using_args(profile_arg) {
+                } => match get_profile(profile_name) {
                     Some(profile) => {
                         let client = Client::new();
                         match authenticate_profile(&client, &profile).await {
@@ -263,7 +273,9 @@ async fn main() {
                                 match list_cloud_providers(&client, &frontegg_auth_machine).await {
                                     Ok(cloud_providers) => {
                                         let parsed_cloud_provider_region =
-                                            parse_cloud_provider_region(cloud_provider_region);
+                                            CloudProviderRegion::parse_region(
+                                                cloud_provider_region,
+                                            );
                                         let filtered_providers: Vec<CloudProvider> =
                                             cloud_providers
                                                 .into_iter()
@@ -339,13 +351,23 @@ async fn main() {
             }
         }
 
-        Commands::Shell => {
-            match get_profile_using_args(profile_arg) {
+        Commands::Shell {
+            cloud_provider_region,
+        } => {
+            let parsed_cloud_provider_region = CloudProviderRegion::parse(cloud_provider_region);
+
+            match get_profile(profile_name) {
                 Some(profile) => {
                     let client = Client::new();
                     match authenticate_profile(&client, &profile).await {
                         Ok(frontegg_auth_machine) => {
-                            shell(client, profile, frontegg_auth_machine).await
+                            shell(
+                                client,
+                                profile,
+                                frontegg_auth_machine,
+                                parsed_cloud_provider_region,
+                            )
+                            .await
                         }
                         Err(error) => exit_with_fail_message(ExitMessage::String(format!(
                             "{}: {:}",

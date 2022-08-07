@@ -177,20 +177,13 @@ pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
 }
 
 /**
- * Returns a default profile if there is one.
- */
-fn get_default_profile() -> Option<Profile> {
-    get_profile(DEFAULT_PROFILE_NAME.to_string())
-}
-
-/**
  * Validate that a profile credentials USER_ID and SECRET are valid.
  */
 pub(crate) async fn validate_profile(
-    profile_arg: Option<String>,
+    profile_name: String,
     client: &Client,
 ) -> Option<FronteggAuthMachine> {
-    match get_profile_using_args(profile_arg) {
+    match get_profile(profile_name) {
         Some(profile) => match authenticate_profile(client, &profile).await {
             Ok(frontegg_auth_machine) => {
                 return Some(frontegg_auth_machine);
@@ -204,15 +197,4 @@ pub(crate) async fn validate_profile(
     }
 
     None
-}
-
-/**
- * Get a particular profile from config by using the user's profile argument
- */
-pub(crate) fn get_profile_using_args(profile_arg: Option<String>) -> Option<Profile> {
-    if let Some(profile_name) = profile_arg {
-        get_profile(profile_name)
-    } else {
-        get_default_profile()
-    }
 }

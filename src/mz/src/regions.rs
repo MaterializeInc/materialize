@@ -22,38 +22,24 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_
 use reqwest::{Client, Error};
 
 /**
- * Parse cloud providers.
- * TODO: us-east-1 and eu-west-1 should be AWS/us-east-1, AWS/eu-west-1
- */
-pub(crate) fn parse_cloud_provider_region(cloud_provider_region: CloudProviderRegion) -> String {
-    match cloud_provider_region {
-        CloudProviderRegion::usEast_1 => "us-east-1".to_string(),
-        CloudProviderRegion::euWest_1 => "eu-west-1".to_string(),
-    }
-}
-
-/**
  * Format cloud provider region url to interact with.
  * TODO: ec.0 is dynamic.
  */
 fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
     format!(
         "https://ec.0.{}.aws.cloud.materialize.com/api/environment",
-        parse_cloud_provider_region(cloud_provider_region)
+        CloudProviderRegion::parse_enum_region(cloud_provider_region)
     )
 }
 
 /**
  * Build the headers for reqwest request with the frontegg authorization.
  */
-fn build_region_request_headers(authorization: String) -> HeaderMap {
+fn build_region_request_headers(authorization: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(authorization.as_str()).unwrap(),
-    );
+    headers.insert(AUTHORIZATION, HeaderValue::from_str(authorization).unwrap());
 
     headers
 }
@@ -69,7 +55,7 @@ pub(crate) async fn enable_region(
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
     let region_url: String = format_region_url(cloud_provider_region);
 
-    let headers = build_region_request_headers(authorization);
+    let headers = build_region_request_headers(authorization.as_str());
     let mut body = HashMap::new();
     body.insert("environmentd_image_ref", &"materialize/environmentd:latest");
 
@@ -92,7 +78,7 @@ pub(crate) async fn cloud_provider_region_details(
     frontegg_auth_machine: &FronteggAuthMachine,
 ) -> Result<Option<Vec<Region>>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
-    let headers = build_region_request_headers(authorization);
+    let headers = build_region_request_headers(authorization.as_str());
     let mut region_api_url = cloud_provider_region.environment_controller_url.clone();
     region_api_url.push_str("/api/environment");
 
@@ -156,7 +142,7 @@ pub(crate) async fn list_cloud_providers(
 ) -> Result<Vec<CloudProvider>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
 
-    let headers = build_region_request_headers(authorization);
+    let headers = build_region_request_headers(authorization.as_str());
 
     client
         .get(CLOUD_PROVIDERS_URL)

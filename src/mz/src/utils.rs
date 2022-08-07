@@ -13,6 +13,69 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::ExitMessage;
 
+use clap::ArgEnum;
+
+/**
+ * Cloud providers and regions available.
+ */
+#[derive(Debug, Clone, ArgEnum)]
+pub(crate) enum CloudProviderRegion {
+    AwsUsEast1,
+    AwsEuWest1,
+}
+
+/**
+ * Implementation to name the possible values and parse every option.
+ */
+impl CloudProviderRegion {
+    pub fn variants() -> [&'static str; 2] {
+        ["aws/us-east-1", "aws/eu-west-1"]
+    }
+    pub fn parse(region: String) -> CloudProviderRegion {
+        match region.as_str() {
+            "aws/us-east-1" => CloudProviderRegion::AwsUsEast1,
+            "aws/eu-west-1" => CloudProviderRegion::AwsEuWest1,
+            _ => panic!("Unknown region."),
+        }
+    }
+    pub fn parse_region(region: String) -> &'static str {
+        match region.as_str() {
+            "aws/us-east-1" => "us-east-1",
+            "aws/eu-west-1" => "eu-west-1",
+            _ => panic!("Unknown region."),
+        }
+    }
+    pub fn parse_enum_region(region: CloudProviderRegion) -> &'static str {
+        match region {
+            CloudProviderRegion::AwsUsEast1 => "us-east-1",
+            CloudProviderRegion::AwsEuWest1 => "eu-west-1",
+        }
+    }
+    //-----------------
+    // Unused parsers
+    //-----------------
+    //
+    // pub fn parse_provider(region: &str) -> &'static str {
+    //     match region {
+    //         "aws/us-east-1" => "aws",
+    //         "aws/eu-west-1" => "aws",
+    //         _ => panic!("Unknown provider.")
+    //     }
+    // }
+    // pub fn parse_enum(region: CloudProviderRegion) -> &'static str {
+    //     match region {
+    //         CloudProviderRegion::AwsUsEast1 => "aws/us-east-1",
+    //         CloudProviderRegion::AwsEuWest1 => "aws/eu-west-1",
+    //     }
+    // }
+    // pub fn parse_enum_provider(region: CloudProviderRegion) -> &'static str {
+    //     match region {
+    //         CloudProviderRegion::AwsUsEast1 => "aws",
+    //         CloudProviderRegion::AwsEuWest1 => "aws",
+    //     }
+    // }
+}
+
 /**
  * Trim lines. Useful when reading input data.
  */
