@@ -97,7 +97,7 @@ class Initialize(Action):
 class Manipulate(Action):
     def __init__(
         self, checks: List[Type["Check"]], phase: Optional[int] = None
-     ) -> None:
+    ) -> None:
         assert phase is not None
         self.phase = phase - 1
 
