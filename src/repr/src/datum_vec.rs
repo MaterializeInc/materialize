@@ -19,7 +19,7 @@
 use crate::{Datum, Row};
 
 /// A re-useable vector of `Datum` with no particular lifetime.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DatumVec {
     outer: Vec<Datum<'static>>,
 }

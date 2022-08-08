@@ -302,7 +302,7 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSourceOption, (Size, String));
+generate_extracted_config!(CreateSourceOption, (Size, String), (Remote, String));
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -318,7 +318,6 @@ pub fn plan_create_source(
         format,
         key_constraint,
         include_metadata,
-        remote,
         with_options,
     } = &stmt;
 
@@ -799,19 +798,13 @@ pub fn plan_create_source(
         }
     }
 
-    let remote = if let Some(remote) = &remote {
-        scx.require_unsafe_mode("CREATE SOURCE ... REMOTE ...")?;
-        Some(remote.clone())
-    } else {
-        None
-    };
+    let CreateSourceOptionExtracted { size, remote, .. } =
+        CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let opt = CreateSourceOptionExtracted::try_from(with_options.clone())?;
-
-    let host_config = match (&remote, &opt.size) {
+    let host_config = match (remote.clone(), size) {
         (None, None) => StorageHostConfig::Undefined,
-        (None, Some(size)) => StorageHostConfig::Managed { size: size.clone() },
-        (Some(addr), None) => StorageHostConfig::Remote { addr: addr.clone() },
+        (None, Some(size)) => StorageHostConfig::Managed { size },
+        (Some(addr), None) => StorageHostConfig::Remote { addr },
         (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
     };
 

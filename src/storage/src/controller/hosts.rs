@@ -25,7 +25,10 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_types::Codec64;
 use timely::progress::Timestamp;
+use tokio::sync::Mutex;
 use tracing::info;
 
 use mz_build_info::BuildInfo;
@@ -71,6 +74,8 @@ pub struct StorageHosts<T> {
     objects: HashMap<GlobalId, StorageHostAddr>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
+    /// A handle to Persist
+    persist: Arc<Mutex<PersistClientCache>>,
 }
 
 /// Metadata about a single storage host.
@@ -86,12 +91,15 @@ struct StorageHost<T> {
 
 impl<T> StorageHosts<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Codec64,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     /// Constructs a new [`StorageHosts`] from its configuration.
-    pub fn new(config: StorageHostsConfig) -> StorageHosts<T> {
+    pub fn new(
+        config: StorageHostsConfig,
+        persist: Arc<Mutex<PersistClientCache>>,
+    ) -> StorageHosts<T> {
         StorageHosts {
             build_info: config.build_info,
             orchestrator: config.orchestrator,
@@ -99,6 +107,7 @@ where
             objects: HashMap::new(),
             hosts: HashMap::new(),
             initialized: false,
+            persist,
         }
     }
 
@@ -136,7 +145,6 @@ where
         host_config: StorageHostConfig,
     ) -> Result<&mut RehydratingStorageClient<T>, anyhow::Error>
     where
-        T: Timestamp + Lattice,
         StorageCommand<T>: RustType<ProtoStorageCommand>,
         StorageResponse<T>: RustType<ProtoStorageResponse>,
     {
@@ -154,7 +162,11 @@ where
         info!("assigned storage object {id} to storage host {host_addr}");
         match self.hosts.entry(host_addr.clone()) {
             Entry::Vacant(entry) => {
-                let mut client = RehydratingStorageClient::new(host_addr, self.build_info);
+                let mut client = RehydratingStorageClient::new(
+                    host_addr,
+                    self.build_info,
+                    Arc::clone(&self.persist),
+                );
                 if self.initialized {
                     client.send(StorageCommand::InitializationComplete);
                 }

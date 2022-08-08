@@ -73,6 +73,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-builtin-migration",
+        "test-upsert",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -163,6 +164,27 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.sql("SELECT * FROM log_table;")
 
 
+def workflow_test_upsert(c: Composition) -> None:
+    """Test creating upsert sources and continuing to ingest them after a restart."""
+    with c.override(
+        Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
+    ):
+        c.down(destroy_volumes=True)
+        dependencies = [
+            "materialized",
+            "zookeeper",
+            "kafka",
+            "schema-registry",
+        ]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
+
+        c.run("testdrive", "upsert/01-create-sources.td")
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged`")
+        c.run("testdrive", "upsert/02-after-storaged-restart.td")
+
+
 def workflow_test_remote_storaged(c: Composition) -> None:
     """Test creating sources in a remote storaged process."""
 
@@ -226,14 +248,40 @@ def workflow_test_builtin_migration(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
 
+        # Use storage external to the mz image because the above sha used postgres but
+        # we now use cockroach, so the data are lost.
+        mz_options = " ".join(
+            [
+                "--persist-consensus-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus",
+                "--storage-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=storage",
+                "--adapter-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=adapter",
+            ]
+        )
+
         with c.override(
             # This commit introduced the pg_authid builtin view with a missing column. The column was added in a
             # later commit.
             Materialized(
-                image="materialize/materialized:devel-4a26e59ac9da694d21b60c8d4d4a7b67c8b3b78d"
-            )
+                image="materialize/materialized:devel-4a26e59ac9da694d21b60c8d4d4a7b67c8b3b78d",
+                options=mz_options,
+            ),
+            Postgres(image="postgres:14.4"),
         ):
+            c.up("postgres")
+            c.wait_for_postgres(service="postgres")
+            c.sql(
+                sql=f"""
+                CREATE SCHEMA IF NOT EXISTS consensus;
+                CREATE SCHEMA IF NOT EXISTS storage;
+                CREATE SCHEMA IF NOT EXISTS adapter;
+            """,
+                service="postgres",
+                user="postgres",
+                password="postgres",
+            )
+
             c.up("materialized")
+            c.wait_for_materialized()
 
             c.testdrive(
                 input=dedent(
@@ -252,9 +300,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             # If this ever stops working, add the following argument:
             # image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921"
             # That commit added the missing column rolconnlimit to pg_authid.
-            Materialized()
+            Materialized(options=mz_options)
         ):
             c.up("materialized")
+            c.wait_for_materialized()
 
             c.testdrive(
                 input=dedent(

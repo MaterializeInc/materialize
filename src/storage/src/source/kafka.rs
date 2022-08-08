@@ -147,6 +147,8 @@ impl SourceReader for KafkaSourceReader {
             }
         }
 
+        info!("Instantiating Kafka source reader at offsets {start_offsets:?}");
+
         let partition_info = Arc::new(Mutex::new(None));
         let metadata_thread_handle = {
             let partition_info = Arc::downgrade(&partition_info);

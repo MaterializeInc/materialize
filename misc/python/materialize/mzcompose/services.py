@@ -28,7 +28,7 @@ LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
-    "pgdata:/var/lib/postgresql",
+    "pgdata:/cockroach-data",
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
 ]
@@ -88,7 +88,7 @@ class Materialized(Service):
             volumes.extend(volumes_extra)
 
         config_ports: List[Union[str, int]] = (
-            [*ports, *extra_ports] if ports else [6875, 5432, *extra_ports, 6876]
+            [*ports, *extra_ports] if ports else [6875, 26257, *extra_ports, 6876]
         )
 
         if isinstance(image, str) and ":v" in image:
@@ -652,7 +652,7 @@ class Testdrive(Service):
 
         if validate_postgres_stash:
             entrypoint.append(
-                "--validate-postgres-stash=postgres://materialize@materialized/materialize?options=--search_path=adapter"
+                "--validate-postgres-stash=postgres://root@materialized:26257?options=--search_path=adapter"
             )
 
         if no_reset:

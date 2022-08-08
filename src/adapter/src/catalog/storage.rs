@@ -19,7 +19,7 @@ use timely::progress::Timestamp;
 use uuid::Uuid;
 
 use crate::catalog;
-use mz_audit_log::VersionedEvent;
+use mz_audit_log::{VersionedEvent, VersionedStorageMetrics};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::ConcreteComputeInstanceReplicaConfig;
@@ -61,6 +61,7 @@ const ROLE_ID_ALLOC_KEY: &str = "role";
 const COMPUTE_ID_ALLOC_KEY: &str = "compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
+pub(crate) const STORAGE_METRICS_ID_ALLOC_KEY: &str = "storagemetrics";
 
 async fn migrate<S: Append>(
     stash: &mut S,
@@ -319,7 +320,18 @@ async fn migrate<S: Append>(
             })?;
             Ok(())
         },
-        // Add new migrations here.
+        // Add a transaction id for the new storage usage metrics table.
+        // Added in alpha.10
+        |txn: &mut Transaction<'_, S>, _bootstrap_args| {
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: STORAGE_METRICS_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue { next_id: 1 },
+            )?;
+            Ok(())
+        },
+        // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
         //
@@ -547,6 +559,14 @@ impl<S: Append> Connection<S> {
             .await?
             .into_keys()
             .map(|ev| ev.event))
+    }
+
+    pub async fn load_storage_metrics(&mut self) -> Result<impl Iterator<Item = Vec<u8>>, Error> {
+        Ok(COLLECTION_STORAGE_USAGE
+            .peek_one(&mut self.stash)
+            .await?
+            .into_keys()
+            .map(|ev| ev.metric))
     }
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
@@ -800,6 +820,7 @@ pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<
         timestamps: TableTransaction::new(collection_timestamps, |_a, _b| false),
         system_gid_mapping: TableTransaction::new(collection_system_gid_mapping, |_a, _b| false),
         audit_log_updates: Vec::new(),
+        storage_usage_updates: Vec::new(),
     })
 }
 
@@ -822,6 +843,7 @@ pub struct Transaction<'a, S> {
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(AuditLogKey, (), i64)>,
+    storage_usage_updates: Vec<(StorageMetricsKey, (), i64)>,
 }
 
 impl<'a, S: Append> Transaction<'a, S> {
@@ -861,6 +883,12 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
         let event = event.serialize();
         self.audit_log_updates.push((AuditLogKey { event }, (), 1));
+    }
+
+    pub fn insert_storage_metrics_event(&mut self, metric: VersionedStorageMetrics) {
+        let metric = metric.serialize();
+        self.storage_usage_updates
+            .push((StorageMetricsKey { metric }, (), 1));
     }
 
     pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
@@ -1312,6 +1340,13 @@ impl<'a, S: Append> Transaction<'a, S> {
             self.audit_log_updates,
         )
         .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_STORAGE_USAGE,
+            self.storage_usage_updates,
+        )
+        .await?;
         if batches.is_empty() {
             return Ok(());
         }
@@ -1370,6 +1405,7 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
     add_batch(stash, &mut batches, &COLLECTION_ROLE).await?;
     add_batch(stash, &mut batches, &COLLECTION_TIMESTAMP).await?;
     add_batch(stash, &mut batches, &COLLECTION_AUDIT_LOG).await?;
+    add_batch(stash, &mut batches, &COLLECTION_STORAGE_USAGE).await?;
     stash.append(batches).await.map_err(|e| e.into())
 }
 
@@ -1592,6 +1628,13 @@ struct AuditLogKey {
 impl_codec!(AuditLogKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct StorageMetricsKey {
+    #[prost(bytes)]
+    metric: Vec<u8>,
+}
+impl_codec!(StorageMetricsKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct TimestampKey {
     #[prost(string)]
     id: String,
@@ -1630,3 +1673,5 @@ static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::n
 static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
     TypedCollection::new("timestamp");
 static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
+static COLLECTION_STORAGE_USAGE: TypedCollection<StorageMetricsKey, ()> =
+    TypedCollection::new("storage_usage");

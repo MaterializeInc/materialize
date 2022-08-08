@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
 
-use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent};
+use mz_audit_log::{
+    EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent, VersionedStorageMetrics,
+};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
@@ -44,8 +46,8 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogType, CatalogTypeDetails,
-    IdReference, NameReference, SessionCatalog, TypeReference,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
+    CatalogTypeDetails, IdReference, NameReference, SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -84,7 +86,9 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
+pub use crate::catalog::config::{
+    ClusterReplicaSizeMap, Config, StorageHostSizeMap, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
+};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::client::ConnectionId;
 use crate::util::index_sql;
@@ -1251,14 +1255,20 @@ impl CatalogItem {
     ) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         match &self {
             CatalogItem::Func(func) => Ok(func.inner),
-            _ => Err(SqlCatalogError::UnknownFunction(name.item.to_string())),
+            _ => Err(SqlCatalogError::UnexpectedType(
+                name.item.to_string(),
+                CatalogItemType::Func,
+            )),
         }
     }
 
     pub fn source_desc(&self, name: &QualifiedObjectName) -> Result<&SourceDesc, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => Ok(&source.source_desc),
-            _ => Err(SqlCatalogError::UnknownSource(name.item.clone())),
+            _ => Err(SqlCatalogError::UnexpectedType(
+                name.item.clone(),
+                CatalogItemType::Source,
+            )),
         }
     }
 
@@ -1637,6 +1647,9 @@ impl<S: Append> Catalog<S> {
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     timestamp_frequency: Duration::from_secs(1),
+                    storage_metrics_collection_interval: Duration::from_secs(
+                        DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
+                    ),
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
@@ -1995,6 +2008,12 @@ impl<S: Append> Catalog<S> {
         for event in audit_logs {
             let event = VersionedEvent::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
+        }
+
+        let storage_metric_events = catalog.storage().await.load_storage_metrics().await?;
+        for event in storage_metric_events {
+            let event = VersionedStorageMetrics::deserialize(&event).unwrap();
+            builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 
         Ok((catalog, builtin_migration_metadata, builtin_table_updates))
@@ -2879,6 +2898,23 @@ impl<S: Append> Catalog<S> {
         Ok(())
     }
 
+    fn add_to_storage_metrics(
+        &self,
+        tx: &mut storage::Transaction<S>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        object_id: Option<String>,
+        size_bytes: u64,
+    ) -> Result<(), Error> {
+        let collection_timestamp = (self.state.config.now)();
+        let id = tx.get_and_increment_id(storage::STORAGE_METRICS_ID_ALLOC_KEY.to_string())?;
+
+        let event_details =
+            VersionedStorageMetrics::new(id, object_id, size_bytes, collection_timestamp);
+        builtin_table_updates.push(self.state.pack_storage_usage_update(&event_details)?);
+        tx.insert_storage_metrics_event(event_details);
+        Ok(())
+    }
+
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
             && matches!(
@@ -3523,6 +3559,18 @@ impl<S: Append> Catalog<S> {
 
                     vec![Action::UpdateComputeInstanceStatus { event }]
                 }
+                Op::UpdateStorageMetrics {
+                    object_id,
+                    size_bytes,
+                } => {
+                    self.add_to_storage_metrics(
+                        &mut tx,
+                        &mut builtin_table_updates,
+                        object_id,
+                        size_bytes,
+                    )?;
+                    vec![]
+                }
             });
         }
 
@@ -4082,6 +4130,10 @@ pub enum Op {
     },
     UpdateComputeInstanceStatus {
         event: ComputeInstanceEvent,
+    },
+    UpdateStorageMetrics {
+        object_id: Option<String>,
+        size_bytes: u64,
     },
 }
 

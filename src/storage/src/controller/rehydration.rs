@@ -16,15 +16,19 @@
 //! replay the command stream.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_types::Codec64;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 
@@ -51,12 +55,16 @@ pub struct RehydratingStorageClient<T> {
 
 impl<T> RehydratingStorageClient<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Codec64,
     StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a `RehydratingStorageClient` for a storage host with the given
     /// network address.
-    pub fn new(addr: String, build_info: &'static BuildInfo) -> RehydratingStorageClient<T> {
+    pub fn new(
+        addr: String,
+        build_info: &'static BuildInfo,
+        persist: Arc<Mutex<PersistClientCache>>,
+    ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
         let mut task = RehydrationTask {
@@ -68,6 +76,7 @@ where
             exports: BTreeMap::new(),
             uppers: HashMap::new(),
             initialized: false,
+            persist,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -109,6 +118,8 @@ struct RehydrationTask<T> {
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
     /// observed.
     initialized: bool,
+    /// A handle to Persist
+    persist: Arc<Mutex<PersistClientCache>>,
 }
 
 enum RehydrationTaskState {
@@ -124,7 +135,7 @@ enum RehydrationTaskState {
 
 impl<T> RehydrationTask<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Codec64,
     StorageGrpcClient: StorageClient<T>,
 {
     async fn run(&mut self) {
@@ -162,6 +173,13 @@ where
             })
             .await
             .expect("retry retries forever");
+
+        for ingest in self.ingestions.values_mut() {
+            ingest.resume_upper = ingest
+                .description
+                .get_resume_upper::<T>(Arc::clone(&self.persist))
+                .await;
+        }
 
         // Rehydrate all commands.
         let mut commands = vec![

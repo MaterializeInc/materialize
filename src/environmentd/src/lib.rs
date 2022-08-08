@@ -36,9 +36,10 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::tcp_connection::ConnectionHandler;
 
@@ -46,6 +47,7 @@ pub mod http;
 pub mod tcp_connection;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
+// TODO: should storage usage default go here?
 
 /// Configuration for an `environmentd` server.
 #[derive(Debug, Clone)]
@@ -236,6 +238,24 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     )
     .await?;
 
+    // set up storage usage client for collecting storage metrics
+    let storage_usage_response = {
+        let mut client_cache = config.controller.persist_clients.lock().await;
+        StorageUsageClient::open(
+            config.controller.persist_location.blob_uri.clone(),
+            &mut client_cache,
+        )
+        .await
+    };
+    info!(
+        "collecting storage metrics every {:?} seconds",
+        mz_adapter::catalog::DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS
+    );
+
+    let storage_usage_client = match storage_usage_response {
+        Ok(storageusageclient) => storageusageclient,
+        Err(error) => panic!("Problem opening storage usage client: {}", error),
+    };
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller).await;
     // Initialize adapter.
@@ -252,6 +272,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
+        storage_usage_client,
     })
     .await?;
 

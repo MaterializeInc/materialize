@@ -516,6 +516,16 @@ Field            | Type       | Meaning
 `name`           | [`text`]   | The name of the source.
 `type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
 
+### `mz_storage_usage`
+
+The `mz_storage_usage` table contains a row for each storage utilization snapshot taken within the retention period (60 days as of July 2022)
+
+| Field                  | Type                         | Meaning                                               |
+| ---------------------- | ---------------------------- | ----------------------------------------------------- |
+| `object_id`            | [`text`]                     | Materialize's unique ID for the storage object.       |
+| `size_bytes`           | [`bigint`]                   | The size in bytes of the storage object.              |
+| `collection_timestamp` | [`timestamp with time zone`] | The time at which the storage snapshot was collected. |
+
 ### `mz_tables`
 
 The `mz_tables` table contains a row for each table in the system.
