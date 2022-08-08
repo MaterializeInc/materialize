@@ -1145,12 +1145,14 @@ impl_display!(KeyConstraint);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceOptionName {
     Size,
+    Remote,
 }
 
 impl AstDisplay for CreateSourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             CreateSourceOptionName::Size => "SIZE",
+            CreateSourceOptionName::Remote => "REMOTE",
         })
     }
 }

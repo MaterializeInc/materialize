@@ -2110,16 +2110,10 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let remote = if self.parse_keyword(REMOTE) {
-            Some(self.parse_literal_string()?)
-        } else {
-            None
-        };
-
         // New WITH block
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_create_source_options)?;
+            let options = self.parse_comma_separated(Parser::parse_create_source_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
@@ -2136,7 +2130,6 @@ impl<'a> Parser<'a> {
             envelope,
             if_not_exists,
             key_constraint,
-            remote,
             with_options,
         }))
     }
@@ -2183,10 +2176,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the final WITH block of a CREATE SOURCE statement
-    fn parse_create_source_options(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SIZE])? {
+    /// Parses a single valid option in the WITH block of a create source
+    fn parse_create_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SIZE, REMOTE])? {
             SIZE => CreateSourceOptionName::Size,
+            REMOTE => CreateSourceOptionName::Remote,
             _ => unreachable!(),
         };
 
