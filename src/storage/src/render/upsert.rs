@@ -307,7 +307,7 @@ where
                 BTreeMap::<Timestamp, (Capability<Timestamp>, HashMap<_, UpsertSourceData>)>::new();
             // Intermediate structures re-used to limit allocations
             let mut scratch_vector = Vec::new();
-            let mut scratch_vector2 = Vec::new();
+            let mut repop_scratch_vector = Vec::new();
             let mut row_packer = mz_repr::Row::default();
             let mut dv = DatumVec::new();
 
@@ -357,10 +357,11 @@ where
                     // allow us to recover the original key and value separately.
                     // Tracked here: https://github.com/MaterializeInc/materialize/issues/14084
                     previous_input.for_each(|_cap, data| {
-                        data.swap(&mut scratch_vector2);
+                        data.swap(&mut repop_scratch_vector);
                         initial_values_multiset.extend(
-                            scratch_vector2
+                            repop_scratch_vector
                                 .drain(..)
+                                // filter out records at or past when we are resuming this operator from
                                 .filter(|(_d, t, _r)| !as_of_frontier.less_equal(t))
                                 .map(|(d, _t, r)| (d, r)),
                         );
@@ -405,6 +406,8 @@ where
                 });
 
                 // Don't try to do anything if we aren't done building the `current_values` map.
+                // Any new data that comes in as we rehydrate `current_values` is just stored in
+                // memory in `pending_values` until we are ready to merge it into `current_values`.
                 let current_values = match &mut current_values {
                     None => return,
                     Some(x) => x,
