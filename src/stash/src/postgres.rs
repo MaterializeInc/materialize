@@ -84,6 +84,7 @@ struct PreparedStatements {
 /// A Stash whose data is stored in a Postgres database. The format of the
 /// tables are not specified and should not be relied upon. The only promise is
 /// stability. Any changes to the table schemas will be accompanied by a clear
+/// migration path.
 pub struct Postgres {
     url: String,
     schema: Option<String>,
