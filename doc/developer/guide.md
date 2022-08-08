@@ -67,7 +67,8 @@ issue `createdb` without any arguments, a database with your username will be
 created.
 
 To also run `bin/cargo-test`, you'll need to add the following to your
-Postgres config (e.g., `/var/lib/postgres/data/postgresql.conf`),
+Postgres config (e.g., `/var/lib/postgres/data/postgresql.conf`,
+or `/opt/homebrew/var/postgres/postgresql.conf` when using brew on an M1 mac),
 and then restart Postgres:
 
 ```
