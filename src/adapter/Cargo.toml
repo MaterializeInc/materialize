@@ -56,4 +56,9 @@ uncased = "0.9.7"
 uuid = { version = "1.1.2", features = ["v4"] }
 
 [dev-dependencies]
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["async_tokio"] }
 datadriven = "0.6.0"
+
+[[bench]]
+name = "catalog"
+harness = false
