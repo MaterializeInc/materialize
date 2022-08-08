@@ -67,8 +67,10 @@ issue `createdb` without any arguments, a database with your username will be
 created.
 
 To also run `bin/cargo-test`, you'll need to add the following to your
-Postgres config (e.g., `/var/lib/postgres/data/postgresql.conf`),
-and then restart Postgres:
+Postgres config. The location of your Postgres config file can be
+shown using `sudo -u postgres psql -c 'SHOW config_file'` (e.g., `/etc/postgresql/13/main/postgresql.conf`
+or `/var/lib/postgres/data/postgresql.conf`).
+Then, restart Postgres.
 
 ```
 wal_level=logical
@@ -150,8 +152,11 @@ On other Linux variants, you'll need to make your own way through [Confluent's
 installation instructions][confluent-install]. Note that, at the time of
 writing, only Java 8 and 11 are supported.
 
-Arch Linux: the AUR package didn't work for me, so I installed from the
-tar ball instead.
+Alternatively, it is possible to get an all-in-one tarball from
+[here](https://packages.confluent.io/archive/). Then untar this to a
+location, set `$CONFLUENT_HOME` to this location and add `$CONFLUENT_HOME/bin`
+to your $PATH. I found this to be the most convenient way to get confluent
+and it also works in a distro neutral way (if you are using, Arch Linux for example).
 
 ## Building Materialize
 
