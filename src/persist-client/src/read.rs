@@ -9,7 +9,7 @@
 
 //! Read capabilities and handles
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,7 +28,8 @@ use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::Blob;
+use mz_persist::location::{Blob, SeqNo};
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
@@ -99,6 +100,13 @@ pub struct ReaderEnrichedHollowBatch<T> {
     pub(crate) shard_id: ShardId,
     pub(crate) reader_metadata: HollowBatchReaderMetadata<T>,
     pub(crate) batch: HollowBatch<T>,
+    /// The `SeqNo` from which this batch originated. This "lease" must be
+    /// returned to the [`ReadHandle`] from which it originated for the `SeqNo`
+    /// to be GCed.
+    ///
+    /// For strategies to accomplish that, see the documentation on functions
+    /// that return `Self`.
+    pub(crate) leased_seqno: SeqNo,
 }
 
 impl<T> ReaderEnrichedHollowBatch<T>
@@ -334,7 +342,9 @@ where
                 since: self.since.clone(),
             },
             batch,
+            leased_seqno: self.handle.lease_seqno(),
         };
+
         // NB: Keep this after we use self.frontier to join_assign self.since.
         self.frontier = new_frontier;
         r
@@ -447,6 +457,8 @@ where
     pub(crate) since: Antichain<T>,
     pub(crate) last_heartbeat: Instant,
     pub(crate) explicitly_expired: bool,
+
+    pub(crate) leased_seqnos: BTreeMap<SeqNo, usize>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -475,9 +487,17 @@ where
     /// timestamp, making the call a no-op).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
+        // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
+        let outstanding_seqno = self.leased_seqnos.keys().next().map(|seqno| *seqno);
+
         let (_seqno, current_reader_since, maintenance) = self
             .machine
-            .downgrade_since(&self.reader_id, new_since, (self.cfg.now)())
+            .downgrade_since(
+                &self.reader_id,
+                outstanding_seqno,
+                new_since,
+                (self.cfg.now)(),
+            )
             .await;
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
@@ -521,24 +541,28 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
+    ///
+    /// The returned [`ReaderEnrichedHollowBatch`]es include `SeqNo` leases,
+    /// which must be returned to the same `ReadHandle`. You can accomplish
+    /// this with either [`Self::fetch_batch`], or explicit calls to
+    /// [`Self::drop_seqno_lease`].
     #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot(
-        &self,
+        &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<ReaderEnrichedHollowBatch<T>>, Since<T>> {
-        let mut machine = self.machine.clone();
-
-        let batches = machine.snapshot(&as_of).await?;
+        let batches = self.machine.snapshot(&as_of).await?;
 
         let r = batches
             .into_iter()
             .filter(|batch| batch.len > 0)
             .map(|batch| ReaderEnrichedHollowBatch {
-                shard_id: machine.shard_id(),
+                shard_id: self.machine.shard_id(),
                 reader_metadata: HollowBatchReaderMetadata::Snapshot {
                     as_of: as_of.clone(),
                 },
                 batch,
+                leased_seqno: self.lease_seqno(),
             })
             .collect::<Vec<_>>();
 
@@ -570,7 +594,10 @@ where
     /// For more details on this operation's semantics, see [Self::snapshot] and
     /// [Self::listen].
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn subscribe(self, as_of: Antichain<T>) -> Result<Subscribe<K, V, T, D>, Since<T>> {
+    pub async fn subscribe(
+        mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
         let snapshot_batches = self.snapshot(as_of.clone()).await?.into();
         let listen = self.listen(as_of).await?;
         Ok(Subscribe::new(snapshot_batches, listen))
@@ -654,6 +681,8 @@ where
             });
         }
 
+        self.drop_seqno_lease(batch.leased_seqno);
+
         // TODO: This is potentially suprising for the `ReadHandle` to manage.
         // Instead, we likely want to add a struct akin to a `Listen`
         // (BatchStreamFetcher?) that wraps the `ReadHandle` and `fetch_batch`
@@ -664,6 +693,31 @@ where
         }
 
         Ok(updates)
+    }
+
+    /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
+    /// "leased out" to a `ReaderEncirchedHollowBatch`, and cannot be garbage
+    /// collected until its lease has been dropped (`Self::drop_seqno_lease`).
+    fn lease_seqno(&mut self) -> SeqNo {
+        let lease = self.machine.seqno();
+        *self.leased_seqnos.entry(lease).or_insert(0) += 1;
+        lease
+    }
+
+    /// Tracks that a `SeqNo` lease has been returned and can be dropped. Once
+    /// a `SeqNo` has no more outstanding leases, it can be removed, and
+    /// `Self::downgrade_since` no longer needs to prevent it from being
+    /// garbage collected.
+    pub fn drop_seqno_lease(&mut self, leased_seqno: SeqNo) {
+        let remaining_leases = self
+            .leased_seqnos
+            .get_mut(&leased_seqno)
+            .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
+        *remaining_leases -= 1;
+
+        if remaining_leases == &0 {
+            self.leased_seqnos.remove(&leased_seqno);
+        }
     }
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
@@ -683,6 +737,7 @@ where
             since: read_cap.since,
             last_heartbeat: Instant::now(),
             explicitly_expired: false,
+            leased_seqnos: BTreeMap::new(),
         };
         new_reader
     }

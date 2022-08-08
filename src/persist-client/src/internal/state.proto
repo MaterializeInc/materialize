@@ -86,4 +86,5 @@ message ProtoReadEnrichedHollowBatch {
     string shard_id = 1;
     ProtoHollowBatchReaderMetadata reader_metadata = 2;
     ProtoHollowBatch batch = 3;
+    uint64 leased_seqno = 4;
 }

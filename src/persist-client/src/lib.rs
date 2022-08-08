@@ -17,6 +17,7 @@
     clippy::cast_sign_loss
 )]
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -378,6 +379,7 @@ impl PersistClient {
             since: read_cap.since,
             last_heartbeat: Instant::now(),
             explicitly_expired: false,
+            leased_seqnos: BTreeMap::new(),
         };
 
         Ok(reader)

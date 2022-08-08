@@ -111,6 +111,10 @@ where
         self.state.upper()
     }
 
+    pub fn seqno(&self) -> SeqNo {
+        self.state.seqno()
+    }
+
     pub async fn register_reader(
         &mut self,
         reader_id: &ReaderId,
@@ -263,11 +267,16 @@ where
     pub async fn downgrade_since(
         &mut self,
         reader_id: &ReaderId,
+        outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, state| {
+            let seqno = match outstanding_seqno {
+                Some(outstanding_seqno) => std::cmp::min(outstanding_seqno, seqno),
+                None => seqno,
+            };
             state.downgrade_since(reader_id, seqno, new_since, heartbeat_timestamp_ms)
         })
         .await
