@@ -15,6 +15,7 @@ SERVICES = [
         {
             "image": "jaegertracing/all-in-one:1.36",
             "ports": ["16686:16686", 14268, 14250],
+            "command": "--collector.grpc-server.max-message-size=16777216",
             "allow_host_ports": True,
         },
     ),
