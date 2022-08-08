@@ -120,7 +120,7 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
     pub resume_upper: Antichain<Timestamp>,
-    /// A handle to the persist client cachce
+    /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
 }
 

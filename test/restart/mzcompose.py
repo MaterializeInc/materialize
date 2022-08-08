@@ -11,6 +11,7 @@ from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
+    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -25,6 +26,7 @@ SERVICES = [
     Materialized(),
     Testdrive(),
     testdrive_no_reset,
+    Postgres(),
 ]
 
 
@@ -85,7 +87,54 @@ def workflow_timelines(c: Composition) -> None:
         )
 
 
+def workflow_stash(c: Composition) -> None:
+    c.rm(
+        "testdrive",
+        "materialized",
+        stop=True,
+        destroy_volumes=True,
+    )
+    c.rm_volumes("mzdata", "pgdata", force=True)
+
+    materialized = Materialized(
+        options=["--adapter-stash-url", "postgres://postgres:postgres@postgres"],
+    )
+    postgres = Postgres(image="postgres:14.4")
+
+    with c.override(materialized, postgres):
+        c.up("postgres")
+        c.wait_for_postgres()
+        c.start_and_wait_for_tcp(services=["materialized"])
+        c.wait_for_materialized("materialized")
+
+        c.sql("CREATE TABLE a (i INT)")
+
+        c.stop("postgres")
+        c.up("postgres")
+        c.wait_for_postgres()
+
+        c.sql("CREATE TABLE b (i INT)")
+
+        c.rm("postgres", stop=True, destroy_volumes=True)
+        c.up("postgres")
+        c.wait_for_postgres()
+
+        # Postgres cleared its database, so this should fail.
+        try:
+            c.sql("CREATE TABLE c (i INT)")
+            raise Exception("expected unreachable")
+        except Exception as e:
+            # Depending on timing, either of these errors can occur. The stash error comes
+            # from the stash complaining. The network error comes from pg8000 complaining
+            # because materialize panic'd.
+            if "stash error: postgres: db error" not in str(
+                e
+            ) and "network error" not in str(e):
+                raise e
+
+
 def workflow_default(c: Composition) -> None:
     workflow_github_8021(c)
     workflow_audit_log(c)
     workflow_timelines(c)
+    workflow_stash(c)

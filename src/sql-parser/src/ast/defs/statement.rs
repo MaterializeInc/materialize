@@ -469,7 +469,6 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub envelope: Option<Envelope<T>>,
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
-    pub remote: Option<String>,
     pub with_options: Vec<CreateSourceOption<T>>,
 }
 
@@ -513,12 +512,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
                 f.write_str(" ENVELOPE ");
                 f.write_node(envelope);
             }
-        }
-
-        if let Some(remote) = &self.remote {
-            f.write_str(" REMOTE '");
-            f.write_node(&display::escape_single_quote_string(remote));
-            f.write_str("'");
         }
 
         if !self.with_options.is_empty() {
@@ -1375,6 +1368,9 @@ pub struct DropClusterReplicasStatement {
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
     pub names: Vec<QualifiedReplica>,
+    /// Whether `CASCADE` was specified. This will be `false` when
+    /// `RESTRICT` or no drop behavior at all was specified.
+    pub cascade: bool,
 }
 
 impl AstDisplay for DropClusterReplicasStatement {
@@ -1384,6 +1380,9 @@ impl AstDisplay for DropClusterReplicasStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&display::comma_separated(&self.names));
+        if self.cascade {
+            f.write_str(" CASCADE");
+        }
     }
 }
 impl_display!(DropClusterReplicasStatement);

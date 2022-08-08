@@ -93,16 +93,8 @@ pub enum InvalidUsage<T> {
         /// The expected upper of the batch
         expected_upper: Antichain<T>,
     },
-    /// A [crate::read::SnapshotSplit] was given to
-    /// [crate::read::ReadHandle::snapshot_iter] from a different shard
-    SnapshotNotFromThisShard {
-        /// The shard of the snapshot
-        snapshot_shard: ShardId,
-        /// The shard of the handle
-        handle_shard: ShardId,
-    },
-    /// A [crate::batch::Batch] was given to a [crate::write::WriteHandle] from
-    /// a different shard
+    /// A [crate::batch::Batch] or [crate::read::ReaderEnrichedHollowBatch] was
+    /// given to a [crate::write::WriteHandle] from a different shard
     BatchNotFromThisShard {
         /// The shard of the batch
         batch_shard: ShardId,
@@ -150,14 +142,6 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                 f,
                 "maximum timestamp {:?} is beyond the expected batch upper: {:?}",
                 max_ts, expected_upper
-            ),
-            InvalidUsage::SnapshotNotFromThisShard {
-                snapshot_shard,
-                handle_shard,
-            } => write!(
-                f,
-                "snapshot was from {} not {}",
-                snapshot_shard, handle_shard
             ),
             InvalidUsage::BatchNotFromThisShard {
                 batch_shard,

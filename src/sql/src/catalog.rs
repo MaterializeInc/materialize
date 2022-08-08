@@ -215,6 +215,8 @@ pub struct CatalogConfig {
     pub build_info: &'static BuildInfo,
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
+    /// How often to collect storage metrics (in seconds).
+    pub storage_metrics_collection_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
@@ -543,10 +545,10 @@ pub enum CatalogError {
     UnknownItem(String),
     /// Unknown function.
     UnknownFunction(String),
-    /// Unknown source.
-    UnknownSource(String),
     /// Unknown connection.
     UnknownConnection(String),
+    /// Expected the catalog item to have the given type, but it did not.
+    UnexpectedType(String, CatalogItemType),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -561,7 +563,6 @@ impl fmt::Display for CatalogError {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
-            Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
@@ -570,6 +571,9 @@ impl fmt::Display for CatalogError {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::UnexpectedType(name, item_type) => {
+                write!(f, "\"{name}\" is not of type {item_type}")
+            }
             Self::InvalidDependency { name, typ } => write!(
                 f,
                 "catalog item '{}' is {} {} and so cannot be depended upon",
@@ -603,6 +607,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     unsafe_mode: true,
     build_info: &DUMMY_BUILD_INFO,
     timestamp_frequency: Duration::from_secs(1),
+    storage_metrics_collection_interval: Duration::from_secs(5),
     now: NOW_ZERO.clone(),
 });
 

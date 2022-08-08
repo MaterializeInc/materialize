@@ -302,7 +302,7 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSourceOption, (Size, String));
+generate_extracted_config!(CreateSourceOption, (Size, String), (Remote, String));
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -318,7 +318,6 @@ pub fn plan_create_source(
         format,
         key_constraint,
         include_metadata,
-        remote,
         with_options,
     } = &stmt;
 
@@ -799,19 +798,13 @@ pub fn plan_create_source(
         }
     }
 
-    let remote = if let Some(remote) = &remote {
-        scx.require_unsafe_mode("CREATE SOURCE ... REMOTE ...")?;
-        Some(remote.clone())
-    } else {
-        None
-    };
+    let CreateSourceOptionExtracted { size, remote, .. } =
+        CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let opt = CreateSourceOptionExtracted::try_from(with_options.clone())?;
-
-    let host_config = match (&remote, &opt.size) {
+    let host_config = match (remote.clone(), size) {
         (None, None) => StorageHostConfig::Undefined,
-        (None, Some(size)) => StorageHostConfig::Managed { size: size.clone() },
-        (Some(addr), None) => StorageHostConfig::Remote { addr: addr.clone() },
+        (None, Some(size)) => StorageHostConfig::Managed { size },
+        (Some(addr), None) => StorageHostConfig::Remote { addr },
         (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
     };
 
@@ -3397,7 +3390,11 @@ pub fn describe_drop_cluster_replica(
 
 pub fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
+    DropClusterReplicasStatement {
+        if_exists,
+        names,
+        cascade,
+    }: DropClusterReplicasStatement,
 ) -> Result<Plan, PlanError> {
     let mut names_out = Vec::with_capacity(names.len());
     for QualifiedReplica { cluster, replica } in names {
@@ -3410,18 +3407,20 @@ pub fn plan_drop_cluster_replica(
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
             // Check if we have an item that depends on the replica's logs
-            let log_ids = instance.replica_logs(&replica_name).unwrap();
-            for id in log_ids {
-                let log_item = scx.catalog.get_item(&id);
-                for id in log_item.used_by() {
-                    let dep = scx.catalog.get_item(id);
-                    if dependency_prevents_drop(ObjectType::Source, dep) {
-                        sql_bail!(
-                            "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
-                            replica_name.quoted(),
-                            instance.name().quoted(),
-                            scx.catalog.resolve_full_name(dep.name())
-                        );
+            if !cascade {
+                let log_ids = instance.replica_logs(&replica_name).unwrap();
+                for id in log_ids {
+                    let log_item = scx.catalog.get_item(&id);
+                    for id in log_item.used_by() {
+                        let dep = scx.catalog.get_item(id);
+                        if dependency_prevents_drop(ObjectType::Source, dep) {
+                            sql_bail!(
+                                "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
+                                replica_name.quoted(),
+                                instance.name().quoted(),
+                                scx.catalog.resolve_full_name(dep.name())
+                            );
+                        }
                     }
                 }
             }

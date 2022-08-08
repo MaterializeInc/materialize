@@ -198,21 +198,18 @@ impl Healthchecker {
     /// having to assume that the `upper` is a single `u64`.
     async fn bootstrap_state(
         &mut self,
-        read_handle: ReadHandle<SourceData, (), Timestamp, i64>,
+        mut read_handle: ReadHandle<SourceData, (), Timestamp, i64>,
         upper: &Antichain<Timestamp>,
     ) {
-        let since = read_handle.since();
+        let since = read_handle.since().clone();
         trace!("Bootstrapping state as of {:?}!", since);
         // Ensure the collection is readable at `since`
-        if PartialOrder::less_than(since, &self.upper) {
-            let mut snapshot = read_handle
-                .snapshot(since.clone())
+        if PartialOrder::less_than(&since, &self.upper) {
+            let updates = read_handle
+                .snapshot_and_fetch(since.clone())
                 .await
                 .expect("local since is not beyond read handle's since");
-            while let Some(updates) = snapshot.next().await {
-                self.process_collection_updates(updates);
-            }
-            self.upper = since.clone();
+            self.process_collection_updates(updates);
         };
         self.sync(upper).await;
         trace!("State bootstrapped as of {since:?}!");
@@ -742,20 +739,21 @@ mod tests {
             .await
             .unwrap();
 
-        let (write_handle, read_handle) = persist_client.open(shard_id).await.unwrap();
+        let (write_handle, mut read_handle) = persist_client.open(shard_id).await.unwrap();
 
         let upper = write_handle.upper();
         let readable_upper = Antichain::from_elem(upper.elements()[0] - 1);
 
-        let mut snapshot = read_handle.snapshot(readable_upper).await.unwrap();
-
-        let mut v: Vec<((Result<SourceData, String>, Result<(), String>), u64, i64)> = Vec::new();
-        while let Some(mut next) = snapshot.next().await {
-            v.append(&mut next)
-        }
-
-        v.into_iter()
-            .map(|((v, _), _, _)| v.unwrap().0.unwrap())
+        read_handle
+            .snapshot_and_fetch(readable_upper)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(
+                |((v, _), _, _): ((Result<SourceData, String>, Result<(), String>), u64, i64)| {
+                    v.unwrap().0.unwrap()
+                },
+            )
             .collect_vec()
     }
 }

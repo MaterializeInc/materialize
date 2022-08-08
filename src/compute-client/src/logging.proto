@@ -57,6 +57,7 @@ message ProtoComputeLog {
         google.protobuf.Empty peek_current = 4;
         google.protobuf.Empty peek_duration = 5;
         google.protobuf.Empty frontier_delay = 6;
+        google.protobuf.Empty source_frontier_current = 7;
     }
 }
 message ProtoLogVariant {

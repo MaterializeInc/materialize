@@ -13,22 +13,28 @@ use std::collections::{BTreeMap, HashMap};
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::BufMut;
+use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
+use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use mz_persist_types::Codec;
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::{any_uuid, TryFromProtoError};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::controller::CollectionMetadata;
 use crate::types::connections::aws::AwsConfig;
@@ -53,6 +59,51 @@ pub struct IngestionDescription<S = ()> {
     pub storage_metadata: S,
     /// The relation type this ingestion should produce
     pub typ: RelationType,
+}
+
+impl IngestionDescription<CollectionMetadata> {
+    pub async fn get_resume_upper<T>(&self, persist: Arc<Mutex<PersistClientCache>>) -> Antichain<T>
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        let persist = persist
+            .lock()
+            .await
+            .open(self.storage_metadata.persist_location.clone())
+            .await
+            .unwrap();
+        // Calculate the point at which we can resume ingestion computing the greatest
+        // antichain that is less or equal to all state and output shard uppers.
+        let mut resume_upper: Antichain<T> = Antichain::new();
+        let remap_write = persist
+            .open_writer::<(), PartitionId, T, MzOffset>(self.storage_metadata.remap_shard)
+            .await
+            .unwrap();
+        for t in remap_write.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+        let data_write = persist
+            .open_writer::<SourceData, (), T, Diff>(self.storage_metadata.data_shard)
+            .await
+            .unwrap();
+        for t in data_write.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+
+        // Check if this ingestion is using any operators that are stateful AND are not
+        // storing their state in persist shards. This whole section should be eventually
+        // removed as we make each operator durably record its state in persist shards.
+        let resume_upper = match self.desc.envelope {
+            // We can only resume with the None envelope, which is stateless,
+            // or with the [Debezium] Upsert envelope, which is easy
+            //   (re-ingest the last emitted state)
+            SourceEnvelope::None(_) => resume_upper,
+            SourceEnvelope::Upsert(_) => resume_upper,
+            // Otherwise re-ingest everything
+            _ => Antichain::from_elem(T::minimum()),
+        };
+        resume_upper
+    }
 }
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {

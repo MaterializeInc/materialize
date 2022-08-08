@@ -16,82 +16,30 @@
 
 {% macro materialize__get_catalog(information_schema, schemas) -%}
 
+  {% set database = information_schema.database %}
+  {{ adapter.verify_database(database) }}
+
   {%- call statement('catalog', fetch_result=True) -%}
-    {#
-      If the user has multiple databases set and the first one is wrong, this will fail.
-      But we won't fail in the case where there are multiple quoting-difference-only dbs, which is better.
-    #}
-    {% set database = information_schema.database %}
-    {{ adapter.verify_database(database) }}
-
-    select
-        '{{ database }}' as table_database,
-        sch.nspname as table_schema,
-        tbl.relname as table_name,
-        case tbl.relkind
-            when 'v' then 'VIEW'
-            else 'BASE TABLE'
-        end as table_type,
-        tbl_desc.description as table_comment,
-        col.attname as column_name,
-        col.attnum as column_index,
-        col.type as column_type,
-        col_desc.description as column_comment,
-        pg_get_userbyid(tbl.relowner) as table_owner
-
-    from pg_catalog.pg_namespace sch
-    join pg_catalog.pg_class tbl on tbl.relnamespace = sch.oid
-    join (select mz_columns.name as attname, position as attnum, mz_relations.oid as attrelid, FALSE as attisdropped, mz_columns.type as type
-          from mz_columns join mz_relations on mz_columns.id = mz_relations.id)
-          as col on col.attrelid = tbl.oid
-    left outer join pg_catalog.pg_description tbl_desc on (tbl_desc.objoid = tbl.oid and tbl_desc.objsubid = 0)
-    left outer join pg_catalog.pg_description col_desc on (col_desc.objoid = tbl.oid and col_desc.objsubid = col.attnum)
-
-    where (
-        {%- for schema in schemas -%}
-          upper(sch.nspname) = upper('{{ schema }}'){%- if not loop.last %} or {% endif -%}
-        {%- endfor -%}
-      )
-      and tbl.relkind in ('r', 'v', 'f', 'p', 'm') -- o[r]dinary table, [v]iew, [f]oreign table, [p]artitioned table, [m]aterialized view. Other values are [i]ndex, [S]equence, [c]omposite type, [t]OAST table
-      and col.attnum > 0 -- negative numbers are used for system columns such as oid
-      and not col.attisdropped -- column as not been dropped
-
-    order by
-        sch.nspname,
-        tbl.relname,
-        col.attnum
-
+        select
+            d.name as table_database,
+            s.name as table_schema,
+            o.name as table_name,
+            case when o.type = 'materialized view' then 'materializedview' else o.type end as table_type,
+            '' as table_comment,
+            c.name as column_name,
+            c.position as column_index,
+            c.type as column_type,
+            '' as column_comment,
+            '' as table_owner
+        from mz_objects o
+        join mz_schemas s on o.schema_id = s.id
+        join mz_databases d on s.database_id = d.id and d.name = '{{ database }}'
+        join mz_columns c on c.id = o.id
+        where s.name in (
+            {%- for schema in schemas -%}
+                '{{ schema }}' {%- if not loop.last %}, {% endif -%}
+            {%- endfor -%}
+        )
   {%- endcall -%}
-
   {{ return(load_result('catalog').table) }}
-
 {%- endmacro %}
-
-{% macro postgres__list_relations_without_caching(schema_relation) %}
-  {% call statement('list_relations_without_caching', fetch_result=True) -%}
-    select
-      '{{ schema_relation.database }}' as database,
-      tablename as name,
-      schemaname as schema,
-      'table' as type
-    from pg_tables
-    where schemaname ilike '{{ schema_relation.schema }}'
-    union all
-    select
-      '{{ schema_relation.database }}' as database,
-      viewname as name,
-      schemaname as schema,
-      'view' as type
-    from pg_views
-    where schemaname ilike '{{ schema_relation.schema }}'
-    union all
-    select
-      '{{ schema_relation.database }}' as database,
-      matviewname as name,
-      schemaname as schema,
-      'materializedview' as type
-    from pg_matviews
-    where schemaname ilike '{{ schema_relation.schema }}'
-  {% endcall %}
-  {{ return(load_result('list_relations_without_caching').table) }}
-{% endmacro %}

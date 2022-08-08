@@ -1,6 +1,6 @@
 ---
-title: "How to connect Metabase to Materialize"
-description: "Get details about using Materialize with Metabase"
+title: "Metabase"
+description: "How to connect a Metabase instance to Materialize"
 aliases:
   /third-party/metabase/
 menu:
@@ -9,34 +9,27 @@ menu:
     name: "Metabase"
 ---
 
-You can use [Metabase] to create business intelligence dashboards using the
-real-time data streams in your Materialize instance.
+You can use [Metabase](https://www.metabase.com/) to create real-time dashboards based on the data maintained in Materialize.
 
 ## Database connection details
 
-Use the following parameters to connect Metabase to your Materialize instance:
+To set up a connection from a Metabase instance to Materialize, use the native [PostgreSQL database driver](https://www.metabase.com/docs/latest/administration-guide/databases/postgresql.html) with the following parameters:
 
-Field             | Enter...
+Field             | Value
 ----------------- | ----------------
 Database type     | **PostgreSQL**
-Name              | **Materialize**
-Host              | The hostname of the machine running Materialize.<br>Use **localhost** if Metabase and Materialize are running on the same machine.
+Host              | Materialize host name.
 Port              | **6875**
-Database name     | Usually **materialize**.
-Database username | Usually **materialize**.
-Database password | Leave empty.
+Database name     | **materialize**
+Database username | Materialize user.
+Database password | App-specific password.
 
-If your Materialize instance requires clients to [authenticate with TLS](/cli/#tls-encryption), see the Metabase documentation about
-[Securing database connections using an SSL certificate][metabase-tls].
+If you require SSL/TLS encryption, you can configure the connection to use `sslmode=require`. For more details, check out the [Metabase documentation](https://www.metabase.com/docs/latest/administration-guide/databases/postgresql.html).
 
-## What's missing?
+## Refresh rate
 
-{{< warning >}}
-Materialize does not offer production-level support for Metabase.
-{{< /warning >}}
+By default, the lowest [refresh rate](https://www.metabase.com/docs/latest/users-guide/07-dashboards.html#auto-refresh) for Metabase dashboards is 1 minute. You can manually set this to a lower interval by adding `#refresh=1` (as an example, for a `1` second interval) to the end of the URL, and opening the modified URL in a new tab.
 
-Visualizing a table which contains a [`list`](/sql/types/list) or
-  [`record`](/sql/types/record) column will fail {{% gh 9374 9375 %}}.
+Because Metabase queries are simply reading data out of self-updating views in Materialize, setting your dashboards to auto-refresh at lower rates will not have a significant impact on database performance.
 
-[Metabase]: https://www.metabase.com/
-[metabase-tls]: https://www.metabase.com/docs/latest/administration-guide/secure-database-connections-with-ssl-certificates.html
+[//]: # "TODO(morsapaes) Once we revamp quickstarts, add Related pages section pointing to a quickstart that uses Metabase"

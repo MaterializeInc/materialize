@@ -1,10 +1,9 @@
 [package]
 name = "mz-avro"
 description = "Library for working with Apache Avro in Rust"
-version = "0.6.5"
+version = "0.7.0"
 authors = [
-    "Brennan Vincent <brennan@materialize.io>",
-    "Jessica Laughlin <jessica@materialize.io>",
+    "Brennan Vincent <brennan@materialize.com>",
 ]
 license = "Apache-2.0"
 repository = "https://github.com/MaterializeInc/materialize"

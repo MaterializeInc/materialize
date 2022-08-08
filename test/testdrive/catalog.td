@@ -385,6 +385,8 @@ mz_worker_materialization_delays
 mz_worker_materialization_delays_1
 mz_worker_materialization_frontiers
 mz_worker_materialization_frontiers_1
+mz_worker_materialization_source_frontiers
+mz_worker_materialization_source_frontiers_1
 
 > SHOW FULL SOURCES FROM mz_catalog
 name                                          type   type
@@ -426,6 +428,8 @@ mz_worker_materialization_delays              system log
 mz_worker_materialization_delays_1            system log
 mz_worker_materialization_frontiers           system log
 mz_worker_materialization_frontiers_1         system log
+mz_worker_materialization_source_frontiers    system log
+mz_worker_materialization_source_frontiers_1  system log
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -452,6 +456,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_storage_usage
 mz_system_configuration
 mz_tables
 mz_types
@@ -486,6 +491,7 @@ mz_secrets                    system
 mz_sinks                      system
 mz_sources                    system
 mz_ssh_tunnel_connections system
+mz_storage_usage              system
 mz_system_configuration       system
 mz_tables                     system
 mz_types                      system
@@ -522,6 +528,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_storage_usage
 mz_system_configuration
 mz_tables
 mz_types
@@ -559,6 +566,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_storage_usage
 mz_system_configuration
 mz_tables
 mz_types
@@ -573,7 +581,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-18
+19
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing
@@ -584,6 +592,7 @@ mz_dataflow_names
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_reachability
 mz_materialization_frontiers
+mz_materialization_source_frontiers
 mz_message_counts
 mz_objects
 mz_perf_arrangement_records
@@ -599,29 +608,30 @@ mz_scheduling_histogram
 mz_scheduling_parks
 
 > SHOW FULL VIEWS FROM mz_catalog
-name                              type
-----------------------------------------
-mz_arrangement_sharing            system
-mz_arrangement_sizes              system
-mz_dataflow_names                 system
-mz_dataflow_operator_dataflows    system
-mz_dataflow_operator_reachability system
-mz_materialization_frontiers      system
-mz_message_counts                 system
-mz_objects                        system
-mz_perf_arrangement_records       system
-mz_perf_peek_durations_aggregates system
-mz_perf_peek_durations_bucket     system
-mz_perf_peek_durations_core       system
-mz_records_per_dataflow           system
-mz_records_per_dataflow_global    system
-mz_records_per_dataflow_operator  system
-mz_relations                      system
-mz_catalog_names                  system
-mz_cluster_replicas               system
-mz_scheduling_elapsed             system
-mz_scheduling_histogram           system
-mz_scheduling_parks               system
+name                                 type
+-------------------------------------------
+mz_arrangement_sharing               system
+mz_arrangement_sizes                 system
+mz_dataflow_names                    system
+mz_dataflow_operator_dataflows       system
+mz_dataflow_operator_reachability    system
+mz_materialization_frontiers         system
+mz_materialization_source_frontiers  system
+mz_message_counts                    system
+mz_objects                           system
+mz_perf_arrangement_records          system
+mz_perf_peek_durations_aggregates    system
+mz_perf_peek_durations_bucket        system
+mz_perf_peek_durations_core          system
+mz_records_per_dataflow              system
+mz_records_per_dataflow_global       system
+mz_records_per_dataflow_operator     system
+mz_relations                         system
+mz_catalog_names                     system
+mz_cluster_replicas                  system
+mz_scheduling_elapsed                system
+mz_scheduling_histogram              system
+mz_scheduling_parks                  system
 
 > SHOW SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active
