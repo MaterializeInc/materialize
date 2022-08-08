@@ -1161,22 +1161,11 @@ mod persist_read_handles {
                 while !shutdown {
                     tokio::select! {
                         _ = interval.tick() => {
-                            // Ideally we would use the code below, but the `since`
-                            // lifetime expires to early for the future, or somesuch.
-
-                            // let futs = FuturesUnordered::new();
-                            // for (_id, read) in read_handles.iter_mut() {
-                            //     let since = read.since().clone();
-                            //     futs.push(read.maybe_downgrade_since(&since));
-                            // }
-                            // futs.collect::<Vec<_>>().await;
-
-                            // Instead we use this code, which has a longer critical path.
-                            let mut since = Antichain::new();
+                            let futs = FuturesUnordered::new();
                             for (_id, read) in read_handles.iter_mut() {
-                                since.clone_from(read.since());
-                                read.maybe_downgrade_since(&since).await;
+                                futs.push(read.maybe_heartbeat_reader());
                             }
+                            futs.collect::<Vec<_>>().await;
                         },
                         cmd = rx.recv() => {
                             if let Some(cmd) = cmd {
