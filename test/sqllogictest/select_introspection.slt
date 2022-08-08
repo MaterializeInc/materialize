@@ -49,7 +49,7 @@ SELECT * FROM mz_materializations
 # make this test less flakey.
 
 statement ok
-SELECT mz_internal.mz_sleep(1.1)
+SELECT mz_internal.mz_sleep(2)
 
 statement ok
 CREATE TABLE t (a INT)
@@ -60,7 +60,7 @@ SELECT sum(count) FROM mz_peek_durations
 2
 
 statement ok
-SELECT mz_internal.mz_sleep(1.1)
+SELECT mz_internal.mz_sleep(2)
 
 statement ok
 DROP TABLE t
