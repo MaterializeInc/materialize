@@ -1296,17 +1296,19 @@ impl CollectionPlan for MirRelationExpr {
     }
 }
 
-impl VisitChildren<Self> for MirRelationExpr {
-    fn visit_children<F>(&self, mut f: F)
-    where
-        F: FnMut(&Self),
-    {
+impl MirRelationExpr {
+    /// Iterates through references to child expressions.
+    pub fn children(&self) -> impl Iterator<Item = &Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut rest = None;
+
         use MirRelationExpr::*;
         match self {
             Constant { .. } | Get { .. } => (),
             Let { value, body, .. } => {
-                f(value);
-                f(body);
+                first = Some(&**value);
+                second = Some(&**body);
             }
             Project { input, .. }
             | Map { input, .. }
@@ -1317,19 +1319,70 @@ impl VisitChildren<Self> for MirRelationExpr {
             | Negate { input }
             | Threshold { input }
             | ArrangeBy { input, .. } => {
-                f(input);
+                first = Some(&**input);
             }
             Join { inputs, .. } => {
-                for input in inputs {
-                    f(input);
-                }
+                rest = Some(inputs);
             }
             Union { base, inputs } => {
-                f(base);
-                for input in inputs {
-                    f(input);
-                }
+                first = Some(&**base);
+                rest = Some(inputs);
             }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(rest.into_iter().flatten())
+    }
+
+    /// Iterates through mutable references to child expressions.
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut rest = None;
+
+        use MirRelationExpr::*;
+        match self {
+            Constant { .. } | Get { .. } => (),
+            Let { value, body, .. } => {
+                first = Some(&mut **value);
+                second = Some(&mut **body);
+            }
+            Project { input, .. }
+            | Map { input, .. }
+            | FlatMap { input, .. }
+            | Filter { input, .. }
+            | Reduce { input, .. }
+            | TopK { input, .. }
+            | Negate { input }
+            | Threshold { input }
+            | ArrangeBy { input, .. } => {
+                first = Some(&mut **input);
+            }
+            Join { inputs, .. } => {
+                rest = Some(inputs);
+            }
+            Union { base, inputs } => {
+                first = Some(&mut **base);
+                rest = Some(inputs);
+            }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(rest.into_iter().flatten())
+    }
+}
+
+impl VisitChildren<Self> for MirRelationExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&Self),
+    {
+        for child in self.children() {
+            f(child)
         }
     }
 
@@ -1337,35 +1390,8 @@ impl VisitChildren<Self> for MirRelationExpr {
     where
         F: FnMut(&mut Self),
     {
-        use MirRelationExpr::*;
-        match self {
-            Constant { .. } | Get { .. } => (),
-            Let { value, body, .. } => {
-                f(value);
-                f(body);
-            }
-            Project { input, .. }
-            | Map { input, .. }
-            | FlatMap { input, .. }
-            | Filter { input, .. }
-            | Reduce { input, .. }
-            | TopK { input, .. }
-            | Negate { input }
-            | Threshold { input }
-            | ArrangeBy { input, .. } => {
-                f(input);
-            }
-            Join { inputs, .. } => {
-                for input in inputs {
-                    f(input);
-                }
-            }
-            Union { base, inputs } => {
-                f(base);
-                for input in inputs {
-                    f(input);
-                }
-            }
+        for child in self.children_mut() {
+            f(child)
         }
     }
 
@@ -1374,35 +1400,8 @@ impl VisitChildren<Self> for MirRelationExpr {
         F: FnMut(&Self) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        use MirRelationExpr::*;
-        match self {
-            Constant { .. } | Get { .. } => (),
-            Let { value, body, .. } => {
-                f(value)?;
-                f(body)?;
-            }
-            Project { input, .. }
-            | Map { input, .. }
-            | FlatMap { input, .. }
-            | Filter { input, .. }
-            | Reduce { input, .. }
-            | TopK { input, .. }
-            | Negate { input }
-            | Threshold { input }
-            | ArrangeBy { input, .. } => {
-                f(input)?;
-            }
-            Join { inputs, .. } => {
-                for input in inputs {
-                    f(input)?;
-                }
-            }
-            Union { base, inputs } => {
-                f(base)?;
-                for input in inputs {
-                    f(input)?;
-                }
-            }
+        for child in self.children() {
+            f(child)?
         }
         Ok(())
     }
@@ -1412,35 +1411,8 @@ impl VisitChildren<Self> for MirRelationExpr {
         F: FnMut(&mut Self) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        use MirRelationExpr::*;
-        match self {
-            Constant { .. } | Get { .. } => (),
-            Let { value, body, .. } => {
-                f(value)?;
-                f(body)?;
-            }
-            Project { input, .. }
-            | Map { input, .. }
-            | FlatMap { input, .. }
-            | Filter { input, .. }
-            | Reduce { input, .. }
-            | TopK { input, .. }
-            | Negate { input }
-            | Threshold { input }
-            | ArrangeBy { input, .. } => {
-                f(input)?;
-            }
-            Join { inputs, .. } => {
-                for input in inputs {
-                    f(input)?;
-                }
-            }
-            Union { base, inputs } => {
-                f(base)?;
-                for input in inputs {
-                    f(input)?;
-                }
-            }
+        for child in self.children_mut() {
+            f(child)?
         }
         Ok(())
     }

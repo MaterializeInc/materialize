@@ -17,14 +17,16 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{ComputedIntGauge, ComputedUIntGauge, Counter, IntCounter, MetricsRegistry};
+use mz_ore::metrics::{
+    ComputedIntGauge, Counter, DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry,
+};
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
 use mz_persist::metrics::PostgresConsensusMetrics;
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
-use prometheus::core::{Atomic, AtomicI64, AtomicU64};
+use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{CounterVec, IntCounterVec};
 use timely::progress::Antichain;
 
@@ -638,25 +640,18 @@ impl CodecMetrics {
 
 #[derive(Debug)]
 pub struct ShardsMetrics {
-    // Ideally, we'd break these down per-shard, but that might be too expensive
-    // for prometheus. Instead, start with the plumbing and aggregate the
-    // interesting per-shard metrics across a process (min of since, max of
-    // upper, sum of state size bytes). It's not ideal, but it's definitely safe
-    // to ship.
-    //
-    // The structure of the code makes it pretty trivial to do this swap
-    // (actually tracking them per-shard) later: replace the ComputedFooGauge in
-    // ShardsMetrics with a FooCounterVec and the AtomicFoo in ShardMetrics with
-    // a FooCounter.
-    _count: ComputedUIntGauge,
-    _since: ComputedIntGauge,
-    _upper: ComputedIntGauge,
-    _encoded_state_size: ComputedUIntGauge,
+    // Unlike all the other metrics in here, ShardsMetrics intentionally uses
+    // the DeleteOnDrop wrappers. A process might stop using a shard (drop all
+    // handles to it) but e.g. the set of commands never changes.
+    _count: ComputedIntGauge,
+    since: mz_ore::metrics::IntGaugeVec,
+    upper: mz_ore::metrics::IntGaugeVec,
+    encoded_state_size: mz_ore::metrics::UIntGaugeVec,
     // _batch_count is somewhat redundant with _encoded_state_size. It's nice to
     // see directly as we're getting started, perhaps we're able to drop it
     // later in favor of only having the latter.
-    _batch_count: ComputedUIntGauge,
-    _seqnos_held: ComputedUIntGauge,
+    batch_count: mz_ore::metrics::UIntGaugeVec,
+    seqnos_held: mz_ore::metrics::UIntGaugeVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -667,11 +662,6 @@ impl ShardsMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         let shards = Arc::new(Mutex::new(HashMap::new()));
         let shards_count = Arc::clone(&shards);
-        let shards_since = Arc::clone(&shards);
-        let shards_upper = Arc::clone(&shards);
-        let shards_size = Arc::clone(&shards);
-        let shards_batches = Arc::clone(&shards);
-        let shards_seqnos = Arc::clone(&shards);
         ShardsMetrics {
             _count: registry.register_computed_gauge(
                 metric!(
@@ -684,60 +674,40 @@ impl ShardsMetrics {
                     ret
                 },
             ),
-            _since: registry.register_computed_gauge(
+            since: registry.register(
                 metric!(
                     name: "mz_persist_shard_since",
                     help: "minimum since of all active shards on this process",
+                    var_labels: ["shard"],
                 ),
-                move || {
-                    let mut ret = i64::MAX;
-                    Self::compute(&shards_since, |m| ret = std::cmp::min(ret, m.since.get()));
-                    ret
-                },
             ),
-            _upper: registry.register_computed_gauge(
+            upper: registry.register(
                 metric!(
                     name: "mz_persist_shard_upper",
                     help: "maximum upper of all active shards on this process",
+                    var_labels: ["shard"],
                 ),
-                move || {
-                    let mut ret = 0;
-                    Self::compute(&shards_upper, |m| ret = std::cmp::max(ret, m.upper.get()));
-                    ret
-                },
             ),
-            _encoded_state_size: registry.register_computed_gauge(
+            encoded_state_size: registry.register(
                 metric!(
                     name: "mz_persist_shard_state_size_bytes",
                     help: "total encoded state size of all active shards on this process",
+                    var_labels: ["shard"],
                 ),
-                move || {
-                    let mut ret = 0;
-                    Self::compute(&shards_size, |m| ret += m.encoded_state_size.get());
-                    ret
-                },
             ),
-            _batch_count: registry.register_computed_gauge(
+            batch_count: registry.register(
                 metric!(
                     name: "mz_persist_shard_batch_count",
                     help: "count of batches in all active shards on this process",
+                    var_labels: ["shard"],
                 ),
-                move || {
-                    let mut ret = 0;
-                    Self::compute(&shards_batches, |m| ret += m.batch_count.get());
-                    ret
-                },
             ),
-            _seqnos_held: registry.register_computed_gauge(
+            seqnos_held: registry.register(
                 metric!(
                     name: "mz_persist_shard_seqnos_held",
                     help: "maximum count of gc-ineligible states across all active shards on this process",
+                    var_labels: ["shard"],
                 ),
-                move || {
-                    let mut ret = 0;
-                    Self::compute(&shards_seqnos, |m| ret = std::cmp::max(ret, m.seqnos_held.get()));
-                    ret
-                },
             ),
             shards,
         }
@@ -752,7 +722,7 @@ impl ShardsMetrics {
                 assert!(shards.remove(shard_id).is_some());
             }
         }
-        let shard = Arc::new(ShardMetrics::new(self));
+        let shard = Arc::new(ShardMetrics::new(shard_id, self));
         assert!(shards
             .insert(shard_id.clone(), Arc::downgrade(&shard))
             .is_none());
@@ -780,21 +750,32 @@ impl ShardsMetrics {
 
 #[derive(Debug)]
 pub struct ShardMetrics {
-    since: AtomicI64,
-    upper: AtomicI64,
-    encoded_state_size: AtomicU64,
-    batch_count: AtomicU64,
-    seqnos_held: AtomicU64,
+    since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    encoded_state_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
-    pub fn new(_shards_metrics: &ShardsMetrics) -> Self {
+    pub fn new(shard_id: &ShardId, shards_metrics: &ShardsMetrics) -> Self {
+        let shard = shard_id.to_string();
         ShardMetrics {
-            since: AtomicI64::new(0),
-            upper: AtomicI64::new(0),
-            encoded_state_size: AtomicU64::new(0),
-            batch_count: AtomicU64::new(0),
-            seqnos_held: AtomicU64::new(0),
+            since: shards_metrics
+                .since
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            upper: shards_metrics
+                .upper
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            encoded_state_size: shards_metrics
+                .encoded_state_size
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            batch_count: shards_metrics
+                .batch_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            seqnos_held: shards_metrics
+                .seqnos_held
+                .get_delete_on_drop_gauge(vec![shard]),
         }
     }
 

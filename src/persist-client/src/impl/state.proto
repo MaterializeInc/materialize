@@ -62,9 +62,25 @@ message ProtoStateRollup {
     repeated ProtoWriterState writers = 9;
 }
 
-message ProtoSnapshotSplit {
-    string reader_id = 4;
+message ProtoHollowBatchReaderMetadata {
+    message ProtoHollowBatchReaderMetadataSnapshot {
+        ProtoU64Antichain as_of = 1;
+    }
+
+    message ProtoHollowBatchReaderMetadataListen {
+        ProtoU64Antichain as_of = 1;
+        ProtoU64Antichain until = 2;
+        ProtoU64Antichain since = 3;
+    }
+
+    oneof kind {
+        ProtoHollowBatchReaderMetadataSnapshot snapshot = 1;
+        ProtoHollowBatchReaderMetadataListen listen = 2;
+    }
+}
+
+message ProtoReadEnrichedHollowBatch {
     string shard_id = 1;
-    ProtoU64Antichain as_of = 2;
-    repeated ProtoHollowBatchPart batches = 3;
+    ProtoHollowBatchReaderMetadata reader_metadata = 2;
+    ProtoHollowBatch batch = 3;
 }

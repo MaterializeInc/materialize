@@ -210,17 +210,15 @@ async fn bench_snapshot_one_iter(
     shard_id: &ShardId,
     as_of: &Antichain<u64>,
 ) -> Result<(), anyhow::Error> {
-    let read = client
+    let mut read = client
         .open_reader::<Vec<u8>, Vec<u8>, u64, i64>(*shard_id)
         .await?;
 
-    let mut snap = read
-        .snapshot(as_of.clone())
+    let x = read
+        .snapshot_and_fetch(as_of.clone())
         .await
         .expect("cannot serve requested as_of");
-    while let Some(x) = snap.next().await {
-        black_box(x);
-    }
+    black_box(x);
 
     // Gracefully expire the ReadHandle.
     read.expire().await;
