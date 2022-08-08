@@ -1128,7 +1128,7 @@ where
 
     let mut s = KafkaSinkState::new(
         connection,
-        name.clone(),
+        name,
         &id,
         scope.index().to_string(),
         Arc::clone(&shutdown_flag),

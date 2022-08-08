@@ -58,7 +58,7 @@ use crate::protocol::client::{
 };
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use crate::types::sinks::{DummySinkConnection, StorageSinkConnection, StorageSinkDesc};
+use crate::types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use crate::types::sources::IngestionDescription;
 
 mod hosts;
@@ -516,6 +516,8 @@ pub enum StorageError {
     IOError(StashError),
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
+    /// Not able to export a collection because it's not persisted
+    ExportDoesntExist(GlobalId),
 }
 
 impl Error for StorageError {
@@ -529,6 +531,7 @@ impl Error for StorageError {
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
+            Self::ExportDoesntExist(_) => None,
         }
     }
 }
@@ -561,6 +564,7 @@ impl fmt::Display for StorageError {
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
             Self::DataflowError(err) => write!(f, "dataflow failed to process request: {err}"),
+            Self::ExportDoesntExist(id) => write!(f, "cannot export collection not peristed: {id}"),
         }
     }
 }
@@ -795,23 +799,22 @@ where
                 .exports
                 .insert(id, ExportState::new(description.clone()));
 
+            let from_storage_metadata = match self.collection(description.sink.from) {
+                Err(StorageError::IdentifierMissing(id)) => {
+                    Err(StorageError::ExportDoesntExist(id))
+                }
+                r => r,
+            }?
+            .collection_metadata
+            .clone();
+
             let augmented_sink_desc = StorageSinkDesc {
                 from: description.sink.from,
                 from_desc: description.sink.from_desc,
-                connection: match description.sink.connection {
-                    StorageSinkConnection::Kafka(k) => StorageSinkConnection::Kafka(k),
-                    StorageSinkConnection::Dummy(DummySinkConnection {
-                        storage_metadata: (),
-                    }) => StorageSinkConnection::Dummy(DummySinkConnection {
-                        storage_metadata: self.collection(id)?.collection_metadata.clone(),
-                    }),
-                },
+                connection: description.sink.connection,
                 envelope: description.sink.envelope,
                 as_of: description.sink.as_of,
-                from_storage_metadata: self
-                    .collection(description.sink.from)?
-                    .collection_metadata
-                    .clone(),
+                from_storage_metadata,
             };
             let cmd = ExportSinkCommand {
                 id,

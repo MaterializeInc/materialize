@@ -32,7 +32,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sinks.rs"));
 pub struct StorageSinkDesc<S = (), T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
-    pub connection: StorageSinkConnection<S>,
+    pub connection: StorageSinkConnection,
     pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf<T>,
     pub from_storage_metadata: S,
@@ -46,7 +46,7 @@ impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
         (
             any::<GlobalId>(),
             any::<RelationDesc>(),
-            any::<StorageSinkConnection<CollectionMetadata>>(),
+            any::<StorageSinkConnection>(),
             any::<Option<SinkEnvelope>>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
             any::<CollectionMetadata>(),
@@ -270,18 +270,18 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum StorageSinkConnection<S = ()> {
+pub enum StorageSinkConnection {
     Kafka(KafkaSinkConnection),
-    Dummy(DummySinkConnection<S>),
+    Dummy(DummySinkConnection),
 }
 
-impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection<CollectionMetadata> {
+impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
     fn into_proto(&self) -> ProtoStorageSinkConnection {
         use proto_storage_sink_connection::Kind;
         ProtoStorageSinkConnection {
             kind: Some(match self {
                 StorageSinkConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-                StorageSinkConnection::Dummy(md) => Kind::Dummy(md.into_proto()),
+                StorageSinkConnection::Dummy(dummy) => Kind::Dummy(dummy.into_proto()),
             }),
         }
     }
@@ -293,29 +293,21 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection<CollectionMe
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageSinkConnection::kind"))?;
         Ok(match kind {
             Kind::Kafka(kafka) => StorageSinkConnection::Kafka(kafka.into_rust()?),
-            Kind::Dummy(md) => StorageSinkConnection::Dummy(md.into_rust()?),
+            Kind::Dummy(dummy) => StorageSinkConnection::Dummy(dummy.into_rust()?),
         })
     }
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DummySinkConnection<S> {
-    pub storage_metadata: S,
-}
+pub struct DummySinkConnection;
 
-impl RustType<ProtoDummySinkConnection> for DummySinkConnection<CollectionMetadata> {
+impl RustType<ProtoDummySinkConnection> for DummySinkConnection {
     fn into_proto(&self) -> ProtoDummySinkConnection {
-        ProtoDummySinkConnection {
-            storage_metadata: Some(self.storage_metadata.into_proto()),
-        }
+        ProtoDummySinkConnection {}
     }
 
-    fn from_proto(proto: ProtoDummySinkConnection) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            storage_metadata: proto
-                .storage_metadata
-                .into_rust_if_some("ProtoDummySinkConnection::storage_metadata")?,
-        })
+    fn from_proto(_proto: ProtoDummySinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(Self {})
     }
 }
 
@@ -545,7 +537,7 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
     }
 }
 
-impl<S> StorageSinkConnection<S> {
+impl StorageSinkConnection {
     /// Returns the name of the sink connection.
     pub fn name(&self) -> &'static str {
         match self {

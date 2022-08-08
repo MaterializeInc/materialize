@@ -245,9 +245,7 @@ where
     }
 }
 
-fn get_sink_render_for<G>(
-    connection: &StorageSinkConnection<CollectionMetadata>,
-) -> Box<dyn SinkRender<G>>
+fn get_sink_render_for<G>(connection: &StorageSinkConnection) -> Box<dyn SinkRender<G>>
 where
     G: Scope<Timestamp = Timestamp>,
 {

@@ -364,7 +364,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         id: GlobalId,
         oid: u32,
-        connection: StorageSinkConnection<()>,
+        connection: StorageSinkConnection,
         compute_instance: ComputeInstanceId,
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
@@ -382,6 +382,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ..sink.clone()
         };
         // Make clear that we're no longer updating catalog state once we have our local copy
+        #[allow(clippy::drop_ref)]
         drop(entry);
 
         // We don't try to linearize the as of for the sink; we just pick the

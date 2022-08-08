@@ -209,7 +209,7 @@ contains:reuse_topic requires that sink input dependencies are sources, material
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:source identifier is not present
+contains:cannot export collection
 
 > CREATE SINK output5_view FROM input_kafka_dbz_view_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5b-view-${testdrive.seed}'
@@ -318,7 +318,7 @@ $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_s
 
 # Test the CONSISTENCY TOPIC and CONSISTENCY FORMAT options
 
-> CREATE VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
+> CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
 
 # Can't provide CONSISTENCY FORMAT without a TOPIC
 ! CREATE SINK double_avro FROM simple_view

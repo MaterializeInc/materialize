@@ -102,5 +102,4 @@ message ProtoPersistSinkConnection {
 }
 
 message ProtoDummySinkConnection {
-    mz_storage.controller.ProtoCollectionMetadata storage_metadata = 1;
 }

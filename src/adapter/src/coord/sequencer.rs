@@ -1034,13 +1034,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(Some(&session), ops, move |_| Ok(()))
             .await
         {
-            Ok(()) => {
-                self.create_storage_export(
+            Ok(()) => match self
+                .create_storage_export(
                     id,
                     &catalog_sink,
-                    StorageSinkConnection::Dummy(DummySinkConnection {
-                        storage_metadata: (),
-                    }),
+                    StorageSinkConnection::Dummy(DummySinkConnection {}),
                     // XXX(chae): find better asof for dummy sink
                     SinkAsOf {
                         frontier: Antichain::from_elem(Timestamp::minimum()),
@@ -1048,7 +1046,23 @@ impl<S: Append + 'static> Coordinator<S> {
                     },
                 )
                 .await
-            }
+            {
+                Ok(()) => Ok(()),
+                Err(storage_error) => {
+                    // TODO: catalog_transact that can take async function to actually make the `CreateItem` above transactional.
+                    match self
+                        .catalog_transact(
+                            Some(&session),
+                            vec![catalog::Op::DropItem(id)],
+                            move |_| Ok(()),
+                        )
+                        .await
+                    {
+                        Ok(()) => Err(storage_error),
+                        Err(e) => Err(e),
+                    }
+                }
+            },
             Err(e) => Err(e),
         };
 
