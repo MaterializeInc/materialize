@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::iter::once;
+use std::str::FromStr;
 
 use bytes::BufMut;
 use itertools::{max, Itertools};
@@ -31,7 +32,7 @@ use mz_repr::global_id::ProtoGlobalId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{
-    DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
+    DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
 };
 use mz_sql::plan::ComputeInstanceIntrospectionConfig;
@@ -195,7 +196,7 @@ async fn migrate<S: Append>(
             )?;
             txn.roles.insert(
                 RoleKey {
-                    id: MATERIALIZE_ROLE_ID,
+                    id: RoleId::User(MATERIALIZE_ROLE_ID).to_string(),
                 },
                 RoleValue {
                     name: "materialize".into(),
@@ -496,12 +497,18 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
-    pub async fn load_roles(&mut self) -> Result<Vec<(u64, String)>, Error> {
+    pub async fn load_roles(&mut self) -> Result<Vec<(RoleId, String)>, Error> {
         Ok(COLLECTION_ROLE
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.id, v.name))
+            .map(|(k, v)| {
+                (
+                    RoleId::from_str(&k.id)
+                        .unwrap_or_else(|_| panic!("Invalid persisted role id {}", k.id)),
+                    v.name,
+                )
+            })
             .collect())
     }
 
@@ -926,10 +933,11 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn insert_role(&mut self, role_name: &str) -> Result<u64, Error> {
+    pub fn insert_role(&mut self, role_name: &str) -> Result<RoleId, Error> {
         let id = self.get_and_increment_id(ROLE_ID_ALLOC_KEY.to_string())?;
+        let id = RoleId::User(id);
         match self.roles.insert(
-            RoleKey { id },
+            RoleKey { id: id.to_string() },
             RoleValue {
                 name: role_name.to_string(),
             },
@@ -1601,8 +1609,8 @@ impl_codec!(ItemValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct RoleKey {
-    #[prost(uint64)]
-    id: u64,
+    #[prost(string)]
+    id: String,
 }
 impl_codec!(RoleKey);
 

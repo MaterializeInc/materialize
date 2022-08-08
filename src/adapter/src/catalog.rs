@@ -51,7 +51,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
-    QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, SchemaId,
+    QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
 };
 use mz_sql::plan::{
@@ -1062,7 +1062,7 @@ pub struct Schema {
 #[derive(Debug, Serialize, Clone)]
 pub struct Role {
     pub name: String,
-    pub id: u64,
+    pub id: RoleId,
     #[serde(skip)]
     pub oid: u32,
 }
@@ -3053,7 +3053,7 @@ impl<S: Append> Catalog<S> {
                 schema_name: String,
             },
             CreateRole {
-                id: u64,
+                id: RoleId,
                 oid: u32,
                 name: String,
             },
@@ -4559,7 +4559,7 @@ impl mz_sql::catalog::CatalogRole for Role {
         &self.name
     }
 
-    fn id(&self) -> u64 {
+    fn id(&self) -> RoleId {
         self.id
     }
 }

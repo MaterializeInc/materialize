@@ -96,8 +96,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_ROLES),
             row: Row::pack_slice(&[
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(role.id as i64),
+                Datum::String(&role.id.to_string()),
                 Datum::UInt32(role.oid),
                 Datum::String(&name),
             ]),
