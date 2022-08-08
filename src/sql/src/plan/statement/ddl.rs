@@ -410,12 +410,14 @@ pub fn plan_create_source(
             };
 
             let mut start_offsets = HashMap::new();
-            match legacy_with_options.remove("start_offset") {
+            let has_nontrivial_start_offsets = match legacy_with_options.remove("start_offset") {
                 None => {
                     start_offsets.insert(0, MzOffset::from(0));
+                    false
                 }
                 Some(SqlValueOrSecret::Value(Value::Number(n))) => {
                     start_offsets.insert(0, parse_offset(&n)?);
+                    true
                 }
                 Some(SqlValueOrSecret::Value(Value::Array(vs))) => {
                     for (i, v) in vs.iter().enumerate() {
@@ -426,8 +428,13 @@ pub fn plan_create_source(
                             _ => sql_bail!("start_offset value must be a number: {}", v),
                         }
                     }
+                    true
                 }
                 Some(v) => sql_bail!("invalid start_offset value: {}", v),
+            };
+
+            if has_nontrivial_start_offsets && envelope.requires_all_input() {
+                sql_bail!("start_offset is not supported with ENVELOPE {}", envelope)
             }
 
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
