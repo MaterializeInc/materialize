@@ -1156,91 +1156,105 @@ mod persist_read_handles {
                 let mut read_handles: BTreeMap<GlobalId, ReadHandle<SourceData, (), T, Diff>> =
                     BTreeMap::new();
 
-                while let Some(cmd) = rx.recv().await {
-                    // Peel off all available commands.
-                    // This allows us to catch up if we fall behind on downgrade commands.
-                    let mut commands = vec![cmd];
-                    while let Ok(cmd) = rx.try_recv() {
-                        commands.push(cmd);
-                    }
-                    // Collect all downgrade requests and apply them last.
-                    let mut downgrades = BTreeMap::default();
-                    let mut shutdown = false;
+                let mut shutdown = false;
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                while !shutdown {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            let futs = FuturesUnordered::new();
+                            for (_id, read) in read_handles.iter_mut() {
+                                futs.push(read.maybe_heartbeat_reader());
+                            }
+                            futs.collect::<Vec<_>>().await;
+                        },
+                        cmd = rx.recv() => {
+                            if let Some(cmd) = cmd {
+                                // Peel off all available commands.
+                                // This allows us to catch up if we fall behind on downgrade commands.
+                                let mut commands = vec![cmd];
+                                while let Ok(cmd) = rx.try_recv() {
+                                    commands.push(cmd);
+                                }
+                                // Collect all downgrade requests and apply them last.
+                                let mut downgrades = BTreeMap::default();
 
-                    for (span, command) in commands {
-                        match command {
-                            PersistWorkerCmd::Register(id, read_handle) => {
-                                let previous = read_handles.insert(id, read_handle);
-                                if previous.is_some() {
-                                    panic!(
-                                        "already registered a ReadHandle for collection {:?}",
-                                        id
-                                    );
+                                for (span, command) in commands {
+                                    match command {
+                                        PersistWorkerCmd::Register(id, read_handle) => {
+                                            let previous = read_handles.insert(id, read_handle);
+                                            if previous.is_some() {
+                                                panic!(
+                                                    "already registered a ReadHandle for collection {:?}",
+                                                    id
+                                                );
+                                            }
+                                        }
+                                        PersistWorkerCmd::Downgrade(since_frontiers) => {
+                                            for (id, frontier) in since_frontiers {
+                                                downgrades.insert(id, (span.clone(), frontier));
+                                            }
+                                        }
+                                        PersistWorkerCmd::Snapshot(id, as_of, oneshot) => {
+                                            async fn snapshot<T2: Timestamp + Lattice + Codec64>(
+                                                read_handle: &mut ReadHandle<SourceData, (), T2, Diff>,
+                                                id: GlobalId,
+                                                as_of: Antichain<T2>,
+                                            ) -> Result<Vec<(Row, Diff)>, StorageError>
+                                            {
+                                                let mut contents = Vec::new();
+                                                for ((source_data, _pid), _ts, diff) in read_handle
+                                                    .snapshot_and_fetch(as_of)
+                                                    .await
+                                                    .map_err(|_| StorageError::ReadBeforeSince(id))?
+                                                {
+                                                    let row = source_data.expect("cannot read snapshot").0?;
+                                                    contents.push((row, diff));
+                                                }
+
+                                                Ok(contents)
+                                            }
+
+                                            if let Some(read_handle) = read_handles.get_mut(&id) {
+                                                let result = snapshot(read_handle, id, as_of)
+                                                    .instrument(span.clone())
+                                                    .await;
+                                                oneshot.send(result).expect("Oneshot should not fail");
+                                            } else {
+                                                oneshot
+                                                    .send(Err(StorageError::IdentifierMissing(id)))
+                                                    .expect("Oneshot should not fail");
+                                            }
+                                        }
+                                        PersistWorkerCmd::Shutdown => {
+                                            shutdown = true;
+                                        }
+                                    }
                                 }
-                            }
-                            PersistWorkerCmd::Downgrade(since_frontiers) => {
-                                for (id, frontier) in since_frontiers {
-                                    downgrades.insert(id, (span.clone(), frontier));
-                                }
-                            }
-                            PersistWorkerCmd::Snapshot(id, as_of, oneshot) => {
-                                async fn snapshot<T2: Timestamp + Lattice + Codec64>(
-                                    read_handle: &mut ReadHandle<SourceData, (), T2, Diff>,
-                                    id: GlobalId,
-                                    as_of: Antichain<T2>,
-                                ) -> Result<Vec<(Row, Diff)>, StorageError>
-                                {
-                                    let mut contents = Vec::new();
-                                    for ((source_data, _pid), _ts, diff) in read_handle
-                                        .snapshot_and_fetch(as_of)
-                                        .await
-                                        .map_err(|_| StorageError::ReadBeforeSince(id))?
-                                    {
-                                        let row = source_data.expect("cannot read snapshot").0?;
-                                        contents.push((row, diff));
+
+
+                                if !downgrades.is_empty() {
+                                    let futs = FuturesUnordered::new();
+
+                                    for (id, read) in read_handles.iter_mut() {
+                                        if let Some((span, since)) = downgrades.remove(id) {
+                                            let fut = async move {
+                                                read.downgrade_since(since).instrument(span).await;
+                                            };
+
+                                            futs.push(fut);
+                                        }
                                     }
 
-                                    Ok(contents)
+                                    assert!(downgrades.is_empty());
+                                    futs.collect::<Vec<_>>().await;
                                 }
-
-                                if let Some(read_handle) = read_handles.get_mut(&id) {
-                                    let result = snapshot(read_handle, id, as_of)
-                                        .instrument(span.clone())
-                                        .await;
-                                    oneshot.send(result).expect("Oneshot should not fail");
-                                } else {
-                                    oneshot
-                                        .send(Err(StorageError::IdentifierMissing(id)))
-                                        .expect("Oneshot should not fail");
-                                }
-                            }
-                            PersistWorkerCmd::Shutdown => {
+                            } else {
                                 shutdown = true;
                             }
                         }
                     }
-
-                    if !downgrades.is_empty() {
-                        let futs = FuturesUnordered::new();
-
-                        for (id, read) in read_handles.iter_mut() {
-                            if let Some((span, since)) = downgrades.remove(id) {
-                                let fut = async move {
-                                    read.downgrade_since(since).instrument(span).await;
-                                };
-
-                                futs.push(fut);
-                            }
-                        }
-
-                        assert!(downgrades.is_empty());
-                        futs.collect::<Vec<_>>().await;
-                    }
-                    if shutdown {
-                        tracing::trace!("shutting down persist since downgrade task");
-                        break;
-                    }
                 }
+                tracing::trace!("shutting down persist since downgrade task");
             });
 
             Self { tx }
