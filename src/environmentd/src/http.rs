@@ -34,9 +34,7 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
-use mz_adapter::SessionClient;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_adapter::catalog::HTTP_DEFAULT_USER;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
@@ -48,7 +46,10 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::session::Session;
+use mz_adapter::SessionClient;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::tracing::OpenTelemetryEnableCallback;
 
 use crate::BUILD_INFO;
 
@@ -56,8 +57,6 @@ mod catalog;
 mod memory;
 mod root;
 mod sql;
-
-const SYSTEM_USER: &str = "mz_system";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -278,7 +277,7 @@ async fn auth<B>(
     let user = match frontegg {
         // If no Frontegg authentication, we can use the cert's username if
         // present, otherwise the system user.
-        None => user.unwrap_or_else(|| SYSTEM_USER.to_string()),
+        None => user.unwrap_or_else(|| HTTP_DEFAULT_USER.to_string()),
         // If we require Frontegg auth, fetch credentials from the HTTP auth
         // header. Basic auth comes with a username/password, where the password
         // is the client+secret pair. Bearer auth is an existing JWT that must

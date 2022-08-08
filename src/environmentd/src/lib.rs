@@ -26,6 +26,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
+use tracing::{error, info};
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
@@ -39,7 +40,6 @@ use mz_ore::tracing::OpenTelemetryEnableCallback;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
-use tracing::{error, info};
 
 use crate::tcp_connection::ConnectionHandler;
 
@@ -259,22 +259,23 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller).await;
     // Initialize adapter.
-    let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
-        dataflow_client: controller,
-        storage: adapter_storage,
-        unsafe_mode: config.unsafe_mode,
-        build_info: &BUILD_INFO,
-        metrics_registry: config.metrics_registry.clone(),
-        now: config.now,
-        secrets_controller: config.secrets_controller,
-        cluster_replica_sizes: config.cluster_replica_sizes,
-        storage_host_sizes: config.storage_host_sizes,
-        default_storage_host_size: config.default_storage_host_size,
-        availability_zones: config.availability_zones,
-        connection_context: config.connection_context,
-        storage_usage_client,
-    })
-    .await?;
+    let (adapter_handle, external_adapter_client, internal_adapter_client) =
+        mz_adapter::serve(mz_adapter::Config {
+            dataflow_client: controller,
+            storage: adapter_storage,
+            unsafe_mode: config.unsafe_mode,
+            build_info: &BUILD_INFO,
+            metrics_registry: config.metrics_registry.clone(),
+            now: config.now,
+            secrets_controller: config.secrets_controller,
+            cluster_replica_sizes: config.cluster_replica_sizes,
+            storage_host_sizes: config.storage_host_sizes,
+            default_storage_host_size: config.default_storage_host_size,
+            availability_zones: config.availability_zones,
+            connection_context: config.connection_context,
+            storage_usage_client,
+        })
+        .await?;
 
     // TODO(benesch): replace both `TCPListenerStream`s below with
     // `<type>_listener.incoming()` if that is
@@ -291,7 +292,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     task::spawn(|| "pgwire_server", {
         let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
-            adapter_client: adapter_client.clone(),
+            adapter_client: external_adapter_client.clone(),
             frontegg: config.frontegg.clone(),
         });
 
@@ -311,7 +312,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         task::spawn(|| "internal_pgwire_server", {
             let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 tls: None,
-                adapter_client: adapter_client.clone(),
+                adapter_client: internal_adapter_client.clone(),
                 frontegg: None,
             });
             let mut incoming = TcpListenerStream::new(internal_sql_listener);
@@ -330,7 +331,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             let http_server = http::Server::new(http::Config {
                 tls: http_tls,
                 frontegg: config.frontegg,
-                adapter_client,
+                adapter_client: external_adapter_client,
                 allowed_origin: config.cors_allowed_origin,
             });
             let mut incoming = TcpListenerStream::new(http_listener);

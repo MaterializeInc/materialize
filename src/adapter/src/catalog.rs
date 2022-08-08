@@ -95,7 +95,8 @@ pub mod builtin;
 pub mod storage;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
-const SYSTEM_USER: &str = "mz_system";
+pub const SYSTEM_USER: &str = "mz_system";
+pub const HTTP_DEFAULT_USER: &str = "mz_http_default_user";
 const CREATE_SQL_TODO: &str = "TODO";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.

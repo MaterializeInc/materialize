@@ -13,7 +13,6 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
-use anyhow::anyhow;
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -21,12 +20,12 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
+use anyhow::anyhow;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
-use mz_ore::retry::Retry;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -36,8 +35,10 @@ use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tracing::info;
 
+use mz_adapter::catalog::SYSTEM_USER;
 use mz_ore::assert_contains;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
@@ -1381,6 +1382,27 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     assert!(join_ts >= view_ts);
 
     cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_system_user() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    assert!(server
+        .pg_config()
+        .user(SYSTEM_USER)
+        .connect(postgres::NoTls)
+        .is_err());
+    assert!(server
+        .pg_config_internal()
+        .user(SYSTEM_USER)
+        .connect(postgres::NoTls)
+        .is_ok());
 
     Ok(())
 }

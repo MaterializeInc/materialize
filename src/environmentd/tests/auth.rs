@@ -30,7 +30,6 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
-use mz_ore::now::SYSTEM_TIME;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -51,6 +50,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
+use mz_adapter::catalog::HTTP_DEFAULT_USER;
 use mz_environmentd::TlsMode;
 use mz_frontegg_auth::{
     ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication, FronteggConfig, RefreshToken,
@@ -58,6 +58,7 @@ use mz_frontegg_auth::{
 };
 use mz_ore::assert_contains;
 use mz_ore::now::NowFn;
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
 
@@ -988,7 +989,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1016,7 +1017,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1053,7 +1054,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             // Test that specifying an mzcloud header does nothing and uses the default
             // user.
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1075,7 +1076,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1098,7 +1099,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1143,7 +1144,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1164,7 +1165,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1188,7 +1189,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
@@ -1216,7 +1217,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 // In verify-ca mode, the HTTP interface ignores the
                 // certificate's user.
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
@@ -1280,7 +1281,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1301,7 +1302,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1325,7 +1326,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
@@ -1450,7 +1451,7 @@ fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::new(),
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
@@ -1480,7 +1481,7 @@ fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: "mz_system",
+                user: HTTP_DEFAULT_USER,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::new(),
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
