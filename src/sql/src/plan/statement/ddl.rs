@@ -21,6 +21,7 @@ use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
+use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{LoadGenerator, SshConnectionOption};
 use mz_storage::source::generator::as_generator;
 use prost::Message;
@@ -326,8 +327,17 @@ pub fn plan_create_source(
     let legacy_with_options_original = legacy_with_options;
     let mut legacy_with_options = normalize::options(legacy_with_options_original)?;
 
-    if !legacy_with_options.is_empty() || !with_options.is_empty() {
-        scx.require_unsafe_mode("creating sources with WITH options")?;
+    const SAFE_WITH_OPTIONS: &'static [CreateSourceOptionName] = &[CreateSourceOptionName::Size];
+
+    if !legacy_with_options.is_empty()
+        || with_options
+            .iter()
+            .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+    {
+        scx.require_unsafe_mode(&format!(
+            "creating sources with WITH options other than {}",
+            comma_separated(SAFE_WITH_OPTIONS)
+        ))?;
     }
 
     let ts_frequency = match legacy_with_options.remove("timestamp_frequency_ms") {
