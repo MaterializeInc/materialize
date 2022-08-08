@@ -9,25 +9,22 @@
 
 MZFROM ubuntu-base
 
-# We install sqlite3 to allow debugging of the catalog file, if necessary.
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
         curl \
-        postgresql-14 \
-        sqlite3 \
+        postgresql-client-14 \
         tini \
     && groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
-    && pg_dropcluster 14 main \
-    && pg_createcluster 14 materialize --user=materialize --start \
-        --pgoption listen_addresses=* \
-        --pgoption max_connections=5000 \
-    && su materialize -c "createdb materialize" \
     && mkdir /mzdata \
-    && chown materialize /mzdata
+    && mkdir /cockroach-data \
+    && chown materialize /mzdata /cockroach-data
 
-COPY pg_hba.conf /etc/postgresql/14/materialize/pg_hba.conf
+ARG COCKROACH_VERSION=22.1.5
+
+RUN curl https://binaries.cockroachdb.com/cockroach-v${COCKROACH_VERSION}.linux-amd64.tgz | tar -xz \
+    && cp cockroach-v${COCKROACH_VERSION}.linux-amd64/cockroach /usr/local/bin/
 
 COPY storaged computed environmentd entrypoint.sh /usr/local/bin/
 
