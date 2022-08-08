@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, Utc};
 
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageMetrics};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
@@ -29,7 +29,8 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_TABLES, MZ_TYPES,
+    MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
@@ -745,5 +746,48 @@ impl CatalogState {
             row,
             diff,
         }
+    }
+
+    pub fn pack_storage_usage_update(
+        &self,
+        event: &VersionedStorageMetrics,
+    ) -> Result<BuiltinTableUpdate, Error> {
+        let (id, object_id, size_bytes, collection_timestamp): (u64, &Option<String>, u64, u64) =
+            match event {
+                VersionedStorageMetrics::V1(ev) => {
+                    (ev.id, &ev.object_id, ev.size_bytes, ev.collection_timestamp)
+                }
+            };
+
+        let valid_id = i64::try_from(id).map_err(|e| {
+            Error::new(ErrorKind::Unstructured(format!(
+                "exceeded event id space: {}",
+                e
+            )))
+        })?;
+        let table = self.resolve_builtin_table(&MZ_STORAGE_USAGE);
+        let object_id_val = match object_id {
+            Some(s) => Datum::String(s),
+            None => Datum::Null,
+        };
+        let dt = mz_ore::now::to_datetime(collection_timestamp).naive_utc();
+
+        let row = Row::pack_slice(&[
+            Datum::Int64(valid_id),
+            object_id_val,
+            Datum::Int64(
+                size_bytes
+                    .try_into()
+                    // Unless one object has over 9k petabytes of storage...
+                    .expect("Storage bytes size should not overflow i64"),
+            ),
+            Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
+        ]);
+        let diff = 1;
+        Ok(BuiltinTableUpdate {
+            id: table,
+            row,
+            diff,
+        })
     }
 }

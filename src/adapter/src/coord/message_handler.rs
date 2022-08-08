@@ -67,6 +67,41 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
+            Message::StorageUsage => {
+                self.storage_usage_update().await;
+            }
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn storage_usage_update(&mut self) {
+        let object_id = None;
+        let shard_sizes = self.storage_usage_client.shard_sizes().await;
+
+        let mut unk_storage = 0;
+        let mut known_storage = 0;
+        for (key, val) in shard_sizes {
+            match key {
+                Some(_) => known_storage += val,
+                None => unk_storage += val,
+            }
+        }
+        // TODO(jpepin): What, if anything, do we want to do with orphaned storage?
+        if unk_storage > 0 {
+            tracing::debug!("Found {} bytes of orphaned storage", unk_storage);
+        }
+        if let Err(err) = self
+            .catalog_transact(
+                None,
+                vec![catalog::Op::UpdateStorageMetrics {
+                    object_id,
+                    size_bytes: known_storage,
+                }],
+                |_| Ok(()),
+            )
+            .await
+        {
+            tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
     }
 
