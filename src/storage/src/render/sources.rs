@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{Exchange, Map, OkErr};
+use timely::dataflow::operators::{Exchange, Map, OkErr, ToStream};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
@@ -143,7 +143,7 @@ where
         now: storage_state.now.clone(),
         base_metrics: &storage_state.source_metrics,
         resume_upper: resume_upper.clone(),
-        storage_metadata: description.storage_metadata,
+        storage_metadata: description.storage_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
     };
 
@@ -321,12 +321,44 @@ where
                     let transformed_results =
                         transform_keys_from_key_envelope(upsert_envelope, results);
 
+                    let persist_clients = Arc::clone(&storage_state.persist_clients);
+
+                    let previous_as_of = match resume_upper.as_option() {
+                        None => Some(Timestamp::MAX),
+                        Some(&0) => None,
+                        Some(&t) => Some(t - 1),
+                    };
+                    let (previous_ok_stream, previous_err_stream, previous_token) =
+                        if let Some(previous_as_of) = previous_as_of {
+                            let (ok, err, tok) = persist_source::persist_source(
+                                scope,
+                                id,
+                                persist_clients,
+                                description.storage_metadata.clone(),
+                                Antichain::from_elem(previous_as_of),
+                            );
+                            (ok, err, Some(tok))
+                        } else {
+                            (
+                                std::iter::empty().to_stream(scope),
+                                std::iter::empty().to_stream(scope),
+                                None,
+                            )
+                        };
+                    let (previous_ok, previous_err) = (
+                        previous_ok_stream.as_collection(),
+                        previous_err_stream.as_collection(),
+                    );
+                    error_collections.push(previous_err);
+
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
                         &mut linear_operators,
                         description.typ.arity(),
                         upsert_envelope.clone(),
+                        previous_ok,
+                        previous_token,
                     );
 
                     (upsert_ok.as_collection(), Some(upsert_err.as_collection()))

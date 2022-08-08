@@ -43,10 +43,9 @@ use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 
 use mz_build_info::BuildInfo;
-use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -60,7 +59,7 @@ use crate::protocol::client::{
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use crate::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
-use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
+use crate::types::sources::IngestionDescription;
 
 mod hosts;
 mod rehydration;
@@ -440,7 +439,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + Unpin> {
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
-    persist_client: PersistClient,
+    persist: Arc<Mutex<PersistClientCache>>,
 }
 
 #[derive(Debug)]
@@ -556,7 +555,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin + Debug,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 
@@ -642,7 +641,12 @@ where
             };
 
             let (write, mut read) = self
-                .persist_client
+                .persist
+                .lock()
+                .await
+                .open(self.persist_location.clone())
+                .await
+                .unwrap()
                 .open(metadata.data_shard)
                 .await
                 .expect("invalid persist usage");
@@ -668,47 +672,17 @@ where
                     source_imports.insert(id, metadata);
                 }
 
-                let metadata = self.collection(id)?.collection_metadata.clone();
-
-                // Calculate the point at which we can resume ingestion computing the greatest
-                // antichain that is less or equal to all state and output shard uppers.
-                let mut resume_upper: Antichain<T> = Antichain::new();
-                let remap_write = self
-                    .persist_client
-                    .open_writer::<(), PartitionId, T, MzOffset>(metadata.remap_shard)
-                    .await
-                    .unwrap();
-                for t in remap_write.upper().elements() {
-                    resume_upper.insert(t.clone());
-                }
-                let data_write = self
-                    .persist_client
-                    .open_writer::<SourceData, (), T, Diff>(metadata.data_shard)
-                    .await
-                    .unwrap();
-                for t in data_write.upper().elements() {
-                    resume_upper.insert(t.clone());
-                }
-
-                // Check if this ingestion is using any operators that are stateful AND are not
-                // storing their state in persist shards. This whole section should be eventually
-                // removed as we make each operator durably record its state in persist shards.
-                let resume_upper = match ingestion.desc.envelope {
-                    // We can only resume with the None envelope right now which is stateless
-                    SourceEnvelope::None(_) => resume_upper,
-                    // Otherwise re-ingest everything
-                    _ => Antichain::from_elem(T::minimum()),
+                let desc = IngestionDescription {
+                    source_imports,
+                    storage_metadata: self.collection(id)?.collection_metadata.clone(),
+                    // The rest of the fields are identical
+                    desc: ingestion.desc,
+                    typ: description.desc.typ().clone(),
                 };
-
+                let resume_upper = desc.get_resume_upper(Arc::clone(&self.persist)).await;
                 let augmented_ingestion = IngestSourceCommand {
                     id,
-                    description: IngestionDescription {
-                        source_imports,
-                        storage_metadata: self.collection(id)?.collection_metadata.clone(),
-                        // The rest of the fields are identical
-                        desc: ingestion.desc,
-                        typ: description.desc.typ().clone(),
-                    },
+                    description: desc,
                     resume_upper,
                 };
 
@@ -1015,25 +989,21 @@ where
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
     ) -> Self {
-        let persist_client = persist_clients
-            .lock()
-            .await
-            .open(persist_location.clone())
-            .await
-            .unwrap();
-
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
             state: StorageControllerState::new(postgres_url, tx).await,
-            hosts: StorageHosts::new(StorageHostsConfig {
-                build_info,
-                orchestrator,
-                storaged_image,
-            }),
+            hosts: StorageHosts::new(
+                StorageHostsConfig {
+                    build_info,
+                    orchestrator,
+                    storaged_image,
+                },
+                Arc::clone(&persist_clients),
+            ),
             internal_response_queue: rx,
             persist_location,
-            persist_client,
+            persist: persist_clients,
         }
     }
 

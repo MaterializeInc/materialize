@@ -73,6 +73,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-builtin-migration",
+        "test-upsert",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -161,6 +162,27 @@ def workflow_test_github_12251(c: Composition) -> None:
 
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
+
+
+def workflow_test_upsert(c: Composition) -> None:
+    """Test creating upsert sources and continuing to ingest them after a restart."""
+    with c.override(
+        Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
+    ):
+        c.down(destroy_volumes=True)
+        dependencies = [
+            "materialized",
+            "zookeeper",
+            "kafka",
+            "schema-registry",
+        ]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
+
+        c.run("testdrive", "upsert/01-create-sources.td")
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged`")
+        c.run("testdrive", "upsert/02-after-storaged-restart.td")
 
 
 def workflow_test_remote_storaged(c: Composition) -> None:

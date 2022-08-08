@@ -7,16 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
+use std::convert::Infallible;
+use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::Collection;
+use mz_ore::permutations::inverse_argsort;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilityRef, Concat, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use tracing::error;
+use timely::order::PartialOrder;
+use timely::progress::frontier::AntichainRef;
+use timely::progress::{Antichain, ChangeBatch};
+use tracing::{error, info};
 
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::result::ResultExt;
@@ -54,6 +62,8 @@ pub(crate) fn upsert<G>(
     // Full arity, including the key columns
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
+    previous_ok: Collection<G, Row, Diff>,
+    previous_token: Option<Rc<dyn Any>>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -61,6 +71,9 @@ pub(crate) fn upsert<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    if as_of_frontier != Antichain::from_elem(0) {
+        info!("upsert resuming from time {as_of_frontier:?}");
+    }
     // Currently, the upsert-specific transformations run in the
     // following order:
     // 1. Applies `as_of` frontier compaction. The compaction is important as
@@ -145,6 +158,8 @@ where
         position_or,
         as_of_frontier,
         upsert_envelope,
+        previous_ok,
+        previous_token,
     );
     let (mut oks, mut errs) = upsert_output.ok_err(|(data, time, diff)| match data {
         Ok(data) => Ok((data, time, diff)),
@@ -200,6 +215,59 @@ fn evaluate(
     Ok(Some(row_buf.clone()))
 }
 
+/// Given a stream of rows and a description of the columns that form their key,
+/// produce a stream of keys and thinned values.
+fn extract_kv<G: Scope>(
+    records: Collection<G, Row, Diff>,
+    key_indices_sorted: Vec<usize>,
+    key_indices: &[usize],
+) -> Collection<G, (Row, Row), Diff> {
+    debug_assert!({
+        let mut verified_sorted = key_indices.to_vec();
+        verified_sorted.sort_unstable();
+        key_indices_sorted == verified_sorted
+    });
+    let key_cols_are_sorted = &key_indices_sorted == key_indices;
+
+    let mut row_buf = Row::default();
+    // If the key columns are in order, we can pack them directly
+    // into `key_row_buf` while scanning the original row.
+    //
+    // Otherwise, we need to put them into `key_dv` and then invert the permutation
+    // before packing.
+    let mut key_row_buf = Row::default();
+    let mut key_dv = DatumVec::default();
+    let key_unsort_permutation = inverse_argsort(key_indices);
+    records.map(move |row| {
+        let mut row_packer = row_buf.packer();
+        let mut key_row_packer = key_row_buf.packer();
+        let values = &mut row.iter();
+        let mut next_idx = 0;
+        let mut key_dv = key_dv.borrow();
+        for &key_idx in key_indices_sorted.iter() {
+            // First, push the datums that are before `key_idx`
+            row_packer.extend(values.take(key_idx - next_idx));
+            // Then, add the key field to whichever buffer we're using for the key
+            let key_datum = values.next().unwrap();
+            if key_cols_are_sorted {
+                key_row_packer.push(key_datum);
+            } else {
+                key_dv.push(key_datum);
+            }
+            next_idx = key_idx + 1;
+        }
+        // Finally, push any columns after the last key index
+        row_packer.extend(values);
+
+        if !key_cols_are_sorted {
+            for &i in key_unsort_permutation.iter() {
+                key_row_packer.push(key_dv[i])
+            }
+        }
+        (key_row_buf.clone(), row_buf.clone())
+    })
+}
+
 /// Internal core upsert logic.
 fn upsert_core<G>(
     stream: &Stream<G, DecodeResult>,
@@ -207,12 +275,27 @@ fn upsert_core<G>(
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
     upsert_envelope: UpsertEnvelope,
-) -> Stream<G, (Result<Row, DataflowError>, u64, Diff)>
+    previous_ok: Collection<G, Row, Diff>,
+    mut previous_token: Option<Rc<dyn Any>>,
+) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let result_stream = stream.unary_frontier(
+    // Prepare sorted and structured `key_indices` required
+    // by the upsert operator, and a `DatumVec` used to avoid
+    // an allocation.
+    let mut key_indices_sorted = upsert_envelope.key_indices.clone();
+    key_indices_sorted.sort_unstable();
+
+    let previous_ok = extract_kv(
+        previous_ok,
+        key_indices_sorted.clone(),
+        &upsert_envelope.key_indices,
+    );
+    let result_stream = stream.binary_frontier(
+        &previous_ok.inner,
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
+        Exchange::new(|((key, _v), _t, _r)| Ok::<_, Infallible>(key).hashed()),
         "Upsert",
         move |_cap, _info| {
             // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
@@ -222,21 +305,12 @@ where
             // value2, time 7)
             let mut pending_values =
                 BTreeMap::<Timestamp, (Capability<Timestamp>, HashMap<_, UpsertSourceData>)>::new();
-            // this is a map of (decoded key) -> (decoded_value). We store the
-            // latest value for a given key that way we know what to retract if
-            // a new value with the same key comes along
-            let mut current_values = HashMap::new();
-
             // Intermediate structures re-used to limit allocations
             let mut scratch_vector = Vec::new();
+            let mut scratch_vector2 = Vec::new();
             let mut row_packer = mz_repr::Row::default();
             let mut dv = DatumVec::new();
 
-            // Prepare sorted and structured `key_indices` required
-            // by the upsert operator, and a `DatumVec` used to avoid
-            // an allocation.
-            let mut key_indices_sorted = upsert_envelope.key_indices.clone();
-            key_indices_sorted.sort_unstable();
             let key_indices_map = upsert_envelope
                 .key_indices
                 .iter()
@@ -244,10 +318,83 @@ where
                 .map(|(idx, value_idx)| (*value_idx, idx))
                 .collect();
             let mut kdv = DatumVec::new();
+            // this is a map of (decoded key) -> (decoded_value). We store the
+            // latest value for a given key that way we know what to retract if
+            // a new value with the same key comes along.
+            //
+            // If `previous_token` is true, we need to rehydrate this from the last good input,
+            // so set it to `None` for now.
+            let mut current_values = if previous_token.is_some() {
+                None
+            } else {
+                Some(HashMap::default())
+            };
 
-            move |input, output| {
+            let mut initial_values_multiset = ChangeBatch::default();
+            move |data_input, previous_input, output| {
+                if previous_token.is_some() {
+                    assert!(current_values.is_none());
+                    // Hydrate the `current_values` map from the previous state of the collection.
+                    // We can't just insert things into the `current_values` map directly, since
+                    // we might in general have non-one multiplicities due to Persist being behind on compaction.
+                    // Thus, we use `initial_values_multiset` to keep track of how many of each record we've seen.
+                    //
+                    // At the end of reading the entire previous input, `initial_values_multiset` must have exactly one of each record,
+                    // and furthermore, each key must be unique. We validate this property for sanity's sake, and build `current_values`.
+                    //
+                    // TODO[btv] This algorithm has the potential to use unbounded space if we can't make any assumptions
+                    // about Persist's level of compaction or the order in which it returns updates.
+                    // See the detailed discussion [here](https://materializeinc.slack.com/archives/C01CFKM1QRF/p1659063332027139).
+                    // This is thought to be fine for our current purposes, but we will need to rethink it once the Persist team has
+                    // thought harder about what guarantees/APIs they want to offer relating to bounded-memory consolidation.
+                    // Tracked here: https://github.com/MaterializeInc/materialize/issues/14086
+                    //
+                    // TODO[btv] Note that we're only looking at `Ok` records here -- the `Err` entries go directly to the error
+                    // stream during source rendering before we ever get here. That means that if an `Err` made it into the
+                    // persisted state, and we restart before it's retracted, the user will never have a chance to retract it
+                    // and the source will be permanently dead. In my opinion, this should be considered a bug and fixed before GA,
+                    // but fixing it will require a bit of surgery, because right now the type of errors we store in persist don't
+                    // allow us to recover the original key and value separately.
+                    // Tracked here: https://github.com/MaterializeInc/materialize/issues/14084
+                    previous_input.for_each(|_cap, data| {
+                        data.swap(&mut scratch_vector2);
+                        initial_values_multiset.extend(
+                            scratch_vector2
+                                .drain(..)
+                                .filter(|(_d, t, _r)| !as_of_frontier.less_equal(t))
+                                .map(|(d, _t, r)| (d, r)),
+                        );
+                    });
+                    if PartialOrder::less_equal(
+                        &AntichainRef::new(&as_of_frontier),
+                        &previous_input.frontier().frontier(),
+                    ) {
+                        // Prevent the persist source from continuing to operate.
+                        // Without this, we will re-download everything we upload, wasting tons of bandwidth.
+                        previous_token = None;
+
+                        let mut new_current_values =
+                            HashMap::with_capacity(initial_values_multiset.len());
+                        for ((k, v), r) in initial_values_multiset.drain() {
+                            assert!(
+                                r == 1,
+                                "The upsert state should have exactly one value per key"
+                            );
+                            match new_current_values.entry(Ok(k)) {
+                                Entry::Occupied(_oe) => {
+                                    panic!("The upsert state should have exactly one value per key")
+                                }
+                                Entry::Vacant(ve) => {
+                                    ve.insert(Ok(v));
+                                }
+                            }
+                        }
+                        current_values = Some(new_current_values);
+                    }
+                }
+
                 // Digest each input, reduce by presented timestamp.
-                input.for_each(|cap, data| {
+                data_input.for_each(|cap, data| {
                     data.swap(&mut scratch_vector);
                     process_new_data(
                         &mut scratch_vector,
@@ -257,9 +404,15 @@ where
                     );
                 });
 
+                // Don't try to do anything if we aren't done building the `current_values` map.
+                let current_values = match &mut current_values {
+                    None => return,
+                    Some(x) => x,
+                };
+
                 let mut removed_times = Vec::new();
                 for (time, (cap, map)) in pending_values.iter_mut() {
-                    if input.frontier.less_equal(time) {
+                    if data_input.frontier.less_equal(time) {
                         // because this is a BTreeMap, the rest of the times in
                         // the map will be greater than this time. So if the
                         // input_frontier is less than or equal to this time,
@@ -270,7 +423,7 @@ where
                         time,
                         cap,
                         map,
-                        &mut current_values,
+                        current_values,
                         &mut row_packer,
                         &mut dv,
                         &upsert_envelope,
