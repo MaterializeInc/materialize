@@ -49,9 +49,12 @@ pub(crate) struct DeferredPlan {
     pub plan: Plan,
 }
 
+/// Describes what action triggered an update to a builtin table.
 #[derive(Clone)]
 pub(crate) enum BuiltinTableUpdateSource {
+    /// Update was triggered by some DDL.
     DDL,
+    /// Update was triggered by some background process, such as periodic heartbeats from COMPUTE.
     Background,
 }
 
@@ -311,14 +314,15 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    /// Applies the results of a completed group commit. The global timestamp will be advanced to
-    /// the timestamp of the completed write, the read hold on the global timeline is advanced to
-    /// the new time, and responses are sent to all waiting clients.
+    /// Applies the results of a completed group commit. The read timestamp of the timeline
+    /// containing user tables will be advanced to the timestamp of the completed write, the read
+    /// hold on the timeline containing user tables is advanced to the new time, and responses are
+    /// sent to all waiting clients.
     ///
     /// It's important that the timeline is advanced before responses are sent so that the client
     /// is guaranteed to see the write.
     ///
-    /// We also advance all non-realtime timelines and update the read holds of non-realtime
+    /// We also advance all other timelines and update the read holds of non-realtime
     /// timelines.
     #[tracing::instrument(level = "debug", skip(self, responses))]
     pub(crate) async fn group_commit_apply(
@@ -331,7 +335,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.apply_local_write(timestamp).await;
 
         // If we're in the middle of DDL then the catalog and COMPUTE/STORAGE may be out of sync,
-        // so we don't advance other timeliens and we don't update read holds.
+        // so we don't advance other timelines and we don't update read holds.
         if !in_ddl {
             let global_timelines = std::mem::take(&mut self.global_timelines);
             for (

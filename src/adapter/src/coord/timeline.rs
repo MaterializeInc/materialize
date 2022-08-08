@@ -53,9 +53,8 @@ pub(crate) struct TimelineState<T> {
 }
 
 /// A timeline can perform reads and writes. Reads happen at the read timestamp
-/// and writes happen at the write timestamp. After the write has completed,
-/// but before a response is sent, the read timestamp must be updated to the
-/// same value as the write timestamp.
+/// and writes happen at the write timestamp. After the write has completed, but before a response
+/// is sent, the read timestamp must be updated to a value greater than or equal to `self.write_ts`.
 struct TimestampOracleState<T> {
     read_ts: T,
     write_ts: T,
@@ -90,7 +89,7 @@ impl<T: CoordTimestamp> TimestampOracle<T> {
     /// Acquire a new timestamp for writing.
     ///
     /// This timestamp will be strictly greater than all prior values of
-    /// `self.read_ts()`.
+    /// `self.read_ts()` and `self.write_ts()`.
     fn write_ts(&mut self) -> WriteTimestamp<T> {
         let mut next = (self.next)();
         if next.less_equal(&self.state.write_ts) {

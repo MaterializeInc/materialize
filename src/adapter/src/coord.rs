@@ -154,10 +154,15 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
+    /// Initiates a group commit.
     GroupCommitInitiate,
+    /// Makes a group commit visible to all clients.
     GroupCommitApply(
+        /// Timestamp of the writes in the group commit.
         T,
+        /// Clients waiting on responses from the group commit.
         Vec<CompletedClientTransmitter<ExecuteResponse>>,
+        /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
     ),
     ComputeInstanceStatus(ComputeInstanceEvent),
