@@ -22,7 +22,9 @@ use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
 use mz_sql_parser::ast::display::comma_separated;
-use mz_sql_parser::ast::{LoadGenerator, SshConnectionOption};
+use mz_sql_parser::ast::{
+    AlterSystemStatement, LoadGenerator, SetVariableValue, SshConnectionOption,
+};
 use mz_storage::source::generator::as_generator;
 use prost::Message;
 use regex::Regex;
@@ -94,7 +96,7 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
+    AlterNoopPlan, AlterSecretPlan, AlterSystemPlan, ComputeInstanceIntrospectionConfig,
     ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
@@ -3713,4 +3715,24 @@ pub fn plan_alter_secret(
     let secret_as = query::plan_secret_as(scx, value)?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
+}
+
+pub fn describe_alter_system(
+    _: &StatementContext,
+    _: AlterSystemStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_system(
+    scx: &StatementContext,
+    AlterSystemStatement { name, value }: AlterSystemStatement,
+) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER SYSTEM")?;
+    let name = name.to_string();
+    if matches!(&value, SetVariableValue::Literal(value) if matches!(value, mz_sql_parser::ast::Value::Null))
+    {
+        sql_bail!("Unable to set system configuration '{}' to NULL", name)
+    }
+    Ok(Plan::AlterSystem(AlterSystemPlan { name, value }))
 }

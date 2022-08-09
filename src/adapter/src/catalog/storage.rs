@@ -604,6 +604,23 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
+    /// Load the persisted server configurations.
+    pub async fn load_system_configuration(
+        &mut self,
+    ) -> Result<BTreeMap<String, mz_sql_parser::ast::Value>, Error> {
+        COLLECTION_SYSTEM_CONFIGURATION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(|(k, v)| {
+                let name = k.name;
+                let value: mz_sql_parser::ast::Value = serde_json::from_slice(&v.value)
+                    .map_err(|err| Error::from(StashError::from(err.to_string())))?;
+                Ok((name, value))
+            })
+            .collect()
+    }
+
     /// Persist mapping from system objects to global IDs and fingerprints.
     ///
     /// Panics if provided id is not a system id.
@@ -796,10 +813,11 @@ pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<
         .peek_one(stash)
         .await?;
     let id_allocator = COLLECTION_ID_ALLOC.peek_one(stash).await?;
-    let collection_config = COLLECTION_CONFIG.peek_one(stash).await?;
-    let collection_setting = COLLECTION_SETTING.peek_one(stash).await?;
-    let collection_timestamps = COLLECTION_TIMESTAMP.peek_one(stash).await?;
-    let collection_system_gid_mapping = COLLECTION_SYSTEM_GID_MAPPING.peek_one(stash).await?;
+    let configs = COLLECTION_CONFIG.peek_one(stash).await?;
+    let settings = COLLECTION_SETTING.peek_one(stash).await?;
+    let timestamps = COLLECTION_TIMESTAMP.peek_one(stash).await?;
+    let system_gid_mapping = COLLECTION_SYSTEM_GID_MAPPING.peek_one(stash).await?;
+    let system_configurations = COLLECTION_SYSTEM_CONFIGURATION.peek_one(stash).await?;
 
     Ok(Transaction {
         stash,
@@ -815,10 +833,11 @@ pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<
         }),
         introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false),
         id_allocator: TableTransaction::new(id_allocator, |_a, _b| false),
-        configs: TableTransaction::new(collection_config, |_a, _b| false),
-        settings: TableTransaction::new(collection_setting, |_a, _b| false),
-        timestamps: TableTransaction::new(collection_timestamps, |_a, _b| false),
-        system_gid_mapping: TableTransaction::new(collection_system_gid_mapping, |_a, _b| false),
+        configs: TableTransaction::new(configs, |_a, _b| false),
+        settings: TableTransaction::new(settings, |_a, _b| false),
+        timestamps: TableTransaction::new(timestamps, |_a, _b| false),
+        system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false),
+        system_configurations: TableTransaction::new(system_configurations, |_a, _b| false),
         audit_log_updates: Vec::new(),
         storage_usage_updates: Vec::new(),
     })
@@ -840,6 +859,7 @@ pub struct Transaction<'a, S> {
     settings: TableTransaction<SettingKey, SettingValue>,
     timestamps: TableTransaction<TimestampKey, TimestampValue>,
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
+    system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(AuditLogKey, (), i64)>,
@@ -1216,6 +1236,37 @@ impl<'a, S: Append> Transaction<'a, S> {
         Ok(())
     }
 
+    /// Upserts persisted system configuration `name` to `value`.
+    pub async fn upsert_system_config(
+        &mut self,
+        name: &str,
+        value: mz_sql_parser::ast::Value,
+    ) -> Result<(), Error> {
+        let key = ServerConfigurationKey {
+            name: name.to_string(),
+        };
+        let value = ServerConfigurationValue {
+            value: serde_json::to_vec(&value)
+                .map_err(|err| Error::from(StashError::from(err.to_string())))?,
+        };
+        self.system_configurations.delete(|k, _v| k == &key);
+        self.system_configurations.insert(key, value)?;
+        Ok(())
+    }
+
+    /// Removes persisted system configuration `name`.
+    pub async fn remove_system_config(&mut self, name: &str) {
+        let key = ServerConfigurationKey {
+            name: name.to_string(),
+        };
+        self.system_configurations.delete(|k, _v| k == &key);
+    }
+
+    /// Removes all persisted system configurations.
+    pub async fn clear_system_configs(&mut self) {
+        self.system_configurations.delete(|_k, _v| true);
+    }
+
     pub fn remove_timestamp(&mut self, timeline: Timeline) {
         let timeline_str = timeline.to_string();
         let n = self.timestamps.delete(|k, _v| k.id == timeline_str).len();
@@ -1336,6 +1387,13 @@ impl<'a, S: Append> Transaction<'a, S> {
         add_batch(
             self.stash,
             &mut batches,
+            &COLLECTION_SYSTEM_CONFIGURATION,
+            self.system_configurations.pending(),
+        )
+        .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
             &COLLECTION_AUDIT_LOG,
             self.audit_log_updates,
         )
@@ -1404,6 +1462,7 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
     add_batch(stash, &mut batches, &COLLECTION_ITEM).await?;
     add_batch(stash, &mut batches, &COLLECTION_ROLE).await?;
     add_batch(stash, &mut batches, &COLLECTION_TIMESTAMP).await?;
+    add_batch(stash, &mut batches, &COLLECTION_SYSTEM_CONFIGURATION).await?;
     add_batch(stash, &mut batches, &COLLECTION_AUDIT_LOG).await?;
     add_batch(stash, &mut batches, &COLLECTION_STORAGE_USAGE).await?;
     stash.append(batches).await.map_err(|e| e.into())
@@ -1648,6 +1707,20 @@ struct TimestampValue {
 }
 impl_codec!(TimestampValue);
 
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct ServerConfigurationKey {
+    #[prost(string)]
+    name: String,
+}
+impl_codec!(ServerConfigurationKey);
+
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+struct ServerConfigurationValue {
+    #[prost(bytes)]
+    value: Vec<u8>,
+}
+impl_codec!(ServerConfigurationValue);
+
 static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
     TypedCollection::new("setting");
@@ -1672,6 +1745,10 @@ static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::n
 static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
 static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
     TypedCollection::new("timestamp");
+static COLLECTION_SYSTEM_CONFIGURATION: TypedCollection<
+    ServerConfigurationKey,
+    ServerConfigurationValue,
+> = TypedCollection::new("system_configuration");
 static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
 static COLLECTION_STORAGE_USAGE: TypedCollection<StorageMetricsKey, ()> =
     TypedCollection::new("storage_usage");
