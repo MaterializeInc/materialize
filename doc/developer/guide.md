@@ -66,11 +66,13 @@ latter to work, you may need to create a new database with `createdb`. If you
 issue `createdb` without any arguments, a database with your username will be
 created.
 
-To also run `bin/cargo-test`, you'll need to add the following to your
-Postgres config. The location of your Postgres config file can be
-shown using `sudo -u postgres psql -c 'SHOW config_file'` (e.g., `/etc/postgresql/13/main/postgresql.conf`
-or `/var/lib/postgres/data/postgresql.conf`).
-Then, restart Postgres.
+To also run `bin/cargo-test`, you'll need to add the following to your Postgres
+config. The location of your Postgres config file can be shown using `psql -c
+'SHOW config_file'` on macOS or using `sudo -u postgres psql -c 'SHOW
+config_file'` on Ubuntu. Common locations are:
+`/opt/homebrew/var/postgres/postgresql.conf` on macOS,
+`/etc/postgresql/13/main/postgresql.conf` on Ubuntu, and
+`/var/lib/postgres/data/postgresql.conf` on Arch Linux. Then, restart Postgres.
 
 ```
 wal_level=logical
