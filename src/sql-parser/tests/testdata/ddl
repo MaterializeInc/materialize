@@ -1538,3 +1538,10 @@ ALTER SYSTEM SET log_connections = 'default'
 ALTER SYSTEM SET log_connections = 'default'
 =>
 AlterSystem(AlterSystemStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+
+parse-statement
+ALTER SYSTEM SET replication_slots 667
+----
+ALTER SYSTEM SET replication_slots = 667
+=>
+AlterSystem(AlterSystemStatement { name: Ident("replication_slots"), value: Literal(Number("667")) })
