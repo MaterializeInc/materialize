@@ -17,7 +17,8 @@ import pytest
 from dbt.tests.util import check_relations_equal, run_dbt
 from fixtures import (
     actual_indexes,
-    expected_indexes,
+    expected_indexes_binary,
+    expected_indexes_cloud,
     test_index,
     test_materialized_view,
     test_materialized_view_index,
@@ -36,7 +37,8 @@ class TestCustomMaterializations:
     @pytest.fixture(scope="class")
     def seeds(self):
         return {
-            "expected_indexes.csv": expected_indexes,
+            "expected_indexes_cloud.csv": expected_indexes_cloud,
+            "expected_indexes_binary.csv": expected_indexes_binary,
         }
 
     @pytest.fixture(scope="class")
@@ -56,18 +58,25 @@ class TestCustomMaterializations:
         # seed seeds
         results = run_dbt(["seed"])
         # seed result length
-        assert len(results) == 1
+        assert len(results) == 2
         # run models
         results = run_dbt(["run"])
         # run result length
         assert len(results) == 8
-
         # relations_equal
         check_relations_equal(
             project.adapter, ["test_materialized_view", "test_view_index"]
         )
 
-        check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
+        mz_version = project.run_sql(f"select mz_version()", fetch="one")[0]
+        if project.adapter.is_materialize_cloud(mz_version):
+            check_relations_equal(
+                project.adapter, ["actual_indexes", "expected_indexes_cloud"]
+            )
+        else:
+            check_relations_equal(
+                project.adapter, ["actual_indexes", "expected_indexes_binary"]
+            )
 
         # TODO(morsapaes): add test that ensures that the source/sink emit the
         # correct data once sinks land.

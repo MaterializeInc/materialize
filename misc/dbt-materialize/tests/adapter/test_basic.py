@@ -52,13 +52,22 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
         # names exist in result nodes
         check_result_nodes_by_name(results, ["view_model", "table_model", "swappable"])
 
-        # check relation types
-        expected = {
-            "base": "materializedview",
-            "view_model": "view",
-            "table_model": "materializedview",
-            "swappable": "materializedview",
-        }
+        mz_version = project.run_sql(f"select mz_version()", fetch="one")[0]
+
+        if project.adapter.is_materialize_cloud(mz_version):
+            expected = {
+                "base": "materializedview",
+                "view_model": "view",
+                "table_model": "materializedview",
+                "swappable": "materializedview",
+            }
+        else:
+            expected = {
+                "base": "view",
+                "view_model": "view",
+                "table_model": "view",
+                "swappable": "view",
+            }
         check_relation_types(project.adapter, expected)
 
         # base table rowcount
@@ -85,12 +94,7 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
         assert len(results) == 1
 
         # check relation types, swappable is view
-        expected = {
-            "base": "materializedview",
-            "view_model": "view",
-            "table_model": "materializedview",
-            "swappable": "view",
-        }
+        expected["swappable"] = "view"
         check_relation_types(project.adapter, expected)
 
 

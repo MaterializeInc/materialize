@@ -44,18 +44,19 @@ class TestCase:
 
 test_cases = [
     TestCase(
-        name="no-tls",
+        name="no-tls-cloud",
         materialized_options=[],
         dbt_env={},
     ),
     TestCase(
-        name="tls",
+        name="tls-binary",
         materialized_options=[
             "--tls-mode=verify-ca",
             "--tls-cert=/secrets/materialized.crt",
             "--tls-key=/secrets/materialized.key",
             "--tls-ca=/secrets/ca.crt",
         ],
+        materialized_image="materialize/materialized:v0.26.4",
         dbt_env={
             "DBT_SSLCERT": "/secrets/postgres.crt",
             "DBT_SSLKEY": "/secrets/postgres.key",

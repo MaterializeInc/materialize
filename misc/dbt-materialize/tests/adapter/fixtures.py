@@ -84,10 +84,30 @@ JOIN mz_objects o ON i.on_id = o.id
 WHERE i.id LIKE 'u%'
 """
 
-expected_indexes = """
+expected_indexes_cloud = """
 name,index_position,on_position,on_expression
 test_materialized_view_index,1,1,
 test_source,1,1,
+test_source_index,1,1,
+test_view_index,1,1,
+test_view_index,2,,pg_catalog.length(a)
+""".lstrip()
+
+expected_indexes_binary = """
+name,index_position,on_position,on_expression
+expected_indexes_cloud,1,1,
+expected_indexes_cloud,2,2,
+expected_indexes_cloud,3,3,
+expected_indexes_cloud,4,4,
+expected_indexes_binary,1,1,
+expected_indexes_binary,2,2,
+expected_indexes_binary,3,3,
+expected_indexes_binary,4,4,
+test_materialized_view,1,1,
+test_materialized_view_index,1,1,
+test_materialized_view_index,1,1,
+test_source,1,1,
+test_source,2,2,
 test_source_index,1,1,
 test_view_index,1,1,
 test_view_index,2,,pg_catalog.length(a)
