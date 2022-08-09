@@ -9,12 +9,13 @@
 
 //! Durable metadata storage.
 
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
-use futures::future::TryFutureExt;
-use futures::future::{self, BoxFuture};
+use futures::future::{self, try_join3, try_join_all, BoxFuture};
+use futures::future::{try_join, TryFutureExt};
 use futures::StreamExt;
 use postgres_openssl::MakeTlsConnector;
 use timely::progress::frontier::AntichainRef;
@@ -372,46 +373,68 @@ impl Postgres {
     where
         I: Iterator<Item = (Id, &'a Antichain<Timestamp>)>,
     {
-        for (collection_id, new_upper) in seals {
-            let upper = Self::upper_tx(stmts, tx, collection_id).await?;
-            if PartialOrder::less_than(new_upper, &upper) {
-                return Err(StashError::from(format!(
-                    "seal request {} is less than the current upper frontier {}",
-                    AntichainFormatter(new_upper),
-                    AntichainFormatter(&upper),
-                )));
-            }
-            tx.execute(&stmts.seal, &[&new_upper.as_option(), &collection_id])
-                .await?;
-        }
+        let futures = seals.map(|(collection_id, new_upper)| {
+            try_join(
+                async move {
+                    let upper = Self::upper_tx(stmts, tx, collection_id).await?;
+                    if PartialOrder::less_than(new_upper, &upper) {
+                        return Err(StashError::from(format!(
+                            "seal request {} is less than the current upper frontier {}",
+                            AntichainFormatter(new_upper),
+                            AntichainFormatter(&upper),
+                        )));
+                    }
+                    Ok(())
+                },
+                async move {
+                    tx.execute(&stmts.seal, &[&new_upper.as_option(), &collection_id])
+                        .map_err(StashError::from)
+                        .await
+                },
+            )
+        });
+        try_join_all(futures).await?;
         Ok(())
     }
 
-    async fn update_many_tx<I>(
+    /// Adds entries to the collection. Returns the collection's upper.
+    async fn update_many_tx(
         stmts: &PreparedStatements,
         tx: &Transaction<'_>,
         collection_id: Id,
-        entries: I,
-    ) -> Result<(), StashError>
-    where
-        I: Iterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
-    {
-        let upper = Self::upper_tx(stmts, tx, collection_id).await?;
+        entries: &[((Vec<u8>, Vec<u8>), Timestamp, Diff)],
+    ) -> Result<Antichain<Timestamp>, StashError> {
+        let mut futures = Vec::with_capacity(entries.len());
         for ((key, value), time, diff) in entries {
-            if !upper.less_equal(&time) {
-                return Err(StashError::from(format!(
-                    "entry time {} is less than the current upper frontier {}",
-                    time,
-                    AntichainFormatter(&upper)
-                )));
-            }
-            tx.execute(
-                &stmts.update_many,
-                &[&collection_id, &key, &value, &time, &diff],
-            )
-            .await?;
+            futures.push(async move {
+                tx.execute(
+                    &stmts.update_many,
+                    &[&collection_id, &key, &value, &time, &diff],
+                )
+                .map_err(|err| err.into())
+                .await
+            });
         }
-        Ok(())
+        // Check the upper in a separate future so we can issue the updates without
+        // waiting for it first.
+        let (upper, _) = try_join(
+            async {
+                let upper = Self::upper_tx(stmts, tx, collection_id).await?;
+                for ((_key, _value), time, _diff) in entries {
+                    if !upper.less_equal(&time) {
+                        return Err(StashError::from(format!(
+                            "entry time {} is less than the current upper frontier {}",
+                            time,
+                            AntichainFormatter(&upper)
+                        )));
+                    }
+                }
+                Ok(upper)
+            },
+            try_join_all(futures),
+        )
+        .await?;
+        Ok(upper)
     }
 
     async fn compact_batch_tx<'a, I>(
@@ -422,26 +445,38 @@ impl Postgres {
     where
         I: Iterator<Item = (Id, &'a Antichain<Timestamp>)>,
     {
-        for (collection_id, new_since) in compactions {
-            let since = Self::since_tx(stmts, tx, collection_id).await?;
-            let upper = Self::upper_tx(stmts, tx, collection_id).await?;
-            if PartialOrder::less_than(&upper, new_since) {
-                return Err(StashError::from(format!(
-                    "compact request {} is greater than the current upper frontier {}",
-                    AntichainFormatter(new_since),
-                    AntichainFormatter(&upper)
-                )));
-            }
-            if PartialOrder::less_than(new_since, &since) {
-                return Err(StashError::from(format!(
-                    "compact request {} is less than the current since frontier {}",
-                    AntichainFormatter(new_since),
-                    AntichainFormatter(&since)
-                )));
-            }
-            tx.execute(&stmts.compact, &[&new_since.as_option(), &collection_id])
-                .await?;
-        }
+        let futures = compactions.map(|(collection_id, new_since)| {
+            try_join3(
+                async move {
+                    let since = Self::since_tx(stmts, tx, collection_id).await?;
+                    if PartialOrder::less_than(new_since, &since) {
+                        return Err(StashError::from(format!(
+                            "compact request {} is less than the current since frontier {}",
+                            AntichainFormatter(new_since),
+                            AntichainFormatter(&since)
+                        )));
+                    }
+                    Ok(())
+                },
+                async move {
+                    let upper = Self::upper_tx(stmts, tx, collection_id).await?;
+                    if PartialOrder::less_than(&upper, new_since) {
+                        return Err(StashError::from(format!(
+                            "compact request {} is greater than the current upper frontier {}",
+                            AntichainFormatter(new_since),
+                            AntichainFormatter(&upper)
+                        )));
+                    }
+                    Ok(())
+                },
+                async move {
+                    tx.execute(&stmts.compact, &[&new_since.as_option(), &collection_id])
+                        .map_err(StashError::from)
+                        .await
+                },
+            )
+        });
+        try_join_all(futures).await?;
         Ok(())
     }
 
@@ -652,12 +687,10 @@ impl Stash for Postgres {
 
         self.transact(move |stmts, tx| {
             let entries = entries.clone();
-            Box::pin(Self::update_many_tx(
-                stmts,
-                tx,
-                collection.id,
-                entries.into_iter(),
-            ))
+            Box::pin(async move {
+                Self::update_many_tx(stmts, tx, collection.id, &entries).await?;
+                Ok(())
+            })
         })
         .await
     }
@@ -816,28 +849,36 @@ impl Append for Postgres {
         self.transact(move |stmts, tx| {
             let batches = batches.clone();
             Box::pin(async move {
-                let mut consolidate = Vec::new();
+                let mut consolidate = HashSet::new();
+                let mut futures = Vec::with_capacity(batches.len());
                 for batch in batches {
-                    consolidate.push(batch.collection_id);
-                    let upper = Self::upper_tx(stmts, tx, batch.collection_id).await?;
-                    if upper != batch.lower {
-                        return Err("unexpected lower".into());
-                    }
-                    Self::update_many_tx(stmts, tx, batch.collection_id, batch.entries.into_iter())
+                    let new_insert = consolidate.insert(batch.collection_id);
+                    // Because we pipeline requests, ensure there's only one collection id per
+                    // append.
+                    assert!(new_insert);
+                    futures.push(async move {
+                        let upper =
+                            Self::update_many_tx(stmts, tx, batch.collection_id, &batch.entries)
+                                .await?;
+                        if upper != batch.lower {
+                            return Err(StashError::from("unexpected lower"));
+                        }
+                        Self::seal_batch_tx(
+                            stmts,
+                            tx,
+                            std::iter::once((batch.collection_id, &batch.upper)),
+                        )
                         .await?;
-                    Self::seal_batch_tx(
-                        stmts,
-                        tx,
-                        std::iter::once((batch.collection_id, &batch.upper)),
-                    )
-                    .await?;
-                    Self::compact_batch_tx(
-                        stmts,
-                        tx,
-                        std::iter::once((batch.collection_id, &batch.compact)),
-                    )
-                    .await?;
+                        Self::compact_batch_tx(
+                            stmts,
+                            tx,
+                            std::iter::once((batch.collection_id, &batch.compact)),
+                        )
+                        .await?;
+                        Ok(())
+                    });
                 }
+                try_join_all(futures).await?;
                 Self::consolidate_batch_tx(stmts, tx, consolidate.into_iter()).await?;
                 Ok(())
             })
