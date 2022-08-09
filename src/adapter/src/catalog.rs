@@ -3836,7 +3836,7 @@ impl<S: Append> Catalog<S> {
                     }
                 }
                 Action::UpdateServerConfiguration { name, value } => {
-                    let old_value = state.remove_system_configuration(&name);
+                    state.remove_system_configuration(&name);
                     state.insert_system_configuration(name.clone(), value.clone());
                 }
             }
