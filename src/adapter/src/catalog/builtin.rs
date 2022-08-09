@@ -1215,12 +1215,14 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
 
+// Modeled after https://www.postgresql.org/docs/current/view-pg-settings.html
 pub static MZ_SYSTEM_CONFIGURATION: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_system_configuration",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("value", ScalarType::String.nullable(false)),
+        .with_column("setting", ScalarType::String.nullable(false))
+        .with_column("vartype", ScalarType::String.nullable(false)),
 });
 
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =

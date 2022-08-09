@@ -801,16 +801,22 @@ impl CatalogState {
         let mut updates = Vec::new();
         let table = self.resolve_builtin_table(&MZ_SYSTEM_CONFIGURATION);
         if let Some(old_value) = old_value {
-            let old_value = old_value.to_string();
-            let row = Row::pack_slice(&[Datum::String(name), Datum::String(&old_value)]);
+            let row = Row::pack_slice(&[
+                Datum::String(name),
+                Datum::String(&old_value.to_string()),
+                Datum::String(&old_value.var_type()),
+            ]);
             updates.push(BuiltinTableUpdate {
                 id: table,
                 row,
                 diff: -1,
             });
         }
-        let value = value.to_string();
-        let row = Row::pack_slice(&[Datum::String(name), Datum::String(&value)]);
+        let row = Row::pack_slice(&[
+            Datum::String(name),
+            Datum::String(&value.to_string()),
+            Datum::String(&value.var_type()),
+        ]);
         updates.push(BuiltinTableUpdate {
             id: table,
             row,

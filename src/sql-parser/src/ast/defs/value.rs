@@ -62,6 +62,21 @@ pub enum Value {
     Null,
 }
 
+impl Value {
+    pub fn var_type(&self) -> String {
+        match self {
+            Value::Number(_) => "integer",
+            Value::String(_) => "string",
+            Value::HexString(_) => "hex",
+            Value::Boolean(_) => "bool",
+            Value::Interval(_) => "interval",
+            Value::Array(_) => "array",
+            Value::Null => "null",
+        }
+        .to_string()
+    }
+}
+
 impl AstDisplay for Value {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
