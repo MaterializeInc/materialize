@@ -559,7 +559,7 @@ impl StorageSinkConnection {
     /// in order to advance the frontier that holds back upstream compaction
     /// of timestamp bindings.
     ///
-    /// See also [`transitive_source_dependencies`](SinkConnection::transitive_source_dependencies).
+    /// See also [`transitive_source_dependencies`](StorageSinkConnection::transitive_source_dependencies).
     pub fn requires_source_compaction_holdback(&self) -> bool {
         match self {
             StorageSinkConnection::Kafka(k) => k.exactly_once,
