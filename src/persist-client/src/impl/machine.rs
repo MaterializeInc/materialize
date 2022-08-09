@@ -216,12 +216,46 @@ where
 
     pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> bool {
         let metrics = Arc::clone(&self.metrics);
-        let (_seqno, applied, _maintenance) = self
+
+        // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
+        // compaction output are deleted so we don't leak them. Naively passing
+        // back the value returned by State::apply_merge_res might give a false
+        // negative in the presence of retries and Indeterminate errors.
+        // Specifically, something like the following:
+        //
+        // - We try to apply_merge_res, it matches.
+        // - When apply_unbatched_cmd goes to commit the new state, the
+        //   Consensus::compare_and_set returns an Indeterminate error (but
+        //   actually succeeds). The committed State now contains references to
+        //   the compaction output blobs.
+        // - Machine::apply_unbatched_idempotent_cmd retries the Indeterminate
+        //   error. For whatever reason, this time though it doesn't match
+        //   (maybe the batches simply get grouped difference when deserialized
+        //   from state, or more unavoidably perhaps another compaction
+        //   happens).
+        // - This now bubbles up applied=false to the caller, which uses it as a
+        //   signal that the blobs in the compaction output should be deleted so
+        //   that we don't leak them.
+        // - We now contain references in committed State to blobs that don't
+        //   exist.
+        //
+        // The fix is to keep track of whether applied ever was true, even for a
+        // compare_and_set that returned an Indeterminate error. This has the
+        // chance of false positive (leaking a blob) but that's better than a
+        // false negative (a blob we can never recover referenced by state). We
+        // anyway need a mechanism to clean up leaked blobs because of process
+        // crashes.
+        let mut applied_ever_true = false;
+        let (_seqno, _applied, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
-                state.apply_merge_res(&res)
+                let ret = state.apply_merge_res(&res);
+                if let Continue(applied) = ret {
+                    applied_ever_true = applied_ever_true || applied;
+                }
+                ret
             })
             .await;
-        applied
+        applied_ever_true
     }
 
     pub async fn downgrade_since(
