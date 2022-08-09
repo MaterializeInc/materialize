@@ -1,7 +1,6 @@
 ---
 title: "Time-To-Live"
 description: "Use the time-to-live pattern and assign an expiration time for a particular row."
-draft: true
 menu:
   main:
     parent: 'sql-patterns'
@@ -18,7 +17,7 @@ A few examples of the use cases that you can achieve are:
 
 ## How-to
 
-1. Identify the row, its initial time, and the TTL. In the example, the `event_time` and `event_ttl` represent those times. The sum of these values represents the **expiring time**.
+1. Identify the row, its initial timestamp, and the TTL. In the example, the `event_time` and `event_ttl` represent those times. The sum of these values is the **expiring time**.
     ```sql
       CREATE TABLE events (event_name TEXT, event_time TIMESTAMP, event_ttl INTERVAL);
 
@@ -26,7 +25,7 @@ A few examples of the use cases that you can achieve are:
       INSERT INTO events VALUES ('send_email', now(), INTERVAL '1 minute');
     ```
 
-    For the example, we use a table, but the time fields could come from a source or views building them on the fly.
+    The time fields or expiring time could come from sources or views building them on the fly. The table is just one of the many options.
 
 1. Create a view with a temporal filter **filtering by the expiring time**.
     ```sql
