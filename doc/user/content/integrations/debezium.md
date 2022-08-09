@@ -1,6 +1,6 @@
 ---
-title: "Working with Debezium CDC Records in Materialize"
-description: "Get details about using Materialize with Debezium"
+title: "Debezium"
+description: "How to propagate Change Data Capture (CDC) data from a database to Materialize using Debezium"
 aliases:
   /third-party/debezium/
 menu:

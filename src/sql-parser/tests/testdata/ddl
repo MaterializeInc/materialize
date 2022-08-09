@@ -1468,3 +1468,101 @@ CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT 
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE = 'johto:42', SIZE = large)
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }, CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }] })
+
+parse-statement
+ALTER SYSTEM SET wal_level TO logical
+----
+ALTER SYSTEM SET wal_level = logical
+=>
+AlterSystem(AlterSystemStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
+
+parse-statement
+ALTER SYSTEM SET wal_level = logical
+----
+ALTER SYSTEM SET wal_level = logical
+=>
+AlterSystem(AlterSystemStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
+
+parse-statement
+ALTER SYSTEM SET log_destination TO 'syslog'
+----
+ALTER SYSTEM SET log_destination = 'syslog'
+=>
+AlterSystem(AlterSystemStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
+
+parse-statement
+ALTER SYSTEM SET log_destination = 'syslog'
+----
+ALTER SYSTEM SET log_destination = 'syslog'
+=>
+AlterSystem(AlterSystemStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
+
+parse-statement
+ALTER SYSTEM SET shared_buffers TO 42
+----
+ALTER SYSTEM SET shared_buffers = 42
+=>
+AlterSystem(AlterSystemStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
+
+parse-statement
+ALTER SYSTEM SET shared_buffers = 42
+----
+ALTER SYSTEM SET shared_buffers = 42
+=>
+AlterSystem(AlterSystemStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
+
+parse-statement
+ALTER SYSTEM SET search_path TO default
+----
+ALTER SYSTEM SET search_path = DEFAULT
+=>
+AlterSystem(AlterSystemStatement { name: Ident("search_path"), value: Default })
+
+parse-statement
+ALTER SYSTEM SET search_path = default
+----
+ALTER SYSTEM SET search_path = DEFAULT
+=>
+AlterSystem(AlterSystemStatement { name: Ident("search_path"), value: Default })
+
+parse-statement
+ALTER SYSTEM SET log_connections TO 'default'
+----
+ALTER SYSTEM SET log_connections = 'default'
+=>
+AlterSystem(AlterSystemStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+
+parse-statement
+ALTER SYSTEM SET log_connections = 'default'
+----
+ALTER SYSTEM SET log_connections = 'default'
+=>
+AlterSystem(AlterSystemStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+
+parse-statement
+ALTER SYSTEM SET some_array_key = [667, 668]
+----
+ALTER SYSTEM SET some_array_key = [667, 668]
+=>
+AlterSystem(AlterSystemStatement { name: Ident("some_array_key"), value: Literal(Array([Number("667"), Number("668")])) })
+
+parse-statement
+ALTER SYSTEM SET quantum_enabled = true
+----
+ALTER SYSTEM SET quantum_enabled = true
+=>
+AlterSystem(AlterSystemStatement { name: Ident("quantum_enabled"), value: Literal(Boolean(true)) })
+
+parse-statement
+ALTER SYSTEM SET use_optional = NULL
+----
+ALTER SYSTEM SET use_optional = NULL
+=>
+AlterSystem(AlterSystemStatement { name: Ident("use_optional"), value: Literal(Null) })
+
+parse-statement
+ALTER SYSTEM SET key value
+----
+error: Expected TO or equals sign, found VALUE
+ALTER SYSTEM SET key value
+                     ^

@@ -1300,6 +1300,7 @@ where
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
+            ExecuteResponse::AlteredSystemConfiguraion => command_complete!("ALTER SYSTEM"),
             ExecuteResponse::Prepare => command_complete!("PREPARE"),
             ExecuteResponse::Deallocate { all } => {
                 command_complete!("DEALLOCATE{}", if all { " ALL" } else { "" })

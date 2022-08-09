@@ -55,6 +55,7 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
+    AlterSystem(AlterSystemStatement),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropSchema(DropSchemaStatement),
@@ -118,6 +119,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
+            Statement::AlterSystem(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -2446,6 +2448,24 @@ impl AstDisplay for NoticeSeverity {
     }
 }
 impl_display!(NoticeSeverity);
+
+/// `ALTER SYSTEM ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSystemStatement {
+    pub name: Ident,
+    pub value: SetVariableValue,
+}
+
+impl AstDisplay for AlterSystemStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SYSTEM SET ");
+        f.write_node(&self.name);
+        f.write_str(" = ");
+        f.write_node(&self.value);
+    }
+}
+
+impl_display!(AlterSystemStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AsOf<T: AstInfo> {

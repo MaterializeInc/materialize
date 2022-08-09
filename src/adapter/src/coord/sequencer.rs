@@ -41,10 +41,10 @@ use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, Cat
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSystemPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
@@ -278,6 +278,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
+            }
+            Plan::AlterSystem(plan) => {
+                tx.send(self.sequence_alter_system(&session, plan).await, session);
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(&session).await;
@@ -3104,6 +3107,27 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         return Ok(Vec::from(payload));
+    }
+
+    async fn sequence_alter_system(
+        &mut self,
+        session: &Session,
+        AlterSystemPlan { name, value }: AlterSystemPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        use mz_sql::ast::SetVariableValue;
+        // TODO(jkosh44) name and value should be validated against some predetermined list of
+        //  system configurations.
+        let value = match value {
+            SetVariableValue::Literal(value) => value,
+            SetVariableValue::Ident(ident) => ident.into(),
+            SetVariableValue::Default => {
+                return Err(AdapterError::Unsupported("default system configurations"))
+            }
+        };
+        let op = catalog::Op::UpdateServerConfiguration { name, value };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+        Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
     // Returns the name of the portal to execute.

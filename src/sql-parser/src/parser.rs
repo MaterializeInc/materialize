@@ -1526,6 +1526,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Bail out if the current token is not an expected keyword or token, or consume it if it is
+    fn expect_keyword_or_token(
+        &mut self,
+        expected_keyword: Keyword,
+        expected_token: &Token,
+    ) -> Result<(), ParserError> {
+        if self.parse_keyword(expected_keyword) || self.consume_token(expected_token) {
+            Ok(())
+        } else {
+            self.expected(
+                self.peek_pos(),
+                format!("{expected_keyword} or {expected_token}"),
+                self.peek_token(),
+            )
+        }
+    }
+
     /// Parse a comma-separated list of 1+ items accepted by `F`
     fn parse_comma_separated<T, F>(&mut self, mut f: F) -> Result<Vec<T>, ParserError>
     where
@@ -3263,6 +3280,7 @@ impl<'a> Parser<'a> {
             TABLE,
             INDEX,
             SECRET,
+            SYSTEM,
         ])? {
             SINK => ObjectType::Sink,
             SOURCE => ObjectType::Source,
@@ -3274,6 +3292,7 @@ impl<'a> Parser<'a> {
             TABLE => ObjectType::Table,
             INDEX => return self.parse_alter_index(),
             SECRET => return self.parse_alter_secret(),
+            SYSTEM => return self.parse_alter_system(),
             _ => unreachable!(),
         };
 
@@ -3358,6 +3377,15 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         })
+    }
+
+    /// Parse an ALTER SYSTEM SET statement.
+    fn parse_alter_system(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(SET)?;
+        let name = self.parse_identifier()?;
+        self.expect_keyword_or_token(TO, &Token::Eq)?;
+        let value = self.parse_set_variable_value()?;
+        Ok(Statement::AlterSystem(AlterSystemStatement { name, value }))
     }
 
     /// Parse a copy statement
@@ -4291,14 +4319,7 @@ impl<'a> Parser<'a> {
             }
         }
         if normal {
-            let token = self.peek_token();
-            let value = match (self.parse_value(), token) {
-                (Ok(value), _) => SetVariableValue::Literal(value),
-                (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
-                (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
-                (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
-                (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,
-            };
+            let value = self.parse_set_variable_value()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
                 variable,
@@ -4319,6 +4340,17 @@ impl<'a> Parser<'a> {
         } else {
             self.expected(self.peek_pos(), "equals sign or TO", self.peek_token())
         }
+    }
+
+    fn parse_set_variable_value(&mut self) -> Result<SetVariableValue, ParserError> {
+        let token = self.peek_token();
+        Ok(match (self.parse_value(), token) {
+            (Ok(value), _) => SetVariableValue::Literal(value),
+            (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
+            (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
+            (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
+            (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,
+        })
     }
 
     fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {

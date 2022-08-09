@@ -139,16 +139,12 @@ a  b  json                     c            d             e                   f
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound  "(43,,\"(44,-1)\")" (45,-2)
 -1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
 
-> CREATE SOURCE fast_forwarded
+! CREATE SOURCE fast_forwarded
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (start_offset=2)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-
-> SELECT a, b, json, c, d FROM fast_forwarded
-a  b  json            c            d
----------------------------------------
--1  7 "[1,2,3]"       FileNotFound True
+contains:start_offset is not supported with ENVELOPE DEBEZIUM
 
 # Check that repeated Debezium messages are skipped.
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
