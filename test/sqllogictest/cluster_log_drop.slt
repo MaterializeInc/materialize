@@ -11,6 +11,28 @@
 
 mode cockroach
 
+
+# This test checks if the sources in mz_catalog are also present in a postfixed way.
+# If this test fails and you added new introspection source and if the new
+# source depends on per replica introspection data, consider adding it also in
+# a per replica postfixed fashion. Adding it to DEFAULT_LOG_VARIANTS should do
+# this automatically. If the new source does not use per replica data,
+# increment the counter.
+query T rowsort
+SELECT (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name NOT LIKE '%_1') - (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name LIKE '%_1');
+----
+1
+
+# This test checks if the views in mz_catalog are also present in a postfixed
+# way. If this test fails and you added new view that uses introspection
+# sources: also add it in a per replica postfixed way, see DEFAULT_LOG_VIEWS.
+# If your view does not involve introspection data, increment this counter.
+query T rowsort
+SELECT (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name NOT LIKE '%_1') - (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name LIKE '%_1');
+----
+29
+
+
 # The default cluster also has log sources, thus we should have one set active at boot.
 # Check the presence of one source and one view
 query T rowsort
