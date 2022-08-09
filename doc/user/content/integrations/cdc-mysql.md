@@ -1,6 +1,6 @@
 ---
-title: "Materialized Views for MySQL via CDC"
-description: "How to create real-time materialized views from MySQL changelog data with Materialize."
+title: "MySQL CDC"
+description: "How to propagate Change Data Capture (CDC) data from a MySQL database to Materialize"
 aliases:
   - /guides/cdc-mysql/
 menu:

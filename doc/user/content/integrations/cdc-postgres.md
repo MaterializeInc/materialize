@@ -1,6 +1,6 @@
 ---
-title: "Materialized Views for PostgreSQL"
-description: "How to create real-time materialized views from PostgreSQL changelog data with Materialize."
+title: "PostgreSQL CDC"
+description: "How to propagate Change Data Capture (CDC) data from a PostgreSQL database to Materialize"
 aliases:
   - /guides/cdc-postgres/
 menu:
