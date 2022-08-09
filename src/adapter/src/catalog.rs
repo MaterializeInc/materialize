@@ -186,35 +186,37 @@ impl CatalogState {
 
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
-    pub fn active_log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn arranged_introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
         let mut out = Vec::new();
-        self.active_log_dependencies_inner(id, &mut out);
+        self.arranged_introspection_dependencies_inner(id, &mut out);
 
         // Filter out persisted logs
-        let mut persisted_logs = HashSet::new();
+        let mut persisted_source_ids = HashSet::new();
         for instance in self.compute_instances_by_id.values() {
             for replica in instance.replicas_by_id.values() {
-                persisted_logs.extend(replica.config.persisted_logs.get_log_ids());
+                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids());
             }
         }
 
         out.into_iter()
-            .filter(|x| !persisted_logs.contains(x))
+            .filter(|x| !persisted_source_ids.contains(x))
             .collect()
     }
 
-    fn active_log_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+    fn arranged_introspection_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
                 for id in item.uses() {
-                    self.active_log_dependencies_inner(*id, out);
+                    self.arranged_introspection_dependencies_inner(*id, out);
                 }
             }
-            CatalogItem::Sink(sink) => self.active_log_dependencies_inner(sink.from, out),
-            CatalogItem::Index(idx) => self.active_log_dependencies_inner(idx.on, out),
+            CatalogItem::Sink(sink) => {
+                self.arranged_introspection_dependencies_inner(sink.from, out)
+            }
+            CatalogItem::Index(idx) => self.arranged_introspection_dependencies_inner(idx.on, out),
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
@@ -2096,7 +2098,7 @@ impl<S: Append> Catalog<S> {
         persisted_logs: &ConcreteComputeInstanceReplicaLogging,
         replica_id: u64,
     ) {
-        for (variant, source_id) in persisted_logs.get_logs() {
+        for (variant, source_id) in persisted_logs.get_sources() {
             let oid = state.allocate_oid().expect("cannot return error here");
             // TODO(lh): Once we get rid of legacy active logs, we should refactor the
             // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
@@ -2120,7 +2122,9 @@ impl<S: Append> Catalog<S> {
             assert!(sql_template.find("{}").is_some());
             assert!(name_template.find("{}").is_some());
             let name = name_template.replace("{}", &replica_id.to_string());
-            let sql = "CREATE VIEW mz_catalog.".to_string()
+            let sql = "CREATE VIEW ".to_string()
+                + MZ_CATALOG_SCHEMA
+                + "."
                 + &name
                 + " AS "
                 + &sql_template.replace("{}", &replica_id.to_string());
@@ -3705,7 +3709,7 @@ impl<S: Append> Catalog<S> {
                         config,
                     );
                     self.insert_per_replica_items(&mut state, &persisted_logs, id);
-                    for id in persisted_logs.get_log_and_view_ids() {
+                    for id in persisted_logs.get_source_and_view_ids() {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                     builtin_table_updates.push(state.pack_compute_instance_replica_update(
@@ -3778,7 +3782,7 @@ impl<S: Append> Catalog<S> {
                         .expect("can only drop replicas from known instances");
                     let replica_id = instance.replica_id_by_name.remove(&name).unwrap();
                     let replica = instance.replicas_by_id.remove(&replica_id).unwrap();
-                    let persisted_log_ids = replica.config.persisted_logs.get_log_and_view_ids();
+                    let persisted_log_ids = replica.config.persisted_logs.get_source_and_view_ids();
                     assert!(instance.replica_id_by_name.len() == instance.replicas_by_id.len());
 
                     for id in persisted_log_ids {
@@ -4038,8 +4042,8 @@ impl<S: Append> Catalog<S> {
     }
 
     /// Return the ids of all active log sources the given object depends on.
-    pub fn active_log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
-        self.state.active_log_dependencies(id)
+    pub fn arranged_introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+        self.state.arranged_introspection_dependencies(id)
     }
 
     /// Serializes the catalog's in-memory state.
@@ -4663,7 +4667,7 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
             .replicas_by_id
             .get(self.replica_id_by_name.get(name)?)?;
         Some((
-            replica.config.persisted_logs.get_log_ids(),
+            replica.config.persisted_logs.get_source_ids(),
             replica.config.persisted_logs.get_view_ids(),
         ))
     }

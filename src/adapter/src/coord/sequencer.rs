@@ -647,7 +647,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
             persisted_introspection_sources.extend(
                 persisted_logs
-                    .get_logs()
+                    .get_sources()
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into())),
             );
@@ -729,9 +729,9 @@ impl<S: Append + 'static> Coordinator<S> {
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
-        let persisted_log_ids = persisted_logs.get_log_ids();
-        let persisted_logs_collections = persisted_logs
-            .get_logs()
+        let persisted_source_ids = persisted_logs.get_source_ids();
+        let persisted_sources = persisted_logs
+            .get_sources()
             .iter()
             .map(|(variant, id)| (*id, variant.desc().into()))
             .collect();
@@ -804,7 +804,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.controller
             .storage_mut()
-            .create_collections(persisted_logs_collections)
+            .create_collections(persisted_sources)
             .await
             .unwrap();
 
@@ -814,7 +814,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         if instance.logging.is_some() {
             self.initialize_storage_read_policies(
-                persisted_log_ids,
+                persisted_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
@@ -1185,7 +1185,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // are replaced with persist-based ones.
         let log_names = depends_on
             .iter()
-            .flat_map(|id| self.catalog.active_log_dependencies(*id))
+            .flat_map(|id| self.catalog.arranged_introspection_dependencies(*id))
             .map(|id| self.catalog.get_entry(&id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
@@ -1423,7 +1423,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // itself are removed with Op::DropComputeInstanceReplica.
             for replica in instance.replicas_by_id.values() {
                 let persisted_logs = replica.config.persisted_logs.clone();
-                let log_and_view_ids = persisted_logs.get_log_and_view_ids();
+                let log_and_view_ids = persisted_logs.get_source_and_view_ids();
                 let view_ids = persisted_logs.get_view_ids();
                 for log_id in log_and_view_ids {
                     // We consider the dependencies of both views and logs, but remove the
@@ -1488,7 +1488,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .persisted_logs
                 .clone();
 
-            let log_and_view_ids = persisted_logs.get_log_and_view_ids();
+            let log_and_view_ids = persisted_logs.get_source_and_view_ids();
             let view_ids = persisted_logs.get_view_ids();
 
             for log_id in log_and_view_ids {
@@ -1743,7 +1743,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ) -> Result<(), AdapterError> {
             let log_names = source_ids
                 .iter()
-                .flat_map(|id| catalog.active_log_dependencies(*id))
+                .flat_map(|id| catalog.arranged_introspection_dependencies(*id))
                 .map(|id| catalog.get_entry(&id).name().item.clone())
                 .collect::<Vec<_>>();
 
