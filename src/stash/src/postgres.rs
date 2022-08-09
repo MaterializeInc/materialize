@@ -387,12 +387,13 @@ impl Postgres {
         Ok(())
     }
 
+    /// Adds entries to the collection. Returns the collection's upper.
     async fn update_many_tx(
         stmts: &PreparedStatements,
         tx: &Transaction<'_>,
         collection_id: Id,
         entries: &[((Vec<u8>, Vec<u8>), Timestamp, Diff)],
-    ) -> Result<(), StashError> {
+    ) -> Result<Antichain<Timestamp>, StashError> {
         let mut futures = Vec::with_capacity(entries.len());
         for ((key, value), time, diff) in entries {
             futures.push(async move {
@@ -406,7 +407,7 @@ impl Postgres {
         }
         // Check the upper in a separate future so we can issue the updates without
         // waiting for it first.
-        try_join(
+        let (upper, _) = try_join(
             async {
                 let upper = Self::upper_tx(stmts, tx, collection_id).await?;
                 for ((_key, _value), time, _diff) in entries {
@@ -418,12 +419,12 @@ impl Postgres {
                         )));
                     }
                 }
-                Ok(())
+                Ok(upper)
             },
             try_join_all(futures),
         )
         .await?;
-        Ok(())
+        Ok(upper)
     }
 
     async fn compact_batch_tx<'a, I>(
@@ -664,7 +665,10 @@ impl Stash for Postgres {
 
         self.transact(move |stmts, tx| {
             let entries = entries.clone();
-            Box::pin(async move { Self::update_many_tx(stmts, tx, collection.id, &entries).await })
+            Box::pin(async move {
+                Self::update_many_tx(stmts, tx, collection.id, &entries).await?;
+                Ok(())
+            })
         })
         .await
     }
@@ -826,11 +830,12 @@ impl Append for Postgres {
                 let mut consolidate = Vec::new();
                 for batch in batches {
                     consolidate.push(batch.collection_id);
-                    let upper = Self::upper_tx(stmts, tx, batch.collection_id).await?;
+                    let upper =
+                        Self::update_many_tx(stmts, tx, batch.collection_id, &batch.entries)
+                            .await?;
                     if upper != batch.lower {
                         return Err("unexpected lower".into());
                     }
-                    Self::update_many_tx(stmts, tx, batch.collection_id, &batch.entries).await?;
                     Self::seal_batch_tx(
                         stmts,
                         tx,
