@@ -3838,8 +3838,6 @@ impl<S: Append> Catalog<S> {
                 Action::UpdateServerConfiguration { name, value } => {
                     let old_value = state.remove_system_configuration(&name);
                     state.insert_system_configuration(name.clone(), value.clone());
-                    builtin_table_updates
-                        .extend(state.pack_system_configuration_update(&name, value, old_value)?);
                 }
             }
         }

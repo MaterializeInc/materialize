@@ -1215,16 +1215,6 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
 
-// Modeled after https://www.postgresql.org/docs/current/view-pg-settings.html
-pub static MZ_SYSTEM_CONFIGURATION: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_system_configuration",
-    schema: MZ_CATALOG_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("setting", ScalarType::String.nullable(false))
-        .with_column("vartype", ScalarType::String.nullable(false)),
-});
-
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
     Lazy::new(|| BuiltinStorageCollection {
         name: "mz_source_status_history",
@@ -2247,7 +2237,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::Table(&MZ_STORAGE_USAGE),
-        Builtin::Table(&MZ_SYSTEM_CONFIGURATION),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_CATALOG_NAMES),

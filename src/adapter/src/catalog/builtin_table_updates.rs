@@ -29,8 +29,8 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_SYSTEM_CONFIGURATION,
-    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_TABLES, MZ_TYPES,
+    MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
@@ -789,40 +789,5 @@ impl CatalogState {
             row,
             diff,
         })
-    }
-
-    /// Packs update for system configuration `name`.
-    pub fn pack_system_configuration_update(
-        &self,
-        name: &str,
-        value: mz_sql_parser::ast::Value,
-        old_value: Option<mz_sql_parser::ast::Value>,
-    ) -> Result<Vec<BuiltinTableUpdate>, Error> {
-        let mut updates = Vec::new();
-        let table = self.resolve_builtin_table(&MZ_SYSTEM_CONFIGURATION);
-        if let Some(old_value) = old_value {
-            let row = Row::pack_slice(&[
-                Datum::String(name),
-                Datum::String(&old_value.to_string()),
-                Datum::String(&old_value.var_type()),
-            ]);
-            updates.push(BuiltinTableUpdate {
-                id: table,
-                row,
-                diff: -1,
-            });
-        }
-        let row = Row::pack_slice(&[
-            Datum::String(name),
-            Datum::String(&value.to_string()),
-            Datum::String(&value.var_type()),
-        ]);
-        updates.push(BuiltinTableUpdate {
-            id: table,
-            row,
-            diff: 1,
-        });
-
-        Ok(updates)
     }
 }
