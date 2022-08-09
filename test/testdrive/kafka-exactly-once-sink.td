@@ -209,7 +209,7 @@ contains:reuse_topic requires that sink input dependencies are sources, material
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:cannot export collection
+contains:collection identifier is not present
 
 > CREATE SINK output5_view FROM input_kafka_dbz_view_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5b-view-${testdrive.seed}'

@@ -516,8 +516,6 @@ pub enum StorageError {
     IOError(StashError),
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
-    /// Not able to export a collection because it's not persisted
-    ExportDoesntExist(GlobalId),
 }
 
 impl Error for StorageError {
@@ -531,7 +529,6 @@ impl Error for StorageError {
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
-            Self::ExportDoesntExist(_) => None,
         }
     }
 }
@@ -544,7 +541,7 @@ impl fmt::Display for StorageError {
                 f,
                 "source identifier was re-created after having been dropped: {id}"
             ),
-            Self::IdentifierMissing(id) => write!(f, "source identifier is not present: {id}"),
+            Self::IdentifierMissing(id) => write!(f, "collection identifier is not present: {id}"),
             Self::UpdateBeyondUpper(id) => {
                 write!(
                     f,
@@ -564,7 +561,6 @@ impl fmt::Display for StorageError {
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
             Self::DataflowError(err) => write!(f, "dataflow failed to process request: {err}"),
-            Self::ExportDoesntExist(id) => write!(f, "cannot export collection not peristed: {id}"),
         }
     }
 }
@@ -799,14 +795,10 @@ where
                 .exports
                 .insert(id, ExportState::new(description.clone()));
 
-            let from_storage_metadata = match self.collection(description.sink.from) {
-                Err(StorageError::IdentifierMissing(id)) => {
-                    Err(StorageError::ExportDoesntExist(id))
-                }
-                r => r,
-            }?
-            .collection_metadata
-            .clone();
+            let from_storage_metadata = self
+                .collection(description.sink.from)?
+                .collection_metadata
+                .clone();
 
             let augmented_sink_desc = StorageSinkDesc {
                 from: description.sink.from,

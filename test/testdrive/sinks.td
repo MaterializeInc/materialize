@@ -71,14 +71,14 @@ contains:unable to publish value schema to registry in kafka sink
 ! CREATE SINK bad_view FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:cannot export collection
+contains:collection identifier is not present
 
 # ...Even if that view is based on a materialized source
 ! CREATE SINK bad_view2 FROM v2
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   WITH (retention_ms=1000000)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:cannot export collection
+contains:collection identifier is not present
 
 > SHOW SINKS
 name

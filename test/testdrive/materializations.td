@@ -143,7 +143,7 @@ a  b
 ! CREATE SINK not_mat_sink2 FROM data_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:cannot export collection
+contains:collection identifier is not present
 
 # Can create indexed view from unmaterialized view.
 > CREATE VIEW test5 AS
@@ -154,7 +154,7 @@ contains:cannot export collection
 ! CREATE SINK not_mat_sink2 FROM test5
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:cannot export collection
+contains:collection identifier is not present
 
 $ set-regex match=(\s\(u\d+\)|\n) replacement=
 
