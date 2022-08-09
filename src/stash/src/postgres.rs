@@ -373,18 +373,27 @@ impl Postgres {
     where
         I: Iterator<Item = (Id, &'a Antichain<Timestamp>)>,
     {
-        for (collection_id, new_upper) in seals {
-            let upper = Self::upper_tx(stmts, tx, collection_id).await?;
-            if PartialOrder::less_than(new_upper, &upper) {
-                return Err(StashError::from(format!(
-                    "seal request {} is less than the current upper frontier {}",
-                    AntichainFormatter(new_upper),
-                    AntichainFormatter(&upper),
-                )));
-            }
-            tx.execute(&stmts.seal, &[&new_upper.as_option(), &collection_id])
-                .await?;
-        }
+        let futures = seals.map(|(collection_id, new_upper)| {
+            try_join(
+                async move {
+                    let upper = Self::upper_tx(stmts, tx, collection_id).await?;
+                    if PartialOrder::less_than(new_upper, &upper) {
+                        return Err(StashError::from(format!(
+                            "seal request {} is less than the current upper frontier {}",
+                            AntichainFormatter(new_upper),
+                            AntichainFormatter(&upper),
+                        )));
+                    }
+                    Ok(())
+                },
+                async move {
+                    tx.execute(&stmts.seal, &[&new_upper.as_option(), &collection_id])
+                        .map_err(StashError::from)
+                        .await
+                },
+            )
+        });
+        try_join_all(futures).await?;
         Ok(())
     }
 
