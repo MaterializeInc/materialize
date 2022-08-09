@@ -9,6 +9,7 @@
 
 //! Durable metadata storage.
 
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::{cmp, time::Duration};
 
@@ -827,28 +828,36 @@ impl Append for Postgres {
         self.transact(move |stmts, tx| {
             let batches = batches.clone();
             Box::pin(async move {
-                let mut consolidate = Vec::new();
+                let mut consolidate = HashSet::new();
+                let mut futures = Vec::with_capacity(batches.len());
                 for batch in batches {
-                    consolidate.push(batch.collection_id);
-                    let upper =
-                        Self::update_many_tx(stmts, tx, batch.collection_id, &batch.entries)
-                            .await?;
-                    if upper != batch.lower {
-                        return Err("unexpected lower".into());
-                    }
-                    Self::seal_batch_tx(
-                        stmts,
-                        tx,
-                        std::iter::once((batch.collection_id, &batch.upper)),
-                    )
-                    .await?;
-                    Self::compact_batch_tx(
-                        stmts,
-                        tx,
-                        std::iter::once((batch.collection_id, &batch.compact)),
-                    )
-                    .await?;
+                    let new_insert = consolidate.insert(batch.collection_id);
+                    // Because we pipeline requests, ensure there's only one collection id per
+                    // append.
+                    assert!(new_insert);
+                    futures.push(async move {
+                        let upper =
+                            Self::update_many_tx(stmts, tx, batch.collection_id, &batch.entries)
+                                .await?;
+                        if upper != batch.lower {
+                            return Err(StashError::from("unexpected lower"));
+                        }
+                        Self::seal_batch_tx(
+                            stmts,
+                            tx,
+                            std::iter::once((batch.collection_id, &batch.upper)),
+                        )
+                        .await?;
+                        Self::compact_batch_tx(
+                            stmts,
+                            tx,
+                            std::iter::once((batch.collection_id, &batch.compact)),
+                        )
+                        .await?;
+                        Ok(())
+                    });
                 }
+                try_join_all(futures).await?;
                 Self::consolidate_batch_tx(stmts, tx, consolidate.into_iter()).await?;
                 Ok(())
             })
