@@ -31,7 +31,6 @@ use serde::Serialize;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
-use mz_sql::names::RoleId;
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -113,9 +112,13 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
+pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
+
 pub struct BuiltinRole {
+    /// Name of the builtin role.
+    ///
+    /// IMPORTANT: Must start with a prefix from [`BUILTIN_ROLE_PREFIXES`].
     pub name: &'static str,
-    pub id: RoleId,
 }
 
 pub trait Fingerprint {
@@ -2102,9 +2105,10 @@ AS SELECT
 FROM mz_catalog.mz_roles r",
 };
 
-pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
-    name: "mz_system",
-    id: RoleId::System(0),
+pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: "mz_system" };
+
+pub const MZ_SYSTEM_EXTERNAL: BuiltinRole = BuiltinRole {
+    name: "mz_system_external",
 };
 
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
@@ -2289,11 +2293,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM]);
+pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> =
+    Lazy::new(|| vec![MZ_SYSTEM, MZ_SYSTEM_EXTERNAL]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {
     use super::*;
+
     pub fn logs() -> impl Iterator<Item = &'static BuiltinLog> {
         BUILTINS_STATIC.iter().filter_map(|b| match b {
             Builtin::Log(log) => Some(*log),
@@ -2328,14 +2334,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::env;
 
-    use mz_ore::now::NOW_ZERO;
     use tokio_postgres::NoTls;
 
-    use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
+    use mz_ore::now::NOW_ZERO;
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::names::{PartialObjectName, ResolvedDatabaseSpecifier};
+
+    use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
 
     use super::*;
 

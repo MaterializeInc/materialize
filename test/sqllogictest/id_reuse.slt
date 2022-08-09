@@ -67,7 +67,8 @@ CREATE ROLE foo LOGIN SUPERUSER
 query TT rowsort
 SELECT id, name FROM mz_roles
 ----
-s0 mz_system
+s1 mz_system
+s2 mz_system_external
 u1 materialize
 u2 foo
 
@@ -80,7 +81,8 @@ CREATE ROLE bar LOGIN SUPERUSER
 query TT rowsort
 SELECT id, name FROM mz_roles
 ----
-s0 mz_system
+s1 mz_system
+s2 mz_system_external
 u1 materialize
 u3 bar
 

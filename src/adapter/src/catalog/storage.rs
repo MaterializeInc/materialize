@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::once;
 use std::str::FromStr;
@@ -19,7 +19,6 @@ use serde_json::json;
 use timely::progress::Timestamp;
 use uuid::Uuid;
 
-use crate::catalog;
 use mz_audit_log::{VersionedEvent, VersionedStorageMetrics};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::ComputeInstanceId;
@@ -39,7 +38,8 @@ use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage::types::sources::Timeline;
 
-use crate::catalog::builtin::BuiltinLog;
+use crate::catalog;
+use crate::catalog::builtin::{BuiltinLog, BUILTIN_ROLES};
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::SerializedComputeInstanceReplicaConfig;
 use crate::catalog::SystemObjectMapping;
@@ -58,7 +58,8 @@ const DEFAULT_REPLICA_ID: u64 = 1;
 
 const DATABASE_ID_ALLOC_KEY: &str = "database";
 const SCHEMA_ID_ALLOC_KEY: &str = "schema";
-const ROLE_ID_ALLOC_KEY: &str = "role";
+const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
+const SYSTEM_ROLE_ID_ALLOC_KEY: &str = "system_role";
 const COMPUTE_ID_ALLOC_KEY: &str = "compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
@@ -113,11 +114,17 @@ async fn migrate<S: Append>(
             )?;
             txn.id_allocator.insert(
                 IdAllocKey {
-                    name: ROLE_ID_ALLOC_KEY.into(),
+                    name: USER_ROLE_ID_ALLOC_KEY.into(),
                 },
                 IdAllocValue {
                     next_id: MATERIALIZE_ROLE_ID + 1,
                 },
+            )?;
+            txn.id_allocator.insert(
+                IdAllocKey {
+                    name: SYSTEM_ROLE_ID_ALLOC_KEY.into(),
+                },
+                IdAllocValue { next_id: 1 },
             )?;
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -498,6 +505,21 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn load_roles(&mut self) -> Result<Vec<(RoleId, String)>, Error> {
+        // Add in any new builtin roles.
+        let mut tx = self.transaction().await?;
+        let role_names: HashSet<_> = tx
+            .roles
+            .items()
+            .into_values()
+            .map(|value| value.name)
+            .collect();
+        for builtin_role in &*BUILTIN_ROLES {
+            if !role_names.contains(builtin_role.name) {
+                tx.insert_system_role(builtin_role.name)?;
+            }
+        }
+        tx.commit().await?;
+
         Ok(COLLECTION_ROLE
             .peek_one(&mut self.stash)
             .await?
@@ -933,9 +955,25 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn insert_role(&mut self, role_name: &str) -> Result<RoleId, Error> {
-        let id = self.get_and_increment_id(ROLE_ID_ALLOC_KEY.to_string())?;
-        let id = RoleId::User(id);
+    pub fn insert_user_role(&mut self, role_name: &str) -> Result<RoleId, Error> {
+        self.insert_role(role_name, USER_ROLE_ID_ALLOC_KEY, RoleId::User)
+    }
+
+    fn insert_system_role(&mut self, role_name: &str) -> Result<RoleId, Error> {
+        self.insert_role(role_name, SYSTEM_ROLE_ID_ALLOC_KEY, RoleId::System)
+    }
+
+    fn insert_role<F>(
+        &mut self,
+        role_name: &str,
+        id_alloc_key: &str,
+        role_id_variant: F,
+    ) -> Result<RoleId, Error>
+    where
+        F: Fn(u64) -> RoleId,
+    {
+        let id = self.get_and_increment_id(id_alloc_key.to_string())?;
+        let id = role_id_variant(id);
         match self.roles.insert(
             RoleKey { id: id.to_string() },
             RoleValue {

@@ -22,6 +22,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use mz_audit_log::{
     EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent, VersionedStorageMetrics,
@@ -66,15 +67,21 @@ use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation}
 use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
-use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
-    BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    BUILTINS, BUILTIN_ROLE_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
+pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::config::{
+    ClusterReplicaSizeMap, Config, StorageHostSizeMap, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
+};
+pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::BootstrapArgs;
+use crate::client::ConnectionId;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
+use crate::util::index_sql;
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
 mod builtin_table_updates;
@@ -84,14 +91,6 @@ mod migrate;
 
 pub mod builtin;
 pub mod storage;
-
-pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{
-    ClusterReplicaSizeMap, Config, StorageHostSizeMap, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
-};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
-use crate::client::ConnectionId;
-use crate::util::index_sql;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 const SYSTEM_USER: &str = "mz_system";
@@ -1722,8 +1721,7 @@ impl<S: Append> Catalog<S> {
         }
 
         let roles = catalog.storage().await.load_roles().await?;
-        let builtin_roles = BUILTIN_ROLES.iter().map(|b| (b.id, b.name.to_owned()));
-        for (id, name) in roles.into_iter().chain(builtin_roles) {
+        for (id, name) in roles {
             let oid = catalog.allocate_oid().await?;
             catalog.state.roles.insert(
                 name.clone(),
@@ -3194,7 +3192,7 @@ impl<S: Append> Catalog<S> {
                         )));
                     }
                     vec![Action::CreateRole {
-                        id: tx.insert_role(&name)?,
+                        id: tx.insert_user_role(&name)?,
                         oid,
                         name,
                     }]
@@ -3343,6 +3341,11 @@ impl<S: Append> Catalog<S> {
                     }]
                 }
                 Op::DropRole { name } => {
+                    if is_reserved_name(&name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedRoleName(name),
+                        )));
+                    }
                     tx.remove_role(&name)?;
                     builtin_table_updates.push(self.state.pack_role_update(&name, -1));
                     vec![Action::DropRole { name }]
@@ -4066,7 +4069,9 @@ impl<S: Append> Catalog<S> {
 }
 
 fn is_reserved_name(name: &str) -> bool {
-    name.starts_with("mz_") || name.starts_with("pg_")
+    BUILTIN_ROLE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 #[derive(Debug, Clone)]
