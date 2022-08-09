@@ -537,10 +537,7 @@ where
     ) -> Result<Vec<ReaderEnrichedHollowBatch<T>>, Since<T>> {
         let mut machine = self.machine.clone();
 
-        let batches = machine
-            .snapshot(&as_of)
-            .await
-            .expect("ReadHandle should validate `as_of` valid before generating Subscribe");
+        let batches = machine.snapshot(&as_of).await?;
 
         let r = batches
             .into_iter()
