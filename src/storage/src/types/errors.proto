@@ -14,10 +14,15 @@ import "repr/src/global_id.proto";
 
 package mz_storage.types.errors;
 
-message ProtoDecodeError {
+message ProtoDecodeErrorInner {
     oneof kind {
         string text = 1;
     }
+}
+
+message ProtoDecodeError {
+    ProtoDecodeErrorInner inner = 1;
+    optional bytes original_bytes = 2;
 }
 
 message ProtoSourceErrorDetails {
@@ -34,10 +39,18 @@ message ProtoSourceError {
     ProtoSourceErrorDetails error = 2;
 }
 
+message ProtoEnvelopeError {
+    oneof kind {
+        string text = 1;
+    }
+}
+
 message ProtoDataflowError {
     oneof kind {
-        ProtoDecodeError decode_error = 1;
-        mz_expr.scalar.ProtoEvalError eval_error = 2;
-        ProtoSourceError source_error = 3;
+        ProtoDecodeError key_decode_error = 1;
+	ProtoDecodeError value_decode_error = 2;
+        mz_expr.scalar.ProtoEvalError eval_error = 3;
+        ProtoSourceError source_error = 4;
+	ProtoEnvelopeError envelope_error = 5;
     }
 }

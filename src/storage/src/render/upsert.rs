@@ -27,7 +27,6 @@ use timely::progress::{Antichain, ChangeBatch};
 use tracing::{error, info};
 
 use mz_expr::{EvalError, MirScalarExpr};
-use mz_ore::result::ResultExt;
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::operator::StreamExt;
 
@@ -484,7 +483,7 @@ fn process_new_data(
             .entry(key);
 
         let new_entry = UpsertSourceData {
-            value: new_value.map(ResultExt::err_into).map(|res| {
+            value: new_value.map(|res| {
                 res.map(|(v, diff)| match diff {
                     1 => v,
                     _ => unreachable!(
@@ -492,6 +491,7 @@ fn process_new_data(
                                         with no explicit diff"
                     ),
                 })
+                .map_err(DataflowError::ValueDecodeError)
             }),
             position: new_position,
             // upsert sources don't have a column for this, so setting it to
@@ -575,7 +575,7 @@ fn process_pending_values_batch(
                             Err(key_decode_error.clone()),
                             // `DecodeError` converted to a `DataflowError`
                             // that we will eventually emit later below
-                            Err(key_decode_error.into()),
+                            Err(DataflowError::KeyDecodeError(key_decode_error)),
                         )
                     }
                     (Ok(decoded_key), None) => (Ok(decoded_key), Ok(None)),

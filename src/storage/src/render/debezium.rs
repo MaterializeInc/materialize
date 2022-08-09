@@ -20,7 +20,7 @@ use mz_expr::EvalError;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::source::DecodeResult;
-use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::errors::{DataflowError, EnvelopeError};
 use crate::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, MzOffset,
@@ -54,7 +54,11 @@ where
                                 "Debezium should only be used with sources with no explicit diff"
                             ),
                             Some(Err(err)) => {
-                                session.give((Err(err.into()), cap.time().clone(), 1));
+                                session.give((
+                                    Err(DataflowError::ValueDecodeError(err)),
+                                    cap.time().clone(),
+                                    1,
+                                ));
                                 continue;
                             }
                             None => continue,
@@ -274,7 +278,7 @@ where
                                 ),
                                 Some(Err(err)) => {
                                     output.session(&data_cap).give((
-                                        Err(err.into()),
+                                        Err(DataflowError::ValueDecodeError(err)),
                                         *data_cap.time(),
                                         1,
                                     ));
@@ -429,10 +433,10 @@ struct SqlServerLsn {
 }
 
 impl FromStr for SqlServerLsn {
-    type Err = DecodeError;
+    type Err = EnvelopeError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let make_err = || DecodeError::Text(format!("invalid lsn: {}", input));
+        let make_err = || EnvelopeError::Text(format!("invalid lsn: {}", input));
         // SQL Server change LSNs are 10-byte integers. Debezium
         // encodes them as hex, in the following format: xxxxxxxx:xxxxxxxx:xxxx
         if input.len() != 22 {
@@ -549,8 +553,12 @@ impl DebeziumDeduplicationState {
                                 Datum::Null => return Ok(None),
                                 d => panic!("type error: expected text, found {:?}", d),
                             };
-                            let make_err =
-                                || DecodeError::Text(format!("invalid sequence: {:?}", sequence));
+                            let make_err = || {
+                                EnvelopeError::Text(format!(
+                                    "invalid sequence in Debezium envelope: {:?}",
+                                    sequence
+                                ))
+                            };
                             let sequence: Vec<Option<&str>> =
                                 serde_json::from_str(sequence).or_else(|_| Err(make_err()))?;
 

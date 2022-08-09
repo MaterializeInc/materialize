@@ -12,7 +12,7 @@ use tokio::runtime::Handle as TokioHandle;
 use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
 use mz_repr::Row;
 
-use crate::types::errors::DecodeError;
+use crate::types::errors::DecodeErrorInner;
 use crate::types::sources::encoding::ProtobufEncoding;
 
 #[derive(Debug)]
@@ -40,7 +40,7 @@ impl ProtobufDecoderState {
             events_error: 0,
         })
     }
-    pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DecodeError>> {
+    pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DecodeErrorInner>> {
         match self.tokio_handle.block_on(self.decoder.decode(bytes)) {
             Ok(row) => {
                 if let Some(row) = row {
@@ -48,14 +48,14 @@ impl ProtobufDecoderState {
                     Some(Ok(row))
                 } else {
                     self.events_error += 1;
-                    Some(Err(DecodeError::Text(format!(
+                    Some(Err(DecodeErrorInner::Text(format!(
                         "protobuf deserialization returned None"
                     ))))
                 }
             }
             Err(err) => {
                 self.events_error += 1;
-                Some(Err(DecodeError::Text(format!(
+                Some(Err(DecodeErrorInner::Text(format!(
                     "protobuf deserialization error: {:#}",
                     err
                 ))))

@@ -44,7 +44,6 @@ use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::metrics::DecodeMetrics;
 use self::protobuf::ProtobufDecoderState;
-use crate::source::{DecodeResult, SourceOutput};
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::DecodeError;
 use crate::types::sources::encoding::{
@@ -52,6 +51,10 @@ use crate::types::sources::encoding::{
 };
 use crate::types::sources::{IncludedColumnSource, MzOffset};
 use crate::types::transforms::LinearOperator;
+use crate::{
+    source::{DecodeResult, SourceOutput},
+    types::errors::DecodeErrorInner,
+};
 
 mod avro;
 mod csv;
@@ -145,17 +148,17 @@ pub(crate) enum PreDelimitedFormat {
 }
 
 impl PreDelimitedFormat {
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeError> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeErrorInner> {
         match self {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeError::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorInner::Text("Failed to decode UTF-8".to_string()))?;
                 Ok(Some(Row::pack(Some(Datum::String(s)))))
             }
             PreDelimitedFormat::Regex(regex, row_buf) => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeError::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorInner::Text("Failed to decode UTF-8".to_string()))?;
                 let captures = match regex.captures(s) {
                     Some(captures) => captures,
                     None => return Ok(None),
@@ -192,7 +195,7 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
-    pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
+    pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorInner> {
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
@@ -218,7 +221,7 @@ impl DataDecoder {
     ///
     /// This is distinct from `next` because, for example, a CSV record should be returned even if it
     /// does not end in a newline.
-    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
+    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorInner> {
         match &mut self.inner {
             DataDecoderInner::Csv(csv) => {
                 let result = csv.decode(bytes);
@@ -331,22 +334,38 @@ fn get_decoder(
     }
 }
 
-fn try_decode(
+fn try_decode_delimited(
     decoder: &mut DataDecoder,
     value: Option<&Vec<u8>>,
 ) -> Option<Result<Row, DecodeError>> {
     let value_buf = &mut value?.as_slice();
+    let value_orig: &[u8] = *value_buf;
     let value = decoder.next(value_buf);
     if value.is_ok() && !value_buf.is_empty() {
         let err = format!(
             "Unexpected bytes remaining for decoded value: {:?}",
             value_buf
         );
-        return Some(Err(DecodeError::Text(err)));
+        return Some(Err(DecodeError {
+            original_bytes: Some(value_orig.to_vec()),
+            inner: DecodeErrorInner::Text(err),
+        }));
     }
     value
+        .map_err(|inner| DecodeError {
+            inner,
+            original_bytes: Some(value_orig.to_vec()),
+        })
         .transpose()
-        .or_else(|| decoder.eof(&mut &[][..]).transpose())
+        .or_else(|| {
+            decoder
+                .eof(&mut &[][..])
+                .map_err(|inner| DecodeError {
+                    inner,
+                    original_bytes: Some(value_orig.to_vec()),
+                })
+                .transpose()
+        })
 }
 
 /// Decode already delimited records of data.
@@ -425,9 +444,9 @@ where
                 {
                     let key = key_decoder
                         .as_mut()
-                        .and_then(|decoder| try_decode(decoder, key.as_ref()));
+                        .and_then(|decoder| try_decode_delimited(decoder, key.as_ref()));
 
-                    let value = try_decode(&mut value_decoder, value.as_ref());
+                    let value = try_decode_delimited(&mut value_decoder, value.as_ref());
 
                     if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
                         n_errors += 1;
@@ -535,7 +554,7 @@ where
                             let data = &mut &value_buf[..];
                             let mut result = value_decoder.eof(data);
                             if result.is_ok() && !data.is_empty() {
-                                result = Err(DecodeError::Text(format!(
+                                result = Err(DecodeErrorInner::Text(format!(
                                     "Saw unexpected EOF with bytes remaining in buffer: {:?}",
                                     data
                                 )));
@@ -560,9 +579,15 @@ where
                                         headers.as_deref(),
                                     );
 
+                                    let value =
+                                        value.map(|r| (r, 1)).map_err(|inner| DecodeError {
+                                            inner,
+                                            original_bytes: None,
+                                        });
+
                                     session.give(DecodeResult {
                                         key: None,
-                                        value: Some(value.map(|r| (r, 1))),
+                                        value: Some(value),
                                         position: position.into(),
                                         upstream_time_millis: *upstream_time_millis,
                                         partition: partition.clone(),
@@ -622,9 +647,14 @@ where
                         );
 
                         if value_bytes_remaining.is_empty() {
+                            let value = value.map(|r| (r, 1)).map_err(|inner| DecodeError {
+                                inner,
+                                original_bytes: None,
+                            });
+
                             session.give(DecodeResult {
                                 key: None,
-                                value: Some(value.map(|r| (r, 1))),
+                                value: Some(value),
                                 position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
@@ -633,9 +663,14 @@ where
                             value_buf = vec![];
                             break;
                         } else {
+                            let value = value.map(|r| (r, 1)).map_err(|inner| DecodeError {
+                                inner,
+                                original_bytes: None,
+                            });
+
                             session.give(DecodeResult {
                                 key: None,
-                                value: Some(value.map(|r| (r, 1))),
+                                value: Some(value),
                                 position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
