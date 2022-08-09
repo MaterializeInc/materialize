@@ -1923,10 +1923,13 @@ pub enum JoinImplementation {
     /// Each plan starts from the corresponding index, and then in sequence joins
     /// against collections identified by index and with the specified arrangement key.
     DeltaQuery(Vec<Vec<(usize, Vec<MirScalarExpr>)>>),
-    /// Join a constant to a user-created index to speed up evaluation of a predicate
+    /// Join a user-created index with a constant collection to speed up the evaluation of a
+    /// predicate such as `f1 = 3 AND f2 = 5`.
+    /// This gets translated to a Differential join during MIR -> LIR lowering, but we still want
+    /// to represent it in MIR, because the fast path detection wants to match on this.
     ///
-    /// Consists of (<view id>, <keys of index>, <constant>)
-    PredicateIndex(GlobalId, Vec<MirScalarExpr>, #[mzreflect(ignore)] Row),
+    /// Consists of (<view id>, <keys of index>, <constant>, and then the same as Differential)
+    IndexedFilter(GlobalId, Vec<MirScalarExpr>, #[mzreflect(ignore)] Row),
     /// No implementation yet selected.
     Unimplemented,
 }

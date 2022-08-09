@@ -69,18 +69,22 @@ EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 1;
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Get %1 (l0)
+%3 =
+| Get %2 (l0)
 | ArrangeBy ()
 
-%3 =
-| Join %2 %1
-| | implementation = Differential %1 %2.()
+%4 =
+| Join %3 %2
+| | implementation = Differential %2 %3.()
 
 EOF
 
@@ -91,18 +95,22 @@ EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3 WHERE a1.f1 = 1 AND a2.f1 = 
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 = Let l1 =
-| Get %1 (l0)
+%3 = Let l1 =
+| Get %2 (l0)
 | ArrangeBy ()
 
-%3 =
-| Join %2 %2 %1
-| | implementation = Differential %1 %2.() %2.()
+%4 =
+| Join %3 %3 %2
+| | implementation = Differential %2 %3.() %3.()
 
 EOF
 
@@ -117,22 +125,26 @@ EXPLAIN SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1) WHERE a1.f1 = 1 AND
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Get %1 (l0)
+%3 =
+| Get %2 (l0)
 | ArrangeBy ()
 
-%3 =
-| Get %1 (l0)
+%4 =
+| Get %2 (l0)
 | Project (#1)
 
-%4 =
-| Join %2 %3
-| | implementation = Differential %3 %2.()
+%5 =
+| Join %3 %4
+| | implementation = Differential %4 %3.()
 
 EOF
 
@@ -183,17 +195,21 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (S
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Get %1 (l0)
+%3 =
+| Get %2 (l0)
 | Project (#0)
 
-%3 =
-| Get %1 (l0)
+%4 =
+| Get %2 (l0)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -201,21 +217,21 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (S
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%4 = Let l1 =
-| Union %2 %3
+%5 = Let l1 =
+| Union %3 %4
 
-%5 =
+%6 =
 | Get materialize.public.t1 (u1)
 | Filter (#0) IS NOT NULL, (#1) IS NOT NULL
 | ArrangeBy (#1)
 
-%6 =
-| Get %4 (l1)
+%7 =
+| Get %5 (l1)
 | ArrangeBy (#0)
 
-%7 =
-| Join %5 %6 %4 (= #0 #2) (= #1 #3)
-| | implementation = Differential %4 %5.(#1) %6.(#0)
+%8 =
+| Join %6 %7 %5 (= #0 #2) (= #1 #3)
+| | implementation = Differential %5 %6.(#1) %7.(#0)
 | Project (#0, #1)
 
 EOF
@@ -316,18 +332,22 @@ ON TRUE
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Get %1 (l0)
+%3 =
+| Get %2 (l0)
 | ArrangeBy ()
 
-%3 =
-| Join %2 %1
-| | implementation = Differential %1 %2.()
+%4 =
+| Join %3 %2
+| | implementation = Differential %2 %3.()
 
 EOF
 
@@ -342,18 +362,22 @@ AND a2.f2 = 2
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1), (#1 = 2)
 
-%2 =
-| Get %1 (l0)
+%3 =
+| Get %2 (l0)
 | ArrangeBy ()
 
-%3 =
-| Join %2 %1
-| | implementation = Differential %1 %2.()
+%4 =
+| Join %3 %2
+| | implementation = Differential %2 %3.()
 
 EOF
 
@@ -369,22 +393,26 @@ AND a2.f2 = 3
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
-| | implementation = IndexedFilter #0 = 1
+%1 =
+| Constant (1)
 
-%2 =
-| Get %1 (l0)
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
+| | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
+
+%3 =
+| Get %2 (l0)
 | Filter (#0 = 1), (#1 = 2)
 | ArrangeBy ()
 
-%3 =
-| Get %1 (l0)
+%4 =
+| Get %2 (l0)
 | Filter (#0 = 1), (#1 = 3)
 
-%4 =
-| Join %2 %3
-| | implementation = Differential %3 %2.()
+%5 =
+| Join %3 %4
+| | implementation = Differential %4 %3.()
 
 EOF
 
@@ -399,13 +427,17 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UN
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Union %1 %1 %1
+%3 =
+| Union %2 %2 %2
 
 EOF
 
@@ -416,14 +448,18 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UN
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 | Project (#1)
 
-%2 =
-| Union %1 %1 %1
+%3 =
+| Union %2 %2 %2
 | Distinct group=(#0)
 | Map 1
 | Project (#1, #0)
@@ -441,17 +477,21 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Get %1 (l0)
+%3 =
+| Get %2 (l0)
 | Project (#0)
 
-%3 =
-| Get %1 (l0)
+%4 =
+| Get %2 (l0)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -459,33 +499,33 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%4 = Let l1 =
-| Union %2 %3
+%5 = Let l1 =
+| Union %3 %4
 
-%5 =
+%6 =
 | Get materialize.public.t1 (u1)
 | Project ()
 | ArrangeBy ()
 
-%6 =
-| Get %4 (l1)
+%7 =
+| Get %5 (l1)
 | Project ()
 | Distinct group=()
 | Negate
 
-%7 =
+%8 =
 | Constant ()
 
-%8 =
-| Union %6 %7
+%9 =
+| Union %7 %8
 | Map null
 
-%9 =
-| Union %4 %8
-
 %10 =
-| Join %5 %9
-| | implementation = Differential %9 %5.()
+| Union %5 %9
+
+%11 =
+| Join %6 %10
+| | implementation = Differential %10 %6.()
 | Project (#0, #0)
 
 EOF
@@ -497,17 +537,21 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHE
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Get %1 (l0)
+%3 =
+| Get %2 (l0)
 | Project (#0)
 
-%3 =
-| Get %1 (l0)
+%4 =
+| Get %2 (l0)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -515,55 +559,55 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHE
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%4 = Let l1 =
-| Union %2 %3
+%5 = Let l1 =
+| Union %3 %4
 
-%5 =
-| Get %4 (l1)
+%6 =
+| Get %5 (l1)
 | Project ()
 | Distinct group=()
 | Negate
 
-%6 =
+%7 =
 | Constant ()
 
-%7 =
-| Union %5 %6
+%8 =
+| Union %6 %7
 | Map null
 
-%8 = Let l2 =
-| Union %4 %7
+%9 = Let l2 =
+| Union %5 %8
 
-%9 =
+%10 =
 | Get materialize.public.t1 (u1)
 | Project ()
 | ArrangeBy ()
 
-%10 =
-| Get %8 (l2)
+%11 =
+| Get %9 (l2)
 | ArrangeBy ()
 
-%11 = Let l3 =
-| Join %9 %10 %8
-| | implementation = Differential %8 %9.() %10.()
+%12 = Let l3 =
+| Join %10 %11 %9
+| | implementation = Differential %9 %10.() %11.()
 | Reduce group=()
 | | agg min(#0)
 | | agg max(#1)
 
-%12 =
-| Get %11 (l3)
+%13 =
+| Get %12 (l3)
 | Project ()
 | Negate
 
-%13 =
+%14 =
 | Constant ()
 
-%14 =
-| Union %12 %13
+%15 =
+| Union %13 %14
 | Map null, null
 
-%15 =
-| Union %11 %14
+%16 =
+| Union %12 %15
 
 EOF
 
@@ -578,21 +622,91 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 = Let l1 =
-| Get %1 (l0)
+%3 = Let l1 =
+| Get %2 (l0)
 | Project ()
 
-%3 =
-| Get %1 (l0)
+%4 =
+| Get %2 (l0)
+| Project (#0)
+
+%5 =
+| Get %3 (l1)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Project ()
+| Map (err: more than one record produced in subquery)
+
+%6 = Let l2 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t1 (u1)
+| Project ()
+| ArrangeBy ()
+
+%8 =
+| Get %3 (l1)
+| Distinct group=()
+| ArrangeBy ()
+
+%9 =
+| Get %6 (l2)
+| Project ()
+| Distinct group=()
+| Negate
+
+%10 =
+| Constant ()
+
+%11 =
+| Union %9 %10
+| Map null
+
+%12 =
+| Union %6 %11
+
+%13 =
+| Join %7 %8 %12
+| | implementation = Differential %12 %8.() %7.()
+
+EOF
+
+query T multiline
+EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1
+UNION ALL
+SELECT f1 FROM t1 WHERE f1 = 1
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
+| | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
+| Filter (#0 = 1)
+
+%3 = Let l1 =
+| Get %2 (l0)
 | Project (#0)
 
 %4 =
-| Get %2 (l1)
+| Get %2 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
@@ -608,89 +722,27 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 
 | ArrangeBy ()
 
 %7 =
-| Get %2 (l1)
-| Distinct group=()
-| ArrangeBy ()
-
-%8 =
 | Get %5 (l2)
 | Project ()
 | Distinct group=()
 | Negate
 
-%9 =
+%8 =
 | Constant ()
 
-%10 =
-| Union %8 %9
+%9 =
+| Union %7 %8
 | Map null
 
+%10 =
+| Union %5 %9
+
 %11 =
-| Union %5 %10
+| Join %6 %10
+| | implementation = Differential %10 %6.()
 
 %12 =
-| Join %6 %7 %11
-| | implementation = Differential %11 %7.() %6.()
-
-EOF
-
-query T multiline
-EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1
-UNION ALL
-SELECT f1 FROM t1 WHERE f1 = 1
-----
-%0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy (#0)
-
-%1 = Let l0 =
-| Join %0
-| | implementation = IndexedFilter #0 = 1
-| Filter (#0 = 1)
-
-%2 = Let l1 =
-| Get %1 (l0)
-| Project (#0)
-
-%3 =
-| Get %1 (l0)
-| Project ()
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Project ()
-| Map (err: more than one record produced in subquery)
-
-%4 = Let l2 =
-| Union %2 %3
-
-%5 =
-| Get materialize.public.t1 (u1)
-| Project ()
-| ArrangeBy ()
-
-%6 =
-| Get %4 (l2)
-| Project ()
-| Distinct group=()
-| Negate
-
-%7 =
-| Constant ()
-
-%8 =
-| Union %6 %7
-| Map null
-
-%9 =
-| Union %4 %8
-
-%10 =
-| Join %5 %9
-| | implementation = Differential %9 %5.()
-
-%11 =
-| Union %10 %2
+| Union %11 %3
 
 EOF
 
@@ -780,44 +832,52 @@ SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) W
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l1 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l1 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 = Let l2 =
-| Join %0
+%3 =
+| Constant (2)
+
+%4 = Let l2 =
+| Join %0 %3 (= #0 #2)
 | | implementation = IndexedFilter #0 = 2
+| Project (#0, #1)
 | Filter (#0 = 2)
 
-%3 =
-| Get %1 (l1)
+%5 =
+| Get %2 (l1)
 | Project ()
 | ArrangeBy ()
-
-%4 =
-| Get %1 (l1)
-| Project (#0)
-
-%5 =
-| Join %3 %4
-| | implementation = Differential %4 %3.()
 
 %6 =
-| Get %2 (l2)
+| Get %2 (l1)
+| Project (#0)
+
+%7 =
+| Join %5 %6
+| | implementation = Differential %6 %5.()
+
+%8 =
+| Get %4 (l2)
 | Project ()
 | ArrangeBy ()
 
-%7 =
-| Get %2 (l2)
+%9 =
+| Get %4 (l2)
 | Project (#0)
 
-%8 =
-| Join %6 %7
-| | implementation = Differential %7 %6.()
+%10 =
+| Join %8 %9
+| | implementation = Differential %9 %8.()
 
-%9 =
-| Union %5 %8
+%11 =
+| Union %7 %10
 
 EOF
 
@@ -832,27 +892,31 @@ WHERE s1.f1 = 1 AND s2.f1 = 1
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 = Let l1 =
-| Get %1 (l0)
+%3 = Let l1 =
+| Get %2 (l0)
 | Project (#0)
 | ArrangeBy ()
 
-%3 = Let l2 =
-| Get %1 (l0)
+%4 = Let l2 =
+| Get %2 (l0)
 | Project ()
 
-%4 =
-| Get %3 (l2)
+%5 =
+| Get %4 (l2)
 | ArrangeBy ()
 
-%5 =
-| Join %2 %4 %2 %3
-| | implementation = Differential %3 %2.() %4.() %2.()
+%6 =
+| Join %3 %5 %3 %4
+| | implementation = Differential %4 %3.() %5.() %3.()
 
 EOF
 
@@ -867,38 +931,46 @@ WHERE s1.f1 = 1 AND s2.f1 = 2
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l1 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l1 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 = Let l2 =
-| Join %0
+%3 =
+| Constant (2)
+
+%4 = Let l2 =
+| Join %0 %3 (= #0 #2)
 | | implementation = IndexedFilter #0 = 2
+| Project (#0, #1)
 | Filter (#0 = 2)
 
-%3 =
-| Get %1 (l1)
-| Project (#0)
-| ArrangeBy ()
-
-%4 =
-| Get %1 (l1)
-| Project ()
-| ArrangeBy ()
-
 %5 =
-| Get %2 (l2)
+| Get %2 (l1)
 | Project (#0)
 | ArrangeBy ()
 
 %6 =
-| Get %2 (l2)
+| Get %2 (l1)
 | Project ()
+| ArrangeBy ()
 
 %7 =
-| Join %3 %4 %5 %6
-| | implementation = Differential %6 %3.() %4.() %5.()
+| Get %4 (l2)
+| Project (#0)
+| ArrangeBy ()
+
+%8 =
+| Get %4 (l2)
+| Project ()
+
+%9 =
+| Join %5 %6 %7 %8
+| | implementation = Differential %8 %5.() %6.() %7.()
 
 EOF
 
@@ -916,13 +988,17 @@ SELECT * FROM t1 WHERE f1 = 1 AND f2 = 2
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1), (#1 = 2)
 
-%2 =
-| Union %1 %1
+%3 =
+| Union %2 %2
 
 EOF
 
@@ -963,19 +1039,23 @@ SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1)
 | ArrangeBy (#0)
 
 %2 =
-| Join %1
+| Constant (1)
+
+%3 =
+| Join %1 %2 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 | Project ()
 | Distinct group=()
 | ArrangeBy ()
 
-%3 = Let l0 =
-| Join %0 %2
-| | implementation = Differential %0 %2.()
+%4 = Let l0 =
+| Join %0 %3
+| | implementation = Differential %0 %3.()
 
-%4 =
-| Union %3 %3
+%5 =
+| Union %4 %4
 
 EOF
 
@@ -989,17 +1069,21 @@ SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l1 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l1 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Get %1 (l1)
+%3 =
+| Get %2 (l1)
 | Project (#0)
 
-%3 =
-| Get %1 (l1)
+%4 =
+| Get %2 (l1)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -1007,16 +1091,16 @@ SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%4 =
-| Union %2 %3
+%5 =
+| Union %3 %4
 
-%5 = Let l2 =
-| Join %0 %4 (= #0 #2)
-| | implementation = Differential %4 %0.(#0)
+%6 = Let l2 =
+| Join %0 %5 (= #0 #2)
+| | implementation = Differential %5 %0.(#0)
 | Project (#0, #1)
 
-%6 =
-| Union %5 %5
+%7 =
+| Union %6 %6
 
 EOF
 
@@ -1155,13 +1239,17 @@ UNION ALL
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Union %1 %1 %1 %1
+%3 =
+| Union %2 %2 %2 %2
 
 EOF
 
@@ -1179,19 +1267,23 @@ UNION ALL
 | ArrangeBy (#0)
 
 %2 =
-| Join %1
+| Constant (1)
+
+%3 =
+| Join %1 %2 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 | Project ()
 | Distinct group=()
 | ArrangeBy ()
 
-%3 = Let l0 =
-| Join %0 %2
-| | implementation = Differential %0 %2.()
+%4 = Let l0 =
+| Join %0 %3
+| | implementation = Differential %0 %3.()
 
-%4 =
-| Union %3 %3
+%5 =
+| Union %4 %4
 
 EOF
 
@@ -1213,27 +1305,31 @@ UNION ALL
 | ArrangeBy (#0)
 
 %2 =
-| Join %1
+| Constant (1)
+
+%3 =
+| Join %1 %2 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 | Project ()
 | Distinct group=()
 | ArrangeBy ()
 
-%3 = Let l0 =
-| Join %0 %2
-| | implementation = Differential %0 %2.()
-
-%4 =
-| Get %3 (l0)
-| Project (#0)
+%4 = Let l0 =
+| Join %0 %3
+| | implementation = Differential %0 %3.()
 
 %5 =
-| Get %3 (l0)
-| Project (#1)
+| Get %4 (l0)
+| Project (#0)
 
 %6 =
-| Union %4 %5
+| Get %4 (l0)
+| Project (#1)
+
+%7 =
+| Union %5 %6
 
 EOF
 
@@ -1251,30 +1347,34 @@ Query:
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 | Project ()
 | Distinct group=()
 | ArrangeBy ()
 
-%2 =
+%3 =
 | Get materialize.public.t1 (u1)
 
-%3 =
-| Join %2 %1
-| | implementation = Differential %2 %1.()
-
 %4 =
-| Get materialize.public.t2 (u3)
+| Join %3 %2
+| | implementation = Differential %3 %2.()
 
 %5 =
-| Join %4 %1
-| | implementation = Differential %4 %1.()
+| Get materialize.public.t2 (u3)
 
 %6 =
-| Union %3 %5
+| Join %5 %2
+| | implementation = Differential %5 %2.()
+
+%7 =
+| Union %4 %6
 
 EOF
 
@@ -1291,30 +1391,34 @@ Query:
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 | Project (#0)
 
-%2 =
+%3 =
 | Get materialize.public.t2 (u3)
 | Project (#0)
 
-%3 =
-| Union %2 %1
+%4 =
+| Union %3 %2
 | ArrangeBy ()
 
-%4 =
+%5 =
 | Get materialize.public.t2 (u3)
 | Project (#1)
 
-%5 =
-| Union %4 %1
-
 %6 =
-| Join %3 %5
-| | implementation = Differential %5 %3.()
+| Union %5 %2
+
+%7 =
+| Join %4 %6
+| | implementation = Differential %6 %4.()
 
 EOF
 
@@ -1329,21 +1433,25 @@ SELECT f2 FROM t1 WHERE f1 = 1
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l0 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 =
-| Get %1 (l0)
+%3 =
+| Get %2 (l0)
 | Project (#0)
 
-%3 =
-| Get %1 (l0)
+%4 =
+| Get %2 (l0)
 | Project (#1)
 
-%4 =
-| Union %2 %3
+%5 =
+| Union %3 %4
 
 EOF
 
@@ -1360,19 +1468,27 @@ EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 2
 | ArrangeBy (#0)
 
 %1 =
-| Join %0
+| Constant (1)
+
+%2 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 | ArrangeBy ()
 
-%2 =
-| Join %0
+%3 =
+| Constant (2)
+
+%4 =
+| Join %0 %3 (= #0 #2)
 | | implementation = IndexedFilter #0 = 2
+| Project (#0, #1)
 | Filter (#0 = 2)
 
-%3 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
+%5 =
+| Join %2 %4
+| | implementation = Differential %4 %2.()
 
 EOF
 
@@ -1386,44 +1502,52 @@ SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE 
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
-%1 = Let l1 =
-| Join %0
+%1 =
+| Constant (1)
+
+%2 = Let l1 =
+| Join %0 %1 (= #0 #2)
 | | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
 | Filter (#0 = 1)
 
-%2 = Let l2 =
-| Join %0
+%3 =
+| Constant (2)
+
+%4 = Let l2 =
+| Join %0 %3 (= #0 #2)
 | | implementation = IndexedFilter #0 = 2
+| Project (#0, #1)
 | Filter (#0 = 2)
 
-%3 =
-| Get %1 (l1)
+%5 =
+| Get %2 (l1)
 | Project ()
 | ArrangeBy ()
-
-%4 =
-| Get %1 (l1)
-| Project (#0)
-
-%5 =
-| Join %3 %4
-| | implementation = Differential %4 %3.()
 
 %6 =
-| Get %2 (l2)
+| Get %2 (l1)
+| Project (#0)
+
+%7 =
+| Join %5 %6
+| | implementation = Differential %6 %5.()
+
+%8 =
+| Get %4 (l2)
 | Project ()
 | ArrangeBy ()
 
-%7 =
-| Get %2 (l2)
+%9 =
+| Get %4 (l2)
 | Project (#0)
 
-%8 =
-| Join %6 %7
-| | implementation = Differential %7 %6.()
+%10 =
+| Join %8 %9
+| | implementation = Differential %9 %8.()
 
-%9 =
-| Union %5 %8
+%11 =
+| Union %7 %10
 
 EOF
 
@@ -1438,17 +1562,25 @@ SELECT * FROM t1 WHERE f1 = 2
 | ArrangeBy (#0)
 
 %1 =
-| Join %0
-| | implementation = IndexedFilter #0 = 1
-| Filter (#0 = 1)
+| Constant (1)
 
 %2 =
-| Join %0
-| | implementation = IndexedFilter #0 = 2
-| Filter (#0 = 2)
+| Join %0 %1 (= #0 #2)
+| | implementation = IndexedFilter #0 = 1
+| Project (#0, #1)
+| Filter (#0 = 1)
 
 %3 =
-| Union %1 %2
+| Constant (2)
+
+%4 =
+| Join %0 %3 (= #0 #2)
+| | implementation = IndexedFilter #0 = 2
+| Project (#0, #1)
+| Filter (#0 = 2)
+
+%5 =
+| Union %2 %4
 
 EOF
 
