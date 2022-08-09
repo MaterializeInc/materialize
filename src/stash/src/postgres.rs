@@ -13,8 +13,8 @@ use std::marker::PhantomData;
 use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
-use futures::future::TryFutureExt;
-use futures::future::{self, BoxFuture};
+use futures::future::{self, try_join_all, BoxFuture};
+use futures::future::{try_join, TryFutureExt};
 use futures::StreamExt;
 use postgres_openssl::MakeTlsConnector;
 use timely::progress::frontier::AntichainRef;
@@ -387,30 +387,42 @@ impl Postgres {
         Ok(())
     }
 
-    async fn update_many_tx<I>(
+    async fn update_many_tx(
         stmts: &PreparedStatements,
         tx: &Transaction<'_>,
         collection_id: Id,
-        entries: I,
-    ) -> Result<(), StashError>
-    where
-        I: Iterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
-    {
-        let upper = Self::upper_tx(stmts, tx, collection_id).await?;
+        entries: &[((Vec<u8>, Vec<u8>), Timestamp, Diff)],
+    ) -> Result<(), StashError> {
+        let mut futures = Vec::with_capacity(entries.len());
         for ((key, value), time, diff) in entries {
-            if !upper.less_equal(&time) {
-                return Err(StashError::from(format!(
-                    "entry time {} is less than the current upper frontier {}",
-                    time,
-                    AntichainFormatter(&upper)
-                )));
-            }
-            tx.execute(
-                &stmts.update_many,
-                &[&collection_id, &key, &value, &time, &diff],
-            )
-            .await?;
+            futures.push(async move {
+                tx.execute(
+                    &stmts.update_many,
+                    &[&collection_id, &key, &value, &time, &diff],
+                )
+                .map_err(|err| err.into())
+                .await
+            });
         }
+        // Check the upper in a separate future so we can issue the updates without
+        // waiting for it first.
+        try_join(
+            async {
+                let upper = Self::upper_tx(stmts, tx, collection_id).await?;
+                for ((_key, _value), time, _diff) in entries {
+                    if !upper.less_equal(&time) {
+                        return Err(StashError::from(format!(
+                            "entry time {} is less than the current upper frontier {}",
+                            time,
+                            AntichainFormatter(&upper)
+                        )));
+                    }
+                }
+                Ok(())
+            },
+            try_join_all(futures),
+        )
+        .await?;
         Ok(())
     }
 
@@ -652,12 +664,7 @@ impl Stash for Postgres {
 
         self.transact(move |stmts, tx| {
             let entries = entries.clone();
-            Box::pin(Self::update_many_tx(
-                stmts,
-                tx,
-                collection.id,
-                entries.into_iter(),
-            ))
+            Box::pin(async move { Self::update_many_tx(stmts, tx, collection.id, &entries).await })
         })
         .await
     }
@@ -823,8 +830,7 @@ impl Append for Postgres {
                     if upper != batch.lower {
                         return Err("unexpected lower".into());
                     }
-                    Self::update_many_tx(stmts, tx, batch.collection_id, batch.entries.into_iter())
-                        .await?;
+                    Self::update_many_tx(stmts, tx, batch.collection_id, &batch.entries).await?;
                     Self::seal_batch_tx(
                         stmts,
                         tx,
