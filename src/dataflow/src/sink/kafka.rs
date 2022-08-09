@@ -498,6 +498,9 @@ impl KafkaSinkState {
         // all bets are off and full exactly once support is required.
         config.set("enable.idempotence", "true");
 
+        // Enable TCP keepalives.
+        config.set("socket.keepalive.enable", "true");
+
         // Increase limits for the Kafka producer's internal buffering of messages
         // Currently we don't have a great backpressure mechanism to tell indexes or
         // views to slow down, so the only thing we can do with a message that we
