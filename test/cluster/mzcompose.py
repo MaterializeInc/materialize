@@ -72,7 +72,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-12251",
         "test-remote-storaged",
         "test-drop-default-cluster",
-        "test-builtin-migration",
         "test-upsert",
     ]:
         with c.test_case(name):
