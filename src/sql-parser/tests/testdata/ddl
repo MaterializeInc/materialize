@@ -1540,8 +1540,29 @@ ALTER SYSTEM SET log_connections = 'default'
 AlterSystem(AlterSystemStatement { name: Ident("log_connections"), value: Literal(String("default")) })
 
 parse-statement
-ALTER SYSTEM SET replication_slots 667
+ALTER SYSTEM SET some_array_key = [667, 668]
 ----
-ALTER SYSTEM SET replication_slots = 667
+ALTER SYSTEM SET some_array_key = [667, 668]
 =>
-AlterSystem(AlterSystemStatement { name: Ident("replication_slots"), value: Literal(Number("667")) })
+AlterSystem(AlterSystemStatement { name: Ident("some_array_key"), value: Literal(Array([Number("667"), Number("668")])) })
+
+parse-statement
+ALTER SYSTEM SET quantum_enabled = true
+----
+ALTER SYSTEM SET quantum_enabled = true
+=>
+AlterSystem(AlterSystemStatement { name: Ident("quantum_enabled"), value: Literal(Boolean(true)) })
+
+parse-statement
+ALTER SYSTEM SET use_optional = NULL
+----
+ALTER SYSTEM SET use_optional = NULL
+=>
+AlterSystem(AlterSystemStatement { name: Ident("use_optional"), value: Literal(Null) })
+
+parse-statement
+ALTER SYSTEM SET key value
+----
+error: Expected TO or equals sign, found VALUE
+ALTER SYSTEM SET key value
+                     ^

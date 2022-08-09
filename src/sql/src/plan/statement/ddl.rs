@@ -21,7 +21,9 @@ use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::{AlterSystemStatement, LoadGenerator, SshConnectionOption};
+use mz_sql_parser::ast::{
+    AlterSystemStatement, LoadGenerator, SetVariableValue, SshConnectionOption,
+};
 use mz_storage::source::generator::as_generator;
 use prost::Message;
 use regex::Regex;
@@ -3711,5 +3713,9 @@ pub fn plan_alter_system(
 ) -> Result<Plan, PlanError> {
     scx.require_unsafe_mode("ALTER SYSTEM")?;
     let name = name.to_string();
+    if matches!(&value, SetVariableValue::Literal(value) if matches!(value, mz_sql_parser::ast::Value::Null))
+    {
+        sql_bail!("Unable to set system configuration '{}' to NULL", name)
+    }
     Ok(Plan::AlterSystem(AlterSystemPlan { name, value }))
 }

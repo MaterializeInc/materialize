@@ -16,31 +16,44 @@
 
 mode cockroach
 
-query TT
+query TT rowsort
 SELECT * FROM mz_system_configuration;
 ----
 
 statement ok
 ALTER SYSTEM SET wal_level TO logical
 
-query TT
+query TT rowsort
 SELECT * FROM mz_system_configuration;
 ----
-wal_level   {"String":"logical"}
+wal_level   'logical'
 
 statement ok
 ALTER SYSTEM SET wal_level = 'physical'
 
-query TT
+query TT rowsort
 SELECT * FROM mz_system_configuration;
 ----
-wal_level   {"String":"physical"}
+wal_level   'physical'
 
 statement ok
 ALTER SYSTEM SET shared_buffers = 5
 
-query TT
+query TT rowsort
 SELECT * FROM mz_system_configuration;
 ----
-shared_buffers  {"Number":"5"}
-wal_level       {"String":"physical"}
+shared_buffers  5
+wal_level       'physical'
+
+statement ok
+ALTER SYSTEM SET replication_enabled = false
+
+query TT rowsort
+SELECT * FROM mz_system_configuration;
+----
+shared_buffers      5
+wal_level           'physical'
+replication_enabled false
+
+statement error Unable to set system configuration 'use_optional' to NULL
+ALTER SYSTEM SET use_optional = NULL

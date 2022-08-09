@@ -1526,6 +1526,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Bail out if the current token is not an expected keyword or token, or consume it if it is
+    fn expect_keyword_or_token(
+        &mut self,
+        expected_keyword: Keyword,
+        expected_token: &Token,
+    ) -> Result<(), ParserError> {
+        if self.parse_keyword(expected_keyword) || self.consume_token(expected_token) {
+            Ok(())
+        } else {
+            self.expected(
+                self.peek_pos(),
+                format!("{expected_keyword} or {expected_token}"),
+                self.peek_token(),
+            )
+        }
+    }
+
     /// Parse a comma-separated list of 1+ items accepted by `F`
     fn parse_comma_separated<T, F>(&mut self, mut f: F) -> Result<Vec<T>, ParserError>
     where
@@ -3366,7 +3383,7 @@ impl<'a> Parser<'a> {
     fn parse_alter_system(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SET)?;
         let name = self.parse_identifier()?;
-        let _ = self.consume_token(&Token::Eq) || self.parse_keyword(TO);
+        self.expect_keyword_or_token(TO, &Token::Eq)?;
         let value = self.parse_set_variable_value()?;
         Ok(Statement::AlterSystem(AlterSystemStatement { name, value }))
     }
