@@ -70,7 +70,7 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
-    BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    BUILTINS, BUILTIN_ROLE_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use crate::catalog::storage::BootstrapArgs;
@@ -1722,8 +1722,7 @@ impl<S: Append> Catalog<S> {
         }
 
         let roles = catalog.storage().await.load_roles().await?;
-        let builtin_roles = BUILTIN_ROLES.iter().map(|b| (b.id, b.name.to_owned()));
-        for (id, name) in roles.into_iter().chain(builtin_roles) {
+        for (id, name) in roles {
             let oid = catalog.allocate_oid().await?;
             catalog.state.roles.insert(
                 name.clone(),
@@ -3343,6 +3342,11 @@ impl<S: Append> Catalog<S> {
                     }]
                 }
                 Op::DropRole { name } => {
+                    if is_reserved_name(&name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedRoleName(name),
+                        )));
+                    }
                     tx.remove_role(&name)?;
                     builtin_table_updates.push(self.state.pack_role_update(&name, -1));
                     vec![Action::DropRole { name }]
@@ -4066,7 +4070,9 @@ impl<S: Append> Catalog<S> {
 }
 
 fn is_reserved_name(name: &str) -> bool {
-    name.starts_with("mz_") || name.starts_with("pg_")
+    BUILTIN_ROLE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 #[derive(Debug, Clone)]

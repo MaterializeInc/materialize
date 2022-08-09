@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::once;
 
@@ -38,7 +38,7 @@ use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage::types::sources::Timeline;
 
-use crate::catalog::builtin::BuiltinLog;
+use crate::catalog::builtin::{BuiltinLog, BUILTIN_ROLES};
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::SerializedComputeInstanceReplicaConfig;
 use crate::catalog::SystemObjectMapping;
@@ -331,6 +331,20 @@ async fn migrate<S: Append>(
             )?;
             Ok(())
         },
+        // Builtin roles are now stored in the stash so that we can dynamically assign new ids
+        // to new builtin roles. "mz_system" existed before this change with id 0, so we don't
+        // want it to change ids after a restart.
+        //
+        // Added in alpha.11
+        |txn: &mut Transaction<'_, S>, _bootstrap_args| {
+            txn.roles.insert(
+                RoleKey { id: 0 },
+                RoleValue {
+                    name: "mz_system".to_string(),
+                },
+            )?;
+            Ok(())
+        },
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
@@ -497,6 +511,21 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn load_roles(&mut self) -> Result<Vec<(u64, String)>, Error> {
+        // Add in any new builtin roles.
+        let mut tx = self.transaction().await?;
+        let role_names: HashSet<_> = tx
+            .roles
+            .items()
+            .into_values()
+            .map(|value| value.name)
+            .collect();
+        for builtin_role in &*BUILTIN_ROLES {
+            if !role_names.contains(builtin_role.name) {
+                tx.insert_role(builtin_role.name)?;
+            }
+        }
+        tx.commit().await?;
+
         Ok(COLLECTION_ROLE
             .peek_one(&mut self.stash)
             .await?

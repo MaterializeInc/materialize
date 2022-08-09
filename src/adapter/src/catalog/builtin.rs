@@ -112,9 +112,13 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
+pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
+
 pub struct BuiltinRole {
+    /// Name of the builtin role.
+    ///
+    /// IMPORTANT: Must start with a prefix from [`BUILTIN_ROLE_PREFIXES`].
     pub name: &'static str,
-    pub id: u64,
 }
 
 pub trait Fingerprint {
@@ -2101,9 +2105,10 @@ AS SELECT
 FROM mz_catalog.mz_roles r",
 };
 
-pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
-    name: "mz_system",
-    id: 0,
+pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: "mz_system" };
+
+pub const MZ_SYSTEM_EXTERNAL: BuiltinRole = BuiltinRole {
+    name: "mz_system_external",
 };
 
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
@@ -2288,7 +2293,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM]);
+pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> =
+    Lazy::new(|| vec![MZ_SYSTEM, MZ_SYSTEM_EXTERNAL]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {

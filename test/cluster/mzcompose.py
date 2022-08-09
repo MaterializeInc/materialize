@@ -74,6 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-drop-default-cluster",
         "test-builtin-migration",
         "test-upsert",
+        "test-dynamic-roles",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -308,12 +309,93 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             c.testdrive(
                 input=dedent(
                     """
+       # New role was added
        > SELECT * FROM v1;
-       2
+       3
 
        # This column is new after the migration
        > SELECT DISTINCT rolconnlimit FROM pg_authid;
        -1
     """
+                )
+            )
+
+
+def workflow_test_dynamic_roles(c: Composition) -> None:
+    """Exercise the builtin object migration code by upgrading between two versions
+    that will have a migration triggered between them. Create a materialized view
+    over the affected builtin object to confirm that the migration was successful
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+    ):
+        c.up("testdrive", persistent=True)
+
+        # Use storage external to the mz image because the above sha used postgres but
+        # we now use cockroach, so the data are lost.
+        mz_options = " ".join(
+            [
+                "--persist-consensus-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus",
+                "--storage-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=storage",
+                "--adapter-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=adapter",
+            ]
+        )
+
+        with c.override(
+            # A random commit on main that was before the introduction of dynamic roles.
+            Materialized(
+                image="materialize/materialized:devel-5e018f3773ff45045d1530a90e9397cf2f2b766d",
+                options=mz_options,
+            ),
+            Postgres(image="postgres:14.4"),
+        ):
+            c.up("postgres")
+            c.wait_for_postgres(service="postgres")
+            c.sql(
+                sql=f"""
+                CREATE SCHEMA IF NOT EXISTS consensus;
+                CREATE SCHEMA IF NOT EXISTS storage;
+                CREATE SCHEMA IF NOT EXISTS adapter;
+            """,
+                service="postgres",
+                user="postgres",
+                password="postgres",
+            )
+
+            c.up("materialized")
+            c.wait_for_materialized()
+
+            c.testdrive(
+                input=dedent(
+                    """
+            > SELECT id, name FROM mz_roles;
+            0 mz_system
+            1 materialize
+            > CREATE ROLE joe LOGIN SUPERUSER;
+            > SELECT id, name FROM mz_roles;
+            0 mz_system
+            1 materialize
+            2 joe
+        """
+                )
+            )
+
+            c.kill("materialized")
+
+        with c.override(Materialized(options=mz_options)):
+            c.up("materialized")
+            c.wait_for_materialized()
+
+            c.testdrive(
+                input=dedent(
+                    """
+            > SELECT id, name FROM mz_roles;
+            0 mz_system
+            1 materialize
+            2 joe
+            3 mz_system_external
+        """
                 )
             )
