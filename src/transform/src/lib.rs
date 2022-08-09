@@ -295,7 +295,9 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![Box::new(crate::FuseAndCollapse::default())],
             }),
-            // 3. Move predicate information up and down the tree.
+            // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
+            Box::new(crate::threshold_elision::ThresholdElision),
+            // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
                 limit: 100,
@@ -314,7 +316,7 @@ impl Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
-            // 4. Reduce/Join simplifications.
+            // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
