@@ -1,7 +1,7 @@
 [package]
 name = "mz-compute"
 description = "Materialize's compute layer."
-version = "0.26.1-dev"
+version = "0.27.0-alpha.11"
 edition = "2021"
 rust-version = "1.62.0"
 publish = false
