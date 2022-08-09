@@ -15,6 +15,7 @@ use differential_dataflow::trace::Description;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use prost::Message;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -98,14 +99,52 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    pub fn decode(buf: &[u8]) -> Result<Self, CodecMismatch> {
+    pub fn decode(build_version: &Version, buf: &[u8]) -> Result<Self, CodecMismatch> {
         let proto = ProtoStateRollup::decode(buf)
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
-        Self::try_from(proto).expect("internal error: invalid encoded state")
+        let state = Self::try_from(proto).expect("internal error: invalid encoded state")?;
+
+        // If persist gets some encoded ProtoState from the future (e.g. two
+        // versions of code are running simultaneously against the same shard),
+        // it might have a field that the current code doesn't know about. This
+        // would be silently discarded at proto decode time. Unknown Fields [1]
+        // are a tool we can use in the future to help deal with this, but in
+        // the short-term, it's best to keep the persist read-modify-CaS loop
+        // simple for as long as we can get away with it (i.e. until we have to
+        // offer the ability to do rollbacks).
+        //
+        // [1]:
+        //     https://developers.google.com/protocol-buffers/docs/proto3#unknowns
+        //
+        // To detect the bad situation and disallow it, we tag every version of
+        // state written to consensus with the version of code used to encode
+        // it. Then at decode time, we're able to compare the current version
+        // against any we receive and assert as necessary.
+        //
+        // Initially we reject any version from the future (no forward
+        // compatibility, most conservative but easiest to reason about) but
+        // allow any from the past (permanent backward compatibility). If/when
+        // we support deploy rollbacks and rolling upgrades, we can adjust this
+        // assert as necessary to reflect the policy (e.g. by adding some window
+        // of X allowed versions of forward compatibility, computed by comparing
+        // semvers).
+        //
+        // We could do the same for blob data, but it shouldn't be necessary.
+        // Any blob data we read is going to be because we fetched it using a
+        // pointer stored in some persist state. If we can handle the state, we
+        // can handle the blobs it references, too.
+        if build_version < &state.applier_version {
+            panic!(
+                "{} received persist state from the future {}",
+                build_version, state.applier_version
+            );
+        }
+
+        Ok(state)
     }
 }
 
@@ -149,6 +188,7 @@ where
 {
     fn into_proto(&self) -> ProtoStateRollup {
         ProtoStateRollup {
+            applier_version: self.applier_version.to_string(),
             shard_id: self.shard_id.into_proto(),
             seqno: self.seqno.into_proto(),
             key_codec: K::codec_name(),
@@ -213,6 +253,20 @@ where
             }));
         }
 
+        let applier_version = if x.applier_version.is_empty() {
+            // Backward compatibility with versions of ProtoState before we set
+            // this field: if it's missing (empty), assume an infinitely old
+            // version.
+            semver::Version::new(0, 0, 0)
+        } else {
+            semver::Version::parse(&x.applier_version).map_err(|err| {
+                TryFromProtoError::InvalidSemverVersion(format!(
+                    "invalid applier_version {}: {}",
+                    x.applier_version, err
+                ))
+            })?
+        };
+
         let mut readers = HashMap::with_capacity(x.readers.len());
         for proto in x.readers {
             let reader_id = proto.reader_id.into_rust()?;
@@ -240,6 +294,7 @@ where
             trace: x.trace.into_rust_if_some("trace")?,
         };
         Ok(Ok(State {
+            applier_version,
             shard_id: x.shard_id.into_rust()?,
             seqno: x.seqno.into_rust()?,
             collections,
@@ -435,5 +490,35 @@ impl<T: Timestamp + Codec64> RustType<ProtoReadEnrichedHollowBatch>
                 .batch
                 .into_rust_if_some("ProtoReadEnrichedHollowBatch::batch")?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_persist_types::Codec;
+
+    use crate::r#impl::state::State;
+    use crate::ShardId;
+
+    #[test]
+    fn applier_version() {
+        let v1 = semver::Version::new(1, 0, 0);
+        let v2 = semver::Version::new(2, 0, 0);
+        let v3 = semver::Version::new(3, 0, 0);
+
+        // Code version v2 evaluates and writes out some State.
+        let state = State::<(), (), u64, i64>::new(v2.clone(), ShardId::new());
+        let mut buf = Vec::new();
+        state.encode(&mut buf);
+
+        // We can read it back using persist code v2 and v3.
+        assert_eq!(State::decode(&v2, &buf).as_ref(), Ok(&state));
+        assert_eq!(State::decode(&v3, &buf).as_ref(), Ok(&state));
+
+        // But we can't read it back using v1 because v1 might corrupt it by
+        // losing or misinterpreting something written out by a future version
+        // of code.
+        let v1_res = std::panic::catch_unwind(|| State::<(), (), u64, i64>::decode(&v1, &buf));
+        assert!(v1_res.is_err());
     }
 }

@@ -176,6 +176,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .await
         .context("loading secrets reader")?;
     let config = mz_storage::Config {
+        build_info: &BUILD_INFO,
         workers: args.workers,
         timely_config,
         metrics_registry,

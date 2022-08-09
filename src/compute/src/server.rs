@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use crossbeam_channel::{RecvError, TryRecvError};
+use mz_build_info::BuildInfo;
 use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
@@ -50,6 +51,8 @@ pub struct CommunicationConfig {
 
 /// Configures a dataflow server.
 pub struct Config {
+    /// Build information.
+    pub build_info: &'static BuildInfo,
     /// The number of worker threads to spawn.
     pub workers: usize,
     /// Configuration for the communication mesh
@@ -93,7 +96,7 @@ pub fn serve(
         initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
 
     let persist_clients = PersistClientCache::new(
-        PersistConfig::new(config.now.clone()),
+        PersistConfig::new(config.build_info, config.now.clone()),
         &config.metrics_registry,
     );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));

@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use timely::order::TotalOrder;
@@ -438,7 +439,7 @@ impl Service for TransactorService {
         let blob = CachingBlob::new(blob);
 
         // Construct requested Consensus.
-        let config = PersistConfig::new(SYSTEM_TIME.clone());
+        let config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {

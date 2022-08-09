@@ -19,6 +19,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
@@ -63,6 +64,7 @@ pub struct HollowBatch<T> {
 
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct StateCollections<T> {
     pub(crate) last_gc_req: SeqNo,
 
@@ -248,7 +250,9 @@ where
 
 // TODO: Document invariants.
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct State<K, V, T, D> {
+    pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
 
     pub(crate) seqno: SeqNo,
@@ -264,10 +268,10 @@ pub struct State<K, V, T, D> {
     pub(crate) _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-// Impl Clone regardless of the type params.
-impl<K, V, T: Clone, D> Clone for State<K, V, T, D> {
-    fn clone(&self) -> Self {
+impl<K, V, T: Clone, D> State<K, V, T, D> {
+    pub(crate) fn clone(&self, applier_version: Version) -> Self {
         Self {
+            applier_version,
             shard_id: self.shard_id.clone(),
             seqno: self.seqno.clone(),
             collections: self.collections.clone(),
@@ -283,8 +287,9 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    pub fn new(shard_id: ShardId) -> Self {
+    pub fn new(applier_version: Version, shard_id: ShardId) -> Self {
         State {
+            applier_version,
             shard_id,
             seqno: SeqNo::minimum(),
             collections: StateCollections {
@@ -364,11 +369,16 @@ where
         usize::cast_from(self.seqno.0.saturating_sub(self.seqno_since().0))
     }
 
-    pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> ControlFlow<E, (R, Self)>
+    pub fn clone_apply<R, E, WorkFn>(
+        &self,
+        build_version: &Version,
+        work_fn: &mut WorkFn,
+    ) -> ControlFlow<E, (R, Self)>
     where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
     {
         let mut new_state = State {
+            applier_version: build_version.clone(),
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
             collections: self.collections.clone(),
@@ -472,6 +482,7 @@ impl<T> Determinacy for Upper<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
 
     use super::*;
@@ -495,7 +506,8 @@ mod tests {
 
     #[test]
     fn downgrade_since() {
-        let mut state = State::<(), (), u64, i64>::new(ShardId::new());
+        let mut state =
+            State::<(), (), u64, i64>::new(DUMMY_BUILD_INFO.semver_version(), ShardId::new());
         let reader = ReaderId::new();
         let seqno = SeqNo::minimum();
         let now = SYSTEM_TIME.clone();
@@ -579,7 +591,11 @@ mod tests {
     #[test]
     fn compare_and_append() {
         mz_ore::test::init_logging();
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        )
+        .collections;
 
         let writer_id = WriterId::new();
         let _ = state.register_writer(&writer_id, 0);
@@ -630,7 +646,10 @@ mod tests {
         mz_ore::test::init_logging();
         let now = SYSTEM_TIME.clone();
 
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
         // Cannot take a snapshot with as_of == shard upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(0)),
@@ -750,7 +769,10 @@ mod tests {
     fn next_listen_batch() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
 
         // Empty collection never has any batches to listen for, regardless of the
         // current frontier.
@@ -798,7 +820,10 @@ mod tests {
     fn expire_writer() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
 
         let writer_id_one = WriterId::new();
 
@@ -850,7 +875,10 @@ mod tests {
     #[test]
     fn maybe_gc() {
         mz_ore::test::init_logging();
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
 
         // Empty state doesn't need gc, regardless of is_write.
         assert_eq!(state.maybe_gc(true), None);

@@ -16,6 +16,7 @@ futures = "0.3.21"
 junit-report = "0.7.1"
 once_cell = "1.13.0"
 md-5 = "0.10.1"
+mz-build-info = { path = "../build-info" }
 mz-controller = { path = "../controller" }
 mz-environmentd = { path = "../environmentd", default-features = false }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
