@@ -340,6 +340,71 @@ impl CatalogState {
         self.entry_by_id.get(id)
     }
 
+    /// Create and insert the per replica log sources and log views.
+    fn insert_replica_introspection_items(
+        &mut self,
+        persisted_logs: &ConcreteComputeInstanceReplicaLogging,
+        replica_id: u64,
+    ) {
+        for (variant, source_id) in persisted_logs.get_sources() {
+            let oid = self.allocate_oid().expect("cannot return error here");
+            // TODO(lh): Once we get rid of legacy active logs, we should refactor the
+            // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
+            // in BUILTINS.
+            let log = BUILTINS::logs()
+                .find(|log| log.variant == variant)
+                .expect("variant must be included in builtins");
+
+            let source_name = QualifiedObjectName {
+                qualifiers: ObjectQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                },
+                item: format!("{}_{}", log.name, replica_id),
+            };
+            self.insert_item(source_id, oid, source_name, CatalogItem::Log(log));
+        }
+
+        for (logview, id) in persisted_logs.get_views() {
+            let (sql_template, name_template) = logview.get_template();
+            assert!(sql_template.find("{}").is_some());
+            assert!(name_template.find("{}").is_some());
+            let name = name_template.replace("{}", &replica_id.to_string());
+            let sql = "CREATE VIEW ".to_string()
+                + MZ_CATALOG_SCHEMA
+                + "."
+                + &name
+                + " AS "
+                + &sql_template.replace("{}", &replica_id.to_string());
+
+            let item = self.parse_view_item(sql);
+
+            match item {
+                Ok(item) => {
+                    let oid = self.allocate_oid().expect("cannot return error here");
+                    let view_name = QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(
+                                self.get_mz_catalog_schema_id().clone(),
+                            ),
+                        },
+                        item: name,
+                    };
+
+                    self.insert_item(id, oid, view_name, item);
+                }
+                Err(e) => {
+                    // This error should never happen, but if we add a logging
+                    // source + view pair and make a mistake in the migration
+                    // it's better to bring up the instance without the view
+                    // than to crash.
+                    tracing::error!("Could not create log view: {}", e);
+                }
+            }
+        }
+    }
+
     /// Parse a SQL string into a catalog view item with only a limited
     /// context.
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
@@ -616,6 +681,7 @@ impl CatalogState {
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) {
+        self.insert_replica_introspection_items(&config.persisted_logs, replica_id);
         let replica = ComputeInstanceReplica {
             config,
             process_status: HashMap::new(),
@@ -1945,10 +2011,6 @@ impl<S: Append> Catalog<S> {
             catalog
                 .state
                 .insert_compute_instance_replica(instance_id, name, replica_id, config);
-
-            let mut new_state = catalog.state.clone();
-            catalog.insert_per_replica_items(&mut new_state, &persisted_logs, replica_id);
-            catalog.state = new_state;
         }
 
         if !config.skip_migrations {
@@ -2121,76 +2183,6 @@ impl<S: Append> Catalog<S> {
             .await?;
 
         Ok(())
-    }
-
-    /// Create and insert the per replica log sources and log views.
-    ///
-    /// The replica with replica_id must already be present in the catalog state.
-    /// This function will allocate the oid's. The GlobalIds are already pre-allocated.
-    /// Views can depend on introspection sources and on other views.
-    fn insert_per_replica_items(
-        &self,
-        state: &mut CatalogState,
-        persisted_logs: &ConcreteComputeInstanceReplicaLogging,
-        replica_id: u64,
-    ) {
-        for (variant, source_id) in persisted_logs.get_sources() {
-            let oid = state.allocate_oid().expect("cannot return error here");
-            // TODO(lh): Once we get rid of legacy active logs, we should refactor the
-            // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
-            // in BUILTINS.
-            let log = BUILTINS::logs()
-                .find(|log| log.variant == variant)
-                .expect("variant must be included in builtins");
-
-            let source_name = QualifiedObjectName {
-                qualifiers: ObjectQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
-                },
-                item: format!("{}_{}", log.name, replica_id),
-            };
-            state.insert_item(source_id, oid, source_name, CatalogItem::Log(log));
-        }
-
-        for (logview, id) in persisted_logs.get_views() {
-            let (sql_template, name_template) = logview.get_template();
-            assert!(sql_template.find("{}").is_some());
-            assert!(name_template.find("{}").is_some());
-            let name = name_template.replace("{}", &replica_id.to_string());
-            let sql = "CREATE VIEW ".to_string()
-                + MZ_CATALOG_SCHEMA
-                + "."
-                + &name
-                + " AS "
-                + &sql_template.replace("{}", &replica_id.to_string());
-
-            let item = self.state.parse_view_item(sql);
-
-            match item {
-                Ok(item) => {
-                    let oid = state.allocate_oid().expect("cannot return error here");
-                    let view_name = QualifiedObjectName {
-                        qualifiers: ObjectQualifiers {
-                            database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_catalog_schema_id().clone(),
-                            ),
-                        },
-                        item: name,
-                    };
-
-                    state.insert_item(id, oid, view_name, item);
-                }
-                Err(e) => {
-                    // This error should never happen, but if we add a logging
-                    // source + view pair and make a mistake in the migration
-                    // it's better to bring up the instance without the view
-                    // than to crash.
-                    tracing::error!("Could not create log view: {}", e);
-                }
-            }
-        }
     }
 
     fn resolve_builtin_type(
@@ -3737,15 +3729,14 @@ impl<S: Append> Catalog<S> {
                     config,
                 } => {
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
-                    let persisted_logs = config.persisted_logs.clone();
+                    let introspection_ids = config.persisted_logs.get_source_and_view_ids();
                     state.insert_compute_instance_replica(
                         compute_instance_id,
                         name.clone(),
                         id,
                         config,
                     );
-                    self.insert_per_replica_items(&mut state, &persisted_logs, id);
-                    for id in persisted_logs.get_source_and_view_ids() {
+                    for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                     builtin_table_updates.push(state.pack_compute_instance_replica_update(
