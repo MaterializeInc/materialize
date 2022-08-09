@@ -1868,9 +1868,7 @@ impl<S: Append> Catalog<S> {
             // Instantiate the default logging settings for replicas
             let persisted_logs = match &serialized_config.persisted_logs {
                 SerializedComputeInstanceReplicaLogging::Default => {
-                    catalog
-                        .allocate_persisted_introspection_source_indexes()
-                        .await
+                    catalog.allocate_persisted_introspection_items().await
                 }
 
                 SerializedComputeInstanceReplicaLogging::Concrete(x) => {
@@ -3096,7 +3094,7 @@ impl<S: Append> Catalog<S> {
                 name: String,
                 config: Option<ComputeInstanceIntrospectionConfig>,
                 // These are the legacy, active logs of this compute instance
-                introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+                arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
             CreateComputeInstanceReplica {
                 id: ReplicaId,
@@ -3236,15 +3234,18 @@ impl<S: Append> Catalog<S> {
                 Op::CreateComputeInstance {
                     name,
                     config,
-                    introspection_source_indexes,
+                    arranged_introspection_sources,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    let id =
-                        tx.insert_compute_instance(&name, &config, &introspection_source_indexes)?;
+                    let id = tx.insert_compute_instance(
+                        &name,
+                        &config,
+                        &arranged_introspection_sources,
+                    )?;
                     self.add_to_audit_log(
                         session,
                         &mut tx,
@@ -3257,7 +3258,7 @@ impl<S: Append> Catalog<S> {
                         id,
                         name,
                         config,
-                        introspection_source_indexes,
+                        arranged_introspection_sources,
                     }]
                 }
                 Op::CreateComputeInstanceReplica {
@@ -3667,11 +3668,11 @@ impl<S: Append> Catalog<S> {
                     id,
                     name,
                     config,
-                    introspection_source_indexes,
+                    arranged_introspection_sources,
                 } => {
                     info!("create cluster {}", name);
-                    let introspection_source_index_ids: Vec<GlobalId> =
-                        introspection_source_indexes
+                    let arranged_introspection_source_ids: Vec<GlobalId> =
+                        arranged_introspection_sources
                             .iter()
                             .map(|(_, id)| *id)
                             .collect();
@@ -3680,11 +3681,11 @@ impl<S: Append> Catalog<S> {
                             id,
                             name.clone(),
                             config,
-                            introspection_source_indexes,
+                            arranged_introspection_sources,
                         )
                         .await;
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
-                    for id in introspection_source_index_ids {
+                    for id in arranged_introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                 }
@@ -4063,7 +4064,7 @@ impl<S: Append> Catalog<S> {
     }
 
     /// Allocate ids for legacy, active logs. Called once per compute instance creation
-    pub async fn allocate_introspection_source_indexes(
+    pub async fn allocate_arranged_introspection_sources(
         &mut self,
     ) -> Vec<(&'static BuiltinLog, GlobalId)> {
         let log_amount = BUILTINS::logs().count();
@@ -4080,7 +4081,7 @@ impl<S: Append> Catalog<S> {
         BUILTINS::logs().zip(system_ids.into_iter()).collect()
     }
 
-    /// Allocate ids for views over persisted logs. Called once per compute replica creation
+    /// Allocate ids for persisted introspection views. Called once per compute replica creation
     pub async fn allocate_persisted_introspection_views(&mut self) -> Vec<(LogView, GlobalId)> {
         let log_amount = DEFAULT_LOG_VIEWS.len();
         let system_ids = self
@@ -4101,8 +4102,9 @@ impl<S: Append> Catalog<S> {
             .collect()
     }
 
-    /// Allocate ids for persisted logs. Called once per compute replica creation
-    pub async fn allocate_persisted_introspection_source_indexes(
+    /// Allocate ids for persisted introspection sources and views.
+    /// Called once per compute replica creation.
+    pub async fn allocate_persisted_introspection_items(
         &mut self,
     ) -> ConcreteComputeInstanceReplicaLogging {
         let logs = {
@@ -4159,7 +4161,7 @@ pub enum Op {
     CreateComputeInstance {
         name: String,
         config: Option<ComputeInstanceIntrospectionConfig>,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateComputeInstanceReplica {
         name: String,

@@ -579,19 +579,19 @@ impl<S: Append + 'static> Coordinator<S> {
         }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
-        let introspection_source_indexes = if compute_instance_config.is_some() {
-            self.catalog.allocate_introspection_source_indexes().await
+        let arranged_introspection_sources = if compute_instance_config.is_some() {
+            self.catalog.allocate_arranged_introspection_sources().await
         } else {
             Vec::new()
         };
-        let introspection_source_index_ids: Vec<_> = introspection_source_indexes
+        let arranged_introspection_source_ids: Vec<_> = arranged_introspection_sources
             .iter()
             .map(|(_, id)| *id)
             .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
             config: compute_instance_config.clone(),
-            introspection_source_indexes,
+            arranged_introspection_sources,
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -612,7 +612,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // This vector collects introspection sources of all replicas of this compute instance
-        let mut introspection_collections = Vec::new();
+        let mut persisted_introspection_sources = Vec::new();
 
         for (replica_name, replica_config) in replicas.into_iter() {
             // If the AZ was not specified, choose one, round-robin, from the ones with
@@ -640,14 +640,12 @@ impl<S: Append + 'static> Coordinator<S> {
             };
             // These are the persisted, per replica persisted logs
             let persisted_logs = if compute_instance_config.is_some() {
-                self.catalog
-                    .allocate_persisted_introspection_source_indexes()
-                    .await
+                self.catalog.allocate_persisted_introspection_items().await
             } else {
                 ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
             };
 
-            introspection_collections.extend(
+            persisted_introspection_sources.extend(
                 persisted_logs
                     .get_logs()
                     .iter()
@@ -669,14 +667,14 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        let introspection_collection_ids: Vec<GlobalId> = introspection_collections
+        let persisted_introspection_source_ids: Vec<GlobalId> = persisted_introspection_sources
             .iter()
             .map(|(id, _)| *id)
             .collect();
 
         self.controller
             .storage_mut()
-            .create_collections(introspection_collections)
+            .create_collections(persisted_introspection_sources)
             .await
             .unwrap();
 
@@ -694,17 +692,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap();
         }
 
-        if !introspection_source_index_ids.is_empty() {
+        if !arranged_introspection_source_ids.is_empty() {
             self.initialize_compute_read_policies(
-                introspection_source_index_ids,
+                arranged_introspection_source_ids,
                 instance.id,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
         }
-        if !introspection_collection_ids.is_empty() {
+
+        if !persisted_introspection_source_ids.is_empty() {
             self.initialize_storage_read_policies(
-                introspection_collection_ids,
+                persisted_introspection_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
@@ -725,9 +724,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
 
         let persisted_logs = if instance.logging.is_some() {
-            self.catalog
-                .allocate_persisted_introspection_source_indexes()
-                .await
+            self.catalog.allocate_persisted_introspection_items().await
         } else {
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
