@@ -614,7 +614,7 @@ impl<S: Append> Connection<S> {
             .into_iter()
             .map(|(k, v)| {
                 let name = k.name;
-                let value: mz_sql_parser::ast::Value = serde_json::from_str(&v.value)
+                let value: mz_sql_parser::ast::Value = serde_json::from_slice(&v.value)
                     .map_err(|err| Error::from(StashError::from(err.to_string())))?;
                 Ok((name, value))
             })
@@ -1246,7 +1246,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             name: name.to_string(),
         };
         let value = ServerConfigurationValue {
-            value: serde_json::to_string(&value)
+            value: serde_json::to_vec(&value)
                 .map_err(|err| Error::from(StashError::from(err.to_string())))?,
         };
         self.system_configurations.delete(|k, _v| k == &key);
@@ -1716,8 +1716,8 @@ impl_codec!(ServerConfigurationKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
 struct ServerConfigurationValue {
-    #[prost(string)]
-    value: String,
+    #[prost(bytes)]
+    value: Vec<u8>,
 }
 impl_codec!(ServerConfigurationValue);
 
