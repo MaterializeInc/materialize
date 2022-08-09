@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import time
-from textwrap import dedent
 
 from pg8000.dbapi import ProgrammingError
 
