@@ -1,20 +1,14 @@
 ---
 title: "DROP MATERIALIZED VIEW"
-description: "`DROP MATERIALIZED VIEW` removes a materialized view from your Materialize instances."
+description: "`DROP MATERIALIZED VIEW` removes a materialized view from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP MATERIALIZED VIEW` removes a materialized view from your Materialize instances.
-
-## Conceptual framework
-
-Materialize maintains materialized views after you create them. If you no longer need the
-materialized view, you can remove it.
-
-Because materialized views rely on receiving data from sources, you must drop all materialized views that
-rely on a source before you can [drop the source](../drop-source) itself. You can achieve this easily using **DROP SOURCE...CASCADE**.
+`DROP MATERIALIZED VIEW` removes a materialized view from Materialize. If there
+are other views depending on the materialized view, you must explicitly drop
+them first, or use the `CASCADE` option.
 
 ## Syntax
 
@@ -23,25 +17,30 @@ rely on a source before you can [drop the source](../drop-source) itself. You ca
 Field | Use
 ------|-----
 **IF EXISTS** | Do not return an error if the named materialized view does not exist.
-_view&lowbar;name_ | The materialized view you want to drop. You can find available materialized view names through [`SHOW MATERIALIZED VIEWS`](../show-materialized-views).
+_view&lowbar;name_ | The materialized view you want to drop. For available materialized views, see [`SHOW MATERIALIZED VIEWS`](../show-materialized-views).
 **RESTRICT** | Do not drop this materialized view if any other views depend on it. _(Default)_
 **CASCADE** | Drop all views that depend on this materialized view.
 
 ## Examples
 
+### Dropping a materialized view with no dependencies
+
 ```sql
-SHOW MATERIALIZED VIEWS;
-```
-```nofmt
-         name
-----------------------
- my_materialized_view
-```
-```sql
-DROP MATERIALIZED VIEW my_materialized_view;
+DROP MATERIALIZED VIEW winning_bids;
 ```
 ```nofmt
 DROP MATERIALIZED VIEW
+```
+
+### Dropping a materialized view with dependencies
+
+```sql
+DROP MATERIALIZED VIEW winning_bids;
+```
+
+```nofmt
+ERROR:  cannot drop materialize.public.winning_bids: still depended
+upon by catalog item 'materialize.public.wb_custom_art'
 ```
 
 ## Related pages

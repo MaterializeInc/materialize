@@ -1,12 +1,12 @@
 ---
 title: "SHOW CREATE MATERIALIZED VIEW"
-description: "`SHOW CREATE MATERIALIZED VIEW` returns the `SELECT` statement used to create the materialized view."
+description: "`SHOW CREATE MATERIALIZED VIEW` returns the statement used to create the materialized view"
 menu:
   main:
     parent: commands
 ---
 
-`SHOW CREATE MATERIALIZED VIEW` returns the [`SELECT`](../select) statement used to create the materialized view.
+`SHOW CREATE MATERIALIZED VIEW` returns the DDL statement used to create the materialized view.
 
 ## Syntax
 
@@ -24,7 +24,7 @@ SHOW CREATE MATERIALIZED VIEW my_materialized_view;
 ```nofmt
             Materialized View            |        Create Materialized View
 -----------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------
- materialize.public.my_materialized_view | CREATE MATERIALIZED VIEW "materialize"."public"."my_materialized_view" IN CLUSTER "default" AS SELECT * FROM "materialize"."public"."my_source"
+materialize.public.winning_bids          | CREATE MATERIALIZED VIEW "materialize"."public"."winning_bids" IN CLUSTER "default" AS SELECT * FROM "materialize"."public"."highest_bid_per_auction" WHERE "pg_catalog"."extract"('epoch', "end_time") * 1000 < "mz_catalog"."mz_logical_timestamp"()
 ```
 
 ## Related pages
