@@ -208,6 +208,21 @@ pub trait StorageController: Debug + Send {
         self.drop_sinks(identifiers).await
     }
 
+    /// Drops the read capability for the sinks and allows their resources to be reclaimed.
+    ///
+    /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
+    ///     controller starts/restarts it has no durable state. That means that it has no way of
+    ///     remembering any past commands sent. In the future we plan on persisting state for the
+    ///     controller so that it is aware of past commands.
+    ///     Therefore this method is for dropping sinks that we know to have been previously
+    ///     created, but have been forgotten by the controller due to a restart.
+    ///     Once command history becomes durable we can remove this method and use the normal
+    ///     `drop_sinks`.
+    async fn drop_sinks_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError>;
+
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     ///
     /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
@@ -831,7 +846,7 @@ where
     }
 
     async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        self.validate_ids(identifiers.iter().cloned())?;
+        self.validate_collection_ids(identifiers.iter().cloned())?;
         let policies = identifiers
             .into_iter()
             .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
@@ -854,7 +869,6 @@ where
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        // XXX(chae): need to ensure we do this properly with the temp sink created from bootstrapping?? Restarting with sinks in catalog causes panic rn
         // XXX(chae): what does dropping sinks mean??
         //self.validate_ids(identifiers.iter().cloned())?;
         //let policies = identifiers
@@ -862,6 +876,14 @@ where
         //    .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
         //    .collect();
         //self.set_read_policy(policies).await?;
+        self.validate_export_ids(identifiers.iter().cloned())?;
+        self.drop_sinks_unvalidated(identifiers).await
+    }
+
+    async fn drop_sinks_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError> {
         for id in identifiers {
             let mut update = ChangeBatch::new();
             let old_frontier = self.export(id)?.write_frontier.frontier();
@@ -1102,9 +1124,20 @@ where
     }
 
     /// Validate that a collection exists for all identifiers, and error if any do not.
-    fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), StorageError> {
+    fn validate_collection_ids(
+        &self,
+        ids: impl Iterator<Item = GlobalId>,
+    ) -> Result<(), StorageError> {
         for id in ids {
             self.collection(id)?;
+        }
+        Ok(())
+    }
+
+    /// Validate that a collection exists for all identifiers, and error if any do not.
+    fn validate_export_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), StorageError> {
+        for id in ids {
+            self.export(id)?;
         }
         Ok(())
     }

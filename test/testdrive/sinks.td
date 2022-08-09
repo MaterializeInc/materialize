@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
-
 $ kafka-create-topic topic=test
 $ kafka-ingest topic=test format=bytes
 jack,jill
@@ -108,11 +106,11 @@ snk2
 snk3
 
 > SHOW FULL SINKS
-cluster        name   type
---------------------------
-<CLUSTER_NAME> snk1   user
-<CLUSTER_NAME> snk2   user
-<CLUSTER_NAME> snk3   user
+name   type
+-----------
+snk1   user
+snk2   user
+snk3   user
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}}
@@ -182,16 +180,16 @@ $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 3}}}
 
 > SHOW FULL SINKS
-cluster           name        type
-----------------------------------
-<CLUSTER_NAME>    snk1        user
-<CLUSTER_NAME>    snk2        user
-<CLUSTER_NAME>    snk3        user
-<CLUSTER_NAME>    snk4        user
-<CLUSTER_NAME>    snk5        user
-<CLUSTER_NAME>    snk6        user
-<CLUSTER_NAME>    snk7        user
-<CLUSTER_NAME>    snk8        user
+name        type
+----------------
+snk1        user
+snk2        user
+snk3        user
+snk4        user
+snk5        user
+snk6        user
+snk7        user
+snk8        user
 
 # test explicit partition count
 > CREATE SINK snk9 FROM foo
@@ -221,13 +219,3 @@ cluster           name        type
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk13'
   WITH (partition_count=-1, replication_factor=-1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-> CREATE CLUSTER clstr REPLICAS (r1 (REMOTE ['localhost:1234']))
-
-> CREATE SINK clstr_sink
-  IN CLUSTER clstr FROM src
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clstr_sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-> SHOW SINKS IN CLUSTER clstr
-clstr_sink

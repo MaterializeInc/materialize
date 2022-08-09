@@ -27,6 +27,7 @@ use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection};
 
 use crate::catalog::{CatalogItem, CatalogState, StorageSinkConnectionState};
 use crate::coord::appends::BuiltinTableUpdateSource;
+use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError};
@@ -365,7 +366,6 @@ impl<S: Append + 'static> Coordinator<S> {
         id: GlobalId,
         oid: u32,
         connection: StorageSinkConnection,
-        compute_instance: ComputeInstanceId,
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
@@ -390,10 +390,10 @@ impl<S: Append + 'static> Coordinator<S> {
         // Materialize and their sink, they'll need to reason about the
         // timestamps we emit anyway, so might as emit as much historical detail
         // as we possibly can.
-        let id_bundle = self
-            .index_oracle(compute_instance)
-            .sufficient_collections(&[sink.from]);
-        // XXX(chae): generalize oracle to account for created a sink based on a source
+        let id_bundle = CollectionIdBundle {
+            storage_ids: [sink.from].into(),
+            ..Default::default()
+        };
         let frontier = self.least_valid_read(&id_bundle);
         let as_of = SinkAsOf {
             frontier,

@@ -210,7 +210,6 @@ pub struct SinkConnectionReady {
     pub id: GlobalId,
     pub oid: u32,
     pub result: Result<StorageSinkConnection, AdapterError>,
-    pub compute_instance: ComputeInstanceId,
 }
 
 /// Configures a coordinator.
@@ -397,13 +396,6 @@ impl<S: Append + 'static> Coordinator<S> {
         .await;
 
         // Migrate builtin objects.
-        for (compute_id, sink_ids) in builtin_migration_metadata.previous_sink_ids {
-            self.controller
-                .compute_mut(compute_id)
-                .unwrap()
-                .drop_sinks_unvalidated(sink_ids)
-                .await?;
-        }
         for (compute_id, index_ids) in builtin_migration_metadata.previous_index_ids {
             self.controller
                 .compute_mut(compute_id)
@@ -427,6 +419,10 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .storage_mut()
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
+            .await?;
+        self.controller
+            .storage_mut()
+            .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids)
             .await?;
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
@@ -582,7 +578,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         entry.oid(),
                         connection,
                         // The sink should be established on a specific compute instance.
-                        sink.compute_instance,
                         None,
                     )
                     .await?;

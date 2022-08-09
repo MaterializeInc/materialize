@@ -2151,24 +2151,14 @@ pub fn describe_create_sink(
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    mut stmt: CreateSinkStatement<Aug>,
+    stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     scx.require_unsafe_mode("CREATE SINK")?;
-    // XXX(chae): figure out what this should be if it's based on a source directly instead of a materialized view
-    let compute_instance = match &stmt.in_cluster {
-        None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.id,
-    };
-    stmt.in_cluster = Some(ResolvedClusterName {
-        id: compute_instance,
-        print_name: None,
-    });
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
         from,
-        in_cluster: _,
         connection,
         with_options,
         format,
@@ -2308,7 +2298,6 @@ pub fn plan_create_sink(
             from: from.id(),
             connection_builder,
             envelope,
-            compute_instance,
         },
         with_snapshot,
         if_not_exists,

@@ -495,9 +495,6 @@ impl CatalogState {
             if let CatalogItem::Index(Index {
                 compute_instance, ..
             })
-            | CatalogItem::Sink(Sink {
-                compute_instance, ..
-            })
             | CatalogItem::MaterializedView(MaterializedView {
                 compute_instance, ..
             }) = item
@@ -571,9 +568,6 @@ impl CatalogState {
             .expect("catalog out of sync");
 
         if let CatalogItem::Index(Index {
-            compute_instance, ..
-        })
-        | CatalogItem::Sink(Sink {
             compute_instance, ..
         })
         | CatalogItem::MaterializedView(MaterializedView {
@@ -1257,7 +1251,6 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
-    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1674,7 +1667,7 @@ impl CatalogItemRebuilder {
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on COMPUTE and STORAGE nodes
     pub previous_index_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
-    pub previous_sink_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_sink_ids: Vec<GlobalId>,
     pub previous_materialized_view_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
     pub previous_source_ids: Vec<GlobalId>,
     // Used to update in memory catalog state
@@ -1691,7 +1684,7 @@ impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
             previous_index_ids: HashMap::new(),
-            previous_sink_ids: HashMap::new(),
+            previous_sink_ids: Vec::new(),
             previous_materialized_view_ids: HashMap::new(),
             previous_source_ids: Vec::new(),
             all_drop_ops: Vec::new(),
@@ -2369,11 +2362,7 @@ impl<S: Append> Catalog<S> {
                 CatalogItem::Table(_) | CatalogItem::Source(_) => {
                     migration_metadata.previous_source_ids.push(id)
                 }
-                CatalogItem::Sink(sink) => migration_metadata
-                    .previous_sink_ids
-                    .entry(sink.compute_instance)
-                    .or_default()
-                    .push(id),
+                CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
                 CatalogItem::Index(index) => migration_metadata
                     .previous_index_ids
                     .entry(index.compute_instance)
@@ -2436,9 +2425,7 @@ impl<S: Append> Catalog<S> {
         for (_, index_ids) in &mut migration_metadata.previous_index_ids {
             index_ids.reverse();
         }
-        for (_, sink_ids) in &mut migration_metadata.previous_sink_ids {
-            sink_ids.reverse();
-        }
+        migration_metadata.previous_sink_ids.reverse();
         migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();
         migration_metadata.user_drop_ops.reverse();
@@ -4142,7 +4129,6 @@ impl<S: Append> Catalog<S> {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
-                compute_instance: sink.compute_instance,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,

@@ -980,8 +980,6 @@ impl<S: Append + 'static> Coordinator<S> {
             if_not_exists,
         } = plan;
 
-        let compute_instance = sink.compute_instance;
-
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_user_id().await {
             Ok(id) => id,
@@ -1018,7 +1016,6 @@ impl<S: Append + 'static> Coordinator<S> {
             envelope: sink.envelope,
             with_snapshot,
             depends_on,
-            compute_instance,
         };
 
         let ops = vec![catalog::Op::CreateItem {
@@ -1098,7 +1095,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         oid,
                         result: sink_connection::build(connection_builder, id, connection_context)
                             .await,
-                        compute_instance,
                     }));
                 if let Err(e) = result {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);

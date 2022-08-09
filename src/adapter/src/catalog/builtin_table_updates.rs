@@ -464,8 +464,6 @@ impl CatalogState {
                     Datum::Int64(u64::from(schema_id) as i64),
                     Datum::String(name),
                     Datum::String(connection.name()),
-                    // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                    Datum::Int64(sink.compute_instance as i64),
                 ]),
                 diff,
             });

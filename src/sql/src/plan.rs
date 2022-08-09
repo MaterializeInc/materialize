@@ -564,7 +564,6 @@ pub struct Sink {
     pub from: GlobalId,
     pub connection_builder: StorageSinkConnectionBuilder,
     pub envelope: SinkEnvelope,
-    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]
