@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
-use futures::future::{self, try_join_all, BoxFuture};
+use futures::future::{self, try_join3, try_join_all, BoxFuture};
 use futures::future::{try_join, TryFutureExt};
 use futures::StreamExt;
 use postgres_openssl::MakeTlsConnector;
@@ -436,26 +436,38 @@ impl Postgres {
     where
         I: Iterator<Item = (Id, &'a Antichain<Timestamp>)>,
     {
-        for (collection_id, new_since) in compactions {
-            let since = Self::since_tx(stmts, tx, collection_id).await?;
-            let upper = Self::upper_tx(stmts, tx, collection_id).await?;
-            if PartialOrder::less_than(&upper, new_since) {
-                return Err(StashError::from(format!(
-                    "compact request {} is greater than the current upper frontier {}",
-                    AntichainFormatter(new_since),
-                    AntichainFormatter(&upper)
-                )));
-            }
-            if PartialOrder::less_than(new_since, &since) {
-                return Err(StashError::from(format!(
-                    "compact request {} is less than the current since frontier {}",
-                    AntichainFormatter(new_since),
-                    AntichainFormatter(&since)
-                )));
-            }
-            tx.execute(&stmts.compact, &[&new_since.as_option(), &collection_id])
-                .await?;
-        }
+        let futures = compactions.map(|(collection_id, new_since)| {
+            try_join3(
+                async move {
+                    let since = Self::since_tx(stmts, tx, collection_id).await?;
+                    if PartialOrder::less_than(new_since, &since) {
+                        return Err(StashError::from(format!(
+                            "compact request {} is less than the current since frontier {}",
+                            AntichainFormatter(new_since),
+                            AntichainFormatter(&since)
+                        )));
+                    }
+                    Ok(())
+                },
+                async move {
+                    let upper = Self::upper_tx(stmts, tx, collection_id).await?;
+                    if PartialOrder::less_than(&upper, new_since) {
+                        return Err(StashError::from(format!(
+                            "compact request {} is greater than the current upper frontier {}",
+                            AntichainFormatter(new_since),
+                            AntichainFormatter(&upper)
+                        )));
+                    }
+                    Ok(())
+                },
+                async move {
+                    tx.execute(&stmts.compact, &[&new_since.as_option(), &collection_id])
+                        .map_err(StashError::from)
+                        .await
+                },
+            )
+        });
+        try_join_all(futures).await?;
         Ok(())
     }
 
