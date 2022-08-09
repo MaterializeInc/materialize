@@ -16,12 +16,14 @@
 //! [service]: https://github.com/jepsen-io/maelstrom/blob/v0.2.1/doc/services.md
 //! [ruby examples]: https://github.com/jepsen-io/maelstrom/blob/v0.2.1/demo/ruby/node.rb
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::{info, trace};
@@ -106,6 +108,7 @@ where
     }
 
     pub fn handle(&mut self, msg: Msg) {
+        let panic_msg = msg.clone();
         // If we've been initialized (i.e. have a NodeId), respond to the
         // message.
         if let Some(node_id) = self.node_id.as_ref() {
@@ -126,8 +129,16 @@ where
 
             let service = Arc::clone(&self.service);
             let _ = mz_ore::task::spawn(|| format!("maelstrom::handle"), async move {
+                let panic_handle = handle.clone();
                 let service = service.get().await;
-                let () = service.eval(handle, msg.src, body).await;
+
+                let result = std::panic::AssertUnwindSafe(service.eval(handle, msg.src, body))
+                    .catch_unwind()
+                    .await;
+
+                if let Err(err) = result {
+                    return send_maelstrom_abort_and_terminate(err, panic_handle, panic_msg);
+                }
             });
             return;
         }
@@ -165,13 +176,28 @@ where
                 let args = self.args.clone();
                 let service_init = Arc::clone(&self.service);
                 let _ = mz_ore::task::spawn(|| format!("maelstrom::init"), async move {
-                    let service = match S::init(&args, &handle).await {
-                        Ok(x) => x,
-                        Err(err) => {
+                    let panic_handle = handle.clone();
+                    let service = match std::panic::AssertUnwindSafe(S::init(&args, &handle))
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(Ok(x)) => x,
+                        Ok(Err(err)) => {
                             // If service initialization fails, there's nothing
                             // to do but panic. Any retries should be pushed
                             // into the impl of `init`.
-                            panic!("service initialization failed: {}", err);
+                            return send_maelstrom_abort_and_terminate(
+                                Box::new(err),
+                                panic_handle,
+                                panic_msg,
+                            );
+                        }
+                        Err(err) => {
+                            return send_maelstrom_abort_and_terminate(
+                                err,
+                                panic_handle,
+                                panic_msg,
+                            );
                         }
                     };
                     service_init.init_once(Arc::new(service)).await;
@@ -181,6 +207,22 @@ where
             _ => {}
         }
     }
+}
+
+fn send_maelstrom_abort_and_terminate(err: Box<dyn Any + Send>, handle: Handle, msg: Msg) {
+    match &msg.body {
+        Body::ReqInit { msg_id, .. } | Body::ReqTxn { msg_id, .. } => {
+            let in_reply_to = msg_id;
+            handle.send_res(msg.src.clone(), |msg_id| Body::Error {
+                msg_id: Some(msg_id),
+                in_reply_to: in_reply_to.to_owned(),
+                code: ErrorCode::Abort,
+                text: format!("{:?}", err.downcast_ref::<String>()),
+            });
+        }
+        _ => {}
+    }
+    std::process::abort();
 }
 
 struct Core {
