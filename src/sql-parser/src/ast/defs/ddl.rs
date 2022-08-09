@@ -417,6 +417,20 @@ pub enum Envelope<T: AstInfo> {
     CdcV2,
 }
 
+impl<T: AstInfo> Envelope<T> {
+    /// `true` iff Materialize is expected to crash or exhibit UB
+    /// when attempting to ingest data starting at an offset other than zero.
+    pub fn requires_all_input(&self) -> bool {
+        match self {
+            Envelope::None => false,
+            Envelope::Debezium(DbzMode::Plain { .. }) => true,
+            Envelope::Debezium(DbzMode::Upsert) => false,
+            Envelope::Upsert => false,
+            Envelope::CdcV2 => true,
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for Envelope<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
