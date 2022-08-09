@@ -121,6 +121,11 @@ where
             HollowBatchReaderMetadata::Snapshot { .. } => None,
         }
     }
+
+    /// Returns the `SeqNo` leased to this batch.
+    pub fn seqno(&self) -> SeqNo {
+        self.leased_seqno
+    }
 }
 
 /// Capable of generating a snapshot of all data at `as_of`, followed by a
@@ -164,6 +169,10 @@ where
     ///
     /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
     /// `ReadHandle::fetch_batch`.
+    ///
+    /// Note that because `ReaderEnrichedHollowBatch` includes a `SeqNo` lease,
+    /// it must be returned to the same `Subscribe` via
+    /// [`Self::drop_seqno_lease`] to permit GC of the `SeqNo`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
     pub async fn next(&mut self) -> ReaderEnrichedHollowBatch<T> {
         // This is odd, but we move our handle into a `Listen`.
@@ -197,6 +206,11 @@ where
             }
             None => self.listen.next().await,
         }
+    }
+
+    /// Passes through request to drop SeqNo lease
+    pub fn drop_seqno_lease(&mut self, seqno: SeqNo) {
+        self.listen.handle.drop_seqno_lease(seqno);
     }
 }
 

@@ -26,8 +26,9 @@ use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_ore::cast::CastFrom;
-use mz_persist::location::ExternalError;
+use mz_persist::location::{ExternalError, SeqNo};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::read::Subscribe;
 use mz_persist_client::read::{ListenEvent, ReaderEnrichedHollowBatch};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
@@ -40,12 +41,10 @@ use crate::types::sources::SourceData;
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
 ///
-/// TODO: deprecate this method when fixing issues with `persist_source_sharded`.
-///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G>(
+pub fn persist_source_single<G>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -227,7 +226,7 @@ where
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source_sharded<G>(
+pub fn persist_source<G>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -241,22 +240,34 @@ pub fn persist_source_sharded<G>(
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
+    // This source is split as such:
+    // 1. Sets up `async_stream`, which only yields data (hollow batches) on one
+    //    chosen worker. Generating hollow batches also generates `SeqNo` leases
+    //    on the chosen worker.
+    // 2. Batch distribution: A timely source operator which continuously reads
+    //    from that stream, and distributes the data among workers.
+    // 3. Batch fetcher: A timely operator which downloads the batch's contents
+    //    from S3, and outputs them to a timely stream. Additionally, the
+    //    operator returns the `SeqNo` lease to the original worker.
+    // 4. SeqNo leaspr: A timely operator running only on the original worker
+    //    that collects returned `SeqNo` leases, dropping them, and allowing
+    //    compaction to occur.
+
     let worker_index = scope.index();
     let peers = scope.peers();
     let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
 
+    // Holds the `Subscribe` to be accessed in the first and last stages; is
+    // meant to be `Some` only on the chosen worker.
+    let subscribe: Arc<Mutex<Option<Subscribe<_, _, _, _>>>> = Arc::new(Mutex::new(None));
+
+    // All of these need to be cloned out here because they're moved into the
+    // `try_stream!` generator.
     let persist_clients_stream = Arc::<Mutex<PersistClientCache>>::clone(&persist_clients);
     let persist_location_stream = metadata.persist_location.clone();
     let data_shard = metadata.data_shard.clone();
     let as_of_stream = as_of;
-
-    // This source is split as such:
-    // 1. Sets up `async_stream`, which only yields data (hollow batches) on one
-    //    worker.
-    // 2. A timely source operator which continuously reads from that stream,
-    //    and distributes the data among workers.
-    // 3. A timely operator which downloads the batch's contents from S3, and
-    //    outputs them to a timely stream.
+    let subscribe_stream = Arc::clone(&subscribe);
 
     // This is a generator that sets up an async `Stream` that can be continously polled to get the
     // values that are `yield`-ed from it's body.
@@ -276,24 +287,35 @@ where
             .open(persist_location_stream)
             .await
             .expect("could not open persist client")
-            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard.clone())
+            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
             .await
             .expect("could not open persist shard");
 
-        let mut subscription = read
+        let subscription = read
             .subscribe(as_of_stream)
             .await
             .expect("cannot serve requested as_of");
 
+        {
+            // Place the subscription in the mutex.
+            let sub = &mut subscribe_stream.lock().await;
+            **sub = Some(subscription);
+        }
+
         loop {
-            yield subscription.next().await;
+            let mut s = subscribe_stream.lock().await;
+            // Unclear, but the `SeqNo` lease is generated as a function of
+            // generating batches that will be distributed to workers.
+            yield s.as_mut().unwrap().next().await;
         }
     });
 
     let mut pinned_stream = Box::pin(async_stream);
 
-    let (inner, token) =
-        crate::source::util::source(scope, "persist_source".to_string(), move |info| {
+    let (inner, token) = crate::source::util::source(
+        scope,
+        format!("persist_source {:?}: batch distribution", source_id),
+        move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures_util::task::waker(waker_activator);
 
@@ -311,9 +333,9 @@ where
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
                         Some(Ok(batch)) => {
+                            let progress = batch.generate_progress();
                             let session_cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&session_cap);
-                            let progress = batch.generate_progress();
 
                             session.give((i, batch));
 
@@ -345,20 +367,26 @@ where
                     }
                 }
             }
-        });
+        },
+    );
 
-    let mut builder = OperatorBuilder::new(
+    let mut fetcher_builder = OperatorBuilder::new(
         format!(
-            "persist_source: sharded reader {} of {:?}",
+            "persist_source {:?}: batch fetcher {}",
             worker_index, source_id
         ),
         scope.clone(),
     );
-    let dist = |&(i, _): &(usize, ReaderEnrichedHollowBatch<Timestamp>)| u64::cast_from(i);
-    let mut input = builder.new_input(&inner, Exchange::new(dist));
-    let (mut output, output_stream) = builder.new_output();
 
-    builder.build_async(
+    let fetcher_dist = |&(i, _): &(usize, ReaderEnrichedHollowBatch<Timestamp>)| u64::cast_from(i);
+    let mut fetcher_input = fetcher_builder.new_input(&inner, Exchange::new(fetcher_dist));
+    let (mut update_output, update_output_stream) = fetcher_builder.new_output();
+    let (mut seqno_lease_output, seqno_lease_output_stream) = fetcher_builder.new_output();
+
+    let update_output_port = update_output_stream.name().port;
+    let seqno_lease_port = seqno_lease_output_stream.name().port;
+
+    fetcher_builder.build_async(
         scope.clone(),
         async_op!(|initial_capabilities, _frontiers| {
             let mut read = persist_clients
@@ -375,25 +403,72 @@ where
 
             initial_capabilities.clear();
 
-            let mut output_handle = output.activate();
+            let mut output_handle = update_output.activate();
+            let mut seqno_lease_output_handle = seqno_lease_output.activate();
 
-            while let Some((cap, data)) = input.next() {
-                let cap = cap.retain();
+            while let Some((cap, data)) = fetcher_input.next() {
+                let update_cap = cap.delayed_for_output(cap.time(), update_output_port);
+                let mut update_session = output_handle.session(&update_cap);
+
+                let seqno_cap = cap.delayed_for_output(cap.time(), seqno_lease_port);
+                let mut seqno_session = seqno_lease_output_handle.session(&seqno_cap);
                 for (_idx, batch) in data.iter() {
                     let mut updates = read
                         .fetch_batch(batch.clone())
                         .await
                         .expect("shard_id generated for sources must match across all workers");
 
-                    let mut session = output_handle.session(&cap);
-                    session.give_vec(&mut updates);
+                    update_session.give_vec(&mut updates);
+                    seqno_session.give(batch.seqno());
                 }
             }
             false
         }),
     );
 
-    let (ok_stream, err_stream) = output_stream.ok_err(|x| match x {
+    // This operator is meant to only run on the chosen worker. All workers will
+    // exchange their fetched batches' `SeqNo` back to the leasor.
+    let mut seqno_leasor_builder = OperatorBuilder::new(
+        format!("persist_source {:?}: SeqNo leasor", source_id),
+        scope.clone(),
+    );
+
+    // Exchange all `SeqNo`s back to the chosen worker/leasor.
+    let seqno_leasor_dist = move |&_: &SeqNo| u64::cast_from(chosen_worker);
+    let mut seqno_leasor_input = seqno_leasor_builder
+        .new_input(&seqno_lease_output_stream, Exchange::new(seqno_leasor_dist));
+
+    seqno_leasor_builder.build_async(
+        scope.clone(),
+        async_op!(|initial_capabilities, _frontiers| {
+            initial_capabilities.clear();
+
+            // The chosen worker is the leasor.
+            if worker_index != chosen_worker {
+                trace!("We are not the SeqNo leasor of {:?}, exiting...", source_id);
+                return false;
+            }
+
+            let subscription = Arc::clone(&subscribe);
+
+            // Ensure subscription has been generated.
+            while subscription.lock().await.is_none() {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+
+            while let Some((_cap, data)) = seqno_leasor_input.next() {
+                let mut s = subscription.lock().await;
+                let s = s.as_mut().unwrap();
+                for seqno in data.iter() {
+                    s.drop_seqno_lease(*seqno);
+                }
+            }
+
+            false
+        }),
+    );
+
+    let (ok_stream, err_stream) = update_output_stream.ok_err(|x| match x {
         ((Ok(SourceData(Ok(row))), Ok(())), ts, diff) => Ok((row, ts, diff)),
         ((Ok(SourceData(Err(err))), Ok(())), ts, diff) => Err((err, ts, diff)),
         // TODO(petrosagg): error handling
