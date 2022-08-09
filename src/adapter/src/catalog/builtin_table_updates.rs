@@ -801,12 +801,7 @@ impl CatalogState {
         let mut updates = Vec::new();
         let table = self.resolve_builtin_table(&MZ_SYSTEM_CONFIGURATION);
         if let Some(old_value) = old_value {
-            let old_value = serde_json::to_string(&old_value).map_err(|e| {
-                Error::new(ErrorKind::Unstructured(format!(
-                    "could not pack server configuration update: {}",
-                    e
-                )))
-            })?;
+            let old_value = old_value.to_string();
             let row = Row::pack_slice(&[Datum::String(name), Datum::String(&old_value)]);
             updates.push(BuiltinTableUpdate {
                 id: table,
@@ -814,12 +809,7 @@ impl CatalogState {
                 diff: -1,
             });
         }
-        let value = serde_json::to_string(&value).map_err(|e| {
-            Error::new(ErrorKind::Unstructured(format!(
-                "could not pack server configuration update: {}",
-                e
-            )))
-        })?;
+        let value = value.to_string();
         let row = Row::pack_slice(&[Datum::String(name), Datum::String(&value)]);
         updates.push(BuiltinTableUpdate {
             id: table,
