@@ -340,6 +340,42 @@ impl CatalogState {
         self.entry_by_id.get(id)
     }
 
+    /// Parse a SQL string into a catalog view item with only a limited
+    /// context.
+    pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
+        let session_catalog = ConnCatalog {
+            state: Cow::Borrowed(&self),
+            conn_id: SYSTEM_CONN_ID,
+            compute_instance: "default".into(),
+            database: self
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .ok()
+                .map(|db| db.id()),
+            search_path: Vec::new(),
+            user: SYSTEM_USER.into(),
+            prepared_statements: None,
+        };
+        let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+        let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
+        let depends_on = depends_on.into_iter().collect();
+        let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
+        Ok(match plan {
+            Plan::CreateView(CreateViewPlan { view, .. }) => {
+                let mut optimizer = Optimizer::logical_optimizer();
+                let optimized_expr = optimizer.optimize(view.expr)?;
+                let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
+                CatalogItem::View(View {
+                    create_sql: view.create_sql,
+                    optimized_expr,
+                    desc,
+                    conn_id: None,
+                    depends_on,
+                })
+            }
+            _ => bail!("Expected valid CREATE VIEW statement"),
+        })
+    }
+
     /// Returns all indexes on the given object and compute instance known in
     /// the catalog.
     pub fn get_indexes_on(
@@ -2129,7 +2165,7 @@ impl<S: Append> Catalog<S> {
                 + " AS "
                 + &sql_template.replace("{}", &replica_id.to_string());
 
-            let item = self.parse_item_state(state, sql, None);
+            let item = self.state.parse_view_item(sql);
 
             match item {
                 Ok(item) => {
@@ -3913,25 +3949,13 @@ impl<S: Append> Catalog<S> {
         self.parse_item(create_sql, Some(&PlanContext::zero()))
     }
 
-    // Parses the given SQL string into a `CatalogItem`, using an explicit state
-    fn parse_item_state(
+    // Parses the given SQL string into a `CatalogItem`.
+    fn parse_item(
         &self,
-        state: &CatalogState,
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
-        let session_catalog = ConnCatalog {
-            state: Cow::Borrowed(state),
-            conn_id: SYSTEM_CONN_ID,
-            compute_instance: "default".into(),
-            database: self
-                .resolve_database(DEFAULT_DATABASE_NAME)
-                .ok()
-                .map(|db| db.id()),
-            search_path: Vec::new(),
-            user: SYSTEM_USER.into(),
-            prepared_statements: None,
-        };
+        let session_catalog = self.for_system_session();
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let depends_on = depends_on.into_iter().collect();
@@ -4026,15 +4050,6 @@ impl<S: Append> Catalog<S> {
             }
             _ => bail!("catalog entry generated inappropriate plan"),
         })
-    }
-
-    // Parses the given SQL string into a `CatalogItem`.
-    fn parse_item(
-        &self,
-        create_sql: String,
-        pcx: Option<&PlanContext>,
-    ) -> Result<CatalogItem, anyhow::Error> {
-        self.parse_item_state(&self.state, create_sql, pcx)
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {
