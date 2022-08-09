@@ -34,7 +34,8 @@
 
 use crate::{IndexOracle, TransformArgs};
 use mz_expr::visit::VisitChildren;
-use mz_expr::{Id, MirRelationExpr};
+use mz_expr::JoinImplementation::IndexedFilter;
+use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
 
 /// Canonicalizes MFPs and performs common sub-expression elimination.
 #[derive(Debug)]
@@ -75,14 +76,39 @@ impl CanonicalizeMfp {
                 // Maximize number of predicates that are sped using a single index.
                 .max_by_key(|(key, _val)| key.len());
             if let Some((key, val)) = key_val {
-                *relation = MirRelationExpr::Join {
-                    implementation: mz_expr::JoinImplementation::PredicateIndex(
-                        *id,
-                        key.clone(),
-                        val,
-                    ),
-                    inputs: vec![relation.take_dangerous().arrange_by(&[key])],
-                    equivalences: Vec::new(),
+                // We transform the Get into a semi-join with a constant collection.
+                // (For now, the constant collection always has only 1 element.)
+                // E.g.: we go from something like
+                // `SELECT f1, f2, f3 FROM t WHERE t.f1 = lit1 AND t.f2 = lit2
+                // to
+                // `SELECT f1, f2, f3 FROM t, (SELECT * FROM (VALUES (lit1, lit2))) as filter_list
+                //  WHERE t.f1 = filter_list.column1 AND t.f2 = filter_list.column2`
+
+                let inp_id = id.clone();
+                let inp_typ = relation.typ();
+                let filter_list = MirRelationExpr::Constant {
+                    rows: Ok(vec![(val.clone(), 1)]),
+                    typ: mz_repr::RelationType {
+                        column_types: key.iter().map(|e| e.typ(&inp_typ)).collect(),
+                        keys: vec![],
+                    },
+                };
+
+                let join = MirRelationExpr::Join {
+                    inputs: vec![relation.clone().arrange_by(&[key.clone()]), filter_list],
+                    equivalences: key
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            vec![(*e).clone(), MirScalarExpr::column(i + inp_typ.arity())]
+                        })
+                        .collect(),
+                    implementation: IndexedFilter(inp_id, key.clone(), val),
+                };
+
+                *relation = MirRelationExpr::Project {
+                    input: Box::new(join),
+                    outputs: (0..inp_typ.arity()).collect(),
                 };
             }
         }
