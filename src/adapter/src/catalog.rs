@@ -2149,7 +2149,7 @@ impl<S: Append> Catalog<S> {
                     // source + view pair and make a mistake in the migration
                     // it's better to bring up the instance without the view
                     // than to crash.
-                    tracing::warn!("Could not create log view: {}", e);
+                    tracing::error!("Could not create log view: {}", e);
                 }
             }
         }
@@ -4237,10 +4237,16 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
+/// Serialized (stored alongside the replica) logging configuration of
+/// a replica. Serialized variant of ConcreteComputeInstanceReplicaLogging.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SerializedComputeInstanceReplicaLogging {
+    /// Instantiate default logging configuration upon system start.
+    /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
     Default,
+    /// Logging sources have been built for this replica.
     Concrete(Vec<(LogVariant, GlobalId)>),
+    /// Logging sources and views have been built for this replica.
     ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
 
