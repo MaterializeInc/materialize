@@ -1036,11 +1036,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     id,
                     &catalog_sink,
                     StorageSinkConnection::Dummy(DummySinkConnection {}),
-                    // XXX(chae): find better asof for dummy sink
-                    SinkAsOf {
-                        frontier: Antichain::from_elem(Timestamp::minimum()),
-                        strict: false,
-                    },
                 )
                 .await
             {

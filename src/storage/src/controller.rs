@@ -869,7 +869,7 @@ where
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        // XXX(chae): what does dropping sinks mean??
+        // XXX(chae): what does dropping sinks mean?? Will we need to release read holds??
         //self.validate_ids(identifiers.iter().cloned())?;
         //let policies = identifiers
         //    .into_iter()

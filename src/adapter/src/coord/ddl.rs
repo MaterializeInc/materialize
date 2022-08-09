@@ -22,12 +22,11 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_stash::Append;
-use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage::types::sinks::StorageSinkConnection;
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection};
 
 use crate::catalog::{CatalogItem, CatalogState, StorageSinkConnectionState};
 use crate::coord::appends::BuiltinTableUpdateSource;
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError};
@@ -385,21 +384,6 @@ impl<S: Append + 'static> Coordinator<S> {
         #[allow(clippy::drop_ref)]
         drop(entry);
 
-        // We don't try to linearize the as of for the sink; we just pick the
-        // least valid read timestamp. If users want linearizability across
-        // Materialize and their sink, they'll need to reason about the
-        // timestamps we emit anyway, so might as emit as much historical detail
-        // as we possibly can.
-        let id_bundle = CollectionIdBundle {
-            storage_ids: [sink.from].into(),
-            ..Default::default()
-        };
-        let frontier = self.least_valid_read(&id_bundle);
-        let as_of = SinkAsOf {
-            frontier,
-            strict: !sink.with_snapshot,
-        };
-
         let ops = vec![
             catalog::Op::DropItem(id),
             catalog::Op::CreateItem {
@@ -411,7 +395,6 @@ impl<S: Append + 'static> Coordinator<S> {
         ];
 
         let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
-        self.create_storage_export(id, &sink, connection, as_of)
-            .await
+        self.create_storage_export(id, &sink, connection).await
     }
 }

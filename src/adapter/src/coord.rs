@@ -791,8 +791,27 @@ impl<S: Append + 'static> Coordinator<S> {
         id: GlobalId,
         sink: &Sink,
         connection: StorageSinkConnection,
-        as_of: SinkAsOf,
     ) -> Result<(), AdapterError> {
+        // Validate `sink.from` is in fact a storage collection and then set the as of to the least valid read.
+        self.controller.storage().collection(sink.from)?;
+
+        // We don't try to linearize the as of for the sink; we just pick the
+        // least valid read timestamp. If users want linearizability across
+        // Materialize and their sink, they'll need to reason about the
+        // timestamps we emit anyway, so might as emit as much historical detail
+        // as we possibly can.
+        let frontier = self.least_valid_read(
+            &(CollectionIdBundle {
+                storage_ids: [sink.from].into(),
+                ..Default::default()
+            }),
+        );
+        // XXX(chae): coordinate read holds with this as_of
+        let as_of = SinkAsOf {
+            frontier,
+            strict: !sink.with_snapshot,
+        };
+
         let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
         let storage_sink_desc = mz_storage::types::sinks::StorageSinkDesc {
             from: sink.from,
