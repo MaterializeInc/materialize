@@ -818,7 +818,7 @@ pub fn plan_create_source(
     let CreateSourceOptionExtracted { size, remote, .. } =
         CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let host_config = match (remote.clone(), size) {
+    let host_config = match (remote, size) {
         (None, None) => StorageHostConfig::Undefined,
         (None, Some(size)) => StorageHostConfig::Managed { size },
         (Some(addr), None) => StorageHostConfig::Remote { addr },
@@ -865,7 +865,6 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        remote,
         host_config,
     }))
 }
