@@ -79,7 +79,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
-use timely::progress::Timestamp as _;
+use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -792,23 +792,28 @@ impl<S: Append + 'static> Coordinator<S> {
         sink: &Sink,
         connection: StorageSinkConnection,
     ) -> Result<(), AdapterError> {
-        // Validate `sink.from` is in fact a storage collection and then set the as of to the least valid read.
+        // Validate `sink.from` is in fact a storage collection
         self.controller.storage().collection(sink.from)?;
 
-        // We don't try to linearize the as of for the sink; we just pick the
-        // least valid read timestamp. If users want linearizability across
-        // Materialize and their sink, they'll need to reason about the
-        // timestamps we emit anyway, so might as emit as much historical detail
-        // as we possibly can.
-        let idb = CollectionIdBundle {
-            storage_ids: [sink.from].into(),
-            ..Default::default()
+        // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
+        // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
+        // that only things going forward are exported.
+        let timeline = self
+            .get_timeline(sink.from)
+            .unwrap_or(Timeline::EpochMilliseconds);
+        let now = if timeline == Timeline::EpochMilliseconds {
+            let now = self.now();
+            now.step_back().unwrap_or(now)
+        } else {
+            // For non realtime sources, we define now as the largest timestamp, not in
+            // advance of any object's upper. This is the largest timestamp that is closed
+            // to writes.
+            let id_bundle = self.ids_in_timeline(&timeline);
+            self.largest_not_in_advance_of_upper(&id_bundle)
         };
-        let lvw = self.least_valid_write(&idb);
-        // XXX(chae): should we use the least_valid_write??
-        // XXX(chae): coordinate read holds with this as_of
+        let frontier = Antichain::from_elem(now);
         let as_of = SinkAsOf {
-            frontier: lvw,
+            frontier,
             strict: !sink.with_snapshot,
         };
 
