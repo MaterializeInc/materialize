@@ -357,7 +357,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
             compute_state
                 .command_history
-                .reduce(&HashMap::<_, ()>::default());
+                .retain_peeks(&HashMap::<_, ()>::default());
+            compute_state.command_history.reduce();
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
             // suitable replacements for the requested dataflows. A dataflow is "certainly installed"
