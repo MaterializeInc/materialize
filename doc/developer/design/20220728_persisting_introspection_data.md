@@ -188,7 +188,7 @@ Note that each replica (even within the same cluster) generates *different* intr
 
 |  | Arranged | Persisted |
 | --- | --- | --- |
-| Source (compact representation) | Often postfixed with _internal (For example: `mz_dataflow_operator_reachability_internal` ) | `mz_dataflow_operator_reachability_internal_1` |
+| Source (compact representation) | Often postfixed with internal (For example: `mz_dataflow_operator_reachability_internal` ) | `mz_dataflow_operator_reachability_internal_1` |
 | Views (human readable representation) | Normal, builtin view (For example: `mz_dataflow_operator_reachability` ) | `mz_dataflow_operator_reachability_1` |
 
 The user can request on a per cluster basis whether to enable introspection and with which frequency the introspection data is updated. This option applies to both, arranged and persisted introspection.
@@ -197,30 +197,30 @@ The types `LogVariant` and `LogView` enumerate the persisted introspection sourc
 
 ### Catalog perspective
 
-Arranged *views* are global, independent of the number of clusters or replicas. Arranged sources get a different `GlobalId`per cluster. Persisted sources and views on the other hand are per-replica. Thus environmentd creates or removes catalog entries related to introspection sources in roughly the following cases:
+Arranged *views* are global, independent of the number of clusters or replicas. Arranged sources get a different `GlobalId` per cluster. Persisted sources and views on the other hand are per-replica. Thus environmentd creates or removes catalog entries related to introspection sources in roughly the following cases:
 
 - The system is started/bootstrapped
-    - This is when the arranged ID’s are allocated and views are built (since the views are static, using the BUILTINS mechanism)
-    - For persisted introspection sources, nothing happens in general. The exception is when migrating from a former stash variant (See Catalog Migration).
+    - This is when the arranged ID’s are allocated and views are built (since the views are static, using the BUILTINS mechanism).
+    - For persisted introspection sources, nothing happens apart from a potential catalog migration (See Catalog Migration).
 - A cluster is created
     - `GlobalId` for the *arranged sources* are allocated. They are not visible in the introspection tables (i.e. `select * from mz_catalog.mz_sources;` will always display the `GlobalId` of the default cluster). But queries are rewritten correctly: If the non-default cluster is selected, selecting from a *arranged source* will resolve the name to the per cluster id.
 - A replica is created
     - Nothing happens for arranged introspection
-    - A `GlobalId` + an introspection shard is allocated for each introspection source, after inserting the corresponding catalog entries (e.g. `mz_catalog.mz_dataflow_operator_reachability_internal_1` ), the introspection
-    views that use these postfixed sources are parsed from a SQL string and inserted into the catalog. The `LogView` enum can produce a SQL `CREATE VIEW ...` string that refers to the postfixed sources. Thus it’s important the the sources are inserted in the catalog before parsing and inserting the views in the catalog too.
+    - A `GlobalId` and an introspection shard are allocated for each introspection source, after inserting the corresponding catalog entries (e.g. `mz_catalog.mz_dataflow_operator_reachability_internal_1` ), the introspection
+    views that use these postfixed sources are parsed from a SQL string and inserted into the catalog. The `LogView` enum can produce a SQL `CREATE VIEW ...` string that refers to the postfixed sources. Thus it’s important that the sources are inserted in the catalog before parsing and inserting the views in the catalog too.
 - A replica is dropped
-    - Nothing happens for arranged introspection
-    - Arranged introspection views and sources are removed. `CASCADE` is necessary if any other catalog item depends upon the sources or views. However at runtime, views are a normal catalog item that has a dependency on the source, thus whenever we determine if there are dependents, we have to ensure we don’t accidentally include
+    - Nothing happens for arranged introspection....
+    - Arranged introspection views and sources are removed. `CASCADE` is necessary if any other catalog item depends upon the sources or views. However at runtime, views are a normal catalog item that has a dependency on the source. Whenever we determine if there are dependents, we have to ensure we don’t accidentally include the *persisted views*.
 
-Note that the replica is created case can be triggered with a `CREATE CLUSTER REPLICA` as well as an inline replica specification with `CREATE CLUSTER` . Analogous, drop replica can happen with `DROP CLUSTER REPLICA` as well as `DROP CLUSTER ... CASCADE`
+Note that the replica created case can be triggered with a `CREATE CLUSTER REPLICA` as well as an inline replica specification with `CREATE CLUSTER` . Analogous, drop replica can happen with `DROP CLUSTER REPLICA` as well as `DROP CLUSTER ... CASCADE`
 
 All of these mechanisms become a no-op if a cluster is created with introspection turned off.
 
-The `GlobalId` to CollectionMetadata mapping is stored in the `METADATA_COLLECTION` stash (as any other id backed by a storage collection).
+The `GlobalId` to CollectionMetadata mapping is stored in the `METADATA_COLLECTION` stash, as any other id backed by a storage collection.
 
 ### Catalog Storage
 
-While at runtime, the catalog is populated with the normal entries for sources and views.
+At runtime, the catalog is populated with the normal entries for sources and views. However, when the catalog is stored all the persisted sources and views are stored alongside the replica object. This ensures we can retrieve the connection between a replica and the introspection ids.
 
 ### Catalog Migration
 
@@ -230,7 +230,7 @@ The serialized `SerializedComputeInstanceReplicaLogging` has three variants:
 - Concrete: Introspection sources are allocated, but not views. Create default views when possible.
 - ConcreteViews: Introspection sources and views have been allocated.
 
-In `catalog::open` the cases Default and Concrete are replaced with `ConcreteViews` . If the cluster has logging enabled, it will become ConcreteViews with non empty vectors. If the cluster has logging disabled, it will be replaced with `ConcreteViews([],[])` .
+In `catalog::open` the cases Default and Concrete are replaced with `ConcreteViews` . If the cluster has logging enabled, it will become ConcreteViews with non empty vectors. If the cluster has logging disabled, it will be replaced with `ConcreteViews([],[])`.
 
 ### Compute controller
 
@@ -238,7 +238,7 @@ The compute controller that manages the replica has to ensure that the `CreateIn
 
 ### Computed perspective
 
-The computeds do not know about the views at all, they know and worry only about the compact representation. When a user queries a introspection view, it is handled like a normal view.
+The computeds do not know about the views at all, they know and worry only about the compact representation. When a user queries an introspection view, it is handled like a normal view.
 
 The `CreateInstance`  command is the first command a computed receives and contains a `LoggingConfig` . This struct describes which introspection sources to maintain in memory, as arrangement and which to write to persist.
 
