@@ -244,3 +244,6 @@ query T
 SHOW max_schemas_per_database
 ----
 1000
+
+query error unrecognized configuration parameter "invalid_param"
+ALTER SYSTEM SET invalid_param TO 42
