@@ -671,6 +671,22 @@ pub enum RoleId {
     User(u64),
 }
 
+impl RoleId {
+    pub fn is_system(&self) -> bool {
+        match self {
+            Self::System(_) => true,
+            Self::User(_) => false,
+        }
+    }
+
+    pub fn is_user(&self) -> bool {
+        match self {
+            Self::System(_) => false,
+            Self::User(_) => true,
+        }
+    }
+}
+
 impl FromStr for RoleId {
     type Err = anyhow::Error;
 

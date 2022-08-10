@@ -28,7 +28,7 @@ from materialize.checks.actions import RestartMz as RestartMzAction
 from materialize.checks.actions import (
     RestartPostgresBackend as RestartPostgresBackendAction,
 )
-from materialize.checks.actions import StartComputed, StartMz, UseComputed, Validate
+from materialize.checks.actions import AlterSystem, StartComputed, StartMz, UseComputed, Validate
 from materialize.checks.checks import Check
 from materialize.mzcompose import Composition
 
@@ -61,6 +61,7 @@ class RestartEntireMz(Scenario):
         return [
             StartMz(),
             Initialize(self.checks),
+            AlterSystem("max_tables", "1000"),
             RestartMzAction(),
             Manipulate(self.checks, phase=1),
             RestartMzAction(),
@@ -75,6 +76,7 @@ class DropCreateDefaultReplica(Scenario):
         return [
             StartMz(),
             Initialize(self.checks),
+            AlterSystem("max_tables", "1000"),
             Manipulate(self.checks, phase=1),
             DropCreateDefaultReplicaAction(),
             Manipulate(self.checks, phase=2),
@@ -91,6 +93,7 @@ class RestartComputed(Scenario):
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
+            AlterSystem("max_tables", "1000"),
             KillComputed(),
             StartComputed(),
             Manipulate(self.checks, phase=1),
@@ -112,6 +115,7 @@ class RestartEnvironmentdStoraged(Scenario):
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
+            AlterSystem("max_tables", "1000"),
             RestartMzAction(),
             Manipulate(self.checks, phase=1),
             RestartMzAction(),
@@ -128,6 +132,7 @@ class KillStoraged(Scenario):
         return [
             StartMz(),
             Initialize(self.checks),
+            AlterSystem("max_tables", "1000"),
             KillStoragedAction(),
             Manipulate(self.checks, phase=1),
             KillStoragedAction(),
