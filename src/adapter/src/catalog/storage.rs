@@ -605,17 +605,16 @@ impl<S: Append> Connection<S> {
     }
 
     /// Load the persisted server configurations.
-    pub async fn load_system_configuration(
-        &mut self,
-    ) -> Result<BTreeMap<String, mz_sql_parser::ast::Value>, Error> {
+    pub async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
         COLLECTION_SYSTEM_CONFIGURATION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(|(k, v)| {
                 let name = k.name;
-                let value: mz_sql_parser::ast::Value = serde_json::from_slice(&v.value)
-                    .map_err(|err| Error::from(StashError::from(err.to_string())))?;
+                let value = std::str::from_utf8(&v.value)
+                    .expect("invalid persisted system configuration")
+                    .to_string();
                 Ok((name, value))
             })
             .collect()
@@ -1237,17 +1236,12 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub async fn upsert_system_config(
-        &mut self,
-        name: &str,
-        value: mz_sql_parser::ast::Value,
-    ) -> Result<(), Error> {
+    pub async fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
         let value = ServerConfigurationValue {
-            value: serde_json::to_vec(&value)
-                .map_err(|err| Error::from(StashError::from(err.to_string())))?,
+            value: value.bytes().collect(),
         };
         self.system_configurations.delete(|k, _v| k == &key);
         self.system_configurations.insert(key, value)?;

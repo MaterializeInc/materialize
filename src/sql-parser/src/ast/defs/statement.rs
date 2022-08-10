@@ -55,7 +55,9 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
-    AlterSystem(AlterSystemStatement),
+    AlterSystemSet(AlterSystemSetStatement),
+    AlterSystemReset(AlterSystemResetStatement),
+    AlterSystemResetAll(AlterSystemResetAllStatement),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropSchema(DropSchemaStatement),
@@ -119,7 +121,9 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
-            Statement::AlterSystem(stmt) => f.write_node(stmt),
+            Statement::AlterSystemSet(stmt) => f.write_node(stmt),
+            Statement::AlterSystemReset(stmt) => f.write_node(stmt),
+            Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -2449,14 +2453,14 @@ impl AstDisplay for NoticeSeverity {
 }
 impl_display!(NoticeSeverity);
 
-/// `ALTER SYSTEM ...`
+/// `ALTER SYSTEM SET ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterSystemStatement {
+pub struct AlterSystemSetStatement {
     pub name: Ident,
     pub value: SetVariableValue,
 }
 
-impl AstDisplay for AlterSystemStatement {
+impl AstDisplay for AlterSystemSetStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER SYSTEM SET ");
         f.write_node(&self.name);
@@ -2464,8 +2468,32 @@ impl AstDisplay for AlterSystemStatement {
         f.write_node(&self.value);
     }
 }
+impl_display!(AlterSystemSetStatement);
 
-impl_display!(AlterSystemStatement);
+/// `ALTER SYSTEM RESET ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSystemResetStatement {
+    pub name: Ident,
+}
+
+impl AstDisplay for AlterSystemResetStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SYSTEM RESET ");
+        f.write_node(&self.name);
+    }
+}
+impl_display!(AlterSystemResetStatement);
+
+/// `ALTER SYSTEM RESET ALL`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSystemResetAllStatement {}
+
+impl AstDisplay for AlterSystemResetAllStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SYSTEM RESET ALL");
+    }
+}
+impl_display!(AlterSystemResetAllStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AsOf<T: AstInfo> {
