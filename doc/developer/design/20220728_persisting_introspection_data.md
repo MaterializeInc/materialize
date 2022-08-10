@@ -1,14 +1,14 @@
 # Persisting introspection data
 
-This document discusses design choices and an implementation overview regarding persisting introspection information. 
+This document discusses design choices and an implementation overview regarding persisting introspection information.
 
 ## Introspection and what it does
 
 The introspection mechanism surfaces the timely logging dataflows to users. For example the [mz_catalog.mz_scheduling_histogram](https://materialize.com/docs/sql/system-catalog/#mz_scheduling_histogram) allows user to inspect how long certain timely operators were running. This can be useful for understanding and debugging Materialize’s performance.
 
-The contents of introspection tables are inherently different per timely instance and thus per replica, unlike with other dataflows, it is not expected that different replicas produce the same data. 
+The contents of introspection tables are inherently different per timely instance and thus per replica, unlike with other dataflows, it is not expected that different replicas produce the same data.
 
-The usual logic of `ActiveReplication` that forwards Peek’s to all replicas and uses the first one does not make sense, as there is no way for the user to tell from which replica the obtained numbers are. 
+The usual logic of `ActiveReplication` that forwards Peek’s to all replicas and uses the first one does not make sense, as there is no way for the user to tell from which replica the obtained numbers are.
 
 Thus we have to offer some other mechanism.
 
@@ -26,7 +26,7 @@ If a replica gets saturated and does not perform timely updates anymore, the use
 
 - Crashing replica
 
-If a replica crashes (for example due to being out-of-memory), the introspection data can’t reliably be saved by the user before the crash happens, as it happened unexpectedly. It is important for the user to see the introspection data for a postmortem analysis. 
+If a replica crashes (for example due to being out-of-memory), the introspection data can’t reliably be saved by the user before the crash happens, as it happened unexpectedly. It is important for the user to see the introspection data for a postmortem analysis.
 
 - Restarting replica
 
@@ -41,7 +41,7 @@ At some point in the distant future, we might use this data to automatically det
 
 From a pure SQL perspective, the obvious schema to present the cross-replica introspection information is to extend the introspection tables with a replica id column.
 
-For example `mz_scheduling_histograms` would get an additional column `replica_id`.  
+For example `mz_scheduling_histograms` would get an additional column `replica_id`.
 
 ```rust
 worker    slept_for    requested    count
@@ -67,7 +67,7 @@ We could offer an aggregate view, but this view has to be changed in the catalog
 
 In addition, this aggregated view would also suffer from the timestamp selection problem described in "Difficulties in offering an aggregated source".
 
-Alternatively, to stay backwards compatible with the replica targeted queries, we could offer a view that refers to a postfixed variant, and recreate this view with a `SET CLUSTER_REPLICA` command. (I.e. the view would be defined as  `CREATE VIEW mz_arrangement_sharing AS SELECT * FROM mz_arrangement_sharing_1` and the postfix changes with each `set cluster_replica`). This approach suffers from the same limitations as above, because the view has to be recreated. It is not possible for the user to define views upon that view and then change the `cluster_replica` variable. 
+Alternatively, to stay backwards compatible with the replica targeted queries, we could offer a view that refers to a postfixed variant, and recreate this view with a `SET CLUSTER_REPLICA` command. (I.e. the view would be defined as  `CREATE VIEW mz_arrangement_sharing AS SELECT * FROM mz_arrangement_sharing_1` and the postfix changes with each `set cluster_replica`). This approach suffers from the same limitations as above, because the view has to be recreated. It is not possible for the user to define views upon that view and then change the `cluster_replica` variable.
 
 ### The zombie replica problem
 
@@ -123,11 +123,11 @@ For the reasons described above, it is not trivial to realize a unionized view o
 
 The idea is to expose to the user one source per replica-introspection type pair. For example after `CREATE CLUSTER c1 REPLICAS (r (SIZE '1'));` the following tables can be found in `mz_catalog`:
 
-`mz_catalog.dataflow_operators_1` (for the default cluster) 
+`mz_catalog.dataflow_operators_1` (for the default cluster)
 
 `mz_catalog.dataflow_operators_2` (for the cluster c1)
 
-Each table name has a cluster id suffix, users can determine the cluster id using the table `mz_catalog.mz_cluster_replicas_base`. 
+Each table name has a cluster id suffix, users can determine the cluster id using the table `mz_catalog.mz_cluster_replicas_base`.
 
 **Benefits**: It allows the user to query up-to-date data from a single replica. There is nothing that blocks a computed of writing into the logging sources as fast as persist allows, thus the queried data should be fresh. This approach synergizes well with storage renditions, if a computed restarts, it could start a new rendition, elegantly solving the problem that a “zombie” computed writes to the same shard.
 
@@ -148,8 +148,8 @@ Using an atomic operation on the persist shard, multiple writers can write into 
 
 **Benefits**: It exposes a single source per introspection type, thus we can match the ideal schema presented above. Updates from fast replica appear together with old updates from lagging replicas.
 
-**Drawbacks**: Multiple reader have to contend for the persist shard, thus limiting the update frequency of the data which requires some compromise in data freshness. 
-There is another reason for limiting the update frequency: We have to determine an artificial timestamp (because we can only append data with an increasing timestamp) and have to ensure that we are not running arbitrarily far into the future. 
+**Drawbacks**: Multiple reader have to contend for the persist shard, thus limiting the update frequency of the data which requires some compromise in data freshness.
+There is another reason for limiting the update frequency: We have to determine an artificial timestamp (because we can only append data with an increasing timestamp) and have to ensure that we are not running arbitrarily far into the future.
 
 To determine an update frequency, we need to know: How many replicas we expect to exist at one time and how fast persist’s  `compare_and_append` is in a scenario with contention. As an educated guess: For example assuming a maximum of 100 replicas and an update latency of 10ms I’d suggest a update frequency of 10s or more (accounting for potential retries).
 
@@ -165,14 +165,14 @@ To determine an update frequency, we need to know: How many replicas we expect t
 
 Should the persisted introspection data remain after a drop cluster? The user actively requested the `DROP CLUSTER REPLICA` so the user could always save the data before dropping.
 
-- If the source remains, what should be the content of these sources? 
+- If the source remains, what should be the content of these sources?
 If we do one source per replica, we also have to consider what are the contents? We can for example have the source stay around but provide empty data.
 - If no, do we need cascade (as in `DROP CLUSTER ... CASCADE`) to clean up the introspection shards? Or is introspection data “volatile” that should be dropped even without cascade?
 - Even if we do remove the entries without cascade, we need to handle the case when there are dependencies on those entries, such as a view created on top of the introspection sources.
 
 Right now, `DROP CLUSTER REPLICA` does not have a cascade option (because there was nothing to cascade into).
 
-**Decision**: We drop the introspection sources and views on replica drop. We add a `CASCADE` option, that will also drop any dependents on the views. The same logic 
+**Decision**: We drop the introspection sources and views on replica drop. We add a `CASCADE` option, that will also drop any dependents on the views. The same logic
 
 The same logic propagates to `DROP CLUSTER` if a cluster is dropped, and there is a (transitive) dependency on one of the cluster’s replica introspection sources, the command will fail. Unless `CASCADE` is specified, in which case, the cluster, the replica, the introspection sources and any views using these introspection sources is used.
 
@@ -193,7 +193,7 @@ Note that each replica (even within the same cluster) generates *different* intr
 
 The user can request on a per cluster basis whether to enable introspection and with which frequency the introspection data is updated. This option applies to both, arranged and persisted introspection.
 
-The types `LogVariant` and `LogView` enumerate the persisted introspection sources and views. 
+The types `LogVariant` and `LogView` enumerate the persisted introspection sources and views.
 
 ### Catalog perspective
 
@@ -216,7 +216,7 @@ Note that the replica is created case can be triggered with a `CREATE CLUSTER RE
 
 All of these mechanisms become a no-op if a cluster is created with introspection turned off.
 
-The `GlobalId` to CollectionMetadata mapping is stored in the `METADATA_COLLECTION` stash (as any other id backed by a storage collection). 
+The `GlobalId` to CollectionMetadata mapping is stored in the `METADATA_COLLECTION` stash (as any other id backed by a storage collection).
 
 ### Catalog Storage
 
@@ -224,7 +224,7 @@ While at runtime, the catalog is populated with the normal entries for sources a
 
 ### Catalog Migration
 
-The serialized `SerializedComputeInstanceReplicaLogging` has three variants: 
+The serialized `SerializedComputeInstanceReplicaLogging` has three variants:
 
 - Default: No introspection sources created, but create the default ones when possible.
 - Concrete: Introspection sources are allocated, but not views. Create default views when possible.
@@ -238,8 +238,8 @@ The compute controller that manages the replica has to ensure that the `CreateIn
 
 ### Computed perspective
 
-The computeds do not know about the views at all, they know and worry only about the compact representation. When a user queries a introspection view, it is handled like a normal view. 
+The computeds do not know about the views at all, they know and worry only about the compact representation. When a user queries a introspection view, it is handled like a normal view.
 
-The `CreateInstance`  command is the first command a computed receives and contains a `LoggingConfig` . This struct describes which introspection sources to maintain in memory, as arrangement and which to write to persist. 
+The `CreateInstance`  command is the first command a computed receives and contains a `LoggingConfig` . This struct describes which introspection sources to maintain in memory, as arrangement and which to write to persist.
 
-If there are multiple replicas, the arranged logs use the same `GlobalId` for the same introspection source across replicas. This means that queries that use arranged introspection sources need to be directed to a replica, otherwise the user can’t tell which replica replied. 
+If there are multiple replicas, the arranged logs use the same `GlobalId` for the same introspection source across replicas. This means that queries that use arranged introspection sources need to be directed to a replica, otherwise the user can’t tell which replica replied.
