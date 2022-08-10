@@ -218,6 +218,8 @@ pub trait StorageController: Debug + Send {
     /// capability if appropriate, but it will not "recover" the read capability if the prior
     /// capability is already ahead of it.
     ///
+    /// The `StorageController` may include its own overrides on these policies.
+    ///
     /// Identifiers not present in `policies` retain their existing read policies.
     async fn set_read_policy(
         &mut self,
@@ -442,6 +444,7 @@ pub struct StorageControllerState<
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) exports: BTreeMap<GlobalId, ExportState<T>>,
+    pub(super) exported_collections: BTreeMap<GlobalId, Vec<GlobalId>>,
     pub(super) stash: S,
     /// Write handle for persist shards.
     pub(super) persist_write_handles: persist_write_handles::PersistWorker<T>,
@@ -570,6 +573,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
         Self {
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
+            exported_collections: BTreeMap::default(),
             stash,
             persist_write_handles: persist_write_handles::PersistWorker::new(tx),
             persist_read_handles: persist_read_handles::PersistWorker::new(),
@@ -761,17 +765,22 @@ where
         }
 
         for (id, description) in exports {
+            let from = description.sink.from;
+
             self.state
                 .exports
                 .insert(id, ExportState::new(description.clone()));
 
-            let from_storage_metadata = self
-                .collection(description.sink.from)?
-                .collection_metadata
-                .clone();
+            self.state
+                .exported_collections
+                .entry(from)
+                .or_default()
+                .push(id);
+
+            let from_storage_metadata = self.collection(from)?.collection_metadata.clone();
 
             let augmented_sink_desc = StorageSinkDesc {
-                from: description.sink.from,
+                from,
                 from_desc: description.sink.from_desc,
                 connection: description.sink.connection,
                 envelope: description.sink.envelope,
@@ -822,13 +831,6 @@ where
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        // XXX(chae): what does dropping sinks mean?? Will we need to release read holds??
-        //self.validate_ids(identifiers.iter().cloned())?;
-        //let policies = identifiers
-        //    .into_iter()
-        //    .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
-        //    .collect();
-        //self.set_read_policy(policies).await?;
         self.validate_export_ids(identifiers.iter().cloned())?;
         self.drop_sinks_unvalidated(identifiers).await
     }
@@ -838,8 +840,22 @@ where
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError> {
         for id in identifiers {
+            let export = match self.export(id) {
+                Ok(export) => export,
+                Err(_) => continue,
+            };
+            let from = export.from();
+            let old_frontier = export.write_frontier.frontier().to_owned();
+
+            self.state
+                .exported_collections
+                .get_mut(&from)
+                // Internal logic error NOT due to export not existing
+                .expect("Dangling exported collection")
+                .retain(|from_export_id| *from_export_id != id);
+
+            // Remove sink by removing its write frontier and then deprovisioning.
             let mut update = ChangeBatch::new();
-            let old_frontier = self.export(id)?.write_frontier.frontier();
             update.extend(old_frontier.iter().map(|time| (time.clone(), -1)));
             self.update_write_frontiers(&[(id, update)]).await?;
             self.hosts.deprovision(id).await?;
@@ -886,20 +902,12 @@ where
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
-            if let Ok(collection) = self.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
-
-                if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
-                    if !update.is_empty() {
-                        read_capability_changes.insert(id, update);
-                    }
+            if let Ok(mut updates) =
+                self.generate_new_capability_for_collection(id, |c| c.read_policy = policy)
+            {
+                if !updates.is_empty() {
+                    read_capability_changes.insert(id, updates);
                 }
-
-                collection.read_policy = policy;
             } else {
                 tracing::error!("Reference to unregistered id: {:?}", id);
             }
@@ -917,39 +925,45 @@ where
         updates: &[(GlobalId, ChangeBatch<T>)],
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
-        let mut read_policy_updates = vec![];
-        for (id, changes) in updates.iter() {
-            if let Ok(collection) = self.collection_mut(*id) {
-                collection
-                    .write_frontier
-                    .update_iter(changes.clone().drain());
+        let mut collections = BTreeMap::new();
+        let mut exports = vec![];
 
-                let mut new_read_capability = collection
-                    .read_policy
-                    .frontier(collection.write_frontier.frontier());
-                if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
-                    // TODO: reuse change batch above?
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
-                }
-            } else if let Ok(export) = self.export_mut(*id) {
-                export.write_frontier.update_iter(changes.clone().drain());
-                read_policy_updates.push(export.description.sink.from);
+        for (id, changes) in updates.iter() {
+            if let Ok(_) = self.collection(*id) {
+                collections.insert(*id, Some(changes));
+            } else if let Ok(_) = self.export(*id) {
+                exports.push((id, changes));
             } else {
                 panic!("Reference to absent collection");
             }
         }
+
+        // Exports come first so we can update the collections below based on any new export write frontiers
+        for (id, changes) in exports {
+            let export = self
+                .export_mut(*id)
+                .expect("Export previously validated to exist");
+            export.write_frontier.update_iter(changes.clone().drain());
+            collections.entry(export.from()).or_insert(None);
+        }
+
+        for (id, changes) in collections {
+            let mut update = self
+                .generate_new_capability_for_collection(id, |c| {
+                    if let Some(changes) = changes {
+                        c.write_frontier.update_iter(changes.clone().drain());
+                    }
+                })
+                .expect("Collection previously validated to exist");
+            if !update.is_empty() {
+                read_capability_changes.insert(id, update);
+            }
+        }
+
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes)
                 .await?;
         }
-        // XXX(chae): do we need to tie read policies at this level? or done at higher level?
-        if !read_policy_updates.is_empty() {}
         Ok(())
     }
 
@@ -1094,6 +1108,58 @@ where
         }
         Ok(())
     }
+
+    // Should only fail if collection doesn't exist. N.B. We can't just take in the mut ref because then the borrow checker wouldn't let us read state.
+    fn generate_new_capability_for_collection<F>(
+        &mut self,
+        id: GlobalId,
+        f: F,
+    ) -> Result<ChangeBatch<T>, StorageError>
+    where
+        F: FnOnce(&mut CollectionState<T>),
+    {
+        let collection = self
+            .state
+            .collections
+            .get_mut(&id)
+            .ok_or(StorageError::IdentifierMissing(id))?;
+        f(collection);
+
+        let mut update = ChangeBatch::new();
+
+        // Get read policy sent from the coordinator
+        let mut new_read_capability = collection
+            .read_policy
+            .frontier(collection.write_frontier.frontier());
+
+        // Also consider the write frontier of any exports
+        for export_id in self
+            .state
+            .exported_collections
+            .get(&id)
+            .cloned()
+            .unwrap_or_default()
+        {
+            new_read_capability.meet_assign(
+                &self
+                    .state
+                    .exports
+                    .get(&export_id)
+                    .expect("Dangling export reference")
+                    .write_frontier
+                    .frontier()
+                    .to_owned(),
+            );
+        }
+
+        if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
+            update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+            std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+            update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+        }
+
+        Ok(update)
+    }
 }
 
 /// State maintained about individual collections.
@@ -1161,6 +1227,9 @@ impl<T: Timestamp> ExportState<T> {
             description,
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
         }
+    }
+    fn from(&self) -> GlobalId {
+        self.description.sink.from
     }
 }
 
