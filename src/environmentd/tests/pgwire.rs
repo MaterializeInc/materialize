@@ -28,7 +28,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use mz_ore::collections::CollectionExt;
-use mz_ore::{assert_contains, task};
+use mz_ore::task;
 use mz_pgrepr::{Numeric, Record};
 
 use crate::util::PostgresErrorExt;
@@ -42,11 +42,6 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-
-    match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
-        Ok(_) => panic!("query with invalid parameters executed successfully"),
-        Err(err) => assert_contains!(format!("{:?}", err.source()), "WrongType"),
-    }
 
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),

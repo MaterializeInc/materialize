@@ -1,0 +1,14 @@
+# Test that invalid query params are rejected.
+
+send
+Parse {"query": "SELECT $1 + 1"}
+Bind {"values": ["a"]}
+Sync
+----
+
+until err_field_typs=S
+ReadyForQuery
+----
+ParseComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"}]}
+ReadyForQuery {"status":"I"}
