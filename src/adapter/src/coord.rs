@@ -347,7 +347,7 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
-        let mut persisted_log_ids = vec![];
+        let mut persisted_source_ids = vec![];
         for instance in self.catalog.compute_instances() {
             self.controller
                 .create_instance(instance.id, instance.logging.clone())
@@ -356,7 +356,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let introspection_collections = replica
                     .config
                     .persisted_logs
-                    .get_logs()
+                    .get_sources()
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
@@ -369,7 +369,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_log_ids.extend(replica.config.persisted_logs.get_log_ids().iter());
+                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids().iter());
 
                 self.controller
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
@@ -379,7 +379,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.initialize_storage_read_policies(
-            persisted_log_ids,
+            persisted_source_ids,
             DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
         )
         .await;

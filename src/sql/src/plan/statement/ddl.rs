@@ -3425,20 +3425,24 @@ pub fn plan_drop_cluster_replica(
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
-            // Check if we have an item that depends on the replica's logs
             if !cascade {
-                let log_ids = instance.replica_logs(&replica_name).unwrap();
-                for id in log_ids {
+                let (log_ids, view_ids) = instance.replica_logs_and_views(&replica_name).unwrap();
+
+                // Check if we have an item that depends on the replica's logs or log views
+                for id in log_ids.iter().chain(view_ids.iter()) {
                     let log_item = scx.catalog.get_item(&id);
                     for id in log_item.used_by() {
-                        let dep = scx.catalog.get_item(id);
-                        if dependency_prevents_drop(ObjectType::Source, dep) {
-                            sql_bail!(
-                                "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
-                                replica_name.quoted(),
-                                instance.name().quoted(),
-                                scx.catalog.resolve_full_name(dep.name())
-                            );
+                        // Dependencies on log views can be removed without cascade.
+                        if !view_ids.contains(id) {
+                            let dep = scx.catalog.get_item(id);
+                            if dependency_prevents_drop(ObjectType::Source, dep) {
+                                sql_bail!(
+                                    "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
+                                    replica_name.quoted(),
+                                    instance.name().quoted(),
+                                    scx.catalog.resolve_full_name(dep.name())
+                                );
+                            }
                         }
                     }
                 }
