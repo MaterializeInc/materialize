@@ -2107,8 +2107,8 @@ FROM mz_catalog.mz_roles r",
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: "mz_system" };
 
-pub const MZ_SYSTEM_EXTERNAL: BuiltinRole = BuiltinRole {
-    name: "mz_system_external",
+pub const HTTP_DEFAULT_USER: BuiltinRole = BuiltinRole {
+    name: "http_default_user",
 };
 
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
@@ -2293,8 +2293,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> =
-    Lazy::new(|| vec![MZ_SYSTEM, MZ_SYSTEM_EXTERNAL]);
+pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM, HTTP_DEFAULT_USER]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {

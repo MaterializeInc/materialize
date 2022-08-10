@@ -68,7 +68,7 @@ query TT rowsort
 SELECT id, name FROM mz_roles
 ----
 s1 mz_system
-s2 mz_system_external
+s2 http_default_user
 u1 materialize
 u2 foo
 
@@ -82,7 +82,7 @@ query TT rowsort
 SELECT id, name FROM mz_roles
 ----
 s1 mz_system
-s2 mz_system_external
+s2 http_default_user
 u1 materialize
 u3 bar
 
