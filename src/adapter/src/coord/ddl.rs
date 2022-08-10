@@ -63,7 +63,6 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
-        let mut storage_temporary_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
@@ -95,22 +94,12 @@ impl<S: Append + 'static> Coordinator<S> {
                             _ => {}
                         }
                     }
-                    CatalogItem::Sink(catalog::Sink { connection, .. }) => {
-                        match connection {
-                            StorageSinkConnectionState::Ready(_) => {
-                                storage_sinks_to_drop.push(*id);
-                            }
-                            StorageSinkConnectionState::Finalizing(_) => {
-                                storage_temporary_sinks_to_drop.push(*id);
-                            }
-                            // XXX(chae): Should we just ignore a drop if we're still pending (haven't started processing
-                            // the sink ready message)?? I'm worried that if we don't ignore, we'd have a panic if we get
-                            // a `DROP SINK` between processing the `CREATE SINK` and handling the sink ready message
-                            // (because the sink ready message assumes the sink does exists / tries to drop it)
-                            // N.B. this is the old behavior
-                            StorageSinkConnectionState::Pending(_) => (),
+                    CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
+                        StorageSinkConnectionState::Ready(_) => {
+                            storage_sinks_to_drop.push(*id);
                         }
-                    }
+                        StorageSinkConnectionState::Pending(_) => (),
+                    },
                     CatalogItem::Index(catalog::Index {
                         compute_instance, ..
                     }) => {
@@ -191,10 +180,6 @@ impl<S: Append + 'static> Coordinator<S> {
             if !storage_sinks_to_drop.is_empty() {
                 self.drop_storage_sinks(storage_sinks_to_drop).await;
             }
-            if !storage_temporary_sinks_to_drop.is_empty() {
-                self.try_drop_storage_sinks(storage_temporary_sinks_to_drop)
-                    .await;
-            }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
             }
@@ -271,17 +256,6 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .storage_mut()
             .drop_sinks(sinks)
-            .await
-            .unwrap();
-    }
-
-    pub(crate) async fn try_drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
-        for id in &sinks {
-            self.drop_read_policy(id);
-        }
-        self.controller
-            .storage_mut()
-            .try_drop_sinks(sinks)
             .await
             .unwrap();
     }
@@ -368,33 +342,43 @@ impl<S: Append + 'static> Coordinator<S> {
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
-        let entry = self.catalog.try_get_entry_mut(&id).unwrap();
+        let entry = self.catalog.get_entry(&id);
         let name = entry.name().clone();
-        let mut sink = match entry.item_mut() {
+        let sink = match entry.item() {
             CatalogItem::Sink(sink) => sink,
             _ => unreachable!(),
         };
-        sink.connection = StorageSinkConnectionState::Finalizing(connection.clone());
-
         let sink = catalog::Sink {
             connection: StorageSinkConnectionState::Ready(connection.clone()),
             ..sink.clone()
         };
-        // Make clear that we're no longer updating catalog state once we have our local copy
-        #[allow(clippy::drop_ref)]
-        drop(entry);
 
         let ops = vec![
             catalog::Op::DropItem(id),
             catalog::Op::CreateItem {
                 id,
                 oid,
-                name: name.clone(),
+                name,
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
 
         let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
-        self.create_storage_export(id, &sink, connection).await
+        // XXX(chae): should this happen in the same task where we build the connection??  Or should it need to happen
+        // after we update the catalog?
+        match self.create_storage_export(id, &sink, connection).await {
+            Ok(()) => Ok(()),
+            Err(storage_error) =>
+            // TODO: catalog_transact that can take async function to actually make the `CreateItem` above transactional.
+            {
+                match self
+                    .catalog_transact(session, vec![catalog::Op::DropItem(id)], move |_| Ok(()))
+                    .await
+                {
+                    Ok(()) => Err(storage_error),
+                    Err(e) => Err(e),
+                }
+            }
+        }
     }
 }

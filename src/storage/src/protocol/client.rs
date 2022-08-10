@@ -170,7 +170,6 @@ impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> 
         ProtoExportSinkCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
-            resume_upper: Some((&self.resume_upper).into()),
         }
     }
 
@@ -180,9 +179,6 @@ impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> 
             description: proto
                 .description
                 .into_rust_if_some("ProtoExportSinkCommand::description")?,
-            resume_upper: proto.resume_upper.map(Into::into).ok_or_else(|| {
-                TryFromProtoError::missing_field("ProtoExportSinkCommand::resume_upper")
-            })?,
         })
     }
 }
@@ -192,8 +188,6 @@ impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> 
 pub struct ExportSinkCommand<T> {
     pub id: GlobalId,
     pub description: StorageSinkDesc<CollectionMetadata, T>,
-    /// The upper frontier at which this export should resume.
-    pub resume_upper: Antichain<T>,
 }
 
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {

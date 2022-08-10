@@ -53,7 +53,6 @@ message ProtoComputeSinkConnection {
 message ProtoStorageSinkConnection {
     oneof kind {
         ProtoKafkaSinkConnection kafka = 1;
-        ProtoDummySinkConnection dummy = 2;
     }
 }
 
@@ -99,7 +98,4 @@ message ProtoPublishedSchemaInfo {
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
     mz_storage.controller.ProtoCollectionMetadata storage_metadata = 2;
-}
-
-message ProtoDummySinkConnection {
 }

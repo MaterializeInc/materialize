@@ -55,8 +55,8 @@ use mz_sql::plan::{
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy};
 use mz_storage::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, DummySinkConnection, SinkAsOf, StorageSinkConnection,
-    StorageSinkConnectionBuilder, TailSinkConnection,
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
+    TailSinkConnection,
 };
 use mz_storage::types::sources::IngestionDescription;
 
@@ -1025,38 +1025,13 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Sink(catalog_sink.clone()),
         }];
 
-        // Result combinators can't use async functions; Futures combinators don't work because requires two mutable
-        // borrows to `self.`
-        let result = match self
-            .catalog_transact(Some(&session), ops, move |_| Ok(()))
-            .await
-        {
-            Ok(()) => match self
-                .create_storage_export(
-                    id,
-                    &catalog_sink,
-                    StorageSinkConnection::Dummy(DummySinkConnection {}),
-                )
-                .await
-            {
-                Ok(()) => Ok(()),
-                Err(storage_error) => {
-                    // TODO: catalog_transact that can take async function to actually make the `CreateItem` above transactional.
-                    match self
-                        .catalog_transact(
-                            Some(&session),
-                            vec![catalog::Op::DropItem(id)],
-                            move |_| Ok(()),
-                        )
-                        .await
-                    {
-                        Ok(()) => Err(storage_error),
-                        Err(e) => Err(e),
-                    }
-                }
-            },
-            Err(e) => Err(e),
-        };
+        let result = self
+            .catalog_transact(Some(&session), ops, move |txn| {
+                // Validate that the from collection is in fact a persist collection we can export.
+                txn.dataflow_client.storage().collection(sink.from)?;
+                Ok(())
+            })
+            .await;
 
         match result {
             Ok(()) => {}

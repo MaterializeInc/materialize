@@ -345,10 +345,6 @@ impl CatalogState {
         self.entry_by_id.get(id)
     }
 
-    pub fn try_get_entry_mut(&mut self, id: &GlobalId) -> Option<&mut CatalogEntry> {
-        self.entry_by_id.get_mut(id)
-    }
-
     /// Create and insert the per replica log sources and log views.
     fn insert_replica_introspection_items(
         &mut self,
@@ -1255,11 +1251,7 @@ pub struct Sink {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum StorageSinkConnectionState {
-    // The sink is currently being built
     Pending(StorageSinkConnectionBuilder),
-    // The temporary sink is being replaced with the proper sink
-    Finalizing(StorageSinkConnection),
-    // The permanent sink is ready for sure
     Ready(StorageSinkConnection),
 }
 
@@ -1414,8 +1406,7 @@ impl CatalogItem {
             | CatalogItem::Connection(_)
             | CatalogItem::StorageCollection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
-                StorageSinkConnectionState::Pending(_)
-                | StorageSinkConnectionState::Finalizing(_) => true,
+                StorageSinkConnectionState::Pending(_) => true,
                 StorageSinkConnectionState::Ready(_) => false,
             },
         }
@@ -1589,11 +1580,6 @@ impl CatalogEntry {
     /// Returns the `CatalogItem` associated with this catalog entry.
     pub fn item(&self) -> &CatalogItem {
         &self.item
-    }
-
-    /// Returns the `CatalogItem` associated with this catalog entry.
-    pub fn item_mut(&mut self) -> &mut CatalogItem {
-        &mut self.item
     }
 
     /// Returns the global ID of this catalog entry.
@@ -2819,10 +2805,6 @@ impl<S: Append> Catalog<S> {
 
     pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
         self.state.try_get_entry(id)
-    }
-
-    pub fn try_get_entry_mut(&mut self, id: &GlobalId) -> Option<&mut CatalogEntry> {
-        self.state.try_get_entry_mut(id)
     }
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {

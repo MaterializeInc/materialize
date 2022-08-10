@@ -453,7 +453,6 @@ impl CatalogState {
                         diff,
                     });
                 }
-                StorageSinkConnection::Dummy(_) => (),
             }
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_SINKS),

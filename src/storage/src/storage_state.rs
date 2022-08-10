@@ -210,7 +210,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         &mut self.storage_state,
                         export.id,
                         export.description,
-                        export.resume_upper,
                     );
 
                     self.storage_state.reported_frontiers.insert(

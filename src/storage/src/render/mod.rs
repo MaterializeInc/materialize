@@ -176,7 +176,6 @@ pub fn build_export_dataflow<A: Allocate>(
     storage_state: &mut StorageState,
     id: GlobalId,
     description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
-    _resume_upper: Antichain<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();

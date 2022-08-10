@@ -58,7 +58,7 @@ use crate::protocol::client::{
 };
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use crate::types::sinks::{StorageSinkConnection, StorageSinkDesc};
+use crate::types::sinks::StorageSinkDesc;
 use crate::types::sources::IngestionDescription;
 
 mod hosts;
@@ -106,44 +106,6 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     /// If `None`, the controller manages the lifetime of the `storaged`
     /// process.
     pub remote_addr: Option<String>,
-}
-
-impl<T: Timestamp> ExportDescription<T> {
-    fn is_valid_replacement_for(&self, old: &ExportDescription<T>) -> bool {
-        let ExportDescription {
-            sink:
-                StorageSinkDesc {
-                    from: ref old_from,
-                    from_desc: ref old_from_desc,
-                    connection: ref old_connection,
-                    envelope: ref old_envelope,
-                    as_of: ref old_as_of,
-                    from_storage_metadata: ref old_from_storage_metadata,
-                },
-            remote_addr: ref old_remote_addr,
-        } = old;
-        let ExportDescription {
-            sink:
-                StorageSinkDesc {
-                    from: ref new_from,
-                    from_desc: ref new_from_desc,
-                    connection: ref new_connection,
-                    envelope: ref new_envelope,
-                    as_of: ref new_as_of,
-                    from_storage_metadata: ref new_from_storage_metadata,
-                },
-            remote_addr: ref new_remote_addr,
-        } = self;
-
-        let required_matching_fields = old_from == new_from
-            && old_from_desc == new_from_desc
-            && old_envelope == new_envelope
-            && old_from_storage_metadata == new_from_storage_metadata
-            && old_remote_addr == new_remote_addr;
-        let optional_matching_fields = matches!(old_connection, StorageSinkConnection::Dummy(_))
-            || (old_as_of == new_as_of && old_connection == new_connection);
-        required_matching_fields && optional_matching_fields
-    }
 }
 
 #[async_trait(?Send)]
@@ -200,13 +162,6 @@ pub trait StorageController: Debug + Send {
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
-
-    /// Drops the read capability for the sinks and allows their resources to be reclaimed.  This
-    /// doesn't require the sinks exists.
-    async fn try_drop_sinks(&mut self, mut identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
-        identifiers.retain(|id| self.export(*id).is_ok());
-        self.drop_sinks(identifiers).await
-    }
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     ///
@@ -799,7 +754,7 @@ where
                 return Err(StorageError::SourceIdReused(*id));
             }
             if let Ok(export) = self.export(*id) {
-                if !desc.is_valid_replacement_for(&export.description) {
+                if &export.description != desc {
                     return Err(StorageError::SourceIdReused(*id));
                 }
             }
@@ -826,8 +781,6 @@ where
             let cmd = ExportSinkCommand {
                 id,
                 description: augmented_sink_desc,
-                // XXX(chae): derive this
-                resume_upper: Antichain::from_elem(T::minimum()),
             };
             // TODO: allow specifying a size parameter for sinks, tracked in #13889
             let host_config = match description.remote_addr {

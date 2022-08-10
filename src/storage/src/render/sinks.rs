@@ -212,45 +212,11 @@ where
         G: Scope<Timestamp = Timestamp>;
 }
 
-struct Dummy;
-
-impl<G> SinkRender<G> for Dummy
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    fn uses_keys(&self) -> bool {
-        false
-    }
-
-    fn get_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
-    fn get_relation_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
-    fn render_continuous_sink(
-        &self,
-        _storage_state: &mut StorageState,
-        _sink: &StorageSinkDesc<CollectionMetadata>,
-        _sink_id: GlobalId,
-        _sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
-        _err_collection: Collection<G, DataflowError, Diff>,
-    ) -> Option<Rc<dyn Any>>
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
-        None
-    }
-}
-
 fn get_sink_render_for<G>(connection: &StorageSinkConnection) -> Box<dyn SinkRender<G>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     match connection {
         StorageSinkConnection::Kafka(connection) => Box::new(connection.clone()),
-        StorageSinkConnection::Dummy(_) => Box::new(Dummy {}),
     }
 }

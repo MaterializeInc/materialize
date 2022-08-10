@@ -272,7 +272,6 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum StorageSinkConnection {
     Kafka(KafkaSinkConnection),
-    Dummy(DummySinkConnection),
 }
 
 impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
@@ -281,7 +280,6 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
         ProtoStorageSinkConnection {
             kind: Some(match self {
                 StorageSinkConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-                StorageSinkConnection::Dummy(dummy) => Kind::Dummy(dummy.into_proto()),
             }),
         }
     }
@@ -293,21 +291,7 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageSinkConnection::kind"))?;
         Ok(match kind {
             Kind::Kafka(kafka) => StorageSinkConnection::Kafka(kafka.into_rust()?),
-            Kind::Dummy(dummy) => StorageSinkConnection::Dummy(dummy.into_rust()?),
         })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DummySinkConnection;
-
-impl RustType<ProtoDummySinkConnection> for DummySinkConnection {
-    fn into_proto(&self) -> ProtoDummySinkConnection {
-        ProtoDummySinkConnection {}
-    }
-
-    fn from_proto(_proto: ProtoDummySinkConnection) -> Result<Self, TryFromProtoError> {
-        Ok(Self {})
     }
 }
 
@@ -542,7 +526,6 @@ impl StorageSinkConnection {
     pub fn name(&self) -> &'static str {
         match self {
             StorageSinkConnection::Kafka(_) => "kafka",
-            StorageSinkConnection::Dummy(_) => "dummy",
         }
     }
 
@@ -563,7 +546,6 @@ impl StorageSinkConnection {
     pub fn requires_source_compaction_holdback(&self) -> bool {
         match self {
             StorageSinkConnection::Kafka(k) => k.exactly_once,
-            StorageSinkConnection::Dummy(_) => false,
         }
     }
 
@@ -572,7 +554,6 @@ impl StorageSinkConnection {
     pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
         match self {
             StorageSinkConnection::Kafka(k) => &k.transitive_source_dependencies,
-            StorageSinkConnection::Dummy(_) => &[],
         }
     }
 }
