@@ -800,15 +800,15 @@ impl<S: Append + 'static> Coordinator<S> {
         // Materialize and their sink, they'll need to reason about the
         // timestamps we emit anyway, so might as emit as much historical detail
         // as we possibly can.
-        let frontier = self.least_valid_read(
-            &(CollectionIdBundle {
-                storage_ids: [sink.from].into(),
-                ..Default::default()
-            }),
-        );
+        let idb = CollectionIdBundle {
+            storage_ids: [sink.from].into(),
+            ..Default::default()
+        };
+        let lvw = self.least_valid_write(&idb);
+        // XXX(chae): should we use the least_valid_write??
         // XXX(chae): coordinate read holds with this as_of
         let as_of = SinkAsOf {
-            frontier,
+            frontier: lvw,
             strict: !sink.with_snapshot,
         };
 
