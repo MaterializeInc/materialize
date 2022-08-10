@@ -22,6 +22,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use mz_audit_log::{
     EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent, VersionedStorageMetrics,
@@ -67,15 +68,22 @@ use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation}
 use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
-use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
+pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::config::{
+    ClusterReplicaSizeMap, Config, StorageHostSizeMap, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
+};
+pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::BootstrapArgs;
+use crate::client::ConnectionId;
+use crate::session::vars::SystemVars;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
+use crate::util::index_sql;
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
 mod builtin_table_updates;
@@ -85,14 +93,6 @@ mod migrate;
 
 pub mod builtin;
 pub mod storage;
-
-pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{
-    ClusterReplicaSizeMap, Config, StorageHostSizeMap, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
-};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
-use crate::client::ConnectionId;
-use crate::util::index_sql;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 const SYSTEM_USER: &str = "mz_system";
@@ -156,7 +156,7 @@ pub struct CatalogState {
     storage_host_sizes: StorageHostSizeMap,
     default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
-    system_configuration: HashMap<String, mz_sql_parser::ast::Value>,
+    system_configuration: SystemVars,
 }
 
 impl CatalogState {
@@ -743,13 +743,18 @@ impl CatalogState {
     }
 
     /// Insert system configuration `name` with `value`.
-    fn insert_system_configuration(&mut self, name: String, value: mz_sql_parser::ast::Value) {
-        self.system_configuration.insert(name, value);
+    fn insert_system_configuration(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
+        self.system_configuration.set(name, value)
     }
 
     /// Remove system configuration `name`.
-    fn remove_system_configuration(&mut self, name: &str) -> Option<mz_sql_parser::ast::Value> {
-        self.system_configuration.remove(name)
+    fn remove_system_configuration(&mut self, name: &str) -> Result<(), AdapterError> {
+        self.system_configuration.reset(name)
+    }
+
+    /// Remove all system configurations.
+    fn clear_system_configuration(&mut self) {
+        self.system_configuration = SystemVars::default();
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -1028,6 +1033,11 @@ impl CatalogState {
             name,
             conn_id,
         )
+    }
+
+    /// Return current system configuration.
+    pub fn system_config(&self) -> &SystemVars {
+        &self.system_configuration
     }
 
     /// Serializes the catalog's in-memory state.
@@ -1754,7 +1764,7 @@ impl<S: Append> Catalog<S> {
                 storage_host_sizes: config.storage_host_sizes,
                 default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
-                system_configuration: HashMap::new(),
+                system_configuration: SystemVars::default(),
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -2040,7 +2050,7 @@ impl<S: Append> Catalog<S> {
 
         let system_config = catalog.storage().await.load_system_configuration().await?;
         for (name, value) in system_config {
-            catalog.state.insert_system_configuration(name, value);
+            catalog.state.insert_system_configuration(&name, &value)?;
         }
 
         if !config.skip_migrations {
@@ -3221,10 +3231,14 @@ impl<S: Append> Catalog<S> {
             UpdateComputeInstanceStatus {
                 event: ComputeInstanceEvent,
             },
-            UpdateServerConfiguration {
+            UpdateSysytemConfiguration {
                 name: String,
-                value: mz_sql_parser::ast::Value,
+                value: String,
             },
+            ResetSystemConfiguration {
+                name: String,
+            },
+            ResetAllSystemConfiguration,
         }
 
         let drop_ids: HashSet<_> = ops
@@ -3695,9 +3709,17 @@ impl<S: Append> Catalog<S> {
                     )?;
                     vec![]
                 }
-                Op::UpdateServerConfiguration { name, value } => {
-                    tx.upsert_system_config(&name, value.clone()).await?;
-                    vec![Action::UpdateServerConfiguration { name, value }]
+                Op::UpdateSystemConfiguration { name, value } => {
+                    tx.upsert_system_config(&name, &value).await?;
+                    vec![Action::UpdateSysytemConfiguration { name, value }]
+                }
+                Op::ResetSystemConfiguration { name } => {
+                    tx.remove_system_config(&name).await;
+                    vec![Action::ResetSystemConfiguration { name }]
+                }
+                Op::ResetAllSystemConfiguration {} => {
+                    tx.clear_system_configs().await;
+                    vec![Action::ResetAllSystemConfiguration]
                 }
             });
         }
@@ -3938,9 +3960,14 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.push(update);
                     }
                 }
-                Action::UpdateServerConfiguration { name, value } => {
-                    state.remove_system_configuration(&name);
-                    state.insert_system_configuration(name.clone(), value.clone());
+                Action::UpdateSysytemConfiguration { name, value } => {
+                    state.insert_system_configuration(&name, &value)?;
+                }
+                Action::ResetSystemConfiguration { name } => {
+                    state.remove_system_configuration(&name)?;
+                }
+                Action::ResetAllSystemConfiguration {} => {
+                    state.clear_system_configuration();
                 }
             }
         }
@@ -4295,10 +4322,14 @@ pub enum Op {
         object_id: Option<String>,
         size_bytes: u64,
     },
-    UpdateServerConfiguration {
+    UpdateSystemConfiguration {
         name: String,
-        value: mz_sql_parser::ast::Value,
+        value: String,
     },
+    ResetSystemConfiguration {
+        name: String,
+    },
+    ResetAllSystemConfiguration {},
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

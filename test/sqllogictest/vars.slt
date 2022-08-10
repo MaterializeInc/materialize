@@ -194,3 +194,56 @@ SHOW extra_float_digits
 ----
 -3
 COMPLETE 1
+
+query T
+SHOW max_tables
+----
+25
+
+statement ok
+ALTER SYSTEM SET max_tables TO 42
+
+query T
+SHOW max_tables
+----
+42
+
+statement ok
+ALTER SYSTEM RESET max_tables
+
+query T
+SHOW max_tables
+----
+25
+
+statement ok
+ALTER SYSTEM SET max_databases TO 50
+
+statement ok
+ALTER SYSTEM SET max_schemas_per_database TO 667
+
+query T
+SHOW max_databases
+----
+50
+
+query T
+SHOW max_schemas_per_database
+----
+667
+
+statement OK
+ALTER SYSTEM RESET ALL
+
+query T
+SHOW max_databases
+----
+1000
+
+query T
+SHOW max_schemas_per_database
+----
+1000
+
+query error unrecognized configuration parameter "invalid_param"
+ALTER SYSTEM SET invalid_param TO 42

@@ -41,10 +41,11 @@ use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, Cat
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSystemPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
@@ -279,8 +280,23 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
             }
-            Plan::AlterSystem(plan) => {
-                tx.send(self.sequence_alter_system(&session, plan).await, session);
+            Plan::AlterSystemSet(plan) => {
+                tx.send(
+                    self.sequence_alter_system_set(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::AlterSystemReset(plan) => {
+                tx.send(
+                    self.sequence_alter_system_reset(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::AlterSystemResetAll(plan) => {
+                tx.send(
+                    self.sequence_alter_system_reset_all(&session, plan).await,
+                    session,
+                );
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(&session).await;
@@ -1580,6 +1596,7 @@ impl<S: Append + 'static> Coordinator<S> {
             session
                 .vars()
                 .iter()
+                .chain(self.catalog.state().system_config().iter())
                 .filter(|v| !v.experimental())
                 .map(|v| {
                     Row::pack_slice(&[
@@ -1597,7 +1614,10 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let variable = session.vars().get(&plan.name)?;
+        let variable = session
+            .vars()
+            .get(&plan.name)
+            .or_else(|_| self.catalog.state().system_config().get(&plan.name))?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -3132,22 +3152,48 @@ impl<S: Append + 'static> Coordinator<S> {
         return Ok(Vec::from(payload));
     }
 
-    async fn sequence_alter_system(
+    async fn sequence_alter_system_set(
         &mut self,
         session: &Session,
-        AlterSystemPlan { name, value }: AlterSystemPlan,
+        AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_sql::ast::SetVariableValue;
-        // TODO(jkosh44) name and value should be validated against some predetermined list of
-        //  system configurations.
-        let value = match value {
-            SetVariableValue::Literal(value) => value,
-            SetVariableValue::Ident(ident) => ident.into(),
-            SetVariableValue::Default => {
-                return Err(AdapterError::Unsupported("default system configurations"))
+        use mz_sql::ast::{SetVariableValue, Value};
+        let op = match value {
+            SetVariableValue::Literal(Value::String(value)) => {
+                catalog::Op::UpdateSystemConfiguration { name, value }
             }
+            SetVariableValue::Literal(value) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: value.to_string(),
+            },
+            SetVariableValue::Ident(value) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: value.to_string(),
+            },
+            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
-        let op = catalog::Op::UpdateServerConfiguration { name, value };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+    }
+
+    async fn sequence_alter_system_reset(
+        &mut self,
+        session: &Session,
+        AlterSystemResetPlan { name }: AlterSystemResetPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::ResetSystemConfiguration { name };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+    }
+
+    async fn sequence_alter_system_reset_all(
+        &mut self,
+        session: &Session,
+        _: AlterSystemResetAllPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         Ok(ExecuteResponse::AlteredSystemConfiguraion)

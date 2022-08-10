@@ -121,7 +121,9 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
-    AlterSystem(AlterSystemPlan),
+    AlterSystemSet(AlterSystemSetPlan),
+    AlterSystemReset(AlterSystemResetPlan),
+    AlterSystemResetAll(AlterSystemResetAllPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -469,10 +471,18 @@ pub struct AlterSecretPlan {
 }
 
 #[derive(Debug)]
-pub struct AlterSystemPlan {
+pub struct AlterSystemSetPlan {
     pub name: String,
     pub value: SetVariableValue,
 }
+
+#[derive(Debug)]
+pub struct AlterSystemResetPlan {
+    pub name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterSystemResetAllPlan {}
 
 #[derive(Debug)]
 pub struct DeclarePlan {

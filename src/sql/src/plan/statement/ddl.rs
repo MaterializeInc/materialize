@@ -23,7 +23,8 @@ use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterSystemStatement, LoadGenerator, SetVariableValue, SshConnectionOption,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    LoadGenerator, SetVariableValue, SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use prost::Message;
@@ -96,14 +97,15 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, AlterSystemPlan, ComputeInstanceIntrospectionConfig,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
-    StorageHostConfig, Table, Type, View,
+    AlterNoopPlan, AlterSecretPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    Index, MaterializedView, Params, Plan, Secret, Sink, Source, StorageHostConfig, Table, Type,
+    View,
 };
 
 pub fn describe_create_database(
@@ -3721,16 +3723,16 @@ pub fn plan_alter_secret(
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
-pub fn describe_alter_system(
+pub fn describe_alter_system_set(
     _: &StatementContext,
-    _: AlterSystemStatement,
+    _: AlterSystemSetStatement,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_alter_system(
+pub fn plan_alter_system_set(
     scx: &StatementContext,
-    AlterSystemStatement { name, value }: AlterSystemStatement,
+    AlterSystemSetStatement { name, value }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
     scx.require_unsafe_mode("ALTER SYSTEM")?;
     let name = name.to_string();
@@ -3738,5 +3740,36 @@ pub fn plan_alter_system(
     {
         sql_bail!("Unable to set system configuration '{}' to NULL", name)
     }
-    Ok(Plan::AlterSystem(AlterSystemPlan { name, value }))
+    Ok(Plan::AlterSystemSet(AlterSystemSetPlan { name, value }))
+}
+
+pub fn describe_alter_system_reset(
+    _: &StatementContext,
+    _: AlterSystemResetStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_system_reset(
+    scx: &StatementContext,
+    AlterSystemResetStatement { name }: AlterSystemResetStatement,
+) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER SYSTEM")?;
+    let name = name.to_string();
+    Ok(Plan::AlterSystemReset(AlterSystemResetPlan { name }))
+}
+
+pub fn describe_alter_system_reset_all(
+    _: &StatementContext,
+    _: AlterSystemResetAllStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_system_reset_all(
+    scx: &StatementContext,
+    _: AlterSystemResetAllStatement,
+) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER SYSTEM")?;
+    Ok(Plan::AlterSystemResetAll(AlterSystemResetAllPlan {}))
 }

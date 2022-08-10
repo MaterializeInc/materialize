@@ -36,8 +36,8 @@ use crate::session::vars::IsolationLevel;
 pub(crate) mod vars;
 
 pub use self::vars::{
-    ClientSeverity, Var, Vars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
-    SERVER_PATCH_VERSION,
+    ClientSeverity, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
@@ -51,7 +51,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
     user: String,
-    vars: Vars,
+    vars: SessionVars,
     drop_sinks: Vec<(ComputeInstanceId, GlobalId)>,
 }
 
@@ -78,7 +78,7 @@ impl<T: CoordTimestamp> Session<T> {
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
             user,
-            vars: Vars::default(),
+            vars: SessionVars::default(),
             drop_sinks: vec![],
         }
     }
@@ -408,7 +408,7 @@ impl<T: CoordTimestamp> Session<T> {
     pub fn reset(&mut self) -> Vec<(ComputeInstanceId, GlobalId)> {
         let (drop_sinks, _) = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = Vars::default();
+        self.vars = SessionVars::default();
         drop_sinks
     }
 
@@ -418,12 +418,12 @@ impl<T: CoordTimestamp> Session<T> {
     }
 
     /// Returns a reference to the variables in this session.
-    pub fn vars(&self) -> &Vars {
+    pub fn vars(&self) -> &SessionVars {
         &self.vars
     }
 
     /// Returns a mutable reference to the variables in this session.
-    pub fn vars_mut(&mut self) -> &mut Vars {
+    pub fn vars_mut(&mut self) -> &mut SessionVars {
         &mut self.vars
     }
 
