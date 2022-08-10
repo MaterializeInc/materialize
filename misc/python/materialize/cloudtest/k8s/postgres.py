@@ -41,13 +41,18 @@ class PostgresConfigMap(K8sConfigMap):
                 name="postgres-init",
             ),
             data={
+                "connections.sql": dedent(
+                    """
+                    ALTER SYSTEM SET max_connections = 5000;
+                    """
+                ),
                 "schemas.sql": dedent(
                     """
                 CREATE SCHEMA consensus;
                 CREATE SCHEMA catalog;
                 CREATE SCHEMA storage;
             """
-                )
+                ),
             },
         )
 
