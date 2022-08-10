@@ -37,6 +37,9 @@ class Minio(K8sResource):
             condition="condition=Available=True",
         )
 
+        self.create_bucket("persist")
+
+    def create_bucket(self, bucket: str) -> None:
         self.kubectl(
             "run",
             "minio",
@@ -49,8 +52,8 @@ class Minio(K8sResource):
             ";".join(
                 [
                     "mc config host add myminio http://minio-service.default:9000 minio minio123",
-                    "mc rm -r --force myminio/test",
-                    "mc mb myminio/test",
+                    f"mc rm -r --force myminio/{bucket}",
+                    f"mc mb myminio/{bucket}",
                 ]
             ),
         )

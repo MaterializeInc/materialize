@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
+from typing import Optional
 
 from kubernetes.client import V1Container, V1ObjectMeta, V1Pod, V1PodSpec
 
@@ -28,7 +29,9 @@ class Testdrive(K8sPod):
         pod_spec = V1PodSpec(containers=[container])
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
 
-    def run_string(self, input: str) -> None:
+    def run_string(
+        self, input: str, no_reset: bool = False, seed: Optional[int] = None
+    ) -> None:
         wait(condition="condition=Ready", resource="pod/testdrive")
         subprocess.run(
             [
@@ -44,6 +47,11 @@ class Testdrive(K8sPod):
                 "--kafka-addr=redpanda:9092",
                 "--schema-registry-url=http://redpanda:8081",
                 "--default-timeout=300s",
+                "--aws-endpoint=http://minio-service.default:9000",
+                "--aws-access-key-id=minio",
+                "--aws-secret-access-key=minio123",
+                *(["--no-reset"] if no_reset else []),
+                *([f"--seed={seed}"] if seed else []),
             ],
             check=True,
             input=input,

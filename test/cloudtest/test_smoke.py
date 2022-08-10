@@ -20,10 +20,13 @@ def test_wait(mz: MaterializeApplication) -> None:
 def test_sql(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("SELECT 1")
 
+    one = mz.environmentd.sql_query("SELECT 1")[0][0]
+    assert int(one) == 1
+
 
 def test_testdrive(mz: MaterializeApplication) -> None:
     mz.testdrive.run_string(
-        input=dedent(
+        dedent(
             """
                 $ kafka-create-topic topic=test
 

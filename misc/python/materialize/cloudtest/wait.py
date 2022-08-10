@@ -33,11 +33,17 @@ def wait(
     error = None
     for remaining in ui.timeout_loop(timeout_secs, tick=0.1):
         try:
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-            if "condition met" in output.decode("ascii"):
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode(
+                "ascii"
+            )
+            # output is:
+            # - an empty string when a 'delete' condition is satisfied
+            # - 'condition met' for all other conditions
+            if len(output) == 0 or "condition met" in output:
                 ui.progress("success!", finish=True)
                 return
         except subprocess.CalledProcessError as e:
+            print(e, e.output)
             error = e
 
     ui.progress(finish=True)
