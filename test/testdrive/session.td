@@ -29,6 +29,14 @@ standard_conforming_strings on                     "Causes '...' strings to trea
 statement_timeout           "10 s"                 "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations."
 TimeZone                    UTC                    "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation       "strict serializable"  "Sets the current transaction's isolation level (PostgreSQL)."
+max_clusters                10                     "The maximum number of clusters in the region (Materialize)."
+max_databases               1000                   "The maximum number of databases in the region (Materialize)."
+max_objects_per_schema      1000                   "The maximum number of objects in a schema (Materialize)."
+max_replicas_per_cluster    5                      "The maximum number of replicas of a single cluster (Materialize)."
+max_schemas_per_database    1000                   "The maximum number of schemas in a database (Materialize)."
+max_sinks                   25                     "The maximum number of sinks in the region, across all schemas (Materialize)."
+max_sources                 25                     "The maximum number of sources in the region, across all schemas (Materialize)."
+max_tables                  25                     "The maximum number of tables in the region, across all schemas (Materialize)."
 
 > SET application_name = 'foo'
 

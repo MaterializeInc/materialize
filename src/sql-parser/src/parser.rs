@@ -3379,13 +3379,32 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an ALTER SYSTEM SET statement.
+    /// Parse an ALTER SYSTEM statement.
     fn parse_alter_system(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keyword(SET)?;
-        let name = self.parse_identifier()?;
-        self.expect_keyword_or_token(TO, &Token::Eq)?;
-        let value = self.parse_set_variable_value()?;
-        Ok(Statement::AlterSystem(AlterSystemStatement { name, value }))
+        match self.expect_one_of_keywords(&[SET, RESET])? {
+            SET => {
+                let name = self.parse_identifier()?;
+                self.expect_keyword_or_token(TO, &Token::Eq)?;
+                let value = self.parse_set_variable_value()?;
+                Ok(Statement::AlterSystemSet(AlterSystemSetStatement {
+                    name,
+                    value,
+                }))
+            }
+            RESET => {
+                if self.parse_keyword(ALL) {
+                    Ok(Statement::AlterSystemResetAll(
+                        AlterSystemResetAllStatement {},
+                    ))
+                } else {
+                    let name = self.parse_identifier()?;
+                    Ok(Statement::AlterSystemReset(AlterSystemResetStatement {
+                        name,
+                    }))
+                }
+            }
+            _ => unreachable!(),
+        }
     }
 
     /// Parse a copy statement

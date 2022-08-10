@@ -198,6 +198,20 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
     && rm hugo.tar.gz; \
     fi
 
+# Install KinD and kubectl
+
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+     && chmod +x /usr/local/bin/kind
+
+RUN if [ $ARCH_GO = amd64 ]; then echo 'af5e8331f2165feab52ec2ae07c427c7b66f4ad044d09f253004a20252524c8b /usr/local/bin/kind' | sha256sum --check; fi
+RUN if [ $ARCH_GO = arm64 ]; then echo '95c9601f21fdb2c286442339d5e370149b4fe2fc7c49f615647e4e27bdfb17e2 /usr/local/bin/kind' | sha256sum --check; fi
+
+RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+     && chmod +x /usr/local/bin/kubectl
+
+RUN if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi
+RUN if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 

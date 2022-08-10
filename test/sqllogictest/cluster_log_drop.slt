@@ -11,9 +11,37 @@
 
 mode cockroach
 
-# The default cluster also has log sources, thus we should have one set active at boot
+
+# This test checks if the sources in mz_catalog are also present in a postfixed way.
+# If this test fails and you added new introspection source and if the new
+# source depends on per replica introspection data, consider adding it also in
+# a per replica postfixed fashion. Adding it to DEFAULT_LOG_VARIANTS should do
+# this automatically. If the new source does not use per replica data,
+# increment the counter.
+query T rowsort
+SELECT (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name NOT LIKE '%_1') - (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name LIKE '%_1');
+----
+1
+
+# This test checks if the views in mz_catalog are also present in a postfixed
+# way. If this test fails and you added new view that uses introspection
+# sources: also add it in a per replica postfixed way, see DEFAULT_LOG_VIEWS.
+# If your view does not involve introspection data, increment this counter.
+query T rowsort
+SELECT (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name NOT LIKE '%_1') - (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name LIKE '%_1');
+----
+29
+
+
+# The default cluster also has log sources, thus we should have one set active at boot.
+# Check the presence of one source and one view
 query T rowsort
 select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+1
+
+query T rowsort
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
 ----
 1
 
@@ -25,11 +53,21 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 ----
 3
 
+query T rowsort
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+----
+3
+
 statement ok
 DROP CLUSTER REPLICA c1.r1;
 
 query T rowsort
 select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+2
+
+query T rowsort
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
 ----
 2
 
@@ -41,6 +79,11 @@ DROP CLUSTER c1 CASCADE;
 
 query T rowsort
 select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+1
+
+query T rowsort
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
 ----
 1
 
@@ -56,13 +99,25 @@ statement ok
 CREATE VIEW v1 AS SELECT * FROM mz_catalog.mz_peek_active_4;
 
 statement ok
+CREATE VIEW w1 AS SELECT * FROM mz_catalog.mz_materialization_frontiers_4;
+
+statement ok
 CREATE VIEW v11 AS SELECT * FROM v1;
+
+statement ok
+CREATE VIEW w11 AS SELECT * FROM w1;
 
 statement ok
 CREATE VIEW v2 AS SELECT * FROM mz_catalog.mz_peek_active_5;
 
 statement ok
+CREATE VIEW w2 AS SELECT * FROM mz_catalog.mz_materialization_frontiers_5;
+
+statement ok
 CREATE VIEW v21 AS SELECT * FROM v2;
+
+statement ok
+CREATE VIEW w21 AS SELECT * FROM w2;
 
 statement error cannot drop replica "r1" of cluster "c1".*
 DROP CLUSTER REPLICA c1.r1;
@@ -70,11 +125,19 @@ DROP CLUSTER REPLICA c1.r1;
 statement ok
 DROP CLUSTER REPLICA c1.r1 CASCADE;
 
+# Now ensure the dependent views are gone
+
 query error unknown catalog item 'v1'
 SELECT * FROM v1;
 
 query error unknown catalog item 'v11'
 SELECT * FROM v11;
+
+query error unknown catalog item 'w1'
+SELECT * FROM w1;
+
+query error unknown catalog item 'w11'
+SELECT * FROM w11;
 
 statement error cannot drop cluster with active indexes.*
 DROP CLUSTER c1;
@@ -88,7 +151,18 @@ SELECT * FROM v2;
 query error unknown catalog item 'v21'
 SELECT * FROM v21;
 
+query error unknown catalog item 'w2'
+SELECT * FROM w2;
+
+query error unknown catalog item 'w21'
+SELECT * FROM w21;
+
 query T rowsort
 select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+----
+1
+
+query T rowsort
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
 ----
 1

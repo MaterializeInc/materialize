@@ -41,10 +41,11 @@ use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, Cat
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSystemPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
@@ -279,8 +280,23 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
             }
-            Plan::AlterSystem(plan) => {
-                tx.send(self.sequence_alter_system(&session, plan).await, session);
+            Plan::AlterSystemSet(plan) => {
+                tx.send(
+                    self.sequence_alter_system_set(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::AlterSystemReset(plan) => {
+                tx.send(
+                    self.sequence_alter_system_reset(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::AlterSystemResetAll(plan) => {
+                tx.send(
+                    self.sequence_alter_system_reset_all(&session, plan).await,
+                    session,
+                );
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(&session).await;
@@ -582,19 +598,19 @@ impl<S: Append + 'static> Coordinator<S> {
         }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
-        let introspection_source_indexes = if compute_instance_config.is_some() {
-            self.catalog.allocate_introspection_source_indexes().await
+        let arranged_introspection_sources = if compute_instance_config.is_some() {
+            self.catalog.allocate_arranged_introspection_sources().await
         } else {
             Vec::new()
         };
-        let introspection_source_index_ids: Vec<_> = introspection_source_indexes
+        let arranged_introspection_source_ids: Vec<_> = arranged_introspection_sources
             .iter()
             .map(|(_, id)| *id)
             .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
             config: compute_instance_config.clone(),
-            introspection_source_indexes,
+            arranged_introspection_sources,
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -615,7 +631,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // This vector collects introspection sources of all replicas of this compute instance
-        let mut introspection_collections = Vec::new();
+        let mut persisted_introspection_sources = Vec::new();
 
         for (replica_name, replica_config) in replicas.into_iter() {
             // If the AZ was not specified, choose one, round-robin, from the ones with
@@ -643,16 +659,14 @@ impl<S: Append + 'static> Coordinator<S> {
             };
             // These are the persisted, per replica persisted logs
             let persisted_logs = if compute_instance_config.is_some() {
-                self.catalog
-                    .allocate_persisted_introspection_source_indexes()
-                    .await
+                self.catalog.allocate_persisted_introspection_items().await
             } else {
-                ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
+                ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
             };
 
-            introspection_collections.extend(
+            persisted_introspection_sources.extend(
                 persisted_logs
-                    .get_logs()
+                    .get_sources()
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into())),
             );
@@ -672,14 +686,14 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        let introspection_collection_ids: Vec<GlobalId> = introspection_collections
+        let persisted_introspection_source_ids: Vec<GlobalId> = persisted_introspection_sources
             .iter()
             .map(|(id, _)| *id)
             .collect();
 
         self.controller
             .storage_mut()
-            .create_collections(introspection_collections)
+            .create_collections(persisted_introspection_sources)
             .await
             .unwrap();
 
@@ -697,17 +711,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap();
         }
 
-        if !introspection_source_index_ids.is_empty() {
+        if !arranged_introspection_source_ids.is_empty() {
             self.initialize_compute_read_policies(
-                introspection_source_index_ids,
+                arranged_introspection_source_ids,
                 instance.id,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
         }
-        if !introspection_collection_ids.is_empty() {
+
+        if !persisted_introspection_source_ids.is_empty() {
             self.initialize_storage_read_policies(
-                introspection_collection_ids,
+                persisted_introspection_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
@@ -728,16 +743,14 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
 
         let persisted_logs = if instance.logging.is_some() {
-            self.catalog
-                .allocate_persisted_introspection_source_indexes()
-                .await
+            self.catalog.allocate_persisted_introspection_items().await
         } else {
-            ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
+            ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
-        let persisted_log_ids = persisted_logs.get_log_ids();
-        let persisted_logs_collections = persisted_logs
-            .get_logs()
+        let persisted_source_ids = persisted_logs.get_source_ids();
+        let persisted_sources = persisted_logs
+            .get_sources()
             .iter()
             .map(|(variant, id)| (*id, variant.desc().into()))
             .collect();
@@ -810,7 +823,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.controller
             .storage_mut()
-            .create_collections(persisted_logs_collections)
+            .create_collections(persisted_sources)
             .await
             .unwrap();
 
@@ -820,7 +833,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         if instance.logging.is_some() {
             self.initialize_storage_read_policies(
-                persisted_log_ids,
+                persisted_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
@@ -1191,7 +1204,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // are replaced with persist-based ones.
         let log_names = depends_on
             .iter()
-            .flat_map(|id| self.catalog.active_log_dependencies(*id))
+            .flat_map(|id| self.catalog.arranged_introspection_dependencies(*id))
             .map(|id| self.catalog.get_entry(&id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
@@ -1428,9 +1441,21 @@ impl<S: Append + 'static> Coordinator<S> {
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
             for replica in instance.replicas_by_id.values() {
-                let log_ids = replica.config.persisted_logs.get_log_ids();
-                for log_id in log_ids {
-                    ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                let persisted_logs = replica.config.persisted_logs.clone();
+                let log_and_view_ids = persisted_logs.get_source_and_view_ids();
+                let view_ids = persisted_logs.get_view_ids();
+                for log_id in log_and_view_ids {
+                    // We consider the dependencies of both views and logs, but remove the
+                    // views itself. The views are included as they depend on the source,
+                    // but we dont need an explicit Op::DropItem as they are dropped together
+                    // with the replica.
+                    ids_to_drop.extend(
+                        self.catalog
+                            .get_entry(&log_id)
+                            .used_by()
+                            .into_iter()
+                            .filter(|x| !view_ids.contains(x)),
+                    )
                 }
             }
 
@@ -1474,15 +1499,29 @@ impl<S: Append + 'static> Coordinator<S> {
             // Determine from the replica which additional items to drop. This is the set
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
-            for log_id in instance
+            let persisted_logs = instance
                 .replicas_by_id
                 .get(&replica_id)
                 .unwrap()
                 .config
                 .persisted_logs
-                .get_log_ids()
-            {
-                ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                .clone();
+
+            let log_and_view_ids = persisted_logs.get_source_and_view_ids();
+            let view_ids = persisted_logs.get_view_ids();
+
+            for log_id in log_and_view_ids {
+                // We consider the dependencies of both views and logs, but remove the
+                // views itself. The views are included as they depend on the source,
+                // but we dont need an explicit Op::DropItem as they are dropped together
+                // with the replica.
+                ids_to_drop.extend(
+                    self.catalog
+                        .get_entry(&log_id)
+                        .used_by()
+                        .into_iter()
+                        .filter(|x| !view_ids.contains(x)),
+                )
             }
 
             replicas_to_drop.push((
@@ -1557,6 +1596,7 @@ impl<S: Append + 'static> Coordinator<S> {
             session
                 .vars()
                 .iter()
+                .chain(self.catalog.state().system_config().iter())
                 .filter(|v| !v.experimental())
                 .map(|v| {
                     Row::pack_slice(&[
@@ -1574,7 +1614,10 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let variable = session.vars().get(&plan.name)?;
+        let variable = session
+            .vars()
+            .get(&plan.name)
+            .or_else(|_| self.catalog.state().system_config().get(&plan.name))?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -1723,7 +1766,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ) -> Result<(), AdapterError> {
             let log_names = source_ids
                 .iter()
-                .flat_map(|id| catalog.active_log_dependencies(*id))
+                .flat_map(|id| catalog.arranged_introspection_dependencies(*id))
                 .map(|id| catalog.get_entry(&id).name().item.clone())
                 .collect::<Vec<_>>();
 
@@ -3109,22 +3152,48 @@ impl<S: Append + 'static> Coordinator<S> {
         return Ok(Vec::from(payload));
     }
 
-    async fn sequence_alter_system(
+    async fn sequence_alter_system_set(
         &mut self,
         session: &Session,
-        AlterSystemPlan { name, value }: AlterSystemPlan,
+        AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_sql::ast::SetVariableValue;
-        // TODO(jkosh44) name and value should be validated against some predetermined list of
-        //  system configurations.
-        let value = match value {
-            SetVariableValue::Literal(value) => value,
-            SetVariableValue::Ident(ident) => ident.into(),
-            SetVariableValue::Default => {
-                return Err(AdapterError::Unsupported("default system configurations"))
+        use mz_sql::ast::{SetVariableValue, Value};
+        let op = match value {
+            SetVariableValue::Literal(Value::String(value)) => {
+                catalog::Op::UpdateSystemConfiguration { name, value }
             }
+            SetVariableValue::Literal(value) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: value.to_string(),
+            },
+            SetVariableValue::Ident(value) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: value.to_string(),
+            },
+            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
-        let op = catalog::Op::UpdateServerConfiguration { name, value };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+    }
+
+    async fn sequence_alter_system_reset(
+        &mut self,
+        session: &Session,
+        AlterSystemResetPlan { name }: AlterSystemResetPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::ResetSystemConfiguration { name };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+    }
+
+    async fn sequence_alter_system_reset_all(
+        &mut self,
+        session: &Session,
+        _: AlterSystemResetAllPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         Ok(ExecuteResponse::AlteredSystemConfiguraion)

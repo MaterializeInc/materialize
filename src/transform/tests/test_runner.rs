@@ -263,6 +263,7 @@ mod tests {
                 mz_transform::redundant_join::RedundantJoin::default(),
             )),
             "TopKFusion" => Ok(Box::new(mz_transform::fusion::top_k::TopK)),
+            "ThresholdElision" => Ok(Box::new(mz_transform::threshold_elision::ThresholdElision)),
             "UnionBranchCancellation" => Ok(Box::new(
                 mz_transform::union_cancel::UnionBranchCancellation,
             )),

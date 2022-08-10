@@ -34,8 +34,10 @@ from materialize import ROOT, mzbuild
 
 
 class K8sResource:
-    def kubectl(self, *args: str) -> None:
-        subprocess.check_call(["kubectl", "--context", self.context(), *args])
+    def kubectl(self, *args: str) -> str:
+        return subprocess.check_output(
+            ["kubectl", "--context", self.context(), *args]
+        ).decode("ascii")
 
     def kube_config(self) -> Any:
         with open(Path.home() / ".kube" / "config") as f:

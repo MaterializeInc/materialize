@@ -173,6 +173,54 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
 
+const MAX_TABLES: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_tables"),
+    value: &25,
+    description: "The maximum number of tables in the region, across all schemas (Materialize).",
+};
+
+const MAX_SOURCES: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_sources"),
+    value: &25,
+    description: "The maximum number of sources in the region, across all schemas (Materialize).",
+};
+
+const MAX_SINKS: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_sinks"),
+    value: &25,
+    description: "The maximum number of sinks in the region, across all schemas (Materialize).",
+};
+
+const MAX_CLUSTERS: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_clusters"),
+    value: &10,
+    description: "The maximum number of clusters in the region (Materialize).",
+};
+
+const MAX_REPLICAS_PER_CLUSTER: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_replicas_per_cluster"),
+    value: &5,
+    description: "The maximum number of replicas of a single cluster (Materialize).",
+};
+
+const MAX_DATABASES: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_databases"),
+    value: &1000,
+    description: "The maximum number of databases in the region (Materialize).",
+};
+
+const MAX_SCHEMAS_PER_DATABASE: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_schemas_per_database"),
+    value: &1000,
+    description: "The maximum number of schemas in a database (Materialize).",
+};
+
+const MAX_OBJECTS_PER_SCHEMA: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_objects_per_schema"),
+    value: &1000,
+    description: "The maximum number of objects in a schema (Materialize).",
+};
+
 /// Session variables.
 ///
 /// Materialize roughly follows the PostgreSQL configuration model, which works
@@ -190,15 +238,19 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
 ///
 /// The Materialize configuration hierarchy at the moment is much simpler.
 /// Global defaults are hardcoded into the binary, and a select few parameters
-/// can be overridden per session. The infrastructure has been designed with an
-/// eye towards supporting additional layers to the hierarchy, however, should
-/// the need arise.
+/// can be overridden per session. A select few parameters can be overridden on
+/// disk.
+///
+/// The set of variables that can be overridden per session and the set of
+/// variables that can be overridden on disk are currently disjoint. The
+/// infrastructure has been designed with an eye towards merging these two sets
+/// and supporting additional layers to the hierarchy, however, should the need arise.
 ///
 /// The configuration parameters that exist are driven by compatibility with
 /// PostgreSQL drivers that expect them, not because they are particularly
 /// important.
 #[derive(Debug)]
-pub struct Vars {
+pub struct SessionVars {
     application_name: SessionVar<str>,
     client_encoding: ServerVar<str>,
     client_min_messages: SessionVar<ClientSeverity>,
@@ -221,9 +273,9 @@ pub struct Vars {
     transaction_isolation: SessionVar<IsolationLevel>,
 }
 
-impl Default for Vars {
-    fn default() -> Vars {
-        Vars {
+impl Default for SessionVars {
+    fn default() -> SessionVars {
+        SessionVars {
             application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
@@ -248,7 +300,7 @@ impl Default for Vars {
     }
 }
 
-impl Vars {
+impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
@@ -352,11 +404,11 @@ impl Vars {
     /// by `value`.
     ///
     /// The new value may be either committed or rolled back by the next call to
-    /// [`Vars::end_transaction`]. If `local` is true, the new value is always
-    /// discarded by the next call to [`Vars::end_transaction`], even if the
+    /// [`SessionVars::end_transaction`]. If `local` is true, the new value is always
+    /// discarded by the next call to [`SessionVars::end_transaction`], even if the
     /// transaction is marked to commit.
     ///
-    /// Like with [`Vars::get`], configuration parameters are matched case
+    /// Like with [`SessionVars::get`], configuration parameters are matched case
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
@@ -485,11 +537,11 @@ impl Vars {
     /// Sets the configuration parameter named `name` to its default value.
     ///
     /// The new value may be either committed or rolled back by the next call to
-    /// [`Vars::end_transaction`]. If `local` is true, the new value is always
-    /// discarded by the next call to [`Vars::end_transaction`], even if the
+    /// [`SessionVars::end_transaction`]. If `local` is true, the new value is always
+    /// discarded by the next call to [`SessionVars::end_transaction`], even if the
     /// transaction is marked to commit.
     ///
-    /// Like with [`Vars::get`], configuration parameters are matched case
+    /// Like with [`SessionVars::get`], configuration parameters are matched case
     /// insensitively. If the named configuration parameter does not exist, an
     /// error is returned.
     pub fn reset(&mut self, name: &str, local: bool) -> Result<(), AdapterError> {
@@ -531,11 +583,11 @@ impl Vars {
     }
 
     /// Commits or rolls back configuration parameter updates made via
-    /// [`Vars::set`] since the last call to `end_transaction`.
+    /// [`SessionVars::set`] since the last call to `end_transaction`.
     pub fn end_transaction(&mut self, action: EndTransactionAction) {
         // IMPORTANT: if you've added a new `SessionVar`, add a corresponding
         // call to `end_transaction` below.
-        let Vars {
+        let SessionVars {
             application_name,
             client_encoding: _,
             client_min_messages,
@@ -671,6 +723,183 @@ impl Vars {
     }
 }
 
+/// On disk variables.
+///
+/// See [`SessionVars`] for more details on the Materialize configuration model.
+#[derive(Debug, Clone)]
+pub struct SystemVars {
+    max_tables: SystemVar<i32>,
+    max_sources: SystemVar<i32>,
+    max_sinks: SystemVar<i32>,
+    max_clusters: SystemVar<i32>,
+    max_replicas_per_cluster: SystemVar<i32>,
+    max_databases: SystemVar<i32>,
+    max_schemas_per_database: SystemVar<i32>,
+    max_objects_per_schema: SystemVar<i32>,
+}
+
+impl Default for SystemVars {
+    fn default() -> Self {
+        SystemVars {
+            max_tables: SystemVar::new(&MAX_TABLES),
+            max_sources: SystemVar::new(&MAX_SOURCES),
+            max_sinks: SystemVar::new(&MAX_SINKS),
+            max_clusters: SystemVar::new(&MAX_CLUSTERS),
+            max_replicas_per_cluster: SystemVar::new(&MAX_REPLICAS_PER_CLUSTER),
+            max_databases: SystemVar::new(&MAX_DATABASES),
+            max_schemas_per_database: SystemVar::new(&MAX_SCHEMAS_PER_DATABASE),
+            max_objects_per_schema: SystemVar::new(&MAX_OBJECTS_PER_SCHEMA),
+        }
+    }
+}
+
+impl SystemVars {
+    /// Returns an iterator over the configuration parameters and their current
+    /// values on disk.
+    pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
+        vec![
+            &self.max_tables as &dyn Var,
+            &self.max_sources,
+            &self.max_sinks,
+            &self.max_clusters,
+            &self.max_replicas_per_cluster,
+            &self.max_databases,
+            &self.max_schemas_per_database,
+            &self.max_objects_per_schema,
+        ]
+        .into_iter()
+    }
+
+    /// Returns a [`Var`] representing the configuration parameter with the
+    /// specified name.
+    ///
+    /// Configuration parameters are matched case insensitively. If no such
+    /// configuration parameter exists, `get` returns an error.
+    ///
+    /// Note that if `name` is known at compile time, you should instead use the
+    /// named accessor to access the variable with its true Rust type. For
+    /// example, `self.get("max_tables").value()` returns the string
+    /// `"25"` or the current value, while `self.max_tables()` returns an i32.
+    pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
+        if name == MAX_TABLES.name {
+            Ok(&self.max_tables)
+        } else if name == MAX_SOURCES.name {
+            Ok(&self.max_sources)
+        } else if name == MAX_SINKS.name {
+            Ok(&self.max_sinks)
+        } else if name == MAX_CLUSTERS.name {
+            Ok(&self.max_clusters)
+        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
+            Ok(&self.max_replicas_per_cluster)
+        } else if name == MAX_DATABASES.name {
+            Ok(&self.max_databases)
+        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
+            Ok(&self.max_schemas_per_database)
+        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
+            Ok(&self.max_objects_per_schema)
+        } else {
+            Err(AdapterError::UnknownParameter(name.into()))
+        }
+    }
+
+    /// Sets the configuration parameter named `name` to the value represented
+    /// by `value`.
+    ///
+    /// Like with [`SystemVars::get`], configuration parameters are matched case
+    /// insensitively. If `value` is not valid, as determined by the underlying
+    /// configuration parameter, or if the named configuration parameter does
+    /// not exist, an error is returned.
+    pub fn set(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
+        if name == MAX_TABLES.name {
+            self.max_tables.set(value)
+        } else if name == MAX_SOURCES.name {
+            self.max_sources.set(value)
+        } else if name == MAX_SINKS.name {
+            self.max_sinks.set(value)
+        } else if name == MAX_CLUSTERS.name {
+            self.max_clusters.set(value)
+        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
+            self.max_replicas_per_cluster.set(value)
+        } else if name == MAX_DATABASES.name {
+            self.max_databases.set(value)
+        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
+            self.max_schemas_per_database.set(value)
+        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
+            self.max_objects_per_schema.set(value)
+        } else {
+            Err(AdapterError::UnknownParameter(name.into()))
+        }
+    }
+
+    /// Sets the configuration parameter named `name` to its default value.
+    ///
+    /// Like with [`SystemVars::get`], configuration parameters are matched case
+    /// insensitively. If the named configuration parameter does not exist, an
+    /// error is returned.
+    pub fn reset(&mut self, name: &str) -> Result<(), AdapterError> {
+        if name == MAX_TABLES.name {
+            self.max_tables.reset()
+        } else if name == MAX_SOURCES.name {
+            self.max_sources.reset()
+        } else if name == MAX_SINKS.name {
+            self.max_sinks.reset()
+        } else if name == MAX_CLUSTERS.name {
+            self.max_clusters.reset()
+        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
+            self.max_replicas_per_cluster.reset()
+        } else if name == MAX_DATABASES.name {
+            self.max_databases.reset()
+        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
+            self.max_schemas_per_database.reset()
+        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
+            self.max_objects_per_schema.reset()
+        } else {
+            return Err(AdapterError::UnknownParameter(name.into()));
+        }
+        Ok(())
+    }
+
+    /// Returns the value of the `max_tables` configuration parameter.
+    pub fn _max_tables(&self) -> i32 {
+        *self.max_tables.value()
+    }
+
+    /// Returns the value of the `max_sources` configuration parameter.
+    pub fn _max_source(&self) -> i32 {
+        *self.max_sources.value()
+    }
+
+    /// Returns the value of the `max_sinks` configuration parameter.
+    pub fn _max_sinks(&self) -> i32 {
+        *self.max_sinks.value()
+    }
+
+    /// Returns the value of the `max_clusters` configuration parameter.
+    pub fn _max_clusters(&self) -> i32 {
+        *self.max_clusters.value()
+    }
+
+    /// Returns the value of the `max_replicas_per_cluster` configuration parameter.
+    pub fn _max_replicas_per_cluster(&self) -> i32 {
+        *self.max_replicas_per_cluster.value()
+    }
+
+    /// Returns the value of the `max_databases` configuration parameter.
+    pub fn _max_databases(&self) -> i32 {
+        *self.max_databases.value()
+    }
+
+    /// Returns the value of the `max_schemas_per_database` configuration parameter.
+    pub fn _max_schemas_per_database(&self) -> i32 {
+        *self.max_schemas_per_database.value()
+    }
+
+    /// Returns the value of the `max_objects_per_schema` configuration parameter.
+    pub fn _max_objects_per_schema(&self) -> i32 {
+        *self.max_objects_per_schema.value()
+    }
+}
+
 /// A `Var` represents a configuration parameter of an arbitrary type.
 pub trait Var: fmt::Debug {
     /// Returns the name of the configuration parameter.
@@ -721,6 +950,74 @@ where
 
     fn description(&self) -> &'static str {
         self.description
+    }
+
+    fn type_name(&self) -> &'static str {
+        V::TYPE_NAME
+    }
+}
+
+/// A `SystemVar` is persisted on disck value for a configuration parameter. If unset,
+/// the server default is used instead.
+#[derive(Debug, Clone)]
+struct SystemVar<V>
+where
+    V: Value + fmt::Debug + ?Sized + 'static,
+    V::Owned: fmt::Debug,
+{
+    persisted_value: Option<V::Owned>,
+    parent: &'static ServerVar<V>,
+}
+
+impl<V> SystemVar<V>
+where
+    V: Value + fmt::Debug + ?Sized + 'static,
+    V::Owned: fmt::Debug,
+{
+    fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
+        SystemVar {
+            persisted_value: None,
+            parent,
+        }
+    }
+
+    fn set(&mut self, s: &str) -> Result<(), AdapterError> {
+        match V::parse(s) {
+            Ok(v) => {
+                self.persisted_value = Some(v);
+                Ok(())
+            }
+            Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.persisted_value = None;
+    }
+
+    fn value(&self) -> &V {
+        self.persisted_value
+            .as_ref()
+            .map(|v| v.borrow())
+            .unwrap_or(self.parent.value)
+    }
+}
+
+impl<V> Var for SystemVar<V>
+where
+    V: Value + ToOwned + fmt::Debug + ?Sized + 'static,
+    V::Owned: fmt::Debug,
+{
+    fn name(&self) -> &'static str {
+        self.parent.name()
+    }
+
+    fn value(&self) -> String {
+        SystemVar::value(self).format()
+    }
+
+    fn description(&self) -> &'static str {
+        self.parent.description()
     }
 
     fn type_name(&self) -> &'static str {
@@ -807,7 +1104,7 @@ where
     V::Owned: fmt::Debug,
 {
     fn name(&self) -> &'static str {
-        self.parent.name.as_str()
+        self.parent.name()
     }
 
     fn value(&self) -> String {
@@ -815,7 +1112,7 @@ where
     }
 
     fn description(&self) -> &'static str {
-        self.parent.description
+        self.parent.description()
     }
 
     fn type_name(&self) -> &'static str {

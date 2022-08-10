@@ -51,6 +51,14 @@ class Application:
                     ]
                 )
 
+    def kubectl(self, *args: str) -> str:
+        return subprocess.check_output(
+            ["kubectl", "--context", self.context(), *args]
+        ).decode("ascii")
+
+    def context(self) -> str:
+        return "kind-kind"
+
 
 class MaterializeApplication(Application):
     def __init__(self) -> None:
@@ -69,18 +77,14 @@ class MaterializeApplication(Application):
 
         self.images = ["environmentd", "computed", "storaged", "testdrive"]
 
-        # Label the minicube node in a way that mimics Materialize cloud
-        subprocess.check_call(
-            [
-                "kubectl",
+        # Label the minicube nodes in a way that mimics Materialize cloud
+        for node in ["kind-control-plane", "kind-worker", "kind-worker2"]:
+            self.kubectl(
                 "label",
-                "--context",
-                "kind-kind",
                 "--overwrite",
-                "node/kind-control-plane",
+                f"node/{node}",
                 "materialize.cloud/availability-zone=",
-            ]
-        )
+            )
 
         super().__init__()
 

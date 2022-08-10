@@ -274,7 +274,7 @@ pub trait CatalogComputeInstance<'a> {
     fn replica_names(&self) -> HashSet<&String>;
 
     /// Returns the set of persisted logs of replica `name` of this cluster.
-    fn replica_logs(&self, name: &String) -> Option<Vec<GlobalId>>;
+    fn replica_logs_and_views(&self, name: &String) -> Option<(Vec<GlobalId>, Vec<GlobalId>)>;
 }
 
 /// An item in a [`SessionCatalog`].
