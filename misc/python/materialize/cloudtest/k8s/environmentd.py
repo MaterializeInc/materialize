@@ -76,6 +76,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             args=[
                 "--storaged-image=" + self.image("storaged"),
                 "--computed-image=" + self.image("computed"),
+                "--availability-zone=kind-worker",
+                "--availability-zone=kind-worker2",
+                "--availability-zone=kind-worker3",
                 f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
                 "--orchestrator=kubernetes",
                 "--orchestrator-kubernetes-image-pull-policy=never",
