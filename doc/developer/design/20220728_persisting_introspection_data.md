@@ -61,9 +61,9 @@ However, if done naively the way queries work in materialize requires a fixed ti
 
 ### UX gap with per replica sources
 
-To replace the arranged introspection with the persisted sources, we should consider there is a gap in user experience: Consider a user that has two replicas. First the user tries to debug a performance issue by writing a complex SQL statement targeting the replica (using `_1` as table postfix). Now the user wants to see the same data on the other replica. The user has to rewrite the whole query to include the new postfix (`_2`).
+To replace the arranged introspection with the persisted sources, we should consider the following scenario: A user has two replicas. First the user tries to debug a performance issue by writing a complex SQL statement targeting the replica (using `_1` as table postfix). Now the user wants to send the same query to another replica. The user has to rewrite the whole query to include the new postfix (`_2`).
 
-We could offer an aggregate view, but this view has to be changed in the catalog on each replica create or drop, thus any view defined upon this needs to be removed. Also, a `TAIL` running against such an aggregated source would not contain newly appearing replicas.
+We could offer an aggregate *view* over all replicas, but this view has to be changed in the catalog on each replica create or drop, thus any view defined upon this needs to be removed, defeating the purpose of having the view in the first place. Also, a `TAIL` running against such an aggregated source would not contain newly appearing replicas.
 
 In addition, this aggregated view would also suffer from the timestamp selection problem described in "Difficulties in offering an aggregated source".
 
@@ -73,7 +73,7 @@ Alternatively, to stay backwards compatible with the replica targeted queries, w
 
 We have to consider the possibility of a half alive computed that has lost all connections to other workers and environmentd, but still continues writing its introspection sources. Because it has lost all connections, it is indistinguishable from dead to the rest of the system. At some point, Kubernetes will restart that instance, but this might not happen immediately and we should consider the option of having two computeds - with the same replica id - running at the same time.
 
-If it goes wrong, the user could see duplicate data in the sources.
+If it goes wrong, the user could see duplicate data in the introspection sources.
 
 Depending on which design settle, this problem has different solutions. It boils down to either delegating this to the storage layer (using renditions or similar) or actively checking for this situation (for example by reading back the introspection and checking no one else wrote with that id).
 
