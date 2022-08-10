@@ -672,7 +672,7 @@ mod tests {
             .expect("invalid shard id");
         let client = new_test_client().await;
 
-        let (mut write0, read0) = client
+        let (mut write0, mut read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
             .await;
 
@@ -760,9 +760,10 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let (_, mut read1) = client
+            let (_, read1) = client
                 .expect_open::<String, String, u64, i64>(shard_id1)
                 .await;
+            let mut read1 = read1.batch_fetcher();
             assert_eq!(
                 read1.fetch_batch(snap.pop().unwrap()).await.unwrap_err(),
                 InvalidUsage::BatchNotFromThisShard {
