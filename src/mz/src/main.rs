@@ -22,16 +22,17 @@ mod shell;
 mod utils;
 
 use profiles::get_profile_using_args;
+use regions::{parse_cloud_provider_region, print_region_enabled, print_region_status};
 use serde::{Deserialize, Serialize};
 
 use clap::{ArgEnum, Args, Parser, Subcommand};
 use reqwest::Client;
+use shell::check_region_health;
+use utils::{exit_with_fail_message, run_loading_spinner};
 
 use crate::login::{login_with_browser, login_with_console};
 use crate::profiles::{authenticate_profile, validate_profile};
-use crate::regions::{
-    delete_region, enable_region, list_cloud_providers, list_regions, warning_delete_region,
-};
+use crate::regions::{enable_region, list_cloud_providers, list_regions};
 use crate::shell::shell;
 
 #[derive(Debug, Clone, ArgEnum)]
@@ -87,22 +88,31 @@ enum RegionsCommands {
         #[clap(arg_enum)]
         cloud_provider_region: CloudProviderRegion,
     },
-    /// Delete an existing region.
-    Delete {
+    /// List all enabled regions.
+    List,
+    /// Check the status of a region.
+    Status {
         #[clap(arg_enum)]
         cloud_provider_region: CloudProviderRegion,
     },
-    /// List all enabled regions.
-    List,
+    // ------------------------------------------------------------------------
+    // Delete is currently disabled. Preserving the code for once is available.
+    // ------------------------------------------------------------------------
+    // Delete an existing region.
+    // Delete {
+    //     #[clap(arg_enum)]
+    //     cloud_provider_region: CloudProviderRegion,
+    // },
 }
 
 /**
  ** Internal types, struct and enums
  **/
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Region {
     environmentd_pgwire_address: String,
+    environmentd_https_address: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -110,6 +120,7 @@ struct Region {
 struct CloudProvider {
     region: String,
     environment_controller_url: String,
+    provider: String,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +160,20 @@ struct Profile {
     region: Option<String>,
 }
 
+struct CloudProviderAndRegion {
+    cloud_provider: CloudProvider,
+    region: Option<Region>,
+}
+
+#[derive(Debug)]
+enum ExitMessage {
+    String(String),
+    Str(&'static str),
+}
+
+/**
+ * Constants
+ */
 const PROFILES_DIR_NAME: &str = ".config/mz";
 const PROFILES_FILE_NAME: &str = "profiles.toml";
 const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/api/cloud-providers";
@@ -161,6 +186,9 @@ const MACHINE_AUTH_URL: &str =
 const WEB_LOGIN_URL: &str = "https://cloud.materialize.com/account/login?redirectUrl=/access/cli";
 const DEFAULT_PROFILE_NAME: &str = "default";
 const PROFILES_PREFIX: &str = "profiles";
+const ERROR_OPENING_PROFILES_MESSAGE: &str = "Error opening the profiles file";
+const ERROR_PARSING_PROFILES_MESSAGE: &str = "Error parsing the profiles";
+const ERROR_AUTHENTICATING_PROFILE_MESSAGE: &str = "Error authenticating profile";
 const PROFILE_NOT_FOUND_MESSAGE: &str =
     "Profile not found. Please, add one or login using `mz login`.";
 
@@ -188,68 +216,126 @@ async fn main() {
             match regions_cmd.command {
                 RegionsCommands::Enable {
                     cloud_provider_region,
-                } => match validate_profile(profile_arg, client.clone()).await {
+                } => match validate_profile(profile_arg, &client).await {
                     Some(frontegg_auth_machine) => {
+                        let loading_spinner = run_loading_spinner("Enabling region...".to_string());
+
                         match enable_region(client, cloud_provider_region, frontegg_auth_machine)
                             .await
                         {
-                            Ok(region) => println!("Region enabled: {:?}", region),
-                            Err(e) => panic!("Error enabling region: {:?}", e),
+                            Ok(_) => loading_spinner.finish_with_message("Region enabled."),
+                            Err(e) => exit_with_fail_message(ExitMessage::String(format!(
+                                "Error enabling region: {:?}",
+                                e
+                            ))),
                         }
                     }
                     None => {}
                 },
-                RegionsCommands::Delete {
-                    cloud_provider_region,
-                } => {
-                    if warning_delete_region(cloud_provider_region.clone()) {
-                        match validate_profile(profile_arg, client.clone()).await {
-                            Some(frontegg_auth_machine) => {
-                                println!(
-                                    "Deleting region. The operation may take a couple of minutes."
+                RegionsCommands::List => match validate_profile(profile_arg, &client).await {
+                    Some(frontegg_auth_machine) => {
+                        match list_cloud_providers(&client, &frontegg_auth_machine).await {
+                            Ok(cloud_providers) => {
+                                let cloud_providers_and_regions =
+                                    list_regions(&cloud_providers, &client, &frontegg_auth_machine)
+                                        .await;
+                                cloud_providers_and_regions.iter().for_each(
+                                    |cloud_provider_and_region| {
+                                        print_region_enabled(cloud_provider_and_region);
+                                    },
                                 );
+                            }
+                            Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                                "Error retrieving cloud providers: {:?}",
+                                error
+                            ))),
+                        }
+                    }
+                    None => {}
+                },
+                RegionsCommands::Status {
+                    cloud_provider_region,
+                } => match get_profile_using_args(profile_arg) {
+                    Some(profile) => {
+                        let client = Client::new();
+                        match authenticate_profile(&client, &profile).await {
+                            Ok(frontegg_auth_machine) => {
+                                match list_cloud_providers(&client, &frontegg_auth_machine).await {
+                                    Ok(cloud_providers) => {
+                                        let parsed_cloud_provider_region =
+                                            parse_cloud_provider_region(cloud_provider_region);
+                                        let filtered_providers: Vec<CloudProvider> =
+                                            cloud_providers
+                                                .into_iter()
+                                                .filter(|provider| {
+                                                    provider.region == parsed_cloud_provider_region
+                                                })
+                                                .collect::<Vec<CloudProvider>>();
 
-                                match delete_region(
-                                    client.clone(),
-                                    cloud_provider_region,
-                                    frontegg_auth_machine,
-                                )
-                                .await
-                                {
-                                    Ok(_) => println!("Region deleted."),
-                                    Err(e) => panic!("Error deleting region: {:?}", e),
+                                        let mut cloud_providers_and_regions = list_regions(
+                                            &filtered_providers,
+                                            &client,
+                                            &frontegg_auth_machine,
+                                        )
+                                        .await;
+
+                                        match cloud_providers_and_regions.pop() {
+                                            Some(cloud_provider_and_region) => {
+                                                if let Some(region) =
+                                                    cloud_provider_and_region.region
+                                                {
+                                                    let health =
+                                                        check_region_health(profile, &region);
+                                                    print_region_status(region, health);
+                                                } else {
+                                                    exit_with_fail_message(ExitMessage::Str(
+                                                        "Region unavailable.",
+                                                    ));
+                                                }
+                                            }
+                                            None => exit_with_fail_message(ExitMessage::Str(
+                                                "Error. Missing provider.",
+                                            )),
+                                        }
+                                    }
+                                    Err(error) => exit_with_fail_message(ExitMessage::String(
+                                        format!("Error listing providers: {:}", error),
+                                    )),
                                 }
                             }
-                            None => {}
+                            Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                                "{}: {:}",
+                                ERROR_AUTHENTICATING_PROFILE_MESSAGE, error
+                            ))),
                         }
                     }
-                }
-                RegionsCommands::List => {
-                    match validate_profile(profile_arg, client.clone()).await {
-                        Some(frontegg_auth_machine) => {
-                            match list_cloud_providers(
-                                client.clone(),
-                                frontegg_auth_machine.clone(),
-                            )
-                            .await
-                            {
-                                Ok(cloud_providers) => {
-                                    let regions = list_regions(
-                                        cloud_providers,
-                                        client.clone(),
-                                        frontegg_auth_machine,
-                                    )
-                                    .await;
-                                    println!("Regions: {:?}", regions);
-                                }
-                                Err(error) => {
-                                    panic!("Error retrieving cloud providers: {:?}", error)
-                                }
-                            }
-                        }
-                        None => {}
-                    }
-                }
+                    None => exit_with_fail_message(ExitMessage::Str(PROFILE_NOT_FOUND_MESSAGE)),
+                },
+                // ------------------------------------------------------------------------
+                // Delete is currently disabled. Preserving the code for once is available.
+                // ------------------------------------------------------------------------
+                // RegionsCommands::Delete {
+                //     cloud_provider_region,
+                // } => {
+                // if warning_delete_region(cloud_provider_region.clone()) {
+                //     match validate_profile(profile_arg, client.clone()).await {
+                //         Some(frontegg_auth_machine) => {
+                //             let loading_spinner = run_loading_spinner("Deleting region...".to_string());
+                //             match delete_region(
+                //                 client.clone(),
+                //                 cloud_provider_region,
+                //                 frontegg_auth_machine,
+                //             )
+                //             .await
+                //             {
+                //                 Ok(_) => loading_spinner.finish_with_message("Region deleted."),
+                //                 Err(e) => panic!("Error deleting region: {:?}", e),
+                //             }
+                //         }
+                //         None => {}
+                //     }
+                // }
+                // }
             }
         }
 
@@ -257,14 +343,17 @@ async fn main() {
             match get_profile_using_args(profile_arg) {
                 Some(profile) => {
                     let client = Client::new();
-                    match authenticate_profile(client.clone(), profile.clone()).await {
+                    match authenticate_profile(&client, &profile).await {
                         Ok(frontegg_auth_machine) => {
                             shell(client, profile, frontegg_auth_machine).await
                         }
-                        Err(error) => panic!("Error authenticating profile : {:?}", error),
+                        Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                            "{}: {:}",
+                            ERROR_AUTHENTICATING_PROFILE_MESSAGE, error
+                        ))),
                     }
                 }
-                None => println!("{}", PROFILE_NOT_FOUND_MESSAGE),
+                None => exit_with_fail_message(ExitMessage::Str(PROFILE_NOT_FOUND_MESSAGE)),
             };
         }
     }

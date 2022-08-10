@@ -2874,6 +2874,7 @@ dependencies = [
  "axum",
  "clap",
  "dirs",
+ "indicatif",
  "mz-ore",
  "open",
  "reqwest",
