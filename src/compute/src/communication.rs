@@ -15,8 +15,7 @@
 //! of spuriously accepted connections that has been observed in Kubernetes with linkerd.
 
 use std::any::Any;
-use std::io::{self, Write};
-use std::io::{Read, Result as IoResult};
+use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
@@ -25,18 +24,9 @@ use std::time::Duration;
 
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
+use tracing::info;
 
 use crate::server::CommunicationConfig;
-
-// This constant is sent along immediately after establishing a TCP stream, so
-// that it is easy to sniff out Timely traffic when it is multiplexed with
-// other traffic on the same port.
-const HANDSHAKE_MAGIC: u64 = 0xc2f1fb770118add9;
-
-// This constant is sent upon receiving a connection. The process establishing
-// the connection must receive it in order to consider the connection to be
-// successfully established.
-const ACK_MAGIC: u64 = 0x68656c6f77726c64;
 
 /// Creates communication mesh from cluster config
 pub fn initialize_networking(
@@ -47,7 +37,7 @@ pub fn initialize_networking(
         process,
         addresses,
     } = config;
-    let sockets_result = create_sockets(addresses, process, true);
+    let sockets_result = create_sockets(addresses, process);
     match sockets_result.and_then(|sockets| {
         initialize_networking_from_sockets(sockets, process, threads, Box::new(|_| None))
     }) {
@@ -66,22 +56,19 @@ pub fn initialize_networking(
 fn create_sockets(
     addresses: Vec<String>,
     my_index: usize,
-    noisy: bool,
-) -> IoResult<Vec<Option<TcpStream>>> {
+) -> Result<Vec<Option<TcpStream>>, io::Error> {
     let hosts1 = Arc::new(addresses);
     let hosts2 = Arc::clone(&hosts1);
 
-    let start_task = thread::spawn(move || start_connections(hosts1, my_index, noisy));
-    let await_task = thread::spawn(move || await_connections(hosts2, my_index, noisy));
+    let start_task = thread::spawn(move || start_connections(hosts1, my_index));
+    let await_task = thread::spawn(move || await_connections(hosts2, my_index));
 
     let mut results = start_task.join().unwrap()?;
     results.push(None);
     let to_extend = await_task.join().unwrap()?;
     results.extend(to_extend.into_iter());
 
-    if noisy {
-        println!("worker {}:\tinitialization complete", my_index)
-    }
+    info!(worker = my_index, "initialization complete");
 
     Ok(results)
 }
@@ -90,36 +77,31 @@ fn create_sockets(
 fn start_connections(
     addresses: Arc<Vec<String>>,
     my_index: usize,
-    noisy: bool,
-) -> IoResult<Vec<Option<TcpStream>>> {
-    let results = addresses.iter().take(my_index).enumerate().map(|(index, address)| {
-        loop {
+) -> Result<Vec<Option<TcpStream>>, io::Error> {
+    let results = addresses
+        .iter()
+        .take(my_index)
+        .enumerate()
+        .map(|(index, address)| loop {
             match TcpStream::connect(address) {
                 Ok(mut stream) => {
                     stream.set_nodelay(true).expect("set_nodelay call failed");
-                    stream.write_all(HANDSHAKE_MAGIC.to_ne_bytes().as_slice()).expect("failed to send handshake magic");
-                    stream.write_all(my_index.to_ne_bytes().as_slice()).expect("failed to send worker index");
-                    let mut buffer = [0u8; 8];
-                    let _ = stream.read_exact(&mut buffer);
-                    // TODO [btv] - We can remove this once we have more reliable
-                    // network connections (possibly after linkerd is torn out)
-                    let peer_ack = u64::from_ne_bytes(buffer);
-                    if peer_ack != ACK_MAGIC {
-                        println!("worker {my_index} failed computed handshake with worker {index}; retrying");
-                        sleep(Duration::from_secs(1));
-                        continue;
-                    };
-                    // TODO [btv] - end of the region that can be removed (see above comment)
-                    if noisy { println!("worker {}:\tconnection to worker {}", my_index, index); }
+                    stream
+                        .write_all(&my_index.to_ne_bytes())
+                        .expect("failed to send worker index");
+                    info!(worker = my_index, "connection to worker {}", index);
                     break Some(stream);
-                },
+                }
                 Err(error) => {
-                    println!("worker {my_index}:\terror connecting to worker {index}: {error}; retrying");
+                    info!(
+                        worker = my_index,
+                        "error connecting to worker {index}: {error}; retrying"
+                    );
                     sleep(Duration::from_secs(1));
-                },
+                }
             }
-        }
-    }).collect();
+        })
+        .collect();
 
     Ok(results)
 }
@@ -128,8 +110,7 @@ fn start_connections(
 pub fn await_connections(
     addresses: Arc<Vec<String>>,
     my_index: usize,
-    noisy: bool,
-) -> IoResult<Vec<Option<TcpStream>>> {
+) -> Result<Vec<Option<TcpStream>>, io::Error> {
     let mut results: Vec<_> = (0..(addresses.len() - my_index - 1))
         .map(|_| None)
         .collect();
@@ -138,29 +119,11 @@ pub fn await_connections(
     for _ in (my_index + 1)..addresses.len() {
         let mut stream = listener.accept()?.0;
         stream.set_nodelay(true).expect("set_nodelay call failed");
-        let mut buffer = [0u8; 16];
+        let mut buffer = [0u8; 8];
         stream.read_exact(&mut buffer)?;
-        let magic = u64::from_ne_bytes((&buffer[0..8]).try_into().unwrap());
-        if magic != HANDSHAKE_MAGIC {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "received incorrect timely handshake",
-            ));
-        }
-        // TODO [btv] - We can remove this once we have more reliable
-        // network connections (possibly after linkerd is torn out)
-        let identifier = u64::from_ne_bytes((&buffer[8..16]).try_into().unwrap());
-        stream
-            .write_all(ACK_MAGIC.to_ne_bytes().as_slice())
-            .expect("failed to send ack magic");
-        // TODO [btv] - end of the region that can be removed (see above comment)
+        let identifier = u64::from_ne_bytes((&buffer[..]).try_into().unwrap());
         results[identifier as usize - my_index - 1] = Some(stream);
-        if noisy {
-            println!(
-                "worker {}:\tconnection from worker {}",
-                my_index, identifier
-            );
-        }
+        info!(worker = my_index, "connection from worker {}", identifier);
     }
 
     Ok(results)
