@@ -12,7 +12,7 @@ $ set-sql-timeout duration=1s
 # Verify initial roles.
 > SELECT id, name FROM mz_roles
 s1 mz_system
-s2 http_default_user
+s2 mz_http_default_user
 u1 materialize
 
 # Verify that invalid options are rejected.
@@ -30,7 +30,7 @@ contains:conflicting or redundant options
 > CREATE USER fms SUPERUSER
 > SELECT id, name FROM mz_roles
 s1 mz_system
-s2 http_default_user
+s2 mz_http_default_user
 u1 materialize
 u2 rj
 u3 fms
@@ -41,7 +41,7 @@ u3 fms
 contains:unknown role 'bad'
 > SELECT id, name FROM mz_roles
 s1 mz_system
-s2 http_default_user
+s2 mz_http_default_user
 u1 materialize
 u2 rj
 u3 fms
@@ -50,20 +50,20 @@ u3 fms
 > DROP ROLE IF EXISTS rj, fms, bad
 > SELECT id, name FROM mz_roles
 s1 mz_system
-s2 http_default_user
+s2 mz_http_default_user
 u1 materialize
 
 # Verify that the single name version of DROP ROLE works too.
 > CREATE ROLE nlb LOGIN SUPERUSER
 > SELECT id, name FROM mz_roles
 s1 mz_system
-s2 http_default_user
+s2 mz_http_default_user
 u1 materialize
 u4 nlb
 > DROP ROLE nlb
 > SELECT id, name FROM mz_roles
 s1 mz_system
-s2 http_default_user
+s2 mz_http_default_user
 u1 materialize
 > DROP ROLE IF EXISTS nlb
 
