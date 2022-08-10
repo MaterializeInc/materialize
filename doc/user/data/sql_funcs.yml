@@ -187,7 +187,7 @@
     description: The square root of `x`.
 
   - signature: 'trunc(x: N) -> N'
-    description: `x` truncated toward zero to a whole number
+    description: "`x` truncated toward zero to a whole number"
 
 - type: Trigonometric
   description: Trigonometric functions take and return `double precision` values.

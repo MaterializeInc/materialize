@@ -48,7 +48,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "truncf32"]
     fn trunc_float32(a: f32) -> f32 {
-         a.trunc()
+        a.trunc()
     }
 );
 
