@@ -363,7 +363,7 @@ contains:CONSISTENCY FORMAT JSON not yet supported
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.double_avro sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "0"}}
+{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 > CREATE SINK double_avro_2 FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
@@ -371,7 +371,7 @@ $ kafka-verify format=avro sink=materialize.public.double_avro sort-messages=tru
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.double_avro_2 sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "0"}}
+{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 > CREATE SINK json_avro FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro'
@@ -379,7 +379,7 @@ $ kafka-verify format=avro sink=materialize.public.double_avro_2 sort-messages=t
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true key=false
-{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "0"}}
+{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "<TIMESTAMP>"}}
 
 > CREATE SINK json_avro_2 FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro'
@@ -387,7 +387,7 @@ $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true 
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.json_avro_2 sort-messages=true key=false
-{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "0"}}
+{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "<TIMESTAMP>"}}
 
 ! CREATE SINK json_reuse_topic_no_parens FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
@@ -404,7 +404,7 @@ contains:For FORMAT JSON, you need to manually specify an Avro consistency topic
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.json_reuse_topic_no_parens sort-messages=true key=false
-{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "0"}}
+{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # This updated syntax will also succeed, creating a reusable topic.
 > CREATE SINK json_reuse_topic_with_parens FROM rt_binding_consistency_test_source
@@ -427,7 +427,7 @@ $ kafka-verify format=json sink=materialize.public.json_reuse_topic_no_parens so
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "0"}}
+{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 > CREATE SINK json_avro_upsert_key FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro-upsert-key'
@@ -437,7 +437,7 @@ $ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=tr
   ENVELOPE UPSERT
 
 $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key key=true
-{"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "0"}}
+{"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "<TIMESTAMP>"}}
 
 > CREATE SINK json_avro_upsert_key_2 FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro-upsert-key'
@@ -447,7 +447,7 @@ $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key key=true
   ENVELOPE UPSERT
 
 $ kafka-verify format=json sink=materialize.public.json_avro_upsert_key_2 key=true
-{"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "0"}}
+{"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Verify compaction of exactly once sinks.
 
