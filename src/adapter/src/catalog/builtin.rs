@@ -112,9 +112,13 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
+pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
+
 pub struct BuiltinRole {
+    /// Name of the builtin role.
+    ///
+    /// IMPORTANT: Must start with a prefix from [`BUILTIN_ROLE_PREFIXES`].
     pub name: &'static str,
-    pub id: u64,
 }
 
 pub trait Fingerprint {
@@ -1134,7 +1138,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_roles",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
@@ -2101,10 +2105,7 @@ AS SELECT
 FROM mz_catalog.mz_roles r",
 };
 
-pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
-    name: "mz_system",
-    id: 0,
-};
+pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: "mz_system" };
 
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
@@ -2293,6 +2294,7 @@ pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM])
 #[allow(non_snake_case)]
 pub mod BUILTINS {
     use super::*;
+
     pub fn logs() -> impl Iterator<Item = &'static BuiltinLog> {
         BUILTINS_STATIC.iter().filter_map(|b| match b {
             Builtin::Log(log) => Some(*log),
@@ -2327,14 +2329,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::env;
 
-    use mz_ore::now::NOW_ZERO;
     use tokio_postgres::NoTls;
 
-    use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
+    use mz_ore::now::NOW_ZERO;
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::names::{PartialObjectName, ResolvedDatabaseSpecifier};
+
+    use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
 
     use super::*;
 

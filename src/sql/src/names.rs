@@ -9,6 +9,7 @@
 
 //! Structured name types for SQL objects.
 
+use anyhow::anyhow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
@@ -660,6 +661,38 @@ impl FromStr for DatabaseId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let val: u64 = s.parse()?;
         Ok(DatabaseId(val))
+    }
+}
+
+/// The identifier for a role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum RoleId {
+    System(u64),
+    User(u64),
+}
+
+impl FromStr for RoleId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() < 2 {
+            return Err(anyhow!("couldn't parse role id {}", s));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next().unwrap() {
+            's' => Ok(Self::System(val)),
+            'u' => Ok(Self::User(val)),
+            _ => Err(anyhow!("couldn't parse role id {}", s)),
+        }
+    }
+}
+
+impl fmt::Display for RoleId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::System(id) => write!(f, "s{}", id),
+            Self::User(id) => write!(f, "u{}", id),
+        }
     }
 }
 

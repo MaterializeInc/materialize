@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
-    ResolvedDatabaseSpecifier, SchemaSpecifier,
+    ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::plan::statement::StatementDesc;
 
@@ -255,7 +255,7 @@ pub trait CatalogRole {
     fn name(&self) -> &str;
 
     /// Returns a stable ID for the role.
-    fn id(&self) -> u64;
+    fn id(&self) -> RoleId;
 }
 
 /// A compute instance in a [`SessionCatalog`].

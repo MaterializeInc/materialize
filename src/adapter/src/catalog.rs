@@ -53,7 +53,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
-    QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, SchemaId,
+    QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
 };
 use mz_sql::plan::{
@@ -71,7 +71,7 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
-    BUILTINS, BUILTIN_ROLES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    BUILTINS, BUILTIN_ROLE_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
@@ -1169,7 +1169,7 @@ pub struct Schema {
 #[derive(Debug, Serialize, Clone)]
 pub struct Role {
     pub name: String,
-    pub id: u64,
+    pub id: RoleId,
     #[serde(skip)]
     pub oid: u32,
 }
@@ -1830,8 +1830,7 @@ impl<S: Append> Catalog<S> {
         }
 
         let roles = catalog.storage().await.load_roles().await?;
-        let builtin_roles = BUILTIN_ROLES.iter().map(|b| (b.id, b.name.to_owned()));
-        for (id, name) in roles.into_iter().chain(builtin_roles) {
+        for (id, name) in roles {
             let oid = catalog.allocate_oid().await?;
             catalog.state.roles.insert(
                 name.clone(),
@@ -3180,7 +3179,7 @@ impl<S: Append> Catalog<S> {
                 schema_name: String,
             },
             CreateRole {
-                id: u64,
+                id: RoleId,
                 oid: u32,
                 name: String,
             },
@@ -3329,7 +3328,7 @@ impl<S: Append> Catalog<S> {
                         )));
                     }
                     vec![Action::CreateRole {
-                        id: tx.insert_role(&name)?,
+                        id: tx.insert_user_role(&name)?,
                         oid,
                         name,
                     }]
@@ -3481,6 +3480,11 @@ impl<S: Append> Catalog<S> {
                     }]
                 }
                 Op::DropRole { name } => {
+                    if is_reserved_name(&name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedRoleName(name),
+                        )));
+                    }
                     tx.remove_role(&name)?;
                     builtin_table_updates.push(self.state.pack_role_update(&name, -1));
                     vec![Action::DropRole { name }]
@@ -4253,7 +4257,9 @@ impl<S: Append> Catalog<S> {
 }
 
 fn is_reserved_name(name: &str) -> bool {
-    name.starts_with("mz_") || name.starts_with("pg_")
+    BUILTIN_ROLE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 #[derive(Debug, Clone)]
@@ -4762,7 +4768,7 @@ impl mz_sql::catalog::CatalogRole for Role {
         &self.name
     }
 
-    fn id(&self) -> u64 {
+    fn id(&self) -> RoleId {
         self.id
     }
 }

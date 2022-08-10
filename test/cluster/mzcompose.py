@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import time
-from textwrap import dedent
 
 from pg8000.dbapi import ProgrammingError
 
@@ -72,7 +71,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-12251",
         "test-remote-storaged",
         "test-drop-default-cluster",
-        "test-builtin-migration",
         "test-upsert",
     ]:
         with c.test_case(name):
@@ -234,86 +232,3 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
 
     c.sql("DROP CLUSTER default CASCADE")
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
-
-
-def workflow_test_builtin_migration(c: Composition) -> None:
-    """Exercise the builtin object migration code by upgrading between two versions
-    that will have a migration triggered between them. Create a materialized view
-    over the affected builtin object to confirm that the migration was successful
-    """
-
-    c.down(destroy_volumes=True)
-    with c.override(
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-    ):
-        c.up("testdrive", persistent=True)
-
-        # Use storage external to the mz image because the above sha used postgres but
-        # we now use cockroach, so the data are lost.
-        mz_options = " ".join(
-            [
-                "--persist-consensus-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus",
-                "--storage-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=storage",
-                "--adapter-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=adapter",
-            ]
-        )
-
-        with c.override(
-            # This commit introduced the pg_authid builtin view with a missing column. The column was added in a
-            # later commit.
-            Materialized(
-                image="materialize/materialized:devel-4a26e59ac9da694d21b60c8d4d4a7b67c8b3b78d",
-                options=mz_options,
-            ),
-            Postgres(image="postgres:14.4"),
-        ):
-            c.up("postgres")
-            c.wait_for_postgres(service="postgres")
-            c.sql(
-                sql=f"""
-                CREATE SCHEMA IF NOT EXISTS consensus;
-                CREATE SCHEMA IF NOT EXISTS storage;
-                CREATE SCHEMA IF NOT EXISTS adapter;
-            """,
-                service="postgres",
-                user="postgres",
-                password="postgres",
-            )
-
-            c.up("materialized")
-            c.wait_for_materialized()
-
-            c.testdrive(
-                input=dedent(
-                    """
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM pg_authid;
-            > CREATE DEFAULT INDEX ON v1;
-            > SELECT * FROM v1;
-            2
-        """
-                )
-            )
-
-            c.kill("materialized")
-
-        with c.override(
-            # If this ever stops working, add the following argument:
-            # image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921"
-            # That commit added the missing column rolconnlimit to pg_authid.
-            Materialized(options=mz_options)
-        ):
-            c.up("materialized")
-            c.wait_for_materialized()
-
-            c.testdrive(
-                input=dedent(
-                    """
-       > SELECT * FROM v1;
-       2
-
-       # This column is new after the migration
-       > SELECT DISTINCT rolconnlimit FROM pg_authid;
-       -1
-    """
-                )
-            )
