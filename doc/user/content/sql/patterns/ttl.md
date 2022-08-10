@@ -6,67 +6,66 @@ menu:
     parent: 'sql-patterns'
 ---
 
-The time-to-live pattern (TTL) helps you to build expiration times mechanisms using SQL. Before continuing, make sure to understand how [temporal filters](/guides/temporal-filters/) work.
+The time-to-live (TTL) pattern helps assign expiration times to rows while processing. Before continuing, make sure to understand how [temporal filters](/guides/temporal-filters/) work.
 
 A few examples of the use cases that you can achieve are:
 
-- Free memory
-- Schedule events, like emails or messages
-- Temporal offers for an e-commerce
-- Time-sensitive security blockers
+- Free-up memory
+- Schedule tasks, like emails or messages
+- Assign temporal offers for an e-commerce
+- Run time-sensitive security blockers
 
 ## How-to
 
-1. Identify the row, its initial timestamp, and the TTL. In the example, the `event_time` and `event_ttl` represent those times. The sum of these values is the **expiring time**.
+1. Identify the row, its initial timestamp, and the TTL. In the example, the `event_timestamp` and `event_ttl` represent those times. The sum of these values is when the row needs to drop, known as **expiring time**.
     ```sql
-      CREATE TABLE events (event_name TEXT, event_time TIMESTAMP, event_ttl INTERVAL);
+      CREATE TABLE events (event_name TEXT, event_timestamp TIMESTAMP, event_ttl INTERVAL);
 
       -- Sample (One minute TTL):
-      INSERT INTO events VALUES ('send_email', now(), INTERVAL '1 minute');
+      INSERT INTO events VALUES ('send_email', now(), INTERVAL '5 minutes');
     ```
 
-    The time fields or expiring time could come from sources or views building them on the fly. The table is just one of the many options.
+    The fields of `event_timestamp` and `event_ttl`, or the resulting expiring time, could come from sources or views building them on the fly. The table is just one of the many options.
 
 1. Create a view with a temporal filter **filtering by the expiring time**.
     ```sql
       CREATE MATERIALIZED VIEW ttl_view AS
       SELECT *
       FROM events
-      WHERE mz_logical_timestamp() < extract(epoch from (event_time + event_ttl)) * 1000;
+      WHERE mz_logical_timestamp() < extract(epoch from (event_timestamp + event_ttl)) * 1000;
     ```
 
-    The filter discards rows with **expiring time** less or equal to the  `mz_logical_timestamp()`.
+    The filter clause will discard any row with an **expiring time** less or equal to `mz_logical_timestamp()`.
 1. That's it! Use it in the way that best fits your use case.
 
 ### Usage examples
 
-- Run a query to know the remaining living time for a row:
+- Run a query to know the time to live for a row:
   ```sql
     SELECT
-      (extract(epoch from (event_time + event_ttl))) -
-      (mz_logical_timestamp() / 1000) AS remaining_block_time
+      (extract(epoch from (event_timestamp + event_ttl))) -
+      (mz_logical_timestamp() / 1000) AS remaining_time
     FROM TTL_VIEW
-    WHERE event_name = 'security_block_ban';
+    WHERE event_name = 'send_email';
   ```
 
-- Check if a particular row is still available:
+- Just check if a particular row is still available:
   ```sql
   SELECT event_name
   FROM TTL_VIEW
-  WHERE event_name = 'special_offer';
+  WHERE event_name = 'ban_over_ip_address';
   ```
 
-- Run a tail and see when the filter reaches an expiration date:
+- Run a tail and react over any expiring row:
   ```sql
-    INSERT INTO events VALUES ('send_email', now(), INTERVAL '10 seconds');
+    INSERT INTO events VALUES ('send_email', now(), INTERVAL '5 seconds');
     COPY( TAIL TTL_VIEW WITH (SNAPSHOT = false) ) TO STDOUT;
 
-    -- It is time to send the email when:
   ```
   ```nofmt
-  mz_timestamp | mz_diff | event_name | event_time | event_ttl |
-  -------------|---------|------------|------------|-----------|
-  ...          | -1      | send_email | ...        | 00:00:10  |
+  mz_timestamp | mz_diff | event_name | event_timestamp | event_ttl |
+  -------------|---------|------------|-----------------|-----------|
+  ...          | -1      | send_email | ...             | 00:00:10  | <-- Time to send the email!
   ```
 
 <!-- ## Expiring time
