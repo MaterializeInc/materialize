@@ -21,13 +21,13 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Map, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::trace;
 
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{ExternalError, SeqNo};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::{ReaderEnrichedHollowBatch, Subscribe};
+use mz_persist_client::read::ReaderEnrichedHollowBatch;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -92,7 +92,7 @@ where
     // 3. Batch fetcher: A timely operator which downloads the batch's contents
     //    from S3, and outputs them to a timely stream. Additionally, the
     //    operator returns the `SeqNo` lease to the original worker.
-    // 4. SeqNo leaspr: A timely operator running only on the original worker
+    // 4. SeqNo leasor: A timely operator running only on the original worker
     //    that collects returned `SeqNo` leases, dropping them, and allowing
     //    compaction to occur.
 
@@ -100,17 +100,17 @@ where
     let peers = scope.peers();
     let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
 
-    // Holds the `Subscribe` to be accessed in the first and last stages; is
-    // meant to be `Some` only on the chosen worker.
-    let subscribe: Arc<Mutex<Option<Subscribe<_, _, _, _>>>> = Arc::new(Mutex::new(None));
-
     // All of these need to be cloned out here because they're moved into the
     // `try_stream!` generator.
     let persist_clients_stream = Arc::<Mutex<PersistClientCache>>::clone(&persist_clients);
     let persist_location_stream = metadata.persist_location.clone();
     let data_shard = metadata.data_shard.clone();
     let as_of_stream = as_of;
-    let subscribe_stream = Arc::clone(&subscribe);
+
+    // Lets the SeqNo lease-returning operator communicate with the
+    // SeqNo-leasing Subscribe.
+    let (seqno_lease_tx, seqno_lease_rx): (mpsc::Sender<Vec<SeqNo>>, mpsc::Receiver<Vec<SeqNo>>) =
+        mpsc::channel(1);
 
     // This is a generator that sets up an async `Stream` that can be continously polled to get the
     // values that are `yield`-ed from it's body.
@@ -134,22 +134,22 @@ where
             .await
             .expect("could not open persist shard");
 
-        let subscription = read
+        let mut subscription = read
             .subscribe(as_of_stream)
             .await
             .expect("cannot serve requested as_of");
 
-        {
-            // Place the subscription in the mutex.
-            let sub = &mut subscribe_stream.lock().await;
-            **sub = Some(subscription);
-        }
+        let mut seqno_lease_rx = seqno_lease_rx;
 
         loop {
-            let mut s = subscribe_stream.lock().await;
             // Unclear, but the `SeqNo` lease is generated as a function of
             // generating batches that will be distributed to workers.
-            yield s.as_mut().unwrap().next().await;
+            yield subscription.next().await;
+            while let Ok(seqnos) = seqno_lease_rx.try_recv() {
+                for seqno in seqnos {
+                    subscription.drop_seqno_lease(seqno);
+                }
+            }
         }
     });
 
@@ -293,18 +293,12 @@ where
                 return false;
             }
 
-            let subscription = Arc::clone(&subscribe);
-
-            // Ensure subscription has been generated.
-            while subscription.lock().await.is_none() {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-
-            while let Some((_cap, data)) = seqno_leasor_input.next() {
-                let mut s = subscription.lock().await;
-                let s = s.as_mut().unwrap();
-                for seqno in data.iter() {
-                    s.drop_seqno_lease(*seqno);
+            'outer: while let Some((_cap, data)) = seqno_leasor_input.next() {
+                if seqno_lease_tx.send(data.clone()).await.is_err() {
+                    // Subscribe loop dropped, which drops its ReadHandle,
+                    // which in turn drops all leased `SeqNo`s so doing
+                    // anything else here is both moot and impossible.
+                    break 'outer;
                 }
             }
 
