@@ -62,7 +62,7 @@ use crate::catalog::{
     SerializedComputeInstanceReplicaLocation,
 };
 use crate::command::{Command, ExecuteResponse};
-use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
+use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::{
     peek, read_policy, Coordinator, Message, PendingTxn, SendDiffs, SinkConnectionReady, TxnReads,
@@ -883,7 +883,7 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
-                let since_ts = self.get_local_write_ts().await;
+                let since_ts = self.peek_local_write_ts();
 
                 let collection_desc = table.desc.clone().into();
                 self.controller
@@ -1556,7 +1556,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 .catalog
                 .state()
                 .pack_replica_heartbeat_update(replica_id, metadata, -1);
-            self.send_builtin_table_updates(vec![retraction]).await;
+            self.send_builtin_table_updates(vec![retraction], BuiltinTableUpdateSource::Background)
+                .await;
         }
         self.controller
             .drop_replica(instance_id, replica_id, replica_config)

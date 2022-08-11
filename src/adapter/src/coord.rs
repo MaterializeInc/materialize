@@ -82,7 +82,7 @@ use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tracing::{span, Level};
 use uuid::Uuid;
 
@@ -114,7 +114,7 @@ use crate::catalog::{
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::coord::appends::{AdvanceLocalInput, Deferred, PendingWriteTxn};
+use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
@@ -123,7 +123,7 @@ use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::sink_connection;
 use crate::tail::PendingTail;
-use crate::util::ClientTransmitter;
+use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
@@ -155,11 +155,21 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
-    AdvanceTimelines,
-    AdvanceLocalInput(AdvanceLocalInput<T>),
-    GroupCommit,
+    /// Initiates a group commit.
+    GroupCommitInitiate,
+    /// Makes a group commit visible to all clients.
+    GroupCommitApply(
+        /// Timestamp of the writes in the group commit.
+        T,
+        /// Clients waiting on responses from the group commit.
+        Vec<CompletedClientTransmitter<ExecuteResponse>>,
+        /// Optional lock if the group commit contained writes to user tables.
+        Option<OwnedMutexGuard<()>>,
+    ),
     ComputeInstanceStatus(ComputeInstanceEvent),
-    RemovePendingPeeks { conn_id: ConnectionId },
+    RemovePendingPeeks {
+        conn_id: ConnectionId,
+    },
     LinearizeReads(Vec<PendingTxn>),
     StorageUsage,
 }
@@ -658,7 +668,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let WriteTimestamp {
             timestamp: _,
             advance_to,
-        } = self.get_and_step_local_write_ts().await;
+        } = self.get_local_write_ts().await;
         let appends = entries
             .iter()
             .filter(|entry| entry.is_table())
@@ -694,7 +704,8 @@ impl<S: Append + 'static> Coordinator<S> {
             builtin_table_updates.extend(retractions);
         }
 
-        self.send_builtin_table_updates(builtin_table_updates).await;
+        self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
+            .await;
 
         Ok(())
     }
@@ -764,7 +775,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
+                _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
                 _ = storage_usage_update_interval.tick() => Message::StorageUsage,
             };
 
@@ -774,10 +785,6 @@ impl<S: Append + 'static> Coordinator<S> {
             let _enter = span.enter();
 
             self.handle_message(msg).await;
-
-            if let Some(timestamp) = self.get_local_timestamp_oracle_mut().should_advance_to() {
-                self.queue_local_input_advances(timestamp).await;
-            }
         }
     }
 

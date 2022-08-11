@@ -11,22 +11,20 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use chrono::DurationRound;
-use timely::PartialOrder;
 use tracing::{event, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
-use mz_storage::types::sources::Timeline;
 
 use crate::catalog::{self};
 use crate::command::{Command, ExecuteResponse};
-use crate::coord::appends::Deferred;
-use crate::coord::timeline::TimelineState;
+use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
+
 use crate::coord::{
-    CoordTimestamp, Coordinator, CreateSourceStatementReady, Message, PendingTxn, ReplicaMetadata,
-    SendDiffs, SinkConnectionReady,
+    Coordinator, CreateSourceStatementReady, Message, PendingTxn, ReplicaMetadata, SendDiffs,
+    SinkConnectionReady,
 };
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -46,14 +44,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
             Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
-            Message::AdvanceTimelines => {
-                self.message_advance_timelines().await;
-            }
-            Message::AdvanceLocalInput(inputs) => {
-                self.advance_local_inputs(inputs).await;
-            }
-            Message::GroupCommit => {
+            Message::GroupCommitInitiate => {
                 self.try_group_commit().await;
+            }
+            Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
+                self.group_commit_apply(timestamp, responses, false, write_lock_guard)
+                    .await;
             }
             Message::ComputeInstanceStatus(status) => {
                 self.message_compute_instance_status(status).await
@@ -162,7 +158,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     } else {
                         vec![insertion]
                     };
-                    self.send_builtin_table_updates(updates).await;
+                    self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
+                        .await;
                 }
             }
         }
@@ -295,7 +292,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
                         .await;
                 }
-                Deferred::GroupCommit => self.group_commit().await,
+                Deferred::GroupCommit => self.group_commit_initiate().await,
             }
         }
         // N.B. if no deferred plans, write lock is released by drop
@@ -333,49 +330,6 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => {
                 tx.send(Err(e), session);
             }
-        }
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn message_advance_timelines(&mut self) {
-        // Convince the coordinator it needs to open a new timestamp
-        // and advance inputs.
-        // Fast forwarding puts the `TimestampOracle` in write mode,
-        // which means the next read may have to wait for table
-        // advancements. To prevent this we explicitly put
-        // the `TimestampOracle` in read mode. Writes will always
-        // advance a table no matter what mode the `TimestampOracle`
-        // is in. We step back the value of `now()` so that the
-        // next write can happen at `now()` and not a value above
-        // `now()`
-        let global_timelines = std::mem::take(&mut self.global_timelines);
-        for (
-            timeline,
-            TimelineState {
-                mut oracle,
-                mut read_holds,
-            },
-        ) in global_timelines
-        {
-            let now = if timeline == Timeline::EpochMilliseconds {
-                let now = self.now();
-                now.step_back().unwrap_or(now)
-            } else {
-                // For non realtime sources, we define now as the largest timestamp, not in
-                // advance of any object's upper. This is the largest timestamp that is closed
-                // to writes.
-                let id_bundle = self.ids_in_timeline(&timeline);
-                self.largest_not_in_advance_of_upper(&id_bundle)
-            };
-            oracle
-                .fast_forward(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
-                .await;
-            let read_ts = oracle.read_ts();
-            if read_holds.time.less_than(&read_ts) {
-                read_holds = self.update_read_hold(read_holds, read_ts).await;
-            }
-            self.global_timelines
-                .insert(timeline, TimelineState { oracle, read_holds });
         }
     }
 

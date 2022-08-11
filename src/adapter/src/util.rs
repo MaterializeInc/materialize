@@ -26,7 +26,7 @@ use crate::catalog::Catalog;
 use crate::command::{Command, Response};
 use crate::coord::Message;
 use crate::error::AdapterError;
-use crate::session::Session;
+use crate::session::{EndTransactionAction, Session};
 use crate::{ExecuteResponse, PeekResponseUnary};
 
 /// Handles responding to clients.
@@ -64,6 +64,39 @@ impl<T> ClientTransmitter<T> {
 
     pub fn take(mut self) -> oneshot::Sender<Response<T>> {
         self.tx.take().unwrap()
+    }
+}
+
+/// `ClientTransmitter` with a response to send.
+#[derive(Debug)]
+pub struct CompletedClientTransmitter<T> {
+    client_transmitter: ClientTransmitter<T>,
+    response: Result<T, AdapterError>,
+    session: Session,
+    action: EndTransactionAction,
+}
+
+impl<T> CompletedClientTransmitter<T> {
+    /// Creates a new completed client transmitter.
+    pub fn new(
+        client_transmitter: ClientTransmitter<T>,
+        response: Result<T, AdapterError>,
+        session: Session,
+        action: EndTransactionAction,
+    ) -> Self {
+        CompletedClientTransmitter {
+            client_transmitter,
+            response,
+            session,
+            action,
+        }
+    }
+
+    /// Transmits `result` to the client, returning ownership of the session
+    /// `session` as well.
+    pub fn send(mut self) {
+        self.session.vars_mut().end_transaction(self.action);
+        self.client_transmitter.send(self.response, self.session);
     }
 }
 

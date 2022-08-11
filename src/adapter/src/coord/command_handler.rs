@@ -479,11 +479,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // Cancel pending writes. There is at most one pending write per session.
             if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
                 matches!(pending_write_txn, PendingWriteTxn::User {
-                    pending_txn:
-                        PendingTxn {
-                            session,
-                            ..
-                        },
+                    pending_txn: PendingTxn { session, .. },
                     ..
                 } if session.conn_id() == conn_id)
             }) {

@@ -26,6 +26,7 @@ use mz_storage::types::sinks::{SinkAsOf, SinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection};
 
 use crate::catalog::{CatalogItem, CatalogState, SinkConnectionState};
+use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError};
@@ -168,7 +169,8 @@ impl<S: Append + 'static> Coordinator<S> {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            self.send_builtin_table_updates(builtin_table_updates).await;
+            self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
+                .await;
 
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop).await;
