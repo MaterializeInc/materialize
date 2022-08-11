@@ -121,7 +121,7 @@ where
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn fetch_recent_upper(&mut self) -> Antichain<T> {
+    pub async fn fetch_recent_upper(&mut self) -> &Antichain<T> {
         trace!("WriteHandle::fetch_recent_upper");
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
