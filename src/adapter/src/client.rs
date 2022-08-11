@@ -202,11 +202,11 @@ impl ConnClient {
 
     /// Validate that the user is allowed to login.
     fn validate_user(&self, user: &str) -> Result<(), AdapterError> {
-        if user == SYSTEM_USER && !matches!(self.inner.client_type, ClientType::Internal) {
-            return Err(AdapterError::UnauthorizedLogin(user.to_string()));
+        match (&self.inner.client_type, user) {
+            (ClientType::Internal, SYSTEM_USER) => Ok(()),
+            (ClientType::Internal, _) => Err(AdapterError::UnauthorizedLogin(user.to_string())),
+            (ClientType::External, _) => Ok(()),
         }
-
-        Ok(())
     }
 
     /// Cancels the query currently running on another connection.

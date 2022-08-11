@@ -312,7 +312,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         task::spawn(|| "internal_pgwire_server", {
             let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 tls: None,
-                adapter_client: internal_adapter_client.clone(),
+                adapter_client: internal_adapter_client,
                 frontegg: None,
             });
             let mut incoming = TcpListenerStream::new(internal_sql_listener);
