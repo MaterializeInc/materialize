@@ -138,6 +138,11 @@ $ kafka-verify format=avro sink=materialize.public.snk4
 {"before": null, "after": {"row":{"c": true}}}
 
 # Test AS OF and WITH/WITHOUT SNAPSHOT.
+#
+# N.B. It's important that we've verified above that a sink exporting
+# src_materialized has processed the row. This means the data has a definite
+# timestamp.  Without that, WITHOUT SNAPSHOT could correct either include or
+# exclude the old rows.
 
 > CREATE SINK snk5 FROM src_materialized
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk5'
