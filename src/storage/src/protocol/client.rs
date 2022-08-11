@@ -357,7 +357,15 @@ where
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", ingestion.id, command);
                 }
             }
-            _ => {
+            StorageCommand::ExportSinks(exports) => {
+                for export in exports {
+                    let mut frontier = MutableAntichain::new();
+                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                    let previous = self.uppers.insert(export.id, frontier);
+                    assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
+                }
+            }
+            StorageCommand::AllowCompaction(_) | StorageCommand::InitializationComplete => {
                 // Other commands have no known impact on frontier tracking.
             }
         }
