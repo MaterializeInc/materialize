@@ -33,6 +33,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
 use itertools::Itertools;
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -47,7 +48,7 @@ use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_stash::{self, StashError, TypedCollection};
 
@@ -58,8 +59,8 @@ use crate::protocol::client::{
 };
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use crate::types::sinks::StorageSinkDesc;
-use crate::types::sources::IngestionDescription;
+use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
+use crate::types::sources::{IngestionDescription, SourceData};
 
 mod hosts;
 mod rehydration;
@@ -68,6 +69,26 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage.controller.rs"));
 
 static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
+
+static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> =
+    TypedCollection::new("storage-export-metadata-u64");
+
+// Do this dance so that we keep the storaged controller expressed in terms of a generic timestamp `T`.
+struct MetadataExportFetcher;
+trait MetadataExport<T>
+where
+    // Associated type would be better but you can't express this relationship without unstable
+    DurableExportMetadata<T>: mz_stash::Data,
+{
+    fn get_stash_collection() -> &'static TypedCollection<GlobalId, DurableExportMetadata<T>>;
+}
+
+impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
+    fn get_stash_collection(
+    ) -> &'static TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> {
+        &METADATA_EXPORT
+    }
+}
 
 /// Describes a request to create a source.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -432,6 +453,71 @@ impl Codec for DurableCollectionMetadata {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DurableExportMetadata<T> {
+    pub initial_as_of: SinkAsOf<T>,
+}
+
+impl PartialOrd for DurableExportMetadata<mz_repr::Timestamp> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::cmp::Ord for DurableExportMetadata<mz_repr::Timestamp> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let mut s = vec![];
+        let mut o = vec![];
+        self.encode(&mut s);
+        other.encode(&mut o);
+        s.cmp(&o)
+    }
+}
+
+impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoDurableExportMetadata {
+        ProtoDurableExportMetadata {
+            initial_as_of: Some(self.initial_as_of.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoDurableExportMetadata) -> Result<Self, TryFromProtoError> {
+        Ok(DurableExportMetadata {
+            initial_as_of: proto
+                .initial_as_of
+                .into_rust_if_some("ProtoDurableExportMetadata::initial_as_of")?,
+        })
+    }
+}
+
+impl Codec for DurableExportMetadata<mz_repr::Timestamp> {
+    fn codec_name() -> String {
+        "protobuf[DurableExportMetadata]".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        self.into_proto()
+            .encode(buf)
+            .expect("no required fields means no initialization errors");
+    }
+
+    fn decode(buf: &[u8]) -> Result<Self, String> {
+        let proto = ProtoDurableExportMetadata::decode(buf).map_err(|err| err.to_string())?;
+        proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
+impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<SinkAsOf<mz_repr::Timestamp>>(),)
+            .prop_map(|(initial_as_of,)| Self { initial_as_of })
+            .boxed()
+    }
+}
+
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<
@@ -585,13 +671,16 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin + Debug,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
+
+    MetadataExportFetcher: MetadataExport<T>,
+    DurableExportMetadata<T>: mz_stash::Data,
 {
     type Timestamp = T;
 
@@ -599,14 +688,17 @@ where
         self.hosts.initialization_complete();
     }
 
-    fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, StorageError> {
+    fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {
         self.state
             .collections
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, StorageError> {
+    fn collection_mut(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError> {
         self.state
             .collections
             .get_mut(&id)
@@ -616,7 +708,7 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     async fn create_collections(
         &mut self,
-        mut collections: Vec<(GlobalId, CollectionDescription<T>)>,
+        mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
@@ -733,14 +825,17 @@ where
         Ok(())
     }
 
-    fn export(&self, id: GlobalId) -> Result<&ExportState<T>, StorageError> {
+    fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError> {
         self.state
             .exports
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn export_mut(&mut self, id: GlobalId) -> Result<&mut ExportState<T>, StorageError> {
+    fn export_mut(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<&mut ExportState<Self::Timestamp>, StorageError> {
         self.state
             .exports
             .get_mut(&id)
@@ -749,7 +844,7 @@ where
 
     async fn create_exports(
         &mut self,
-        exports: Vec<(GlobalId, ExportDescription<T>)>,
+        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         let mut dedup_hashmap = HashMap::<&_, &_>::new();
@@ -779,18 +874,55 @@ where
 
             let from_storage_metadata = self.collection(from)?.collection_metadata.clone();
 
-            let augmented_sink_desc = StorageSinkDesc {
-                from,
-                from_desc: description.sink.from_desc,
-                connection: description.sink.connection,
-                envelope: description.sink.envelope,
-                as_of: description.sink.as_of,
-                from_storage_metadata,
+            let initial_as_of = MetadataExportFetcher::get_stash_collection()
+                .insert_without_overwrite(
+                    &mut self.state.stash,
+                    &id,
+                    DurableExportMetadata {
+                        initial_as_of: description.sink.as_of,
+                    },
+                )
+                .await?
+                .initial_as_of;
+
+            // We've added the dependency above in `exported_collections` so this guaranteed not to change at least until the sink is started up.
+            let from_since = self
+                .persist
+                .lock()
+                .await
+                .open(self.persist_location.clone())
+                .await
+                .unwrap()
+                .open_reader::<SourceData, (), Self::Timestamp, Diff>(
+                    from_storage_metadata.data_shard,
+                )
+                .await
+                .expect("invalid persist usage")
+                .since()
+                .to_owned();
+
+            let as_of = if PartialOrder::less_equal(&initial_as_of.frontier, &from_since) {
+                SinkAsOf {
+                    frontier: from_since,
+                    // If we're using the since, never read the snapshot
+                    strict: true,
+                }
+            } else {
+                initial_as_of
             };
+
             let cmd = ExportSinkCommand {
                 id,
-                description: augmented_sink_desc,
+                description: StorageSinkDesc {
+                    from,
+                    from_desc: description.sink.from_desc,
+                    connection: description.sink.connection,
+                    envelope: description.sink.envelope,
+                    as_of,
+                    from_storage_metadata,
+                },
             };
+
             // TODO: allow specifying a size parameter for sinks, tracked in #13889
             let host_config = match description.remote_addr {
                 Some(addr) => StorageHostConfig::Remote { addr },
@@ -898,7 +1030,7 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn set_read_policy(
         &mut self,
-        policies: Vec<(GlobalId, ReadPolicy<T>)>,
+        policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
@@ -922,7 +1054,7 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, ChangeBatch<T>)],
+        updates: &[(GlobalId, ChangeBatch<Self::Timestamp>)],
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
         let mut collections = BTreeMap::new();
@@ -970,7 +1102,7 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_read_capabilities(
         &mut self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
+        updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     ) -> Result<(), StorageError> {
         // Location to record consequences that we need to act on.
         let mut storage_net = HashMap::new();
@@ -1089,7 +1221,20 @@ where
             persist: persist_clients,
         }
     }
+}
 
+impl<T> Controller<T>
+where
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
+    <T as TryInto<i64>>::Error: std::fmt::Debug,
+    <T as TryFrom<i64>>::Error: std::fmt::Debug,
+
+    // Required to setup grpc clients for new storaged instances.
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
+
+    Self: StorageController<Timestamp = T>,
+{
     /// Validate that a collection exists for all identifiers, and error if any do not.
     fn validate_collection_ids(
         &self,
@@ -1114,9 +1259,9 @@ where
         &mut self,
         id: GlobalId,
         f: F,
-    ) -> Result<ChangeBatch<T>, StorageError>
+    ) -> Result<ChangeBatch<<Self as StorageController>::Timestamp>, StorageError>
     where
-        F: FnOnce(&mut CollectionState<T>),
+        F: FnOnce(&mut CollectionState<<Self as StorageController>::Timestamp>),
     {
         let collection = self
             .state

@@ -99,3 +99,8 @@ message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
     mz_storage.controller.ProtoCollectionMetadata storage_metadata = 2;
 }
+
+message ProtoDurableExportMetadata {
+    // This message is persisted to disk. Changes must be backwards compatible.
+    mz_storage.types.sinks.ProtoSinkAsOf initial_as_of = 1;
+}
