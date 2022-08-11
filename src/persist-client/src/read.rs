@@ -74,9 +74,6 @@ pub(crate) enum HollowBatchReaderMetadata<T> {
         as_of: Antichain<T>,
         /// Return all values with time leq `until`.
         until: Antichain<T>,
-        /// After reading the batch, you can downgrade the reader's `since` to
-        /// this value.
-        since: Antichain<T>,
     },
 }
 
@@ -231,7 +228,7 @@ where
         // isn't). Be a good citizen and downgrade early.
         handle.downgrade_since(&since).await;
 
-        let fetcher = handle.clone().await.batch_fetcher();
+        let fetcher = handle.clone().await.batch_fetcher().await;
 
         Listen {
             handle,
@@ -332,7 +329,6 @@ where
             reader_metadata: HollowBatchReaderMetadata::Listen {
                 as_of: self.as_of.clone(),
                 until: self.frontier.clone(),
-                since: self.since.clone(),
             },
             batch,
             leased_seqno: self.handle.lease_seqno(),
@@ -527,8 +523,8 @@ where
 
     /// Returns a [`BatchFetcher`], which is only capable of fetching batches.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub fn batch_fetcher(self) -> BatchFetcher<K, V, T, D> {
-        BatchFetcher::new(self)
+    pub async fn batch_fetcher(self) -> BatchFetcher<K, V, T, D> {
+        BatchFetcher::new(self).await
     }
 
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
@@ -579,7 +575,7 @@ where
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
         let snap = self.snapshot(as_of).await?;
 
-        let mut fetcher = self.clone().await.batch_fetcher();
+        let fetcher = self.clone().await.batch_fetcher().await;
 
         let mut contents = Vec::new();
         for batch in snap {

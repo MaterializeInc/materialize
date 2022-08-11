@@ -10,6 +10,8 @@
 //! Fetching batches of data from persist's backing store
 
 use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
@@ -43,7 +45,13 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(crate) handle: ReadHandle<K, V, T, D>,
+    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) shard_id: ShardId,
+
+    // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
+    // derived from.
+    _phantom: PhantomData<(K, V, T, D)>,
 }
 
 impl<K, V, T, D> BatchFetcher<K, V, T, D>
@@ -53,43 +61,45 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(super) fn new(handle: ReadHandle<K, V, T, D>) -> Self {
-        BatchFetcher { handle }
+    pub(super) async fn new(handle: ReadHandle<K, V, T, D>) -> Self {
+        let b = BatchFetcher {
+            blob: Arc::clone(&handle.blob),
+            metrics: Arc::clone(&handle.metrics),
+            shard_id: handle.machine.shard_id(),
+            _phantom: PhantomData,
+        };
+        handle.expire().await;
+        b
     }
 
     /// Trade in an exchange-able [ReaderEnrichedHollowBatch] for the data it
     /// represents.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.handle.machine.shard_id()))]
+    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     /// Trade in an exchange-able [ReaderEnrichedHollowBatch] for the data it
     /// represents.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.handle.machine.shard_id()))]
+    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn fetch_batch(
-        &mut self,
+        &self,
         batch: ReaderEnrichedHollowBatch<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
-        if batch.shard_id != self.handle.machine.shard_id() {
+        if batch.shard_id != self.shard_id {
             return Err(InvalidUsage::BatchNotFromThisShard {
                 batch_shard: batch.shard_id,
-                handle_shard: self.handle.machine.shard_id(),
+                handle_shard: self.shard_id,
             });
         }
 
         let mut updates = Vec::new();
         for key in batch.batch.keys.iter() {
-            self.handle.maybe_heartbeat_reader().await;
             fetch_batch_part(
                 &batch.shard_id,
-                self.handle.blob.as_ref(),
-                &self.handle.metrics,
+                self.blob.as_ref(),
+                &self.metrics,
                 &key,
                 &batch.batch.desc.clone(),
                 |k, v, mut t, d| {
                     match &batch.reader_metadata {
-                        HollowBatchReaderMetadata::Listen {
-                            as_of,
-                            until,
-                            since: _,
-                        } => {
+                        HollowBatchReaderMetadata::Listen { as_of, until } => {
                             // This time is covered by a snapshot
                             if !as_of.less_than(&t) {
                                 return;
@@ -115,8 +125,8 @@ where
                         }
                     }
 
-                    let k = self.handle.metrics.codecs.key.decode(|| K::decode(k));
-                    let v = self.handle.metrics.codecs.val.decode(|| V::decode(v));
+                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
+                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
                     let d = D::decode(d);
                     updates.push(((k, v), t, d));
                 },
@@ -136,12 +146,6 @@ where
                     self.handle.reader_id, err
                 )
             });
-        }
-
-        self.handle.drop_seqno_lease(batch.leased_seqno);
-
-        if let HollowBatchReaderMetadata::Listen { since, .. } = batch.reader_metadata {
-            self.handle.maybe_downgrade_since(&since).await;
         }
 
         Ok(updates)

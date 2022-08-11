@@ -232,7 +232,7 @@ where
     fetcher_builder.build_async(
         scope.clone(),
         async_op!(|initial_capabilities, _frontiers| {
-            let mut fetcher = persist_clients
+            let fetcher = persist_clients
                 .lock()
                 .await
                 .open(metadata.persist_location.clone())
@@ -243,7 +243,8 @@ where
                 )
                 .await
                 .expect("could not open persist shard")
-                .batch_fetcher();
+                .batch_fetcher()
+                .await;
 
             initial_capabilities.clear();
 
