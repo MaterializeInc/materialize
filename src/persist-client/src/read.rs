@@ -250,7 +250,7 @@ where
         // This listen only needs to distinguish things after its frontier
         // (initially as_of although the frontier is inclusive and the as_of
         // isn't). Be a good citizen and downgrade early.
-        ret.handle.downgrade_since(ret.since.clone()).await;
+        ret.handle.downgrade_since(&ret.since).await;
         ret
     }
 
@@ -432,7 +432,7 @@ where
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let new_since: timely::progress::Antichain<u64> = unimplemented!();
 /// # async {
-/// tokio::time::timeout(timeout, read.downgrade_since(new_since)).await
+/// tokio::time::timeout(timeout, read.downgrade_since(&new_since)).await
 /// # };
 /// ```
 #[derive(Debug)]
@@ -480,11 +480,11 @@ where
     /// This also acts as a heartbeat for the reader lease (including if called
     /// with `new_since` equal to `self.since()`, making the call a no-op).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
+    pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
         let (_seqno, current_reader_since, maintenance) = self
             .machine
-            .downgrade_since(&self.reader_id, &new_since, (self.cfg.now)())
+            .downgrade_since(&self.reader_id, new_since, (self.cfg.now)())
             .await;
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
@@ -702,7 +702,7 @@ where
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 4;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(new_since.clone()).await;
+            self.downgrade_since(&new_since).await;
         }
     }
 

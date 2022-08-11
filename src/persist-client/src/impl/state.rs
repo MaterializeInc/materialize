@@ -242,7 +242,7 @@ where
         while let Some(reader) = readers.next() {
             since.meet_assign(&reader.since);
         }
-        self.trace.downgrade_since(since);
+        self.trace.downgrade_since(&since);
     }
 }
 

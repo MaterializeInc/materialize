@@ -604,7 +604,7 @@ mod tests {
         );
 
         // Downgrading the since is tracked locally (but otherwise is a no-op).
-        read.downgrade_since(Antichain::from_elem(2)).await;
+        read.downgrade_since(&Antichain::from_elem(2)).await;
         assert_eq!(read.since(), &Antichain::from_elem(2));
     }
 

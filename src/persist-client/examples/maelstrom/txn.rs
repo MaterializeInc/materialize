@@ -376,7 +376,7 @@ impl Transactor {
         let new_since = self.read_ts.saturating_sub(SINCE_LAG);
         debug!("downgrading since to {}", new_since);
         self.read
-            .downgrade_since(Antichain::from_elem(new_since))
+            .downgrade_since(&Antichain::from_elem(new_since))
             .await;
         self.since_ts = new_since;
     }

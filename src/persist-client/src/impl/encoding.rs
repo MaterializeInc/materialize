@@ -262,7 +262,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
 
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
         let mut ret = Trace::default();
-        ret.downgrade_since(proto.since.into_rust_if_some("since")?);
+        ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
         for batch in proto.spine.into_iter() {
             let batch: HollowBatch<T> = batch.into_rust()?;
             if PartialOrder::less_than(ret.since(), batch.desc.since()) {
