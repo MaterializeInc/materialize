@@ -164,7 +164,7 @@ impl ConnClient {
         session: Session,
         create_user_if_not_exists: bool,
     ) -> Result<(SessionClient, StartupResponse), AdapterError> {
-        self.validate_user(session.user())?;
+        self.is_user_disallowed_by_client_type(session.user())?;
 
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
@@ -200,8 +200,8 @@ impl ConnClient {
         }
     }
 
-    /// Validate that the user is allowed to login.
-    fn validate_user(&self, user: &str) -> Result<(), AdapterError> {
+    /// Returns an error if the user is not permitted to log in to the ClientType.
+    fn is_user_disallowed_by_client_type(&self, user: &str) -> Result<(), AdapterError> {
         match (&self.inner.client_type, user) {
             (ClientType::Internal, SYSTEM_USER) => Ok(()),
             (ClientType::Internal, _) => Err(AdapterError::UnauthorizedLogin(user.to_string())),
