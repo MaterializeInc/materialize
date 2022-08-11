@@ -567,8 +567,6 @@ where
         retry_metrics: &RetriesMetrics,
         shard_id: ShardId,
     ) -> Result<State<K, V, T, D>, CodecMismatch> {
-        debug!("Machine::maybe_init_state shard_id={}", shard_id);
-
         let path = shard_id.to_string();
         let mut current = retry_external(&retry_metrics.external.maybe_init_state_head, || async {
             consensus.head(&path).await

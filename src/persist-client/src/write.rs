@@ -24,7 +24,7 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug, debug_span, info, instrument, trace, warn, Instrument};
+use tracing::{debug, debug_span, info, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{validate_truncate_batch, Batch, BatchBuilder};
@@ -122,7 +122,6 @@ where
     /// expensive operation.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn fetch_recent_upper(&mut self) -> &Antichain<T> {
-        trace!("WriteHandle::fetch_recent_upper");
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
         let fresh_upper = self.machine.fetch_upper().await;
@@ -176,7 +175,6 @@ where
         I: IntoIterator<Item = SB>,
         D: Send + Sync,
     {
-        trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
         let batch = self.batch(updates, lower.clone(), upper.clone()).await?;
         self.append_batch(batch, lower, upper).await
     }
@@ -232,12 +230,6 @@ where
         I: IntoIterator<Item = SB>,
         D: Send + Sync,
     {
-        trace!(
-            "WriteHandle::compare_and_append expected_upper={:?} new_upper={:?}",
-            expected_upper,
-            new_upper
-        );
-
         let mut batch = match self
             .batch(updates, expected_upper.clone(), new_upper.clone())
             .await
@@ -297,8 +289,6 @@ where
     where
         D: Send + Sync,
     {
-        trace!("Batch::append lower={:?} upper={:?}", lower, upper);
-
         let mut retry = self
             .metrics
             .retries
@@ -420,12 +410,6 @@ where
     where
         D: Send + Sync,
     {
-        trace!(
-            "Batch::compare_and_append expected_upper={:?} new_upper={:?}",
-            expected_upper,
-            new_upper
-        );
-
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
                 return Ok(Err(InvalidUsage::BatchNotFromThisShard {
@@ -496,7 +480,6 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&mut self, size_hint: usize, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
-        trace!("WriteHandle::builder lower={:?}", lower);
         BatchBuilder::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -525,8 +508,6 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!("WriteHandle::batch lower={:?} upper={:?}", lower, upper);
-
         let iter = updates.into_iter();
 
         // This uses the iter's size_hint's lower+1 to match the logic in Vec.
@@ -556,7 +537,6 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        trace!("WriteHandle::expire");
         self.machine.expire_writer(&self.writer_id).await;
         self.explicitly_expired = true;
     }
@@ -668,7 +648,6 @@ where
         let _ = handle.spawn_named(
             || format!("WriteHandle::expire ({})", self.writer_id),
             async move {
-                trace!("WriteHandle::expire");
                 machine.expire_writer(&writer_id).await;
             }
             .instrument(expire_span),
