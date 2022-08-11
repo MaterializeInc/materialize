@@ -102,12 +102,12 @@ where
         self.state.shard_id()
     }
 
-    pub async fn fetch_upper(&mut self) -> Antichain<T> {
+    pub async fn fetch_upper(&mut self) -> &Antichain<T> {
         self.fetch_and_update_state().await;
         self.state.upper()
     }
 
-    pub fn upper(&self) -> Antichain<T> {
+    pub fn upper(&self) -> &Antichain<T> {
         self.state.upper()
     }
 
@@ -200,8 +200,8 @@ where
 
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
-                    if &current_upper != batch.desc.lower() {
-                        return Ok(Ok(Err(Upper(current_upper))));
+                    if current_upper != batch.desc.lower() {
+                        return Ok(Ok(Err(Upper(current_upper.clone()))));
                     } else {
                         // The upper stored in state was outdated. Retry after
                         // updating.

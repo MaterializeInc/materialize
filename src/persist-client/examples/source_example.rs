@@ -366,7 +366,7 @@ mod api {
         async fn snapshot(&mut self, as_of: Antichain<T>)
             -> Result<Vec<((K, V), T)>, Antichain<T>>;
 
-        async fn current_upper(&mut self) -> Antichain<T>;
+        async fn current_upper(&mut self) -> &Antichain<T>;
 
         /// Tries to append the given updates to the maintained collection. If the current
         /// upper is not `expected_upper` this will return an `Err` containing the current
@@ -888,7 +888,7 @@ mod impls {
             + Sync
             + Copy,
     {
-        async fn current_upper(&mut self) -> Antichain<T> {
+        async fn current_upper(&mut self) -> &Antichain<T> {
             self.write.fetch_recent_upper().await
         }
 

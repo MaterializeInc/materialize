@@ -309,8 +309,8 @@ where
         self.collections.trace.since()
     }
 
-    pub fn upper(&self) -> Antichain<T> {
-        self.collections.trace.upper().clone()
+    pub fn upper(&self) -> &Antichain<T> {
+        self.collections.trace.upper()
     }
 
     pub fn batch_count(&self) -> usize {
