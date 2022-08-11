@@ -464,10 +464,10 @@ impl<T: Timestamp + Codec64> From<ReaderEnrichedHollowBatch<T>> for SerdeReaderE
 impl<T: Timestamp + Codec64> From<SerdeReaderEnrichedHollowBatch> for ReaderEnrichedHollowBatch<T> {
     fn from(x: SerdeReaderEnrichedHollowBatch) -> Self {
         let proto = ProtoReadEnrichedHollowBatch::decode(x.0.as_slice())
-            .expect("internal error: invalid snapshot split");
+            .expect("internal error: invalid ProtoReadEnrichedHollowBatch");
         proto
             .into_rust()
-            .expect("internal error: invalid snapshot split")
+            .expect("internal error: invalid ProtoReadEnrichedHollowBatch")
     }
 }
 
