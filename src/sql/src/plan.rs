@@ -210,7 +210,6 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
-    pub remote: Option<String>,
     pub host_config: StorageHostConfig,
 }
 

@@ -414,7 +414,6 @@ impl<S: Append + 'static> Coordinator<S> {
             desc: plan.source.desc,
             timeline: plan.timeline,
             depends_on,
-            remote_addr: plan.remote,
             host_config,
         };
         ops.push(catalog::Op::CreateItem {

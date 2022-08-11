@@ -1242,7 +1242,6 @@ pub struct Source {
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
-    pub remote_addr: Option<String>,
     pub host_config: StorageHostConfig,
 }
 
@@ -4069,7 +4068,6 @@ impl<S: Append> Catalog<S> {
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
-                remote,
                 timeline,
                 host_config,
                 ..
@@ -4079,7 +4077,6 @@ impl<S: Append> Catalog<S> {
                 desc: source.desc,
                 timeline,
                 depends_on,
-                remote_addr: remote,
                 host_config: self.resolve_storage_host_config(host_config)?,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
