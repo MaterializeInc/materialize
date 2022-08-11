@@ -25,7 +25,7 @@ logger = logging.getLogger("bootstrap")
 
 def main(args: List[str]) -> int:
     logging.basicConfig(level=os.environ.get("MZ_DEV_LOG", "WARNING").upper())
-    logger.debug("args={}".format(args))
+    logger.debug("args=%s", args)
 
     # Validate Python version.
     if sys.hexversion < 0x03090000:
@@ -40,7 +40,7 @@ def main(args: List[str]) -> int:
 
     root_dir = Path(__file__).parent.parent
     py_dir = root_dir / "misc" / "python"
-    logger.debug("root_dir={} py_dir={}".format(root_dir, py_dir))
+    logger.debug("root_dir=%s py_dir=%s", root_dir, py_dir)
 
     # If we're not in the CI builder container, activate a virtualenv with the
     # necessary dependencies.
@@ -48,7 +48,7 @@ def main(args: List[str]) -> int:
         python = "python3"
     else:
         python = str(activate_venv(py_dir))
-    logger.debug("python={}".format(python))
+    logger.debug("python=%s", python)
 
     # Reinvoke with the interpreter from the virtualenv.
     py_path = str(py_dir.resolve())
@@ -64,7 +64,7 @@ def activate_venv(py_dir: Path) -> Path:
     stamp_path = venv_dir / "dep_stamp"
     bin_dir = venv_dir / "bin"
     python = bin_dir / "python"
-    logger.debug("venv_dir={} python={}".format(venv_dir, python))
+    logger.debug("venv_dir=%s python=%s", venv_dir, python)
 
     # Create a virtualenv, if necessary. virtualenv creation is not atomic, so
     # we don't want to assume the presence of a `venv` directory means that we
@@ -87,8 +87,8 @@ def activate_venv(py_dir: Path) -> Path:
                 "warning: existing virtualenv is unable to execute python; will recreate",
                 file=sys.stderr
             )
-            logger.info(f"python exec error: {e}")
-        print("==> Initializing virtualenv in {}".format(venv_dir), file=sys.stderr)
+            logger.info("python exec error: %s", e)
+        print(f"==> Initializing virtualenv in {venv_dir}", file=sys.stderr)
         # Install Python into the virtualenv via a symlink rather than copying,
         # except on Windows. This matches the behavior of the `python -m venv`
         # command line tool. This is important on macOS, where the default
@@ -152,22 +152,18 @@ def acquire_deps(venv_dir: Path, variant: Optional[str] = None, use_pep517: bool
         stamp_mtime = os.path.getmtime(stamp_path)
     except FileNotFoundError:
         stamp_mtime = 0
-    logger.debug("stamp_path={} stamp_mtime={}".format(stamp_path, stamp_mtime))
+    logger.debug("stamp_path=%s stamp_mtime=%s", stamp_path, stamp_mtime)
 
     # Check when the requirements file was last modified.
     requirements_path = venv_dir.parent / (
         f"requirements-{variant}.txt" if variant else "requirements.txt"
     )
     requirements_mtime = os.path.getmtime(requirements_path)
-    logger.debug(
-        "requirements_path={} requirements_mtime={}".format(
-            requirements_path, requirements_mtime
-        )
-    )
+    logger.debug("requirements_path=%s requirements_mtime=%s", requirements_path, requirements_mtime)
 
     # Update dependencies, if necessary.
     if stamp_mtime <= requirements_mtime:
-        print("==> Updating {}dependencies with pip".format(variant + " " if variant else ""), file=sys.stderr)
+        print(f"==> Updating {variant + ' ' if variant else ''}dependencies with pip", file=sys.stderr)
         subprocess.check_call([
             venv_dir / "bin" / "pip", "install", "-r", requirements_path,
             "--disable-pip-version-check",
