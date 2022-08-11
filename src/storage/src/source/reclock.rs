@@ -221,13 +221,14 @@ impl ReclockOperator {
     }
 
     /// Advances the upper of the reclock operator if appropriate
-    pub async fn advance(&mut self) {
+    pub async fn advance(&mut self) -> &Antichain<Timestamp> {
         if self.next_mint_timestamp().is_ok() {
             let empty: Vec<(PartitionId, MzOffset)> = Vec::new();
             while let Err(Upper(actual_upper)) = self.append(&empty).await {
                 self.sync(&actual_upper).await;
             }
         }
+        &self.upper
     }
 
     /// Calculates the source upper frontier at a particular timestamp

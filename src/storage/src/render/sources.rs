@@ -145,6 +145,7 @@ where
         resume_upper: resume_upper.clone(),
         storage_metadata: description.storage_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
+        current_remap_upper: Rc::clone(&storage_state.frontiers.source_remap_uppers[&id]),
     };
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the

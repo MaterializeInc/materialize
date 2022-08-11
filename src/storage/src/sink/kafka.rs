@@ -150,6 +150,7 @@ where
         );
 
         storage_state
+            .frontiers
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 

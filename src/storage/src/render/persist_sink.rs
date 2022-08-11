@@ -54,7 +54,7 @@ pub fn render<G>(
 
     let mut input = persist_op.new_input(&source_data.inner, Exchange::new(move |_| hashed_id));
 
-    let current_upper = Rc::clone(&storage_state.source_uppers[&src_id]);
+    let current_upper = Rc::clone(&storage_state.frontiers.source_uppers[&src_id]);
 
     let weak_token = Rc::downgrade(&token);
 

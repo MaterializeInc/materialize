@@ -51,8 +51,9 @@ pub struct Worker<'w, A: Allocate> {
     pub storage_state: StorageState,
 }
 
-/// Worker-local state related to the ingress or egress of collections of data.
-pub struct StorageState {
+/// A sub-struct used to organize fields related to `FrontierUppers`
+/// progress reporting
+pub struct StorageFrontierState {
     /// The highest observed upper frontier for collection.
     ///
     /// This is shared among all source instances, so that they can jointly advance the
@@ -60,12 +61,24 @@ pub struct StorageState {
     /// module would eventually provide one source of truth on this rather than multiple,
     /// and we should aim for that but are not there yet.
     pub source_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
+    /// The higest observed upper for the _remap_ collection for a collection.
+    pub source_remap_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
+    /// Tracks the conditional write frontiers we have reported.
+    pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Tracks the conditional write frontiers we have reported, for the remap collection
+    pub reported_remap_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Frontier of sink writes (all subsequent writes will be at times at or
+    /// equal to this frontier)
+    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+}
+/// Worker-local state related to the ingress or egress of collections of data.
+pub struct StorageState {
+    /// Information about collection frontiers
+    pub frontiers: StorageFrontierState,
     /// Handles to created sources, keyed by ID
     pub source_tokens: HashMap<GlobalId, Rc<dyn Any>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
-    /// Tracks the conditional write frontiers we have reported.
-    pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Descriptions of each installed ingestion.
     pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
@@ -88,9 +101,6 @@ pub struct StorageState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub sink_tokens: HashMap<GlobalId, SinkToken>,
-    /// Frontier of sink writes (all subsequent writes will be at times at or
-    /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
 }
 
 /// A token that keeps a sink alive.
@@ -137,6 +147,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.timely_worker.step();
             }
 
+            // TODO(guswynn): figure out how to ensure that remap and data
+            // frontier progress are reported at the same time
             self.report_frontier_progress(&response_tx);
 
             // Handle any received commands.
@@ -171,7 +183,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier tracking.
-                    self.storage_state.source_uppers.insert(
+                    self.storage_state.frontiers.source_uppers.insert(
+                        ingestion.id,
+                        Rc::new(RefCell::new(Antichain::from_elem(
+                            mz_repr::Timestamp::minimum(),
+                        ))),
+                    );
+                    self.storage_state.frontiers.source_remap_uppers.insert(
                         ingestion.id,
                         Rc::new(RefCell::new(Antichain::from_elem(
                             mz_repr::Timestamp::minimum(),
@@ -186,10 +204,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ingestion.resume_upper,
                     );
 
-                    self.storage_state.reported_frontiers.insert(
+                    self.storage_state.frontiers.reported_frontiers.insert(
                         ingestion.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
+                    self.storage_state
+                        .frontiers
+                        .reported_remap_frontiers
+                        .insert(
+                            ingestion.id,
+                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                        );
                 }
             }
             StorageCommand::ExportSinks(exports) => {
@@ -198,7 +223,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .exports
                         .insert(export.id, export.description.clone());
 
-                    self.storage_state.sink_write_frontiers.insert(
+                    self.storage_state.frontiers.sink_write_frontiers.insert(
                         export.id,
                         Rc::new(RefCell::new(Antichain::from_elem(
                             mz_repr::Timestamp::minimum(),
@@ -212,7 +237,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         export.description,
                     );
 
-                    self.storage_state.reported_frontiers.insert(
+                    self.storage_state.frontiers.reported_frontiers.insert(
                         export.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
@@ -223,8 +248,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     if frontier.is_empty() {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         // Clean up per-source / per-sink state.
-                        self.storage_state.source_uppers.remove(&id);
-                        self.storage_state.reported_frontiers.remove(&id);
+                        self.storage_state.frontiers.source_uppers.remove(&id);
+                        self.storage_state.frontiers.source_remap_uppers.remove(&id);
+                        self.storage_state.frontiers.reported_frontiers.remove(&id);
+                        self.storage_state
+                            .frontiers
+                            .reported_remap_frontiers
+                            .remove(&id);
                         self.storage_state.source_tokens.remove(&id);
                         self.storage_state.sink_tokens.remove(&id);
                     }
@@ -244,18 +274,38 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// with the understanding if that if made durable (and ack'd back to the workers) the source will
     /// in fact progress with this write frontier.
     pub fn report_frontier_progress(&mut self, response_tx: &ResponseSender) {
-        let mut changes = Vec::new();
+        let mut data_changes = vec![];
+        Self::build_frontier_progress_change_batch(
+            &mut data_changes,
+            &self.storage_state.frontiers.source_uppers,
+            &mut self.storage_state.frontiers.reported_frontiers,
+        );
+        Self::build_frontier_progress_change_batch(
+            &mut data_changes,
+            &self.storage_state.frontiers.sink_write_frontiers,
+            &mut self.storage_state.frontiers.reported_frontiers,
+        );
 
+        let mut remap_changes = vec![];
+        Self::build_frontier_progress_change_batch(
+            &mut remap_changes,
+            &self.storage_state.frontiers.source_remap_uppers,
+            &mut self.storage_state.frontiers.reported_remap_frontiers,
+        );
+
+        if !data_changes.is_empty() {
+            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(data_changes));
+        }
+    }
+
+    fn build_frontier_progress_change_batch(
+        changes: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+        source_uppers: &HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
+        reported_frontiers: &mut HashMap<GlobalId, Antichain<Timestamp>>,
+    ) {
         // Check if any observed frontier should advance the reported frontiers.
-        for (id, frontier) in self
-            .storage_state
-            .source_uppers
-            .iter()
-            .chain(self.storage_state.sink_write_frontiers.iter())
-        {
-            let reported_frontier = self
-                .storage_state
-                .reported_frontiers
+        for (id, frontier) in source_uppers.iter() {
+            let reported_frontier = reported_frontiers
                 .get_mut(&id)
                 .expect("Reported frontier missing!");
 
@@ -276,10 +326,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
                 reported_frontier.clone_from(&observed_frontier);
             }
-        }
-
-        if !changes.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(changes));
         }
     }
 
@@ -383,7 +429,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
         ));
 
         // Reset the reported frontiers.
-        for (_, frontier) in &mut self.storage_state.reported_frontiers {
+        for (_, frontier) in &mut self.storage_state.frontiers.reported_frontiers {
+            *frontier = Antichain::from_elem(<_>::minimum());
+        }
+        // Reset the reported frontiers.
+        for (_, frontier) in &mut self.storage_state.frontiers.reported_remap_frontiers {
             *frontier = Antichain::from_elem(<_>::minimum());
         }
 

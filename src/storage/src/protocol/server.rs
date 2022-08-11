@@ -26,7 +26,7 @@ use mz_service::local::LocalClient;
 use crate::protocol::client::StorageClient;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::{StorageState, Worker};
+use crate::storage_state::{StorageFrontierState, StorageState, Worker};
 use crate::types::connections::ConnectionContext;
 use crate::DecodeMetrics;
 
@@ -95,10 +95,15 @@ pub fn serve(
             timely_worker,
             client_rx,
             storage_state: StorageState {
-                source_uppers: HashMap::new(),
+                frontiers: StorageFrontierState {
+                    source_uppers: HashMap::new(),
+                    source_remap_uppers: HashMap::new(),
+                    reported_frontiers: HashMap::new(),
+                    reported_remap_frontiers: HashMap::new(),
+                    sink_write_frontiers: HashMap::new(),
+                },
                 source_tokens: HashMap::new(),
                 decode_metrics,
-                reported_frontiers: HashMap::new(),
                 ingestions: HashMap::new(),
                 exports: HashMap::new(),
                 now: now.clone(),
@@ -109,7 +114,6 @@ pub fn serve(
                 connection_context: config.connection_context.clone(),
                 persist_clients,
                 sink_tokens: HashMap::new(),
-                sink_write_frontiers: HashMap::new(),
             },
         }
         .run()

@@ -22,6 +22,7 @@
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
 
+use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
@@ -122,6 +123,10 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub resume_upper: Antichain<Timestamp>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// Shared access to a frontier tracked in `StorageState` that
+    /// allows the source operator to communicate the remap operator's
+    /// progress.
+    pub current_remap_upper: Rc<RefCell<Antichain<Timestamp>>>,
 }
 
 /// A record produced by a source
@@ -728,6 +733,7 @@ where
         base_metrics,
         now,
         persist_clients,
+        current_remap_upper,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
@@ -879,7 +885,8 @@ where
                             }
                         }
 
-                        timestamper.advance().await;
+                        *current_remap_upper.borrow_mut() =
+                            timestamper.advance().await.clone();
 
                         // TODO(petrosagg): compaction should be driven by AllowCompaction commands
                         // coming from the storage controller
