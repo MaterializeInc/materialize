@@ -56,4 +56,4 @@ $ kafka-ingest topic=missing_keys_or_values key-format=bytes format=bytes omit-v
 bar
 
 ! SELECT * FROM missing_keys_or_values
-contains: Decode error: Text: Value not present for message
+contains: Envelope error: Flat: Value not present for message
