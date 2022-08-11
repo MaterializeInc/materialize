@@ -467,7 +467,7 @@ Source materialize.public.m1 UID:
   ]
 }
 
-Query:
+View materialize.public.v11 UID:
 {
   "TopK": {
     "input": {

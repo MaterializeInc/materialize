@@ -21,6 +21,7 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
+use tokio::task::JoinHandle;
 use tracing::{debug_span, warn, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
@@ -89,7 +90,8 @@ impl Compactor {
         &self,
         machine: &Machine<K, V, T, D>,
         req: CompactReq<T>,
-    ) where
+    ) -> Option<JoinHandle<()>>
+    where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
@@ -107,7 +109,7 @@ impl Compactor {
                 >= self.cfg.compaction_heuristic_min_updates;
         if !should_compact {
             self.metrics.compaction.skipped.inc();
-            return;
+            return None;
         }
 
         let cfg = self.cfg.clone();
@@ -123,7 +125,7 @@ impl Compactor {
             debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
         compact_span.follows_from(&Span::current());
 
-        let _ = mz_ore::task::spawn(
+        Some(mz_ore::task::spawn(
             || "persist::compact::apply",
             async move {
                 metrics.compaction.started.inc();
@@ -166,7 +168,7 @@ impl Compactor {
                 }
             }
             .instrument(compact_span),
-        );
+        ))
     }
 
     pub async fn compact<T, D>(

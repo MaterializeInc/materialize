@@ -43,7 +43,7 @@ Source materialize.public.foo (u1):
 | Filter (#0 = 5), (#1 = 6)
 | Project (#0, #1)
 
-Query:
+View materialize.public.foo3 (u3):
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5), (#1 = 6)
@@ -72,12 +72,8 @@ query T multiline
 EXPLAIN PLAN FOR SELECT * from foo3
 ----
 %0 =
-| Get materialize.public.foo2 (u2)
-| ArrangeBy (#0)
-
-%1 =
-| Join %0
-| | implementation = IndexedFilter #0 = 6
+| ReadExistingIndex materialize.public.foo2_primary_idx
+| | Lookup value (6)
 | Filter (#0 = 6)
 
 EOF

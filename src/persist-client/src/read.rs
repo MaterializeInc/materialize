@@ -9,9 +9,8 @@
 
 //! Read capabilities and handles
 
+use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::marker::PhantomData;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
@@ -34,12 +33,12 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
-use crate::r#impl::encoding::SerdeSnapshotSplit;
+use crate::r#impl::encoding::SerdeReaderEnrichedHollowBatch;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::state::Since;
-use crate::{PersistConfig, ShardId};
+use crate::r#impl::state::{HollowBatch, Since};
+use crate::{GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -63,167 +62,144 @@ impl ReaderId {
     }
 }
 
-/// A token representing one split of a "snapshot" (the contents of a shard
-/// as of some frontier).
+/// Propagates metadata from readers alongside a `HollowBatch` to apply the
+/// desired semantics.
+#[derive(Debug, Clone)]
+pub(crate) enum HollowBatchReaderMetadata<T> {
+    /// Apply snapshot-style semantics to the fetched batch.
+    Snapshot {
+        /// Return all values with time leq `as_of`.
+        as_of: Antichain<T>,
+    },
+    /// Apply listen-style semantics to the fetched batch.
+    Listen {
+        /// Return all values with time in advance of `as_of`.
+        as_of: Antichain<T>,
+        /// Return all values with time leq `until`.
+        until: Antichain<T>,
+        /// After reading the batch, you can downgrade the reader's `since` to
+        /// this value.
+        since: Antichain<T>,
+    },
+}
+
+/// A token representing one read batch.
 ///
 /// This may be exchanged (including over the network). It is tradeable via
-/// [ReadHandle::snapshot_iter] for a [SnapshotIter], which can be used to
-/// receive the relevant data.
-///
-/// See [ReadHandle::snapshot] for details.
+/// [ReadHandle::fetch_batch] for the resulting data stored in the batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "T: Timestamp + Codec64",
     deserialize = "T: Timestamp + Codec64"
 ))]
-#[serde(into = "SerdeSnapshotSplit", from = "SerdeSnapshotSplit")]
-pub struct SnapshotSplit<T> {
-    pub(crate) reader_id: ReaderId,
+#[serde(
+    into = "SerdeReaderEnrichedHollowBatch",
+    from = "SerdeReaderEnrichedHollowBatch"
+)]
+pub struct ReaderEnrichedHollowBatch<T> {
     pub(crate) shard_id: ShardId,
-    pub(crate) as_of: Antichain<T>,
-    pub(crate) batches: Vec<(PartialBlobKey, Description<T>)>,
+    pub(crate) reader_metadata: HollowBatchReaderMetadata<T>,
+    pub(crate) batch: HollowBatch<T>,
 }
 
-/// An iterator over one split of a "snapshot" (the contents of a shard as of
-/// some frontier).
+impl<T> ReaderEnrichedHollowBatch<T>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    /// Signals whether or not `self` should downgrade the `Capability` its
+    /// presented alongside.
+    pub fn generate_progress(&self) -> Option<Antichain<T>> {
+        match self.reader_metadata {
+            HollowBatchReaderMetadata::Listen { .. } => Some(self.batch.desc.upper().clone()),
+            HollowBatchReaderMetadata::Snapshot { .. } => None,
+        }
+    }
+}
+
+/// Capable of generating a snapshot of all data at `as_of`, followed by a
+/// listen of all updates.
 ///
-/// See [ReadHandle::snapshot] for details.
+/// For more details, see [`ReadHandle::snapshot`] and [`Listen`].
 #[derive(Debug)]
-pub struct SnapshotIter<K, V, T, D>
+pub struct Subscribe<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
-    handle: ReadHandle<K, V, T, D>,
-    as_of: Antichain<T>,
-    batches: Vec<(PartialBlobKey, Description<T>)>,
-
-    _phantom: PhantomData<(K, V, T, D)>,
+    snapshot_batches: VecDeque<ReaderEnrichedHollowBatch<T>>,
+    listen: Listen<K, V, T, D>,
 }
 
-impl<K, V, T, D> SnapshotIter<K, V, T, D>
+impl<K, V, T, D> Subscribe<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
-    fn new(handle: ReadHandle<K, V, T, D>, split: SnapshotSplit<T>) -> Self {
-        debug_assert_eq!(handle.reader_id, split.reader_id);
-        SnapshotIter {
-            handle,
-            as_of: split.as_of,
-            batches: split.batches,
-            _phantom: PhantomData,
+    fn new(
+        snapshot_batches: VecDeque<ReaderEnrichedHollowBatch<T>>,
+        listen: Listen<K, V, T, D>,
+    ) -> Self {
+        Subscribe {
+            snapshot_batches,
+            listen,
         }
     }
 
-    /// The frontier at which we're outputting the contents of the shard.
-    pub fn as_of(&self) -> &Antichain<T> {
-        &self.as_of
+    /// Returns a `HollowBatch` enriched with the proper metadata.
+    ///
+    /// First returns snapshot batches, until they're exhausted, at which point
+    /// begins returning listen batches.
+    ///
+    /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
+    /// `ReadHandle::fetch_batch`.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
+    pub async fn next(&mut self) -> ReaderEnrichedHollowBatch<T> {
+        trace!(
+            "Subscribe::next as_of={:?}, frontier={:?}",
+            self.listen.as_of,
+            self.listen.frontier
+        );
+        // This is odd, but we move our handle into a `Listen`.
+        self.listen.handle.maybe_heartbeat_reader().await;
+
+        match self.snapshot_batches.pop_front() {
+            Some(batch) => batch,
+            None => self.listen.next_batch().await,
+        }
     }
 
-    /// Attempt to pull out the next values of this iterator.
+    /// Attempt to pull out the next values of this subscription. For more
+    /// details, see [`Listen::next`].
     ///
-    /// All times emitted will have been [advanced by] the [Self::as_of]
-    /// frontier.
-    ///
-    /// [advanced by]: Lattice::advance_by
-    ///
-    /// The returned updates are not consolidated. In the presence of
-    /// compaction, consolidation can take an unbounded amount of memory so it's
-    /// not safe for persist to consolidate in the general case. Persist users
-    /// that know they are dealing with a small amount of data are free to
-    /// consolidate this themselves. See
-    /// [differential_dataflow::consolidation::consolidate_updates].
-    ///
-    /// An None value is returned if this iterator is exhausted.
-    #[instrument(level = "debug", name = "snap::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> Option<Vec<((Result<K, String>, Result<V, String>), T, D)>> {
-        trace!("SnapshotIter::next");
+    /// TODO: delete this method when refactoring
+    /// `storage::source::persist_source::persist_source_sharded`.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
+    pub async fn next_listen_events(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
+        trace!(
+            "Subscribe::next as_of={:?}, frontier={:?}",
+            self.listen.as_of,
+            self.listen.frontier
+        );
+        // This is odd, but we move our handle into a `Listen`.
+        self.listen.handle.maybe_heartbeat_reader().await;
 
-        loop {
-            let (key, desc) = match self.batches.pop() {
-                Some(x) => {
-                    // Periodically heartbeat so the batches we're iterating
-                    // don't get garbage collected.
-                    self.handle.maybe_heartbeat_reader().await;
-                    x
-                }
-                // All done! Drop our seqno capability to unblock garbage
-                // collection of blobs.
-                None => {
-                    trace!("SnapshotIter::expire");
-                    self.handle
-                        .machine
-                        .expire_reader(&self.handle.reader_id)
-                        .await;
-                    self.handle.explicitly_expired = true;
-                    return None;
-                }
-            };
-
-            let mut updates = Vec::new();
-            fetch_batch_part(
-                &self.handle.machine.shard_id(),
-                self.handle.blob.as_ref(),
-                &self.handle.metrics,
-                &key,
-                &desc,
-                |k, v, mut t, d| {
-                    // This would get covered by a listen started at the same as_of.
-                    if self.as_of.less_than(&t) {
-                        return;
-                    }
-                    t.advance_by(self.as_of.borrow());
-                    let k = self.handle.metrics.codecs.key.decode(|| K::decode(k));
-                    let v = self.handle.metrics.codecs.val.decode(|| V::decode(v));
-                    let d = D::decode(d);
-                    updates.push(((k, v), t, d));
-                },
-            )
-            .await;
-            if updates.is_empty() {
-                // We might have filtered everything.
-                continue;
+        match self.snapshot_batches.pop_front() {
+            Some(batch) => {
+                let updates = self
+                    .listen
+                    .handle
+                    .fetch_batch(batch)
+                    .await
+                    .expect("must accept self-generated batch");
+                vec![ListenEvent::Updates(updates)]
             }
-            return Some(updates);
+            None => self.listen.next().await,
         }
-    }
-
-    /// Politely expires this iterator, releasing its lease.
-    ///
-    /// There is a best-effort impl in Drop to expire a iterator that wasn't
-    /// explictly expired with this method. When possible, explicit expiry is
-    /// still preferred because the Drop one is best effort and is dependant on
-    /// a tokio [Handle] being available in the TLC at the time of drop (which
-    /// is a bit subtle). Also, explicit expiry allows for control over when it
-    /// happens.
-    pub async fn expire(self) {
-        self.handle.expire().await
-    }
-}
-
-impl<K, V, T, D> SnapshotIter<K, V, T, D>
-where
-    K: Debug + Codec + Ord,
-    V: Debug + Codec + Ord,
-    T: Timestamp + Lattice + Codec64 + Ord,
-    D: Semigroup + Codec64 + Ord,
-{
-    /// Test helper to read all data in the snapshot and return it sorted.
-    #[cfg(test)]
-    #[track_caller]
-    pub async fn read_all(&mut self) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
-        let mut ret = Vec::new();
-        while let Some(mut next) = self.next().await {
-            ret.append(&mut next)
-        }
-        ret.sort();
-        ret
     }
 }
 
@@ -247,7 +223,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
     as_of: Antichain<T>,
@@ -261,7 +237,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     async fn new(handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
         let mut ret = Listen {
@@ -289,20 +265,11 @@ where
         })
     }
 
-    /// Attempt to pull out the next values of this subscription.
+    /// Retreives the next batch and updates `self`s metadata.
     ///
-    /// The updates received in [ListenEvent::Updates] should be assumed to be in arbitrary order
-    /// and not necessarily consolidated. However, the timestamp of each individual update will be
-    /// greater than or equal to the last received [ListenEvent::Progress] frontier (or this
-    /// [Listen]'s initial `as_of` frontier if no progress event has been emitted yet) and less
-    /// than the next [ListenEvent::Progress] frontier.
-    ///
-    /// If you have a use for consolidated listen output, given that snapshots can't be
-    /// consolidated, come talk to us!
-    #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
-        trace!("Listen::next");
-
+    /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
+    /// `ReadHandle::fetch_batch`.
+    pub async fn next_batch(&mut self) -> ReaderEnrichedHollowBatch<T> {
         // We might also want to call maybe_heartbeat_reader in the
         // `next_listen_batch` loop so that we can heartbeat even when batches
         // aren't incoming. At the moment, the ownership would be weird and we
@@ -333,45 +300,9 @@ where
             self.frontier
         );
 
-        let mut updates = Vec::new();
-        for key in batch.keys.iter() {
-            fetch_batch_part(
-                &self.handle.machine.shard_id(),
-                self.handle.blob.as_ref(),
-                &self.handle.metrics,
-                key,
-                &batch.desc,
-                |k, v, t, d| {
-                    // This would get covered by a snapshot started at the same as_of.
-                    if !self.as_of.less_than(&t) {
-                        return;
-                    }
-                    // Because of compaction, the next batch we get might also
-                    // contain updates we've already emitted. For example, we
-                    // emitted `[1, 2)` and then compaction combined that batch
-                    // with a `[2, 3)` batch into a new `[1, 3)` batch. If this
-                    // happens, we just need to filter out anything < the
-                    // frontier. This frontier was the upper of the last batch
-                    // (and thus exclusive) so for the == case, we still emit.
-                    if !self.frontier.less_equal(&t) {
-                        return;
-                    }
-                    let k = self.handle.metrics.codecs.key.decode(|| K::decode(k));
-                    let v = self.handle.metrics.codecs.val.decode(|| V::decode(v));
-                    let d = D::decode(d);
-                    updates.push(((k, v), t, d));
-                },
-            )
-            .await;
-        }
-        let mut ret = Vec::with_capacity(2);
-        if !updates.is_empty() {
-            ret.push(ListenEvent::Updates(updates));
-        }
-        ret.push(ListenEvent::Progress(batch.desc.upper().clone()));
-        self.frontier = batch.desc.upper().clone();
+        let new_frontier = batch.desc.upper().clone();
 
-        // We have a new frontier, so this is an opportunity to downgrade our
+        // We will have a new frontier, so this is an opportunity to downgrade our
         // since capability. Go through `maybe_heartbeat` so we can rate limit
         // this along with our heartbeats.
         //
@@ -380,25 +311,67 @@ where
         // distinguish between the times T at the frontier (to emit updates with
         // these times) and T-1 (to filter them). Advancing the since to
         // frontier would erase the ability to distinguish between them. Ideally
-        // we'd use what is conceptually "frontier - 1" (the greatest elements
-        // that are still strictly less than frontier), but the trait bounds on
-        // T don't give us a way to compute that directly. Instead, we sniff out
-        // any elements in lower that are strictly less_than frontier to compute
-        // a new since. For totally ordered times (currently always the case in
-        // mz) lower will always have a single element and it will be less_than
-        // upper, but the following logic is (hopefully) correct for partially
-        // order times as well. We could also abuse the fact that every time we
-        // actually emit is guaranteed by definition to be less_than upper to be
-        // a bit more prompt, but this would involve a lot more temporary
-        // antichains and it's unclear if that's worth it.
-        for l in batch.desc.lower().elements().iter() {
-            let lower_than_upper = batch.desc.upper().elements().iter().any(|u| l.less_than(u));
-            if lower_than_upper {
-                self.since.join_assign(&Antichain::from_elem(l.clone()));
+        // we'd use what is conceptually "batch.upper - 1" (the greatest
+        // elements that are still strictly less than batch.upper, which will be
+        // the new value of self.frontier after this call returns), but the
+        // trait bounds on T don't give us a way to compute that directly.
+        // Instead, we sniff out any elements in self.frontier (the upper of the
+        // batch the last time we called this) that are strictly less_than the
+        // batch upper to compute a new since. For totally ordered times
+        // (currently always the case in mz) self.frontier will always have a
+        // single element and it will be less_than upper, but the following
+        // logic is (hopefully) correct for partially order times as well. We
+        // could also abuse the fact that every time we actually emit is
+        // guaranteed by definition to be less_than upper to be a bit more
+        // prompt, but this would involve a lot more temporary antichains and
+        // it's unclear if that's worth it.
+        for x in self.frontier.elements().iter() {
+            let less_than_upper = batch.desc.upper().elements().iter().any(|u| x.less_than(u));
+            if less_than_upper {
+                self.since.join_assign(&Antichain::from_elem(x.clone()));
             }
         }
-        self.handle.maybe_downgrade_since(&self.since).await;
 
+        let r = ReaderEnrichedHollowBatch {
+            shard_id: self.handle.machine.shard_id(),
+            reader_metadata: HollowBatchReaderMetadata::Listen {
+                as_of: self.as_of.clone(),
+                until: self.frontier.clone(),
+                since: self.since.clone(),
+            },
+            batch,
+        };
+        // NB: Keep this after we use self.frontier to join_assign self.since.
+        self.frontier = new_frontier;
+        r
+    }
+
+    /// Attempt to pull out the next values of this subscription.
+    ///
+    /// The updates received in [ListenEvent::Updates] should be assumed to be in arbitrary order
+    /// and not necessarily consolidated. However, the timestamp of each individual update will be
+    /// greater than or equal to the last received [ListenEvent::Progress] frontier (or this
+    /// [Listen]'s initial `as_of` frontier if no progress event has been emitted yet) and less
+    /// than the next [ListenEvent::Progress] frontier.
+    ///
+    /// If you have a use for consolidated listen output, given that snapshots can't be
+    /// consolidated, come talk to us!
+    #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
+    pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
+        trace!("Listen::next");
+        let batch = self.next_batch().await;
+        let progress = batch.batch.desc.upper().clone();
+        let updates = self
+            .handle
+            .fetch_batch(batch)
+            .await
+            .expect("must accept self-generated batch");
+
+        let mut ret = Vec::with_capacity(2);
+        if !updates.is_empty() {
+            ret.push(ListenEvent::Updates(updates));
+        }
+        ret.push(ListenEvent::Progress(progress));
         ret
     }
 
@@ -469,12 +442,13 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
+    pub(crate) gc: GarbageCollector,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
@@ -487,7 +461,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     /// This handle's `since` frontier.
     ///
@@ -508,7 +482,7 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
         trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
-        let (_seqno, current_reader_since) = self
+        let (_seqno, current_reader_since, maintenance) = self
             .machine
             .downgrade_since(&self.reader_id, &new_since, (self.cfg.now)())
             .await;
@@ -516,6 +490,7 @@ where
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
         self.last_heartbeat = Instant::now();
+        maintenance.perform(&self.machine, &self.gc);
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -542,7 +517,9 @@ where
         Ok(Listen::new(self, as_of).await)
     }
 
-    /// Returns a snapshot of the contents of the shard TVC at `as_of`.
+    /// Returns all of the contents of the shard TVC at `as_of` broken up into
+    /// [`ReaderEnrichedHollowBatch`]es. These batches can be "turned in" via
+    /// `ReadHandle::fetch_batch` to receive the data they contain.
     ///
     /// This command returns the contents of this shard as of `as_of` once they
     /// are known. This may "block" (in an async-friendly way) if `as_of` is
@@ -553,129 +530,138 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
-    ///
-    /// This is a convenience method for constructing the snapshot and
-    /// immediately consuming it from a single place. If you need to parallelize
-    /// snapshot iteration (potentially from multiple machines), see
-    /// [Self::snapshot_splits] and [Self::snapshot_iter].
     #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot(
         &self,
         as_of: Antichain<T>,
-    ) -> Result<SnapshotIter<K, V, T, D>, Since<T>> {
-        let mut splits = self
-            .snapshot_splits(as_of, NonZeroUsize::new(1).unwrap())
-            .await?;
-        assert_eq!(splits.len(), 1);
-        let split = splits.pop().unwrap();
-        let iter = self
-            .snapshot_iter(split)
-            .await
-            .expect("internal error: snapshot shard didn't match machine shard");
-        Ok(iter)
-    }
-
-    /// Returns a snapshot of the contents of the shard TVC at `as_of`.
-    ///
-    /// This command returns the contents of this shard as of `as_of` once they
-    /// are known. This may "block" (in an async-friendly way) if `as_of` is
-    /// greater or equal to the current `upper` of the shard. The recipient
-    /// should only downgrade their read capability when they are certain they
-    /// have all data through the frontier they would downgrade to.
-    ///
-    /// The `Since` error indicates that the requested `as_of` cannot be served
-    /// (the caller has out of date information) and includes the smallest
-    /// `as_of` that would have been accepted.
-    ///
-    /// This snapshot may be split into a number of splits, each of which may be
-    /// exchanged (including over the network) to load balance the processing of
-    /// this snapshot. These splits are usable by anyone with access to the
-    /// shard's [crate::PersistLocation]. The `len()` of the returned `Vec` is
-    /// `num_splits`. If a 1:1 mapping between splits and (e.g. dataflow
-    /// workers) is used, then the work of replaying the snapshot will be
-    /// roughly balanced.
-    ///
-    /// This method exists to allow users to parallelize snapshot iteration. If
-    /// you want to immediately consume the snapshot from a single place, you
-    /// likely want the [Self::snapshot] helper.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn snapshot_splits(
-        &self,
-        as_of: Antichain<T>,
-        num_splits: NonZeroUsize,
-    ) -> Result<Vec<SnapshotSplit<T>>, Since<T>> {
-        trace!(
-            "ReadHandle::snapshot as_of={:?} num_splits={:?}",
-            as_of,
-            num_splits
-        );
-        // Hack: Keep this method `&self` instead of `&mut self` by cloning the
-        // cached copy of the state, updating it, and throwing it away
-        // afterward.
+    ) -> Result<Vec<ReaderEnrichedHollowBatch<T>>, Since<T>> {
         let mut machine = self.machine.clone();
+
         let batches = machine.snapshot(&as_of).await?;
-        let batches = batches.into_iter().flat_map(|b| {
-            let desc = b.desc.clone();
-            b.keys.into_iter().map(move |k| (k, desc.clone()))
-        });
-        let mut splits = Vec::new();
-        for _ in 0..num_splits.get() {
-            // Register this split as a new reader so that it gets its own
-            // seqno capability.
-            let split_reader_id = ReaderId::new();
-            let _read_cap = machine
-                .clone_reader(&split_reader_id, (self.cfg.now)())
-                .await;
-            // We don't want the frontier capability, so explictly toss it.
-            let _ = machine
-                .downgrade_since(&split_reader_id, &Antichain::new(), (self.cfg.now)())
-                .await;
-            splits.push(SnapshotSplit {
-                reader_id: split_reader_id,
-                shard_id: self.machine.shard_id(),
-                as_of: as_of.clone(),
-                batches: Vec::new(),
+
+        let r = batches
+            .into_iter()
+            .filter(|batch| batch.len > 0)
+            .map(|batch| ReaderEnrichedHollowBatch {
+                shard_id: machine.shard_id(),
+                reader_metadata: HollowBatchReaderMetadata::Snapshot {
+                    as_of: as_of.clone(),
+                },
+                batch,
             })
-        }
-        for (idx, (batch_key, desc)) in batches.into_iter().enumerate() {
-            splits[idx % num_splits.get()]
-                .batches
-                .push((batch_key, desc.clone()));
-        }
-        return Ok(splits);
+            .collect::<Vec<_>>();
+
+        Ok(r)
     }
 
-    /// Trade in an exchange-able [SnapshotSplit] for an iterator over the data
-    /// it represents.
+    /// Generates a [shapshot](Self::snapshot), and [fetches](Self::fetch_batch)
+    /// all of the batches it contains.
+    pub async fn snapshot_and_fetch(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let snap = self.snapshot(as_of).await?;
+
+        let mut contents = Vec::new();
+        for batch in snap {
+            let mut r = self
+                .fetch_batch(batch)
+                .await
+                .expect("must accept self-generated snapshot");
+            contents.append(&mut r);
+        }
+        Ok(contents)
+    }
+
+    /// Returns a snapshot of all of a shard's data using `as_of`, followed by
+    /// listening to any future updates.
+    ///
+    /// For more details on this operation's semantics, see [Self::snapshot] and
+    /// [Self::listen].
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn snapshot_iter(
-        &self,
-        split: SnapshotSplit<T>,
-    ) -> Result<SnapshotIter<K, V, T, D>, InvalidUsage<T>> {
-        trace!("ReadHandle::snapshot split={:?}", split);
-        if split.shard_id != self.machine.shard_id() {
-            return Err(InvalidUsage::SnapshotNotFromThisShard {
-                snapshot_shard: split.shard_id,
+    pub async fn subscribe(self, as_of: Antichain<T>) -> Result<Subscribe<K, V, T, D>, Since<T>> {
+        trace!("ReadHandle::subscribe as_of={:?}", as_of);
+
+        let snapshot_batches = self.snapshot(as_of.clone()).await?.into();
+        let listen = self.listen(as_of).await?;
+        Ok(Subscribe::new(snapshot_batches, listen))
+    }
+
+    /// Trade in an exchange-able [ReaderEnrichedHollowBatch] for the data it
+    /// represents.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn fetch_batch(
+        &mut self,
+        batch: ReaderEnrichedHollowBatch<T>,
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
+        trace!("ReadHandle::fetch_batch");
+        if batch.shard_id != self.machine.shard_id() {
+            return Err(InvalidUsage::BatchNotFromThisShard {
+                batch_shard: batch.shard_id,
                 handle_shard: self.machine.shard_id(),
             });
         }
-        let mut machine = self.machine.clone();
-        machine.fetch_and_update_state().await;
-        let handle = ReadHandle {
-            cfg: self.cfg.clone(),
-            metrics: Arc::clone(&self.metrics),
-            reader_id: split.reader_id.clone(),
-            machine,
-            blob: Arc::clone(&self.blob),
-            since: self.since.clone(),
-            // This isn't quite right since we did the heartbeat before sending
-            // it over the wire, but probably good enough for now? Maybe we
-            // should roundtrip the timestamp through SnapshotSplit instead?
-            last_heartbeat: Instant::now(),
-            explicitly_expired: false,
-        };
-        let iter = SnapshotIter::new(handle, split);
-        Ok(iter)
+
+        let mut updates = Vec::new();
+        for key in batch.batch.keys.iter() {
+            self.maybe_heartbeat_reader().await;
+            fetch_batch_part(
+                &batch.shard_id,
+                self.blob.as_ref(),
+                &self.metrics,
+                &key,
+                &batch.batch.desc.clone(),
+                |k, v, mut t, d| {
+                    match &batch.reader_metadata {
+                        HollowBatchReaderMetadata::Listen {
+                            as_of,
+                            until,
+                            since: _,
+                        } => {
+                            // This time is covered by a snapshot
+                            if !as_of.less_than(&t) {
+                                return;
+                            }
+
+                            // Because of compaction, the next batch we get might also
+                            // contain updates we've already emitted. For example, we
+                            // emitted `[1, 2)` and then compaction combined that batch
+                            // with a `[2, 3)` batch into a new `[1, 3)` batch. If this
+                            // happens, we just need to filter out anything < the
+                            // frontier. This frontier was the upper of the last batch
+                            // (and thus exclusive) so for the == case, we still emit.
+                            if !until.less_equal(&t) {
+                                return;
+                            }
+                        }
+                        HollowBatchReaderMetadata::Snapshot { as_of } => {
+                            // This time is covered by a listen
+                            if as_of.less_than(&t) {
+                                return;
+                            }
+                            t.advance_by(as_of.borrow())
+                        }
+                    }
+
+                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
+                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
+                    let d = D::decode(d);
+                    updates.push(((k, v), t, d));
+                },
+            )
+            .await;
+        }
+
+        // TODO: This is potentially suprising for the `ReadHandle` to manage.
+        // Instead, we likely want to add a struct akin to a `Listen`
+        // (BatchStreamFetcher?) that wraps the `ReadHandle` and `fetch_batch`
+        // method is only available on that (think the pattern that Listen has
+        // now).
+        if let HollowBatchReaderMetadata::Listen { since, .. } = batch.reader_metadata {
+            self.maybe_downgrade_since(&since).await;
+        }
+
+        Ok(updates)
     }
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
@@ -691,6 +677,7 @@ where
             metrics: Arc::clone(&self.metrics),
             reader_id: new_reader_id,
             machine,
+            gc: self.gc.clone(),
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
             last_heartbeat: Instant::now(),
@@ -729,10 +716,12 @@ where
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 2;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.machine
+            let (_, maintenance) = self
+                .machine
                 .heartbeat_reader(&self.reader_id, (self.cfg.now)())
                 .await;
             self.last_heartbeat = Instant::now();
+            maintenance.perform(&self.machine, &self.gc);
         }
     }
 
@@ -751,10 +740,9 @@ where
         self.explicitly_expired = true;
     }
 
-    /// Test helper for an [Self::snapshot] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
-    pub async fn expect_snapshot(&self, as_of: T) -> SnapshotIter<K, V, T, D> {
+    pub async fn expect_snapshot(&self, as_of: T) -> Vec<ReaderEnrichedHollowBatch<T>> {
         self.snapshot(Antichain::from_elem(as_of))
             .await
             .expect("cannot serve requested as_of")
@@ -770,13 +758,38 @@ where
     }
 }
 
+impl<K, V, T, D> ReadHandle<K, V, T, D>
+where
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
+    T: Timestamp + Lattice + Codec64 + Ord,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Test helper to generate a [Self::snapshot] call that is expected to
+    /// succeed, process its batches, and then return its data sorted.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_snapshot_and_fetch(
+        &mut self,
+        as_of: T,
+    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
+        let mut ret = self
+            .snapshot_and_fetch(Antichain::from_elem(as_of))
+            .await
+            .expect("cannot serve rrequested as_of");
+
+        ret.sort();
+        ret
+    }
+}
+
 impl<K, V, T, D> Drop for ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
     // These are only here so we can use them in this auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {
@@ -970,9 +983,9 @@ mod tests {
 
     use super::*;
 
-    // Verifies performance optimizations where a SnapshotIter/Listener doesn't
-    // fetch the latest Consensus state if the one it currently has can serve
-    // the next request.
+    // Verifies performance optimizations where a Listener doesn't fetch the
+    // latest Consensus state if the one it currently has can serve the next
+    // request.
     #[tokio::test]
     async fn skip_consensus_fetch_optimization() {
         mz_ore::test::init_logging();
@@ -989,7 +1002,7 @@ mod tests {
         let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
             as Arc<dyn Consensus + Send + Sync>;
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-        let (mut write, read) = PersistClient::new(
+        let (mut write, mut read) = PersistClient::new(
             PersistConfig::new(SYSTEM_TIME.clone()),
             blob,
             consensus,
@@ -1004,7 +1017,7 @@ mod tests {
         write.expect_compare_and_append(&data[1..2], 1, 2).await;
         write.expect_compare_and_append(&data[2..3], 2, 3).await;
 
-        let mut snapshot = read.expect_snapshot(2).await;
+        let mut snapshot = read.expect_snapshot_and_fetch(2).await;
         let mut listen = read.expect_listen(0).await;
 
         // Manually advance the listener's machine so that it has the latest
@@ -1018,7 +1031,7 @@ mod tests {
         // At this point, the snapshot and listen's state should have all the
         // writes. Test this by making consensus completely unavailable.
         unreliable.totally_unavailable();
-        assert_eq!(snapshot.read_all().await, all_ok(&data, 2));
+        assert_eq!(snapshot, all_ok(&data, 2));
         assert_eq!(
             listen.read_until(&3).await,
             (all_ok(&data[1..], 1), Antichain::from_elem(3))
@@ -1026,12 +1039,12 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_split_exchange_data() {
-        // The whole point of SnapshotSplit is that it can be exchanged between
+    fn client_exchange_data() {
+        // The whole point of ReaderEnrichedHollowBatch is that it can be exchanged between
         // timely workers, including over the network. Enforce then that it
         // implements ExchangeData.
         fn is_exchange_data<T: ExchangeData>() {}
-        is_exchange_data::<SnapshotSplit<u64>>();
-        is_exchange_data::<SnapshotSplit<i64>>();
+        is_exchange_data::<ReaderEnrichedHollowBatch<u64>>();
+        is_exchange_data::<ReaderEnrichedHollowBatch<i64>>();
     }
 }

@@ -32,6 +32,7 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
+use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -42,10 +43,9 @@ use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 
 use mz_build_info::BuildInfo;
-use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -59,7 +59,7 @@ use crate::protocol::client::{
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use crate::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
-use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
+use crate::types::sources::IngestionDescription;
 
 mod hosts;
 mod rehydration;
@@ -439,7 +439,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + Unpin> {
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
-    persist_client: PersistClient,
+    persist: Arc<Mutex<PersistClientCache>>,
 }
 
 #[derive(Debug)]
@@ -453,8 +453,8 @@ pub enum StorageError {
     UpdateBeyondUpper(GlobalId),
     /// The read was at a timestamp before the collection's since
     ReadBeforeSince(GlobalId),
-    /// The expected upper of an append was different than the actual append of the collection
-    InvalidUpper(GlobalId),
+    /// The expected upper of one or more appends was different from the actual upper of the collection
+    InvalidUppers(Vec<GlobalId>),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
     /// An operation failed to read or write state
@@ -470,7 +470,7 @@ impl Error for StorageError {
             Self::IdentifierMissing(_) => None,
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
-            Self::InvalidUpper(_) => None,
+            Self::InvalidUppers(_) => None,
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
@@ -496,10 +496,11 @@ impl fmt::Display for StorageError {
             Self::ReadBeforeSince(id) => {
                 write!(f, "read for {id} was at a timestamp before its since")
             }
-            Self::InvalidUpper(id) => {
+            Self::InvalidUppers(id) => {
                 write!(
                     f,
-                    "expected upper for {id} was different than its actual upper"
+                    "expected upper was different from the actual upper for: {}",
+                    id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
@@ -554,7 +555,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin + Debug,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 
@@ -640,7 +641,12 @@ where
             };
 
             let (write, mut read) = self
-                .persist_client
+                .persist
+                .lock()
+                .await
+                .open(self.persist_location.clone())
+                .await
+                .unwrap()
                 .open(metadata.data_shard)
                 .await
                 .expect("invalid persist usage");
@@ -666,47 +672,17 @@ where
                     source_imports.insert(id, metadata);
                 }
 
-                let metadata = self.collection(id)?.collection_metadata.clone();
-
-                // Calculate the point at which we can resume ingestion computing the greatest
-                // antichain that is less or equal to all state and output shard uppers.
-                let mut resume_upper: Antichain<T> = Antichain::new();
-                let remap_write = self
-                    .persist_client
-                    .open_writer::<(), PartitionId, T, MzOffset>(metadata.remap_shard)
-                    .await
-                    .unwrap();
-                for t in remap_write.upper().elements() {
-                    resume_upper.insert(t.clone());
-                }
-                let data_write = self
-                    .persist_client
-                    .open_writer::<SourceData, (), T, Diff>(metadata.data_shard)
-                    .await
-                    .unwrap();
-                for t in data_write.upper().elements() {
-                    resume_upper.insert(t.clone());
-                }
-
-                // Check if this ingestion is using any operators that are stateful AND are not
-                // storing their state in persist shards. This whole section should be eventually
-                // removed as we make each operator durably record its state in persist shards.
-                let resume_upper = match ingestion.desc.envelope {
-                    // We can only resume with the None envelope right now which is stateless
-                    SourceEnvelope::None(_) => resume_upper,
-                    // Otherwise re-ingest everything
-                    _ => Antichain::from_elem(T::minimum()),
+                let desc = IngestionDescription {
+                    source_imports,
+                    storage_metadata: self.collection(id)?.collection_metadata.clone(),
+                    // The rest of the fields are identical
+                    desc: ingestion.desc,
+                    typ: description.desc.typ().clone(),
                 };
-
+                let resume_upper = desc.get_resume_upper(Arc::clone(&self.persist)).await;
                 let augmented_ingestion = IngestSourceCommand {
                     id,
-                    description: IngestionDescription {
-                        source_imports,
-                        storage_metadata: self.collection(id)?.collection_metadata.clone(),
-                        // The rest of the fields are identical
-                        desc: ingestion.desc,
-                        typ: description.desc.typ().clone(),
-                    },
+                    description: desc,
                     resume_upper,
                 };
 
@@ -840,7 +816,7 @@ where
             .unwrap()
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
@@ -872,7 +848,7 @@ where
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, ChangeBatch<T>)],
@@ -908,7 +884,7 @@ where
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
@@ -1013,25 +989,21 @@ where
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
     ) -> Self {
-        let persist_client = persist_clients
-            .lock()
-            .await
-            .open(persist_location.clone())
-            .await
-            .unwrap();
-
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
             state: StorageControllerState::new(postgres_url, tx).await,
-            hosts: StorageHosts::new(StorageHostsConfig {
-                build_info,
-                orchestrator,
-                storaged_image,
-            }),
+            hosts: StorageHosts::new(
+                StorageHostsConfig {
+                    build_info,
+                    orchestrator,
+                    storaged_image,
+                },
+                Arc::clone(&persist_clients),
+            ),
             internal_response_queue: rx,
             persist_location,
-            persist_client,
+            persist: persist_clients,
         }
     }
 
@@ -1104,6 +1076,7 @@ mod persist_read_handles {
     use mz_persist_types::Codec64;
     use mz_repr::Row;
     use mz_repr::{Diff, GlobalId};
+    use tracing::Instrument;
 
     use crate::controller::StorageError;
     use crate::types::sources::SourceData;
@@ -1119,7 +1092,7 @@ mod persist_read_handles {
     /// persist calls.
     #[derive(Debug)]
     pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
-        tx: UnboundedSender<PersistWorkerCmd<T>>,
+        tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
     impl<T> Drop for PersistWorker<T>
@@ -1147,100 +1120,111 @@ mod persist_read_handles {
 
     impl<T: Timestamp + Lattice + Codec64> PersistWorker<T> {
         pub(crate) fn new() -> Self {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
             mz_ore::task::spawn(|| "PersistReadHandles", async move {
                 let mut read_handles: BTreeMap<GlobalId, ReadHandle<SourceData, (), T, Diff>> =
                     BTreeMap::new();
 
-                while let Some(cmd) = rx.recv().await {
-                    // Peel off all available commands.
-                    // This allows us to catch up if we fall behind on downgrade commands.
-                    let mut commands = vec![cmd];
-                    while let Ok(cmd) = rx.try_recv() {
-                        commands.push(cmd);
-                    }
-                    // Collect all downgrade requests and apply them last.
-                    let mut downgrades = BTreeMap::default();
-                    let mut shutdown = false;
-
-                    for command in commands {
-                        match command {
-                            PersistWorkerCmd::Register(id, read_handle) => {
-                                let previous = read_handles.insert(id, read_handle);
-                                if previous.is_some() {
-                                    panic!(
-                                        "already registered a ReadHandle for collection {:?}",
-                                        id
-                                    );
-                                }
+                let mut shutdown = false;
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                while !shutdown {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            let futs = FuturesUnordered::new();
+                            for (_id, read) in read_handles.iter_mut() {
+                                futs.push(read.maybe_heartbeat_reader());
                             }
-                            PersistWorkerCmd::Downgrade(since_frontiers) => {
-                                for (id, frontier) in since_frontiers {
-                                    downgrades.insert(id, frontier);
+                            futs.collect::<Vec<_>>().await;
+                        },
+                        cmd = rx.recv() => {
+                            if let Some(cmd) = cmd {
+                                // Peel off all available commands.
+                                // This allows us to catch up if we fall behind on downgrade commands.
+                                let mut commands = vec![cmd];
+                                while let Ok(cmd) = rx.try_recv() {
+                                    commands.push(cmd);
                                 }
-                            }
-                            PersistWorkerCmd::Snapshot(id, as_of, oneshot) => {
-                                async fn snapshot<T2: Timestamp + Lattice + Codec64>(
-                                    read_handle: &mut ReadHandle<SourceData, (), T2, Diff>,
-                                    id: GlobalId,
-                                    as_of: Antichain<T2>,
-                                ) -> Result<Vec<(Row, Diff)>, StorageError>
-                                {
-                                    let mut snapshot = read_handle
-                                        .snapshot(as_of)
-                                        .await
-                                        .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                                // Collect all downgrade requests and apply them last.
+                                let mut downgrades = BTreeMap::default();
 
-                                    let mut contents = Vec::new();
+                                for (span, command) in commands {
+                                    match command {
+                                        PersistWorkerCmd::Register(id, read_handle) => {
+                                            let previous = read_handles.insert(id, read_handle);
+                                            if previous.is_some() {
+                                                panic!(
+                                                    "already registered a ReadHandle for collection {:?}",
+                                                    id
+                                                );
+                                            }
+                                        }
+                                        PersistWorkerCmd::Downgrade(since_frontiers) => {
+                                            for (id, frontier) in since_frontiers {
+                                                downgrades.insert(id, (span.clone(), frontier));
+                                            }
+                                        }
+                                        PersistWorkerCmd::Snapshot(id, as_of, oneshot) => {
+                                            async fn snapshot<T2: Timestamp + Lattice + Codec64>(
+                                                read_handle: &mut ReadHandle<SourceData, (), T2, Diff>,
+                                                id: GlobalId,
+                                                as_of: Antichain<T2>,
+                                            ) -> Result<Vec<(Row, Diff)>, StorageError>
+                                            {
+                                                let mut contents = Vec::new();
+                                                for ((source_data, _pid), _ts, diff) in read_handle
+                                                    .snapshot_and_fetch(as_of)
+                                                    .await
+                                                    .map_err(|_| StorageError::ReadBeforeSince(id))?
+                                                {
+                                                    let row = source_data.expect("cannot read snapshot").0?;
+                                                    contents.push((row, diff));
+                                                }
 
-                                    while let Some(updates) = snapshot.next().await {
-                                        for ((source_data, _pid), _ts, diff) in updates {
-                                            let row =
-                                                source_data.expect("cannot read snapshot").0?;
-                                            contents.push((row, diff));
+                                                Ok(contents)
+                                            }
+
+                                            if let Some(read_handle) = read_handles.get_mut(&id) {
+                                                let result = snapshot(read_handle, id, as_of)
+                                                    .instrument(span.clone())
+                                                    .await;
+                                                oneshot.send(result).expect("Oneshot should not fail");
+                                            } else {
+                                                oneshot
+                                                    .send(Err(StorageError::IdentifierMissing(id)))
+                                                    .expect("Oneshot should not fail");
+                                            }
+                                        }
+                                        PersistWorkerCmd::Shutdown => {
+                                            shutdown = true;
+                                        }
+                                    }
+                                }
+
+
+                                if !downgrades.is_empty() {
+                                    let futs = FuturesUnordered::new();
+
+                                    for (id, read) in read_handles.iter_mut() {
+                                        if let Some((span, since)) = downgrades.remove(id) {
+                                            let fut = async move {
+                                                read.downgrade_since(since).instrument(span).await;
+                                            };
+
+                                            futs.push(fut);
                                         }
                                     }
 
-                                    Ok(contents)
+                                    assert!(downgrades.is_empty());
+                                    futs.collect::<Vec<_>>().await;
                                 }
-
-                                if let Some(read_handle) = read_handles.get_mut(&id) {
-                                    let result = snapshot(read_handle, id, as_of).await;
-                                    oneshot.send(result).expect("Oneshot should not fail");
-                                } else {
-                                    oneshot
-                                        .send(Err(StorageError::IdentifierMissing(id)))
-                                        .expect("Oneshot should not fail");
-                                }
-                            }
-                            PersistWorkerCmd::Shutdown => {
+                            } else {
                                 shutdown = true;
                             }
                         }
                     }
-
-                    if !downgrades.is_empty() {
-                        let futs = FuturesUnordered::new();
-
-                        for (id, read) in read_handles.iter_mut() {
-                            if let Some(since) = downgrades.remove(id) {
-                                let fut = async move {
-                                    read.downgrade_since(since).await;
-                                };
-
-                                futs.push(fut);
-                            }
-                        }
-
-                        assert!(downgrades.is_empty());
-                        futs.collect::<Vec<_>>().await;
-                    }
-                    if shutdown {
-                        tracing::trace!("shutting down persist since downgrade task");
-                        break;
-                    }
                 }
+                tracing::trace!("shutting down persist since downgrade task");
             });
 
             Self { tx }
@@ -1269,7 +1253,7 @@ mod persist_read_handles {
         }
 
         fn send(&self, cmd: PersistWorkerCmd<T>) {
-            match self.tx.send(cmd) {
+            match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
                     tracing::error!("could not forward command: {:?}", e);
@@ -1285,12 +1269,14 @@ mod persist_write_handles {
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
+    use itertools::Itertools;
     use timely::progress::{Antichain, Timestamp};
     use tokio::sync::mpsc::UnboundedSender;
 
     use mz_persist_client::write::WriteHandle;
     use mz_persist_types::Codec64;
     use mz_repr::{Diff, GlobalId};
+    use tracing::Instrument;
 
     use crate::controller::StorageError;
     use crate::protocol::client::StorageResponse;
@@ -1299,7 +1285,7 @@ mod persist_write_handles {
 
     #[derive(Debug)]
     pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
-        tx: UnboundedSender<PersistWorkerCmd<T>>,
+        tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
     impl<T> Drop for PersistWorker<T>
@@ -1327,7 +1313,7 @@ mod persist_write_handles {
         pub(crate) fn new(
             mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         ) -> Self {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
             mz_ore::task::spawn(|| "PersistWriteHandles", async move {
                 let mut write_handles = BTreeMap::new();
@@ -1348,7 +1334,7 @@ mod persist_write_handles {
 
                     let mut shutdown = false;
 
-                    for command in commands {
+                    for (span, command) in commands {
                         match command {
                             PersistWorkerCmd::Register(id, write_handle) => {
                                 let previous = write_handles
@@ -1362,11 +1348,25 @@ mod persist_write_handles {
                             }
                             PersistWorkerCmd::Append(updates, response) => {
                                 for (id, update, upper) in updates {
-                                    let (updates, old_upper) =
+                                    let (old_span, updates, old_upper) =
                                         all_updates.entry(id).or_insert_with(|| {
-                                            (Vec::default(), Antichain::from_elem(T::minimum()))
+                                            (
+                                                span.clone(),
+                                                Vec::default(),
+                                                Antichain::from_elem(T::minimum()),
+                                            )
                                         });
 
+                                    if old_span.id() != span.id() {
+                                        // Link in any spans for `Append`
+                                        // operations that we lump together by
+                                        // doing this. This is not ideal,
+                                        // because we only have a true tracing
+                                        // history for the "first" span that we
+                                        // process, but it's better than
+                                        // nothing.
+                                        old_span.follows_from(span.id());
+                                    }
                                     updates.extend(update);
                                     old_upper.join_assign(&Antichain::from_elem(upper));
                                 }
@@ -1386,8 +1386,11 @@ mod persist_write_handles {
                             GlobalId,
                             (WriteHandle<SourceData, (), T2, Diff>, Antichain<T2>),
                         >,
-                        mut commands: BTreeMap<GlobalId, (Vec<Update<T2>>, Antichain<T2>)>,
-                    ) -> Result<(), GlobalId> {
+                        mut commands: BTreeMap<
+                            GlobalId,
+                            (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
+                        >,
+                    ) -> Result<(), Vec<GlobalId>> {
                         let futs = FuturesUnordered::new();
 
                         // We cannot iterate through the updates and then set off a persist call
@@ -1398,21 +1401,64 @@ mod persist_write_handles {
                         // through all available write handles and see if there are any updates
                         // for it. If yes, we send them all in one go.
                         for (id, (write, old_upper)) in write_handles.iter_mut() {
-                            if let Some((updates, new_upper)) = commands.remove(id) {
+                            if let Some((span, updates, new_upper)) = commands.remove(id) {
                                 let persist_upper = write.upper().clone();
                                 let updates = updates
                                     .into_iter()
                                     .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
 
                                 futs.push(async move {
+                                    let persist_upper = persist_upper.clone();
+                                    let mut result =
                                     write
                                         .compare_and_append(
-                                            updates,
+                                            updates.clone(),
                                             persist_upper.clone(),
                                             new_upper.clone(),
                                         )
-                                        .await
-                                        .expect("cannot append updates")
+                                        .instrument(span.clone())
+                                        .await;
+
+                                    // Indeterminate results can occur when persist is not certain
+                                    // whether the transaction has applied or not. We will attempt
+                                    // to suss this out by looking at the recent `upper`, and retrying
+                                    // if it is still appropriate, not retrying if it has advanced
+                                    // to `new_upper`, and panicking if it is anything else.
+                                    while let Err(indeterminate) = result {
+                                        tracing::warn!("Retrying indeterminate table write: {:?}", indeterminate);
+                                        write.fetch_recent_upper().await;
+                                        if write.upper() == &persist_upper {
+                                            // If the upper frontier is the prior frontier, the commit
+                                            // did not happen and we should retry it.
+                                            result =
+                                            write
+                                                .compare_and_append(
+                                                    updates.clone(),
+                                                    persist_upper.clone(),
+                                                    new_upper.clone(),
+                                                )
+                                                .instrument(span.clone())
+                                                .await;
+
+                                        } else if write.upper() == &new_upper {
+                                            // If the upper frontier is the new frontier, then because
+                                            // of mutual exclusion of writes, no other writer should be
+                                            // advancing the frontier to `new_upper`.
+                                            //
+                                            // TODO: This may succeed if `new_upper` is where we cut over
+                                            // to a new leader, who advanced tables to `new_upper` when it
+                                            // started. In that case, a success here will soon be followed
+                                            // by a failure on our next interaction with the catalog stash,
+                                            // but we would incorrectly think this committed and may serve
+                                            // results in the meantime.
+                                            result = Ok(Ok(Ok(())))
+                                        } else {
+                                            panic!("Table write failed: `write.upper` set to value that signals we have lost leadership");
+                                        }
+                                    }
+
+                                    result
+                                        .expect("Indeterminate response not resolved")
                                         .expect("cannot append updates")
                                         .or(Err(*id))?;
 
@@ -1426,14 +1472,23 @@ mod persist_write_handles {
                             }
                         }
 
-                        use futures_util::TryStreamExt;
-                        let change_batches = futs.try_collect::<Vec<_>>().await?;
+                        use futures_util::StreamExt;
+                        // Ensure all futures run to completion, and track status of each of them individually
+                        let (change_batches, failed_appends): (Vec<_>, Vec<_>) = futs
+                            .collect::<Vec<_>>()
+                            .await
+                            .into_iter()
+                            .partition_result();
 
                         // It is not strictly an error for the controller to hang up.
                         let _ = frontier_responses
                             .send(StorageResponse::FrontierUppers(change_batches));
 
-                        Ok(())
+                        if failed_appends.is_empty() {
+                            Ok(())
+                        } else {
+                            Err(failed_appends)
+                        }
                     }
 
                     let result =
@@ -1441,8 +1496,7 @@ mod persist_write_handles {
 
                     // It is not an error for the other end to hang up.
                     for response in all_responses {
-                        let _ =
-                            response.send(result.clone().map_err(StorageError::IdentifierMissing));
+                        let _ = response.send(result.clone().map_err(StorageError::InvalidUppers));
                     }
 
                     if shutdown {
@@ -1468,12 +1522,18 @@ mod persist_write_handles {
             updates: Vec<(GlobalId, Vec<Update<T>>, T)>,
         ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            self.send(PersistWorkerCmd::Append(updates, tx));
-            rx
+            if updates.is_empty() {
+                tx.send(Ok(()))
+                    .expect("rx has not been dropped at this point");
+                rx
+            } else {
+                self.send(PersistWorkerCmd::Append(updates, tx));
+                rx
+            }
         }
 
         fn send(&self, cmd: PersistWorkerCmd<T>) {
-            match self.tx.send(cmd) {
+            match self.tx.send((tracing::Span::current(), cmd)) {
                 Ok(()) => (), // All good!
                 Err(e) => {
                     tracing::error!("could not forward command: {:?}", e);

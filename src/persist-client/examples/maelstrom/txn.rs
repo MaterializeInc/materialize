@@ -195,7 +195,7 @@ impl Transactor {
         }
     }
 
-    async fn read(&self) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
+    async fn read(&mut self) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
         // We're reading as of read_ts, but we can split the read between the
         // snapshot and listen at any ts in `[since_ts, read_ts]`. Intentionally
         // pick one that uses a combination of both to get coverage.
@@ -204,23 +204,11 @@ impl Transactor {
         let snap_ts = self.since_ts + (self.read_ts - self.since_ts) / 2;
         let snap_as_of = Antichain::from_elem(snap_ts);
 
-        let mut snap = self
-            .read
-            .snapshot(snap_as_of.clone())
-            .await
-            .map_err(|since| MaelstromError {
-                code: ErrorCode::Abort,
-                text: format!(
-                    "snapshot cannot serve requested as_of {} since is {:?}",
-                    snap_ts,
-                    since.0.as_option(),
-                ),
-            })?;
         let listen = self
             .read
             .clone()
             .await
-            .listen(snap_as_of)
+            .listen(snap_as_of.clone())
             .await
             .map_err(|since| MaelstromError {
                 code: ErrorCode::Abort,
@@ -231,10 +219,19 @@ impl Transactor {
                 ),
             })?;
 
-        let mut updates = Vec::new();
-        while let Some(mut dataz) = snap.next().await {
-            updates.append(&mut dataz);
-        }
+        let mut updates = self
+            .read
+            .snapshot_and_fetch(snap_as_of.clone())
+            .await
+            .map_err(|since| MaelstromError {
+                code: ErrorCode::Abort,
+                text: format!(
+                    "snapshot cannot serve requested as_of {} since is {:?}",
+                    snap_ts,
+                    since.0.as_option(),
+                ),
+            })?;
+
         trace!(
             "read updates from snapshot as_of {}: {:?}",
             snap_ts,
@@ -442,12 +439,17 @@ impl Service for TransactorService {
 
         // Construct requested Consensus.
         let config = PersistConfig::new(SYSTEM_TIME.clone());
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
-                ConsensusConfig::try_from(consensus_uri, config.consensus_connection_pool_max_size)
-                    .await?
-                    .open()
-                    .await?
+                ConsensusConfig::try_from(
+                    consensus_uri,
+                    config.consensus_connection_pool_max_size,
+                    metrics.postgres_consensus.clone(),
+                )
+                .await?
+                .open()
+                .await?
             }
             None => MaelstromConsensus::new(handle.clone()),
         };
@@ -455,7 +457,6 @@ impl Service for TransactorService {
             as Arc<dyn Consensus + Send + Sync>;
 
         // Wire up the TransactorService.
-        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
         let client =
             PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime).await?;

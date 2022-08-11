@@ -53,9 +53,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.wait_for_materialized()
 
     # Start MySQL and Debezium.
-    c.up("mysql", "debezium")
-    c.wait_for_tcp(host="mysql", port=3306)
-    c.wait_for_tcp(host="debezium", port=8083)
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "mysql", "debezium"]
+    )
 
     # Generate initial data.
     c.run(

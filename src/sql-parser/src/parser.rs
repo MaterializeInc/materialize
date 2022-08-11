@@ -1526,6 +1526,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Bail out if the current token is not an expected keyword or token, or consume it if it is
+    fn expect_keyword_or_token(
+        &mut self,
+        expected_keyword: Keyword,
+        expected_token: &Token,
+    ) -> Result<(), ParserError> {
+        if self.parse_keyword(expected_keyword) || self.consume_token(expected_token) {
+            Ok(())
+        } else {
+            self.expected(
+                self.peek_pos(),
+                format!("{expected_keyword} or {expected_token}"),
+                self.peek_token(),
+            )
+        }
+    }
+
     /// Parse a comma-separated list of 1+ items accepted by `F`
     fn parse_comma_separated<T, F>(&mut self, mut f: F) -> Result<Vec<T>, ParserError>
     where
@@ -2110,16 +2127,10 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let remote = if self.parse_keyword(REMOTE) {
-            Some(self.parse_literal_string()?)
-        } else {
-            None
-        };
-
         // New WITH block
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_create_source_options)?;
+            let options = self.parse_comma_separated(Parser::parse_create_source_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
@@ -2136,7 +2147,6 @@ impl<'a> Parser<'a> {
             envelope,
             if_not_exists,
             key_constraint,
-            remote,
             with_options,
         }))
     }
@@ -2183,10 +2193,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the final WITH block of a CREATE SOURCE statement
-    fn parse_create_source_options(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SIZE])? {
+    /// Parses a single valid option in the WITH block of a create source
+    fn parse_create_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SIZE, REMOTE])? {
             SIZE => CreateSourceOptionName::Size,
+            REMOTE => CreateSourceOptionName::Remote,
             _ => unreachable!(),
         };
 
@@ -2979,8 +2990,16 @@ impl<'a> Parser<'a> {
             let replica = p.parse_identifier()?;
             Ok(QualifiedReplica { cluster, replica })
         })?;
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
         Ok(Statement::DropClusterReplicas(
-            DropClusterReplicasStatement { if_exists, names },
+            DropClusterReplicasStatement {
+                if_exists,
+                names,
+                cascade,
+            },
         ))
     }
 
@@ -3261,6 +3280,7 @@ impl<'a> Parser<'a> {
             TABLE,
             INDEX,
             SECRET,
+            SYSTEM,
         ])? {
             SINK => ObjectType::Sink,
             SOURCE => ObjectType::Source,
@@ -3272,6 +3292,7 @@ impl<'a> Parser<'a> {
             TABLE => ObjectType::Table,
             INDEX => return self.parse_alter_index(),
             SECRET => return self.parse_alter_secret(),
+            SYSTEM => return self.parse_alter_system(),
             _ => unreachable!(),
         };
 
@@ -3356,6 +3377,15 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         })
+    }
+
+    /// Parse an ALTER SYSTEM SET statement.
+    fn parse_alter_system(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(SET)?;
+        let name = self.parse_identifier()?;
+        self.expect_keyword_or_token(TO, &Token::Eq)?;
+        let value = self.parse_set_variable_value()?;
+        Ok(Statement::AlterSystem(AlterSystemStatement { name, value }))
     }
 
     /// Parse a copy statement
@@ -4289,14 +4319,7 @@ impl<'a> Parser<'a> {
             }
         }
         if normal {
-            let token = self.peek_token();
-            let value = match (self.parse_value(), token) {
-                (Ok(value), _) => SetVariableValue::Literal(value),
-                (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
-                (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
-                (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
-                (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,
-            };
+            let value = self.parse_set_variable_value()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
                 variable,
@@ -4317,6 +4340,17 @@ impl<'a> Parser<'a> {
         } else {
             self.expected(self.peek_pos(), "equals sign or TO", self.peek_token())
         }
+    }
+
+    fn parse_set_variable_value(&mut self) -> Result<SetVariableValue, ParserError> {
+        let token = self.peek_token();
+        Ok(match (self.parse_value(), token) {
+            (Ok(value), _) => SetVariableValue::Literal(value),
+            (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
+            (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
+            (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
+            (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,
+        })
     }
 
     fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {

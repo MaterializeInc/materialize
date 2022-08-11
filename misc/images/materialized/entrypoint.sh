@@ -11,18 +11,18 @@
 
 set -euo pipefail
 
-pg_ctlcluster 14 materialize start
+COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING=true cockroach start-single-node --insecure --background
 
-psql -Atc "CREATE SCHEMA IF NOT EXISTS consensus"
-psql -Atc "CREATE SCHEMA IF NOT EXISTS storage"
-psql -Atc "CREATE SCHEMA IF NOT EXISTS adapter"
+cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
+cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS storage"
+cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS adapter"
 
 exec environmentd \
     --sql-listen-addr=0.0.0.0:6875 \
     --http-listen-addr=0.0.0.0:6876 \
     --internal-sql-listen-addr=0.0.0.0:6877 \
     --internal-http-listen-addr=0.0.0.0:6878 \
-    "--persist-consensus-url=postgresql://materialize@$(hostname):5432?options=--search_path=consensus" \
-    "--storage-stash-url=postgresql://materialize@$(hostname):5432?options=--search_path=storage" \
-    "--adapter-stash-url=postgresql://materialize@$(hostname):5432?options=--search_path=adapter" \
+    "--persist-consensus-url=postgresql://root@$(hostname):26257?options=--search_path=consensus" \
+    "--storage-stash-url=postgresql://root@$(hostname):26257?options=--search_path=storage" \
+    "--adapter-stash-url=postgresql://root@$(hostname):26257?options=--search_path=adapter" \
     "$@"

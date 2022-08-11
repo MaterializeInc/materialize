@@ -9,6 +9,8 @@ menu:
 
 A connection describes how to connect and authenticate to an external system you want Materialize to read data from. Once created, a connection is **reusable** across multiple [`CREATE SOURCE`](/sql/create-source) statements.
 
+To use credentials that contain sensitive information (like passwords and SSL keys) in a connection, you must first [create a secret](/sql/create-secret) to securely store them in Materialize's secret management system. Credentials that are generally not sensitive (like usernames and SSL certificates) can be specified as plain `text`, or also stored as secrets.
+
 [//]: # "TODO(morsapaes) Adapt once sinks are wired up to use connections."
 
 ## Syntax
@@ -27,9 +29,9 @@ Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:|------------------
 `BROKER`                    | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
 `BROKERS`                   | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate. Required for SSL client authentication.
-`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key. Required for SSL client authentication.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
+`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
 
 ##### Example
 
@@ -49,9 +51,9 @@ CREATE CONNECTION kafka_connection
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:| ------------
 `URL`                       | `text`           | ✓        | The schema registry URL.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate. Required for SSL client authentication.
-`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key. Required for SSL client authentication.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
+`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
 `PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 `USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 
@@ -108,10 +110,10 @@ Field                       | Value            | Required | Description
 `PORT`                      | `int4`           |          | Default: `5432`. Port number to connect to at the server host.
 `PASSWORD`                  | secret           |          | Password for the connection
 `SSH TUNNEL`                | `text`           |          | `SSH TUNNEL` connection name. See [SSH tunneling](#postgres-ssh).
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL MODE`                  | `text`           |          | Default: `disable`. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
-`SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate.
-`SSL KEY`                   | secret           |          | Client SSL key.
+`SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
+`SSL KEY`                   | secret           |          | Client SSL key in PEM format.
 `USER`                      | `text`           | ✓        | Database username.
 
 ##### Example
@@ -151,5 +153,5 @@ CREAT CONNECTION ssh_connection
 
 ## Related pages
 
-- `CREATE SECRET`
+- [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE SOURCE`](/sql/create-source)

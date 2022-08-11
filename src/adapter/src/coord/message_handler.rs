@@ -11,6 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use chrono::DurationRound;
+use timely::PartialOrder;
 use tracing::{event, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
@@ -66,6 +67,41 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
+            Message::StorageUsage => {
+                self.storage_usage_update().await;
+            }
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn storage_usage_update(&mut self) {
+        let object_id = None;
+        let shard_sizes = self.storage_usage_client.shard_sizes().await;
+
+        let mut unk_storage = 0;
+        let mut known_storage = 0;
+        for (key, val) in shard_sizes {
+            match key {
+                Some(_) => known_storage += val,
+                None => unk_storage += val,
+            }
+        }
+        // TODO(jpepin): What, if anything, do we want to do with orphaned storage?
+        if unk_storage > 0 {
+            tracing::debug!("Found {} bytes of orphaned storage", unk_storage);
+        }
+        if let Err(err) = self
+            .catalog_transact(
+                None,
+                vec![catalog::Op::UpdateStorageMetrics {
+                    object_id,
+                    size_bytes: known_storage,
+                }],
+                |_| Ok(()),
+            )
+            .await
+        {
+            tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
     }
 
@@ -142,8 +178,11 @@ impl<S: Append + 'static> Coordinator<S> {
             params,
             depends_on,
             original_stmt,
+            otel_ctx,
         }: CreateSourceStatementReady,
     ) {
+        otel_ctx.attach_as_parent();
+
         let stmt = match result {
             Ok(stmt) => stmt,
             Err(e) => return tx.send(Err(e), session),
@@ -314,7 +353,7 @@ impl<S: Append + 'static> Coordinator<S> {
             timeline,
             TimelineState {
                 mut oracle,
-                read_holds,
+                mut read_holds,
             },
         ) in global_timelines
         {
@@ -332,7 +371,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .fast_forward(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
-            let read_holds = self.update_read_hold(read_holds, read_ts).await;
+            if read_holds.time.less_than(&read_ts) {
+                read_holds = self.update_read_hold(read_holds, read_ts).await;
+            }
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
         }

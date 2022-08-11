@@ -9,19 +9,28 @@
 
 //! Prometheus monitoring metrics.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
+use mz_ore::metrics::{
+    ComputedIntGauge, Counter, DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry,
+};
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
+use mz_persist::metrics::PostgresConsensusMetrics;
 use mz_persist::retry::RetryStream;
+use mz_persist_types::Codec64;
+use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{CounterVec, IntCounterVec};
+use timely::progress::Antichain;
+
+use crate::ShardId;
 
 /// Prometheus monitoring metrics.
 ///
@@ -50,6 +59,11 @@ pub struct Metrics {
     pub lease: LeaseMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
+    /// Metrics for various per-shard measurements.
+    pub shards: ShardsMetrics,
+
+    /// Metrics for Postgres-backed consensus implementation
+    pub postgres_consensus: PostgresConsensusMetrics,
 }
 
 impl Metrics {
@@ -66,6 +80,8 @@ impl Metrics {
             compaction: CompactionMetrics::new(registry),
             gc: GcMetrics::new(registry),
             lease: LeaseMetrics::new(registry),
+            shards: ShardsMetrics::new(registry),
+            postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
         }
     }
@@ -100,6 +116,7 @@ struct MetricsVecs {
     external_op_bytes: IntCounterVec,
     external_op_seconds: CounterVec,
     external_consensus_truncated_count: IntCounter,
+    external_blob_delete_noop_count: IntCounter,
 
     retry_started: IntCounterVec,
     retry_finished: IntCounterVec,
@@ -169,6 +186,10 @@ impl MetricsVecs {
             external_consensus_truncated_count: registry.register(metric!(
                 name: "mz_persist_external_consensus_truncated_count",
                 help: "count of versions deleted by consensus truncate calls",
+            )),
+            external_blob_delete_noop_count: registry.register(metric!(
+                name: "mz_persist_external_blob_delete_noop_count",
+                help: "count of blob delete calls that deleted a non-existent key",
             )),
 
             retry_started: registry.register(metric!(
@@ -301,6 +322,7 @@ impl MetricsVecs {
             get: self.external_op_metrics("blob_get"),
             list_keys: self.external_op_metrics("blob_list_keys"),
             delete: self.external_op_metrics("blob_delete"),
+            delete_noop: self.external_blob_delete_noop_count.clone(),
         }
     }
 
@@ -486,7 +508,6 @@ impl CompactionMetrics {
 
 #[derive(Debug)]
 pub struct GcMetrics {
-    pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) finished: IntCounter,
     pub(crate) seconds: Counter,
@@ -495,10 +516,6 @@ pub struct GcMetrics {
 impl GcMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         GcMetrics {
-            skipped: registry.register(metric!(
-                name: "mz_persist_gc_skipped",
-                help: "count of garbage collections skipped due to heuristics",
-            )),
             started: registry.register(metric!(
                 name: "mz_persist_gc_started",
                 help: "count of garbage collections started",
@@ -622,6 +639,185 @@ impl CodecMetrics {
 }
 
 #[derive(Debug)]
+pub struct ShardsMetrics {
+    // Unlike all the other metrics in here, ShardsMetrics intentionally uses
+    // the DeleteOnDrop wrappers. A process might stop using a shard (drop all
+    // handles to it) but e.g. the set of commands never changes.
+    _count: ComputedIntGauge,
+    since: mz_ore::metrics::IntGaugeVec,
+    upper: mz_ore::metrics::IntGaugeVec,
+    encoded_state_size: mz_ore::metrics::UIntGaugeVec,
+    // _batch_count is somewhat redundant with _encoded_state_size. It's nice to
+    // see directly as we're getting started, perhaps we're able to drop it
+    // later in favor of only having the latter.
+    batch_count: mz_ore::metrics::UIntGaugeVec,
+    seqnos_held: mz_ore::metrics::UIntGaugeVec,
+    // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
+    // here as `Weak`. This allows us to discover if it's no longer in use and
+    // so we can remove it from the map.
+    shards: Arc<Mutex<HashMap<ShardId, Weak<ShardMetrics>>>>,
+}
+
+impl ShardsMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let shards = Arc::new(Mutex::new(HashMap::new()));
+        let shards_count = Arc::clone(&shards);
+        ShardsMetrics {
+            _count: registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_shard_count",
+                    help: "count of all active shards on this process",
+                ),
+                move || {
+                    let mut ret = 0;
+                    Self::compute(&shards_count, |_m| ret += 1);
+                    ret
+                },
+            ),
+            since: registry.register(
+                metric!(
+                    name: "mz_persist_shard_since",
+                    help: "minimum since of all active shards on this process",
+                    var_labels: ["shard"],
+                ),
+            ),
+            upper: registry.register(
+                metric!(
+                    name: "mz_persist_shard_upper",
+                    help: "maximum upper of all active shards on this process",
+                    var_labels: ["shard"],
+                ),
+            ),
+            encoded_state_size: registry.register(
+                metric!(
+                    name: "mz_persist_shard_state_size_bytes",
+                    help: "total encoded state size of all active shards on this process",
+                    var_labels: ["shard"],
+                ),
+            ),
+            batch_count: registry.register(
+                metric!(
+                    name: "mz_persist_shard_batch_count",
+                    help: "count of batches in all active shards on this process",
+                    var_labels: ["shard"],
+                ),
+            ),
+            seqnos_held: registry.register(
+                metric!(
+                    name: "mz_persist_shard_seqnos_held",
+                    help: "maximum count of gc-ineligible states across all active shards on this process",
+                    var_labels: ["shard"],
+                ),
+            ),
+            shards,
+        }
+    }
+
+    pub fn shard(&self, shard_id: &ShardId) -> Arc<ShardMetrics> {
+        let mut shards = self.shards.lock().expect("mutex poisoned");
+        if let Some(shard) = shards.get(shard_id) {
+            if let Some(shard) = shard.upgrade() {
+                return Arc::clone(&shard);
+            } else {
+                assert!(shards.remove(shard_id).is_some());
+            }
+        }
+        let shard = Arc::new(ShardMetrics::new(shard_id, self));
+        assert!(shards
+            .insert(shard_id.clone(), Arc::downgrade(&shard))
+            .is_none());
+        shard
+    }
+
+    fn compute<F: FnMut(&ShardMetrics)>(
+        shards: &Arc<Mutex<HashMap<ShardId, Weak<ShardMetrics>>>>,
+        mut f: F,
+    ) {
+        let mut shards = shards.lock().expect("mutex poisoned");
+        let mut deleted_shards = Vec::new();
+        for (shard_id, metrics) in shards.iter() {
+            if let Some(metrics) = metrics.upgrade() {
+                f(&metrics);
+            } else {
+                deleted_shards.push(shard_id.clone());
+            }
+        }
+        for deleted_shard_id in deleted_shards {
+            assert!(shards.remove(&deleted_shard_id).is_some());
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ShardMetrics {
+    since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    encoded_state_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+}
+
+impl ShardMetrics {
+    pub fn new(shard_id: &ShardId, shards_metrics: &ShardsMetrics) -> Self {
+        let shard = shard_id.to_string();
+        ShardMetrics {
+            since: shards_metrics
+                .since
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            upper: shards_metrics
+                .upper
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            encoded_state_size: shards_metrics
+                .encoded_state_size
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            batch_count: shards_metrics
+                .batch_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            seqnos_held: shards_metrics
+                .seqnos_held
+                .get_delete_on_drop_gauge(vec![shard]),
+        }
+    }
+
+    fn encode_ts_metric<T: Codec64>(ts: &Antichain<T>) -> i64 {
+        // We have two problems in mapping a persist frontier into a metric.
+        // First is that we only have a `T: Timestamp+Codec64`. Second, is
+        // mapping an antichain to a single counter value. We solve both by
+        // taking advantage of the fact that in practice, timestamps in mz are
+        // currently always a u64 (and if we switch them, it will be to an i64).
+        // This means that for all values that mz would actually produce,
+        // interpreting the the encoded bytes as a little-endian i64 will work.
+        // Both of them impl PartialOrder, so in practice, there will always be
+        // zero or one elements in the antichain.
+        match ts.elements().first() {
+            Some(ts) => i64::from_le_bytes(Codec64::encode(ts)),
+            None => i64::MAX,
+        }
+    }
+
+    pub fn set_since<T: Codec64>(&self, since: &Antichain<T>) {
+        self.since.set(Self::encode_ts_metric(since))
+    }
+
+    pub fn set_upper<T: Codec64>(&self, upper: &Antichain<T>) {
+        self.upper.set(Self::encode_ts_metric(upper))
+    }
+
+    pub fn set_encoded_state_size(&self, encoded_state_size: usize) {
+        self.encoded_state_size
+            .set(u64::cast_from(encoded_state_size))
+    }
+
+    pub fn set_batch_count(&self, batch_count: usize) {
+        self.batch_count.set(u64::cast_from(batch_count))
+    }
+
+    pub fn set_seqnos_held(&self, seqnos_held: usize) {
+        self.seqnos_held.set(u64::cast_from(seqnos_held))
+    }
+}
+
+#[derive(Debug)]
 pub struct ExternalOpMetrics {
     started: IntCounter,
     succeeded: IntCounter,
@@ -654,6 +850,7 @@ pub struct BlobMetrics {
     get: ExternalOpMetrics,
     list_keys: ExternalOpMetrics,
     delete: ExternalOpMetrics,
+    delete_noop: IntCounter,
 }
 
 #[derive(Debug)]
@@ -722,13 +919,19 @@ impl Blob for MetricsBlob {
         res
     }
 
-    async fn delete(&self, key: &str) -> Result<(), ExternalError> {
-        // It'd be nice if this could also track bytes somehow.
-        self.metrics
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        let bytes = self
+            .metrics
             .blob
             .delete
             .run_op(|| self.blob.delete(key))
-            .await
+            .await?;
+        if let Some(bytes) = bytes {
+            self.metrics.blob.delete.bytes.inc_by(u64::cast_from(bytes));
+        } else {
+            self.metrics.blob.delete_noop.inc();
+        }
+        Ok(bytes)
     }
 }
 

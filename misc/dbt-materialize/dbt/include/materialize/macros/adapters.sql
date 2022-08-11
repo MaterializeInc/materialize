@@ -46,30 +46,18 @@
   {%- endcall %}
 {% endmacro %}
 
-{% macro materialize__drop_source(source_name) -%}
-  {% call statement('drop_source') -%}
-    drop source if exists {{ source_name }} cascade
-  {%- endcall %}
-{% endmacro %}
-
-{% macro materialize__drop_index(index_name) -%}
-  {% call statement('drop_index') -%}
-    drop index if exists {{ index_name }}
-  {%- endcall %}
-{% endmacro %}
-
-{% macro materialize__drop_sink(sink_name) -%}
-  {% call statement('drop_sink') -%}
-    drop sink if exists {{ sink_name }}
-  {%- endcall %}
-{% endmacro %}
-
 {% macro materialize__drop_relation(relation) -%}
   {% call statement('drop_relation') -%}
     {% if relation.type == 'view' %}
       drop view if exists {{ relation }} cascade
-    {% else %}
+    {% elif relation.type == 'materializedview' %}
       drop materialized view if exists {{ relation }} cascade
+    {% elif relation.type == 'sink' %}
+      drop sink if exists {{ relation }}
+    {% elif relation.type == 'source' %}
+      drop source if exists {{ relation }} cascade
+    {% elif relation.type == 'index' %}
+      drop index if exists {{ relation }}
     {% endif %}
   {%- endcall %}
 {% endmacro %}
@@ -85,3 +73,17 @@
   {%- endif %}
   ({{ comma_separated_columns }});
 {%- endmacro %}
+
+{% macro materialize__list_relations_without_caching(schema_relation) %}
+  {% call statement('list_relations_without_caching', fetch_result=True) -%}
+    select
+        d.name as database,
+        s.name as schema,
+        o.name,
+        case when o.type = 'materialized view' then 'materializedview' else o.type end as type
+    from mz_objects o
+    join mz_schemas s on o.schema_id = s.id and s.name = '{{ schema_relation.schema }}'
+    join mz_databases d on s.database_id = d.id and d.name = '{{ schema_relation.database }}'
+  {% endcall %}
+  {{ return(load_result('list_relations_without_caching').table) }}
+{% endmacro %}

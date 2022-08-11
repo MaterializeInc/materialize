@@ -73,6 +73,7 @@ class Database:
     ) -> None:
         logging.debug(f"Initialize Database with host={host} port={port}, user={user}")
         self.conn = pg8000.connect(host=host, port=port, user=user)
+        self.conn.autocommit = True
 
     def mz_version(self) -> str:
         result = self.query_one("SELECT mz_version()")

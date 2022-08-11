@@ -46,7 +46,7 @@ use mz_compute_client::controller::{
     ComputeController, ComputeControllerMut, ComputeControllerResponse, ComputeControllerState,
     ComputeInstanceId,
 };
-use mz_compute_client::logging::{LogVariant, LoggingConfig};
+use mz_compute_client::logging::{LogVariant, LogView, LoggingConfig};
 use mz_compute_client::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, TailResponse,
 };
@@ -135,28 +135,55 @@ impl ConcreteComputeInstanceReplicaLocation {
     }
 }
 
-/// Logging configuration of a replica
+/// Logging configuration of a replica.
+/// Changing this type requires a catalog storage migration!
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ConcreteComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
-    /// To configure a replica without logging, Concrete(vec![]) should be used.
+    /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
     Default,
-    /// Logging collections have already been built for this replica.
+    /// Logging sources have been built for this replica. Upon system restart,
+    /// this will be replaced with ConcreteViews.
     Concrete(Vec<(LogVariant, GlobalId)>),
+    /// Logging sources and views have been built for this replica.
+    ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
 
 impl ConcreteComputeInstanceReplicaLogging {
-    /// Return all logs described
-    pub fn get_logs(&self) -> Vec<(LogVariant, GlobalId)> {
+    /// Return all persisted introspection sources contained
+    pub fn get_sources(&self) -> Vec<(LogVariant, GlobalId)> {
         match self {
             ConcreteComputeInstanceReplicaLogging::Default => vec![],
             ConcreteComputeInstanceReplicaLogging::Concrete(logs) => logs.clone(),
+            ConcreteComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs.clone(),
         }
     }
 
-    /// Returns log ids described
-    pub fn get_log_ids(&self) -> Vec<GlobalId> {
-        self.get_logs().into_iter().map(|(_, id)| id).collect()
+    /// Return all persisted introspection views contained
+    pub fn get_views(&self) -> Vec<(LogView, GlobalId)> {
+        match self {
+            ConcreteComputeInstanceReplicaLogging::Default => vec![],
+            ConcreteComputeInstanceReplicaLogging::Concrete(_) => vec![],
+            ConcreteComputeInstanceReplicaLogging::ConcreteViews(_, views) => views.clone(),
+        }
+    }
+
+    /// Return all ids of the persisted introspection views contained
+    pub fn get_view_ids(&self) -> Vec<GlobalId> {
+        self.get_views().into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Return all ids of the persisted introspection sources contained
+    pub fn get_source_ids(&self) -> Vec<GlobalId> {
+        self.get_sources().into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Return all ids of the persisted introspection sources and logs contained
+    pub fn get_source_and_view_ids(&self) -> Vec<GlobalId> {
+        self.get_source_ids()
+            .into_iter()
+            .chain(self.get_view_ids().into_iter())
+            .collect()
     }
 }
 
@@ -302,7 +329,7 @@ where
                 compute_instance.add_replica(
                     replica_id,
                     addrs.into_iter().collect(),
-                    config.persisted_logs.get_logs().into_iter().collect(),
+                    config.persisted_logs.get_sources().into_iter().collect(),
                 );
             }
             ConcreteComputeInstanceReplicaLocation::Managed {
@@ -398,7 +425,7 @@ where
                 self.compute_mut(instance_id).unwrap().add_replica(
                     replica_id,
                     service.addresses("controller"),
-                    config.persisted_logs.get_logs().into_iter().collect(),
+                    config.persisted_logs.get_sources().into_iter().collect(),
                 );
             }
         }

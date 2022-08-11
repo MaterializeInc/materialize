@@ -1,8 +1,10 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_rename ::=
-  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE') name 'RENAME TO' new_name
+  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
+alter_secret ::=
+  'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
@@ -57,6 +59,8 @@ create_materialized_view ::=
     'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
+create_secret ::=
+    'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink ::=
@@ -147,6 +151,8 @@ drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
+drop_secret ::=
+    'DROP' 'SECRET' ('IF EXISTS')? secret_name ('CASCADE' | 'RESTRICT')?
 drop_schema ::=
     'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')?
 drop_sink ::=
@@ -299,7 +305,7 @@ show_create_table ::=
 show_create_view ::=
   'SHOW' 'CREATE' 'VIEW' view_name
 show_databases ::=
-    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)
+    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
 show_index ::=
     'SHOW' 'EXTENDED'? ('INDEX' | 'INDEXES' | 'KEYS')
     (('FROM' | 'IN') on_name)?
@@ -307,6 +313,8 @@ show_index ::=
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
     'SHOW' 'FULL'? 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
+show_secrets ::=
+    'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=

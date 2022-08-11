@@ -167,6 +167,8 @@ pub enum ExecuteResponse {
     AlteredObject(ObjectType),
     // The index was altered.
     AlteredIndexLogicalCompaction,
+    // The system configuration was altered.
+    AlteredSystemConfiguraion,
     // The query was canceled.
     Canceled,
     /// The requested cursor was closed.

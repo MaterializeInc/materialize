@@ -592,6 +592,7 @@ where
     /// Downgrade the read capabilities of specific identifiers to specific frontiers.
     ///
     /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn allow_compaction(
         &mut self,
         frontiers: Vec<(GlobalId, Antichain<T>)>,
@@ -617,6 +618,7 @@ where
     ///     previously created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
     ///     `allow_compaction`.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn allow_compaction_unvalidated(
         &mut self,
         frontiers: Vec<(GlobalId, Antichain<T>)>,
@@ -636,6 +638,7 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
@@ -759,6 +762,7 @@ where
     }
 
     /// Accept write frontier updates from the compute layer.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, ChangeBatch<T>)],
@@ -813,6 +817,7 @@ where
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,

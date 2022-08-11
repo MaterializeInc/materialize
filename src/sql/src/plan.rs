@@ -65,7 +65,9 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
-pub use self::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use self::expr::{
+    AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
+};
 pub use error::PlanError;
 pub use explain::Explanation;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -119,6 +121,7 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
+    AlterSystem(AlterSystemPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -396,6 +399,7 @@ pub struct ExplainPlanNew {
     pub stage: ExplainStageNew,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
+    pub explainee: mz_repr::explain_new::Explainee,
 }
 
 #[derive(Debug)]
@@ -404,6 +408,7 @@ pub struct ExplainPlanOld {
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStageOld,
     pub options: ExplainOptions,
+    pub view_id: GlobalId,
 }
 
 #[derive(Debug)]
@@ -461,6 +466,12 @@ pub struct AlterItemRenamePlan {
 pub struct AlterSecretPlan {
     pub id: GlobalId,
     pub secret_as: MirScalarExpr,
+}
+
+#[derive(Debug)]
+pub struct AlterSystemPlan {
+    pub name: String,
+    pub value: SetVariableValue,
 }
 
 #[derive(Debug)]

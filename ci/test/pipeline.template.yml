@@ -454,6 +454,56 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: checks-drop-create-default-replica
+    label: "Checks + DROP/CREATE replica"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=DropCreateDefaultReplica]
+
+  - id: checks-restart-computed
+    label: "Checks + restart computed"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartComputed]
+
+  - id: checks-restart-entire-mz
+    label: "Checks + restart of the entire Mz"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEntireMz]
+
+  - id: checks-restart-environmentd-storaged
+    label: "Checks + restart of environmentd & storaged"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEnvironmentdStoraged]
+
+  - id: checks-kill-storaged
+    label: "Checks + kill storaged"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=KillStoraged]
+
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build-x86_64

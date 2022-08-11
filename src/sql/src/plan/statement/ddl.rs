@@ -21,7 +21,10 @@ use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::{LoadGenerator, SshConnectionOption};
+use mz_sql_parser::ast::display::comma_separated;
+use mz_sql_parser::ast::{
+    AlterSystemStatement, LoadGenerator, SetVariableValue, SshConnectionOption,
+};
 use mz_storage::source::generator::as_generator;
 use prost::Message;
 use regex::Regex;
@@ -93,7 +96,7 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
+    AlterNoopPlan, AlterSecretPlan, AlterSystemPlan, ComputeInstanceIntrospectionConfig,
     ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
@@ -302,7 +305,7 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSourceOption, (Size, String));
+generate_extracted_config!(CreateSourceOption, (Size, String), (Remote, String));
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -318,7 +321,6 @@ pub fn plan_create_source(
         format,
         key_constraint,
         include_metadata,
-        remote,
         with_options,
     } = &stmt;
 
@@ -327,8 +329,17 @@ pub fn plan_create_source(
     let legacy_with_options_original = legacy_with_options;
     let mut legacy_with_options = normalize::options(legacy_with_options_original)?;
 
-    if !legacy_with_options.is_empty() || !with_options.is_empty() {
-        scx.require_unsafe_mode("creating sources with WITH options")?;
+    const SAFE_WITH_OPTIONS: &'static [CreateSourceOptionName] = &[CreateSourceOptionName::Size];
+
+    if !legacy_with_options.is_empty()
+        || with_options
+            .iter()
+            .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+    {
+        scx.require_unsafe_mode(&format!(
+            "creating sources with WITH options other than {}",
+            comma_separated(SAFE_WITH_OPTIONS)
+        ))?;
     }
 
     let ts_frequency = match legacy_with_options.remove("timestamp_frequency_ms") {
@@ -411,12 +422,14 @@ pub fn plan_create_source(
             };
 
             let mut start_offsets = HashMap::new();
-            match legacy_with_options.remove("start_offset") {
+            let has_nontrivial_start_offsets = match legacy_with_options.remove("start_offset") {
                 None => {
                     start_offsets.insert(0, MzOffset::from(0));
+                    false
                 }
                 Some(SqlValueOrSecret::Value(Value::Number(n))) => {
                     start_offsets.insert(0, parse_offset(&n)?);
+                    true
                 }
                 Some(SqlValueOrSecret::Value(Value::Array(vs))) => {
                     for (i, v) in vs.iter().enumerate() {
@@ -427,8 +440,13 @@ pub fn plan_create_source(
                             _ => sql_bail!("start_offset value must be a number: {}", v),
                         }
                     }
+                    true
                 }
                 Some(v) => sql_bail!("invalid start_offset value: {}", v),
+            };
+
+            if has_nontrivial_start_offsets && envelope.requires_all_input() {
+                sql_bail!("start_offset is not supported with ENVELOPE {}", envelope)
             }
 
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
@@ -799,19 +817,13 @@ pub fn plan_create_source(
         }
     }
 
-    let remote = if let Some(remote) = &remote {
-        scx.require_unsafe_mode("CREATE SOURCE ... REMOTE ...")?;
-        Some(remote.clone())
-    } else {
-        None
-    };
+    let CreateSourceOptionExtracted { size, remote, .. } =
+        CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let opt = CreateSourceOptionExtracted::try_from(with_options.clone())?;
-
-    let host_config = match (&remote, &opt.size) {
+    let host_config = match (remote.clone(), size) {
         (None, None) => StorageHostConfig::Undefined,
-        (None, Some(size)) => StorageHostConfig::Managed { size: size.clone() },
-        (Some(addr), None) => StorageHostConfig::Remote { addr: addr.clone() },
+        (None, Some(size)) => StorageHostConfig::Managed { size },
+        (Some(addr), None) => StorageHostConfig::Remote { addr },
         (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
     };
 
@@ -3397,7 +3409,11 @@ pub fn describe_drop_cluster_replica(
 
 pub fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
+    DropClusterReplicasStatement {
+        if_exists,
+        names,
+        cascade,
+    }: DropClusterReplicasStatement,
 ) -> Result<Plan, PlanError> {
     let mut names_out = Vec::with_capacity(names.len());
     for QualifiedReplica { cluster, replica } in names {
@@ -3409,19 +3425,25 @@ pub fn plan_drop_cluster_replica(
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
-            // Check if we have an item that depends on the replica's logs
-            let log_ids = instance.replica_logs(&replica_name).unwrap();
-            for id in log_ids {
-                let log_item = scx.catalog.get_item(&id);
-                for id in log_item.used_by() {
-                    let dep = scx.catalog.get_item(id);
-                    if dependency_prevents_drop(ObjectType::Source, dep) {
-                        sql_bail!(
-                            "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
-                            replica_name.quoted(),
-                            instance.name().quoted(),
-                            scx.catalog.resolve_full_name(dep.name())
-                        );
+            if !cascade {
+                let (log_ids, view_ids) = instance.replica_logs_and_views(&replica_name).unwrap();
+
+                // Check if we have an item that depends on the replica's logs or log views
+                for id in log_ids.iter().chain(view_ids.iter()) {
+                    let log_item = scx.catalog.get_item(&id);
+                    for id in log_item.used_by() {
+                        // Dependencies on log views can be removed without cascade.
+                        if !view_ids.contains(id) {
+                            let dep = scx.catalog.get_item(id);
+                            if dependency_prevents_drop(ObjectType::Source, dep) {
+                                sql_bail!(
+                                    "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
+                                    replica_name.quoted(),
+                                    instance.name().quoted(),
+                                    scx.catalog.resolve_full_name(dep.name())
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -3697,4 +3719,24 @@ pub fn plan_alter_secret(
     let secret_as = query::plan_secret_as(scx, value)?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
+}
+
+pub fn describe_alter_system(
+    _: &StatementContext,
+    _: AlterSystemStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_system(
+    scx: &StatementContext,
+    AlterSystemStatement { name, value }: AlterSystemStatement,
+) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER SYSTEM")?;
+    let name = name.to_string();
+    if matches!(&value, SetVariableValue::Literal(value) if matches!(value, mz_sql_parser::ast::Value::Null))
+    {
+        sql_bail!("Unable to set system configuration '{}' to NULL", name)
+    }
+    Ok(Plan::AlterSystem(AlterSystemPlan { name, value }))
 }

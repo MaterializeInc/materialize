@@ -77,6 +77,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
@@ -93,6 +94,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
+use mz_persist_client::usage::StorageUsageClient;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
@@ -112,7 +114,7 @@ use crate::catalog::{
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::coord::appends::{AdvanceLocalInput, AdvanceTables, Deferred, PendingWriteTxn};
+use crate::coord::appends::{AdvanceLocalInput, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
@@ -159,6 +161,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks { conn_id: ConnectionId },
     LinearizeReads(Vec<PendingTxn>),
+    StorageUsage,
 }
 
 #[derive(Derivative)]
@@ -183,6 +186,7 @@ pub struct CreateSourceStatementReady {
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
+    pub otel_ctx: OpenTelemetryContext,
 }
 
 #[derive(Derivative)]
@@ -211,6 +215,7 @@ pub struct Config<S> {
     pub storage_host_sizes: StorageHostSizeMap,
     pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
+    pub storage_usage_client: StorageUsageClient,
 }
 
 /// Soft-state metadata about a compute replica
@@ -276,10 +281,6 @@ pub struct Coordinator<S> {
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
 
-    /// Tracks tables needing advancement, which can be processed at a low priority
-    /// in the biased select loop.
-    advance_tables: AdvanceTables<Timestamp>,
-
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
@@ -331,6 +332,9 @@ pub struct Coordinator<S> {
     /// `None` is used as a tombstone value for replicas that have been
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
+
+    // Persist client for fetching storage metadata such as size metrics
+    storage_usage_client: StorageUsageClient,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -343,7 +347,7 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
-        let mut persisted_log_ids = vec![];
+        let mut persisted_source_ids = vec![];
         for instance in self.catalog.compute_instances() {
             self.controller
                 .create_instance(instance.id, instance.logging.clone())
@@ -352,7 +356,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let introspection_collections = replica
                     .config
                     .persisted_logs
-                    .get_logs()
+                    .get_sources()
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
@@ -365,7 +369,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_log_ids.extend(replica.config.persisted_logs.get_log_ids().iter());
+                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids().iter());
 
                 self.controller
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
@@ -375,7 +379,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.initialize_storage_read_policies(
-            persisted_log_ids,
+            persisted_source_ids,
             DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
         )
         .await;
@@ -719,6 +723,10 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
 
+        // Trigger a storage usage metric collection on configured interval
+        let mut storage_usage_update_interval =
+            tokio::time::interval(self.catalog.config().storage_metrics_collection_interval);
+
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
             // cancellation safe and add a comment explaining why. You can refer here for more
@@ -757,18 +765,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
-
-                // At the lowest priority, process table advancements. This is a blocking
-                // HashMap instead of a channel so that we can delay the determination of
-                // which table to advance until we know we can process it. In the event of
-                // very high traffic where a second AdvanceLocalInputs message occurs before
-                // advance_tables is fully emptied, this allows us to replace an old request
-                // with a new one, avoiding duplication of work, which wouldn't be possible if
-                // we had already sent all AdvanceLocalInput messages on a channel.
-                // See [`AdvanceTables::recv`] for notes on why this is cancel-safe.
-                inputs = self.advance_tables.recv() => {
-                    Message::AdvanceLocalInput(inputs)
-                },
+                _ = storage_usage_update_interval.tick() => Message::StorageUsage,
             };
 
             // All message processing functions trace. Start a parent span for them to make
@@ -841,6 +838,7 @@ pub async fn serve<S: Append + 'static>(
         default_storage_host_size,
         mut availability_zones,
         connection_context,
+        storage_usage_client,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -927,7 +925,6 @@ pub async fn serve<S: Append + 'static>(
                 internal_cmd_tx,
                 strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
-                advance_tables: AdvanceTables::new(),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
@@ -941,6 +938,7 @@ pub async fn serve<S: Append + 'static>(
                 secrets_controller,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
+                storage_usage_client,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));

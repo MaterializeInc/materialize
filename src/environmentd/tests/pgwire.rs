@@ -43,13 +43,6 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
 
-    match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
-        Ok(_) => panic!("query with invalid parameters executed successfully"),
-        Err(err) => {
-            assert!(format!("{:?}", err.source()).contains("WrongType"));
-        }
-    }
-
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
         Err(err) => assert!(err.to_string().contains("no overload")),

@@ -169,7 +169,11 @@ pub fn render<G>(
                             .expect("invalid usage");
 
                         write
-                            .compare_and_append_batch(&mut batch, expected_upper, new_upper.clone())
+                            .compare_and_append_batch(
+                                &mut [&mut batch],
+                                expected_upper,
+                                new_upper.clone(),
+                            )
                             .await
                             .expect("cannot append updates")
                             .expect("cannot append updates")

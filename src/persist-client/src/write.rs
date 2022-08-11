@@ -29,11 +29,11 @@ use uuid::Uuid;
 
 use crate::batch::{validate_truncate_batch, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
-use crate::r#impl::compact::{CompactReq, Compactor};
+use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::{HollowBatch, Upper};
-use crate::{parse_id, PersistConfig};
+use crate::{parse_id, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -87,11 +87,12 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
+    pub(crate) gc: GarbageCollector,
     pub(crate) compact: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) writer_id: WriterId,
@@ -105,11 +106,11 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
-    /// This handle's `upper` frontier.
+    /// A cached version of the shard-global `upper` frontier.
     ///
-    /// This will always be greater or equal to the shard-global `upper`.
+    /// This will always be less or equal to the shard-global `upper`.
     pub fn upper(&self) -> &Antichain<T> {
         &self.upper
     }
@@ -122,7 +123,11 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn fetch_recent_upper(&mut self) -> Antichain<T> {
         trace!("WriteHandle::fetch_recent_upper");
-        self.machine.fetch_upper().await
+        // TODO: Do we even need to track self.upper on WriteHandle or could
+        // WriteHandle::upper just get the one out of machine?
+        let fresh_upper = self.machine.fetch_upper().await;
+        self.upper.clone_from(&fresh_upper);
+        fresh_upper
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -242,7 +247,7 @@ where
         };
 
         match self
-            .compare_and_append_batch(&mut batch, expected_upper, new_upper)
+            .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper)
             .await
         {
             ok @ Ok(Ok(Ok(()))) => ok,
@@ -301,7 +306,7 @@ where
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             let res = self
-                .compare_and_append_batch(&mut batch, lower.clone(), upper.clone())
+                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone())
                 .await;
             // Unlike compare_and_append, the contract of append is constructed
             // such that it's correct to retry Indeterminate errors.
@@ -408,7 +413,7 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,
-        batch: &mut Batch<K, V, T, D>,
+        batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
     ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate>
@@ -421,11 +426,13 @@ where
             new_upper
         );
 
-        if self.machine.shard_id() != batch.shard_id() {
-            return Ok(Err(InvalidUsage::BatchNotFromThisShard {
-                batch_shard: batch.shard_id(),
-                handle_shard: self.machine.shard_id(),
-            }));
+        for batch in batches.iter() {
+            if self.machine.shard_id() != batch.shard_id() {
+                return Ok(Err(InvalidUsage::BatchNotFromThisShard {
+                    batch_shard: batch.shard_id(),
+                    handle_shard: self.machine.shard_id(),
+                }));
+            }
         }
 
         let lower = expected_upper.clone();
@@ -433,8 +440,13 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        if let Err(err) = validate_truncate_batch(&batch.desc, &desc) {
-            return Ok(Err(err));
+        let (mut keys, mut num_updates) = (Vec::new(), 0);
+        for batch in batches.iter() {
+            if let Err(err) = validate_truncate_batch(&batch.desc, &desc) {
+                return Ok(Err(err));
+            }
+            keys.extend_from_slice(&batch.blob_keys);
+            num_updates += batch.num_updates;
         }
 
         let res = self
@@ -442,18 +454,20 @@ where
             .compare_and_append(
                 &HollowBatch {
                     desc: desc.clone(),
-                    keys: batch.blob_keys.clone(),
-                    len: batch.num_updates,
+                    keys,
+                    len: num_updates,
                 },
                 &self.writer_id,
             )
             .await?;
 
-        let merge_reqs = match res {
-            Ok(Ok((_seqno, merge_reqs))) => {
+        let maintenance = match res {
+            Ok(Ok((_seqno, maintenance))) => {
                 self.upper = desc.upper().clone();
-                batch.mark_consumed();
-                merge_reqs
+                for batch in batches.iter_mut() {
+                    batch.mark_consumed();
+                }
+                maintenance
             }
             Ok(Err(current_upper)) => {
                 // We tried to to a compare_and_append with the wrong expected upper, that
@@ -464,17 +478,7 @@ where
             Err(err) => return Ok(Err(err)),
         };
 
-        // If the compactor isn't enabled, just ignore the requests.
-        if let Some(compactor) = self.compact.as_ref() {
-            for req in merge_reqs {
-                let req = CompactReq {
-                    shard_id: self.machine.shard_id(),
-                    desc: req.desc,
-                    inputs: req.inputs,
-                };
-                compactor.compact_and_apply_background(&self.machine, req);
-            }
-        }
+        maintenance.perform(&self.machine, &self.gc, self.compact.as_ref());
 
         Ok(Ok(Ok(())))
     }
@@ -595,6 +599,27 @@ where
         .expect("unexpected upper")
     }
 
+    /// Test helper for a [Self::compare_and_append_batch] call that is expected
+    /// to succeed.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_compare_and_append_batch(
+        &mut self,
+        batches: &mut [&mut Batch<K, V, T, D>],
+        expected_upper: T,
+        new_upper: T,
+    ) {
+        self.compare_and_append_batch(
+            batches,
+            Antichain::from_elem(expected_upper),
+            Antichain::from_elem(new_upper),
+        )
+        .await
+        .expect("external durability failed")
+        .expect("invalid usage")
+        .expect("unexpected upper")
+    }
+
     /// Test helper for an [Self::append] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
@@ -619,7 +644,7 @@ where
     T: Timestamp + Lattice + Codec64,
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {
@@ -653,7 +678,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::tests::new_test_client;
+    use differential_dataflow::consolidation::consolidate_updates;
+
+    use crate::tests::{all_ok, new_test_client};
     use crate::ShardId;
 
     use super::*;
@@ -697,5 +724,42 @@ mod tests {
         .await
         .expect("list_keys failed");
         assert_eq!(count_after, count_before);
+    }
+
+    #[tokio::test]
+    async fn compare_and_append_batch_multi() {
+        mz_ore::test::init_logging();
+
+        let data0 = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("4".to_owned(), "four".to_owned()), 4, 1),
+        ];
+        let data1 = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let (mut write, mut read) = new_test_client()
+            .await
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        let mut batch0 = write.expect_batch(&data0, 0, 5).await;
+        let mut batch1 = write.expect_batch(&data1, 0, 4).await;
+
+        write
+            .expect_compare_and_append_batch(&mut [&mut batch0, &mut batch1], 0, 4)
+            .await;
+
+        let expected = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 2),
+            (("2".to_owned(), "two".to_owned()), 2, 2),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+        let mut actual = read.expect_snapshot_and_fetch(3).await;
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, all_ok(&expected, 3));
     }
 }

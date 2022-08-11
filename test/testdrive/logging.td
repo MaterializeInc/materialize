@@ -40,6 +40,10 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM count_frontiers;
 1
 
+> CREATE VIEW count_source_frontiers AS SELECT count(*) FROM mz_materialization_source_frontiers;
+> SELECT count(*) FROM count_source_frontiers;
+1
+
 > CREATE VIEW count_frontier_delays AS SELECT count(*) FROM mz_worker_materialization_delays;
 > SELECT count(*) FROM count_frontier_delays;
 1
@@ -149,8 +153,19 @@ SID   count       3           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   dataflow    1           text
+SID   global_id   1           text
 SID   source      2           text
 SID   worker      3           bigint
 SID   delay_ns    4           bigint
 SID   count       5           bigint
+
+> SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
+  FROM mz_sources JOIN mz_columns USING (id)
+  WHERE mz_sources.name = 'mz_worker_materialization_source_frontiers'
+  ORDER BY position
+id      name        position    type
+--------------------------------------
+SID   global_id   1           text
+SID   source      2           text
+SID   worker      3           bigint
+SID   time        4           bigint

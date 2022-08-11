@@ -122,7 +122,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 // Drop the introspection sources
                 for replica in instance.replicas_by_id.values() {
-                    sources_to_drop.extend(replica.config.persisted_logs.get_log_ids());
+                    sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
                 }
 
                 // Drop timelines
@@ -133,7 +133,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let replica = &compute_instance.replicas_by_id[&replica_id];
 
                 // Drop the introspection sources
-                sources_to_drop.extend(replica.config.persisted_logs.get_log_ids());
+                sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
             }
         }
 
@@ -307,6 +307,9 @@ impl<S: Append + 'static> Coordinator<S> {
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
         let ops = self.catalog.drop_temp_item_ops(session.conn_id());
+        if ops.is_empty() {
+            return;
+        }
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await
             .expect("unable to drop temporary items for conn_id");

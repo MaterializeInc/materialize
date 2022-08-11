@@ -42,6 +42,7 @@ use std::mem;
 use itertools::Itertools;
 use uuid::Uuid;
 
+use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -70,7 +71,7 @@ use crate::normalize::{self, SqlValueOrSecret};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
-    CoercibleScalarExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind,
+    CoercibleScalarExpr, ColumnOrder, ColumnRef, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, VariadicFunc, WindowExpr,
     WindowExprType,
 };
@@ -1235,16 +1236,7 @@ fn plan_set_expr(
                         lhs.union(rhs).distinct()
                     }
                 }
-                SetOperator::Except => {
-                    if *all {
-                        let rhs = rhs.negate();
-                        HirRelationExpr::union(lhs, rhs).threshold()
-                    } else {
-                        let lhs = lhs.distinct();
-                        let rhs = rhs.distinct().negate();
-                        HirRelationExpr::union(lhs, rhs).threshold()
-                    }
-                }
+                SetOperator::Except => Hir::except(all, lhs, rhs),
                 SetOperator::Intersect => {
                     // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
                     // Though we believe that render() does The Right Thing (TM)

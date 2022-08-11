@@ -34,17 +34,17 @@ use mz_expr::{
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
-use mz_repr::explain_new::Explain;
+use mz_repr::explain_new::{Explain, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSystemPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
@@ -278,6 +278,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
+            }
+            Plan::AlterSystem(plan) => {
+                tx.send(self.sequence_alter_system(&session, plan).await, session);
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(&session).await;
@@ -579,15 +582,19 @@ impl<S: Append + 'static> Coordinator<S> {
         }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
-        let introspection_sources = if compute_instance_config.is_some() {
-            self.catalog.allocate_introspection_source_indexes().await
+        let arranged_introspection_sources = if compute_instance_config.is_some() {
+            self.catalog.allocate_arranged_introspection_sources().await
         } else {
             Vec::new()
         };
+        let arranged_introspection_source_ids: Vec<_> = arranged_introspection_sources
+            .iter()
+            .map(|(_, id)| *id)
+            .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
             config: compute_instance_config.clone(),
-            introspection_sources,
+            arranged_introspection_sources,
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -608,7 +615,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // This vector collects introspection sources of all replicas of this compute instance
-        let mut introspection_collections = Vec::new();
+        let mut persisted_introspection_sources = Vec::new();
 
         for (replica_name, replica_config) in replicas.into_iter() {
             // If the AZ was not specified, choose one, round-robin, from the ones with
@@ -636,16 +643,14 @@ impl<S: Append + 'static> Coordinator<S> {
             };
             // These are the persisted, per replica persisted logs
             let persisted_logs = if compute_instance_config.is_some() {
-                self.catalog
-                    .allocate_persisted_introspection_source_indexes()
-                    .await
+                self.catalog.allocate_persisted_introspection_items().await
             } else {
-                ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
+                ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
             };
 
-            introspection_collections.extend(
+            persisted_introspection_sources.extend(
                 persisted_logs
-                    .get_logs()
+                    .get_sources()
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into())),
             );
@@ -665,14 +670,14 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        let introspection_collection_ids: Vec<GlobalId> = introspection_collections
+        let persisted_introspection_source_ids: Vec<GlobalId> = persisted_introspection_sources
             .iter()
             .map(|(id, _)| *id)
             .collect();
 
         self.controller
             .storage_mut()
-            .create_collections(introspection_collections)
+            .create_collections(persisted_introspection_sources)
             .await
             .unwrap();
 
@@ -690,9 +695,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap();
         }
 
-        if !introspection_collection_ids.is_empty() {
+        if !arranged_introspection_source_ids.is_empty() {
+            self.initialize_compute_read_policies(
+                arranged_introspection_source_ids,
+                instance.id,
+                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            )
+            .await;
+        }
+
+        if !persisted_introspection_source_ids.is_empty() {
             self.initialize_storage_read_policies(
-                introspection_collection_ids,
+                persisted_introspection_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
@@ -713,16 +727,14 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
 
         let persisted_logs = if instance.logging.is_some() {
-            self.catalog
-                .allocate_persisted_introspection_source_indexes()
-                .await
+            self.catalog.allocate_persisted_introspection_items().await
         } else {
-            ConcreteComputeInstanceReplicaLogging::Concrete(Vec::new())
+            ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
-        let persisted_log_ids = persisted_logs.get_log_ids();
-        let persisted_logs_collections = persisted_logs
-            .get_logs()
+        let persisted_source_ids = persisted_logs.get_source_ids();
+        let persisted_sources = persisted_logs
+            .get_sources()
             .iter()
             .map(|(variant, id)| (*id, variant.desc().into()))
             .collect();
@@ -795,7 +807,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.controller
             .storage_mut()
-            .create_collections(persisted_logs_collections)
+            .create_collections(persisted_sources)
             .await
             .unwrap();
 
@@ -805,7 +817,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         if instance.logging.is_some() {
             self.initialize_storage_read_policies(
-                persisted_log_ids,
+                persisted_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
@@ -1176,7 +1188,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // are replaced with persist-based ones.
         let log_names = depends_on
             .iter()
-            .flat_map(|id| self.catalog.active_log_dependencies(*id))
+            .flat_map(|id| self.catalog.arranged_introspection_dependencies(*id))
             .map(|id| self.catalog.get_entry(&id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
@@ -1413,9 +1425,21 @@ impl<S: Append + 'static> Coordinator<S> {
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
             for replica in instance.replicas_by_id.values() {
-                let log_ids = replica.config.persisted_logs.get_log_ids();
-                for log_id in log_ids {
-                    ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                let persisted_logs = replica.config.persisted_logs.clone();
+                let log_and_view_ids = persisted_logs.get_source_and_view_ids();
+                let view_ids = persisted_logs.get_view_ids();
+                for log_id in log_and_view_ids {
+                    // We consider the dependencies of both views and logs, but remove the
+                    // views itself. The views are included as they depend on the source,
+                    // but we dont need an explicit Op::DropItem as they are dropped together
+                    // with the replica.
+                    ids_to_drop.extend(
+                        self.catalog
+                            .get_entry(&log_id)
+                            .used_by()
+                            .into_iter()
+                            .filter(|x| !view_ids.contains(x)),
+                    )
                 }
             }
 
@@ -1459,15 +1483,29 @@ impl<S: Append + 'static> Coordinator<S> {
             // Determine from the replica which additional items to drop. This is the set
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
-            for log_id in instance
+            let persisted_logs = instance
                 .replicas_by_id
                 .get(&replica_id)
                 .unwrap()
                 .config
                 .persisted_logs
-                .get_log_ids()
-            {
-                ids_to_drop.extend(self.catalog.get_entry(&log_id).used_by());
+                .clone();
+
+            let log_and_view_ids = persisted_logs.get_source_and_view_ids();
+            let view_ids = persisted_logs.get_view_ids();
+
+            for log_id in log_and_view_ids {
+                // We consider the dependencies of both views and logs, but remove the
+                // views itself. The views are included as they depend on the source,
+                // but we dont need an explicit Op::DropItem as they are dropped together
+                // with the replica.
+                ids_to_drop.extend(
+                    self.catalog
+                        .get_entry(&log_id)
+                        .used_by()
+                        .into_iter()
+                        .filter(|x| !view_ids.contains(x)),
+                )
             }
 
             replicas_to_drop.push((
@@ -1621,7 +1659,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 (response, action)
             }
             Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
-                self.submit_write(PendingWriteTxn {
+                self.submit_write(PendingWriteTxn::User {
                     writes,
                     write_lock_guard,
                     pending_txn: PendingTxn {
@@ -1708,7 +1746,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ) -> Result<(), AdapterError> {
             let log_names = source_ids
                 .iter()
-                .flat_map(|id| catalog.active_log_dependencies(*id))
+                .flat_map(|id| catalog.arranged_introspection_dependencies(*id))
                 .map(|id| catalog.get_entry(&id).name().item.clone())
                 .collect::<Vec<_>>();
 
@@ -1780,20 +1818,16 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
-        let in_transaction = matches!(
-            session.transaction(),
-            &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
-        );
         // Queries are independent of the logical timestamp iff there are no referenced
         // sources or indexes and there is no reference to `mz_logical_timestamp()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
-        // For explicit or implicit transactions that do not use AS OF, get the
+        // For queries that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
-        // query, we don't care about any possible transaction timestamp. If this is a
-        // single-statement transaction (TransactionStatus::Started), we don't need to
-        // worry about preventing compaction or choosing a valid timestamp for future
-        // queries.
-        let timestamp = if in_transaction && when == QueryWhen::Immediately {
+        // query, we don't care about any possible transaction timestamp. We do
+        // not do any optimization of the so-called single-statement transactions
+        // (TransactionStatus::Started) because multiple statements can actually be
+        // executed there in the extended protocol.
+        let timestamp = if when == QueryWhen::Immediately {
             // If all previous statements were timestamp-independent and the current one is
             // not, clear the transaction ops so it can get a new timestamp and timedomain.
             if let Some(read_txn) = self.txn_reads.get(&conn_id) {
@@ -1934,31 +1968,31 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
-        let fast_path = peek::create_plan(
+        let peek_plan = self.create_peek_plan(
             dataflow,
             view_id,
+            compute_instance,
             index_id,
             key,
             permutation,
             thinning.len(),
         )?;
 
-        // Finalization optimizes the dataflow as much as possible.
-        let fast_path =
-            fast_path.finalize(|dataflow| self.finalize_dataflow(dataflow, compute_instance));
-
         // We only track the peeks in the session if the query doesn't use AS OF, it's a
         // non-constant or timestamp dependent query.
         if when == QueryWhen::Immediately
-            && (!matches!(fast_path, peek::Plan::Constant(_)) || !timestamp_independent)
+            && (!matches!(
+                peek_plan,
+                peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
+            ) || !timestamp_independent)
         {
             session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
         }
 
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_fast_path_peek(
-                fast_path,
+            .implement_peek_plan(
+                peek_plan,
                 timestamp,
                 finishing,
                 conn_id,
@@ -2101,6 +2135,7 @@ impl<S: Append + 'static> Coordinator<S> {
             stage,
             format,
             config,
+            explainee,
         } = plan;
 
         let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
@@ -2200,12 +2235,19 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = optimize(self, decorrelated_plan)?;
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
+                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                    }
+                    _ => None,
+                };
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: UsedIndexes::new(used_indexes),
                     finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                    fast_path_plan,
                 };
                 // explain plan
                 Explainable::new(&mut dataflow).explain(&format, &config, &context)?
@@ -2214,7 +2256,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 // run partial pipeline
                 let decorrelated_plan = decorrelate(raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(self, decorrelated_plan)?;
+                let mut dataflow = optimize(self, decorrelated_plan)?;
+                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                    }
+                    _ => None,
+                };
                 let mut dataflow_plan =
                     mz_compute_client::plan::Plan::<mz_repr::Timestamp>::finalize_dataflow(
                         dataflow,
@@ -2225,9 +2274,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 let context = ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: UsedIndexes::new(used_indexes),
                     finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                    fast_path_plan,
                 };
                 // explain plan
                 Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
@@ -2257,6 +2306,7 @@ impl<S: Append + 'static> Coordinator<S> {
             row_set_finishing,
             stage,
             options,
+            view_id,
         } = plan;
 
         struct Timings {
@@ -2290,12 +2340,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
                 coord
                     .dataflow_builder(compute_instance)
-                    .import_view_into_dataflow(
-                        // TODO: If explaining a view, pipe the actual id of the view.
-                        &GlobalId::Explain,
-                        &optimized_plan,
-                        &mut dataflow,
-                    )?;
+                    .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;
                 mz_transform::optimize_dataflow(
                     &mut dataflow,
                     &coord.index_oracle(compute_instance),
@@ -2343,7 +2388,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStageOld::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let dataflow = optimize(&mut timings, self, decorrelated_plan)?;
+                let mut dataflow = optimize(&mut timings, self, decorrelated_plan)?;
                 let catalog = self.catalog.for_session(session);
                 let formatter = DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation =
@@ -2351,7 +2396,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
-                explanation.to_string()
+                let mut explanation = explanation.to_string();
+                if view_id == GlobalId::Explain {
+                    let fast_path_plan = peek::create_fast_path_plan(&mut dataflow, view_id)
+                        .expect("Fast path planning failed; unrecoverable error");
+                    if let Some(fast_path_plan) = fast_path_plan {
+                        explanation = fast_path_plan.explain_old(&catalog, options.typed);
+                    }
+                }
+                explanation
             }
             ExplainStageOld::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
@@ -2373,11 +2426,24 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStageOld::Timestamp => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                self.validate_timeline(optimized_plan.depends_on())?;
+                let timeline = self.validate_timeline(optimized_plan.depends_on())?;
                 let source_ids = optimized_plan.depends_on();
-                let id_bundle = self
-                    .index_oracle(compute_instance)
-                    .sufficient_collections(&source_ids);
+                let id_bundle = if session.vars().transaction_isolation()
+                    == &IsolationLevel::StrictSerializable
+                    && timeline.is_some()
+                {
+                    self.index_oracle(compute_instance)
+                        .sufficient_collections(&source_ids)
+                } else {
+                    // Determine a timestamp that will be valid for anything in any schema
+                    // referenced by the query.
+                    self.timedomain_for(
+                        &source_ids,
+                        &timeline,
+                        session.conn_id(),
+                        compute_instance,
+                    )?
+                };
                 // TODO: determine_timestamp takes a mut self to track table linearizability,
                 // so explaining a plan involving tables has side effects. Removing those side
                 // effects would be good.
@@ -3064,6 +3130,27 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         return Ok(Vec::from(payload));
+    }
+
+    async fn sequence_alter_system(
+        &mut self,
+        session: &Session,
+        AlterSystemPlan { name, value }: AlterSystemPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        use mz_sql::ast::SetVariableValue;
+        // TODO(jkosh44) name and value should be validated against some predetermined list of
+        //  system configurations.
+        let value = match value {
+            SetVariableValue::Literal(value) => value,
+            SetVariableValue::Ident(ident) => ident.into(),
+            SetVariableValue::Default => {
+                return Err(AdapterError::Unsupported("default system configurations"))
+            }
+        };
+        let op = catalog::Op::UpdateServerConfiguration { name, value };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+        Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
     // Returns the name of the portal to execute.

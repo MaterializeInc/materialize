@@ -108,7 +108,7 @@ bigger than this cap.
 [blob_target_size]: crate::PersistConfig::blob_target_size
 [batch_builder_max_outstanding_parts]: crate::PersistConfig::batch_builder_max_outstanding_parts
 
-A persist reader uses as most `3B` memory per [Listen] and per [SnapshotIter].
+A persist reader uses as most `3B` memory per [Listen] and per [Subscribe].
 
 - `B` is [blob_target_size]
 - We have one part fetched that is being iterated
@@ -117,7 +117,7 @@ A persist reader uses as most `3B` memory per [Listen] and per [SnapshotIter].
   memory.
 
 [Listen]: crate::read::Listen
-[SnapshotIter]: crate::read::SnapshotIter
+[Subscribe]: crate::read::Subscribe
 
 Both of these might have _small_ additive and multiplicative constants. This is
 true even when reading data that is far bigger than this cap.

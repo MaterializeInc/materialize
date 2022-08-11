@@ -2894,6 +2894,7 @@ dependencies = [
  "bytes",
  "chrono",
  "const_format",
+ "criterion",
  "datadriven",
  "dec",
  "derivative",
@@ -2909,6 +2910,7 @@ dependencies = [
  "mz-expr",
  "mz-kafka-util",
  "mz-ore",
+ "mz-persist-client",
  "mz-persist-types",
  "mz-pgcopy",
  "mz-pgrepr",
@@ -2953,7 +2955,7 @@ dependencies = [
 
 [[package]]
 name = "mz-avro"
-version = "0.6.5"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -3957,6 +3959,7 @@ dependencies = [
  "mz-walkabout",
  "phf",
  "phf_codegen",
+ "serde",
  "tracing",
  "uncased",
  "unicode-width",

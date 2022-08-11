@@ -521,6 +521,7 @@ impl SessionClient {
                 | ExecuteResponse::Updated(_)
                 | ExecuteResponse::AlteredObject(_)
                 | ExecuteResponse::AlteredIndexLogicalCompaction
+                | ExecuteResponse::AlteredSystemConfiguraion
                 | ExecuteResponse::Deallocate { all: _ }
                 | ExecuteResponse::Prepare => {
                     results.push(SimpleResult::Ok);
