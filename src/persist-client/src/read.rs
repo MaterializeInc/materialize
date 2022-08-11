@@ -432,7 +432,7 @@ where
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let new_since: timely::progress::Antichain<u64> = unimplemented!();
 /// # async {
-/// tokio::time::timeout(timeout, read.downgrade_since(new_since)).await
+/// tokio::time::timeout(timeout, read.downgrade_since(&new_since)).await
 /// # };
 /// ```
 #[derive(Debug)]

@@ -1112,7 +1112,7 @@ mod tests {
                     }
                     "downgrade-since" => {
                         let since = tc.input.trim().parse().expect("invalid since");
-                        trace.downgrade_since(Antichain::from_elem(since));
+                        trace.downgrade_since(&Antichain::from_elem(since));
                         "ok\n".to_owned()
                     }
                     "take-merge-reqs" => {

@@ -1400,7 +1400,7 @@ mod reader {
                                 break 'outer;
                             }
 
-                            read.downgrade_since(p).await;
+                            read.downgrade_since(&p).await;
                         }
                         ListenEvent::Updates(updates) => {
                             println!("instance {}: got updates from listen: {:?}", name, updates);
