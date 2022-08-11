@@ -81,6 +81,28 @@ pub struct Trace<T> {
     merge_reqs: Vec<FueledMergeReq<T>>,
 }
 
+#[cfg(test)]
+impl<T: PartialEq> PartialEq for Trace<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // Deconstruct self and other so we get a compile failure if new fields
+        // are added.
+        let Trace {
+            spine: self_spine,
+            merge_reqs: self_merge_reqs,
+        } = self;
+        let Trace {
+            spine: other_spine,
+            merge_reqs: other_merge_reqs,
+        } = other;
+
+        let (mut self_batches, mut other_batches) = (Vec::new(), Vec::new());
+        self_spine.map_batches(|b| self_batches.push(b));
+        other_spine.map_batches(|b| other_batches.push(b));
+
+        self_batches == other_batches && self_merge_reqs == other_merge_reqs
+    }
+}
+
 impl<T: Timestamp + Lattice> Default for Trace<T> {
     fn default() -> Self {
         Self {
@@ -223,6 +245,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 enum SpineBatch<T> {
     Merged(HollowBatch<T>),
     Fueled {
@@ -459,6 +482,22 @@ struct Spine<T> {
     merging: Vec<MergeState<T>>,
 }
 
+impl<T> Spine<T> {
+    pub fn map_batches<'a, F: FnMut(&'a SpineBatch<T>)>(&'a self, mut f: F) {
+        for batch in self.merging.iter().rev() {
+            match batch {
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                    f(batch1);
+                    f(batch2);
+                }
+                MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => f(batch),
+                MergeState::Single(Some(batch)) => f(batch),
+                _ => {}
+            }
+        }
+    }
+}
+
 impl<T: Timestamp + Lattice> Spine<T> {
     /// Allocates a fueled `Spine`.
     ///
@@ -526,20 +565,6 @@ impl<T: Timestamp + Lattice> Spine<T> {
                 #[allow(clippy::cast_sign_loss)]
                 let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
                 self.introduce_batch(None, level, merge_reqs);
-            }
-        }
-    }
-
-    pub fn map_batches<F: FnMut(&SpineBatch<T>)>(&self, mut f: F) {
-        for batch in self.merging.iter().rev() {
-            match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
-                    f(batch1);
-                    f(batch2);
-                }
-                MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => f(batch),
-                MergeState::Single(Some(batch)) => f(batch),
-                _ => {}
             }
         }
     }

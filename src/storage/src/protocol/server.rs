@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
+use mz_build_info::BuildInfo;
 use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
@@ -30,6 +31,8 @@ use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
 pub struct Config {
+    /// Build information.
+    pub build_info: &'static BuildInfo,
     /// The number of worker threads to spawn.
     pub workers: usize,
     /// The Timely configuration
@@ -68,8 +71,10 @@ pub fn serve(
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
-    let persist_clients =
-        PersistClientCache::new(PersistConfig::new(now.clone()), &config.metrics_registry);
+    let persist_clients = PersistClientCache::new(
+        PersistConfig::new(config.build_info, now.clone()),
+        &config.metrics_registry,
+    );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {

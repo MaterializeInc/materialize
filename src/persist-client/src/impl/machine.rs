@@ -61,7 +61,7 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
             consensus: Arc::clone(&self.consensus),
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.shard_metrics),
-            state: self.state.clone(),
+            state: self.state.clone(self.cfg.build_version.clone()),
         }
     }
 }
@@ -86,7 +86,7 @@ where
             .run_cmd(|_cas_mismatch_metric| {
                 // No cas_mismatch retries because we just use the returned
                 // state on a mismatch.
-                Self::maybe_init_state(consensus.as_ref(), &metrics.retries, shard_id)
+                Self::maybe_init_state(&cfg, consensus.as_ref(), &metrics.retries, shard_id)
             })
             .await?;
         Ok(Machine {
@@ -449,7 +449,10 @@ where
             let mut garbage_collection;
 
             loop {
-                let (work_ret, mut new_state) = match self.state.clone_apply(&mut work_fn) {
+                let (work_ret, mut new_state) = match self
+                    .state
+                    .clone_apply(&self.cfg.build_version, &mut work_fn)
+                {
                     Continue(x) => x,
                     Break(err) => {
                         return Ok((self.state.seqno(), Err(err), RoutineMaintenance::default()))
@@ -563,6 +566,7 @@ where
     }
 
     async fn maybe_init_state(
+        cfg: &PersistConfig,
         consensus: &(dyn Consensus + Send + Sync),
         retry_metrics: &RetriesMetrics,
         shard_id: ShardId,
@@ -576,7 +580,7 @@ where
         loop {
             // First, check if the shard has already been initialized.
             if let Some(current) = current.as_ref() {
-                let current_state = match State::decode(&current.data) {
+                let current_state = match State::decode(&cfg.build_version, &current.data) {
                     Ok(x) => x,
                     Err(err) => return Err(err),
                 };
@@ -585,7 +589,7 @@ where
             }
 
             // It hasn't been initialized, try initializing it.
-            let state = State::new(shard_id);
+            let state = State::new(cfg.build_version.clone(), shard_id);
             let new = VersionedData::from((state.seqno(), &state));
             trace!(
                 "maybe_init_state attempting {}\n  state={:?}",
@@ -646,7 +650,7 @@ where
             .metrics
             .codecs
             .state
-            .decode(|| State::decode(&current.data))
+            .decode(|| State::decode(&self.cfg.build_version, &current.data))
             // We received a State with different declared codecs than a
             // previous SeqNo of the same State. Fail loudly.
             .expect("internal error: new durable state disagreed with old durable state");
@@ -745,6 +749,7 @@ mod tests {
     use std::collections::HashMap;
 
     use differential_dataflow::trace::Description;
+    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
     use tokio::sync::Mutex;
 
@@ -788,7 +793,7 @@ mod tests {
             // Reset blob_target_size. Individual batch writes and compactions
             // can override it with an arg.
             client.cfg.blob_target_size =
-                PersistConfig::new(client.cfg.now.clone()).blob_target_size;
+                PersistConfig::new(&DUMMY_BUILD_INFO, client.cfg.now.clone()).blob_target_size;
 
             let state = Arc::new(Mutex::new(DatadrivenState::default()));
             let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());

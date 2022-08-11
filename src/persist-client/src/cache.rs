@@ -56,9 +56,10 @@ impl PersistClientCache {
     /// metrics.
     #[cfg(test)]
     pub fn new_no_metrics() -> Self {
+        use mz_build_info::DUMMY_BUILD_INFO;
         use mz_ore::now::SYSTEM_TIME;
 
-        let cfg = PersistConfig::new(SYSTEM_TIME.clone());
+        let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         Self::new(cfg, &MetricsRegistry::new())
     }
 
@@ -127,6 +128,7 @@ impl PersistClientCache {
 
 #[cfg(test)]
 mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
 
     use super::*;
@@ -134,7 +136,7 @@ mod tests {
     #[tokio::test]
     async fn client_cache() {
         let mut cache = PersistClientCache::new(
-            PersistConfig::new(SYSTEM_TIME.clone()),
+            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
         );
         assert_eq!(cache.blob_by_uri.len(), 0);
