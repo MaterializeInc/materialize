@@ -95,14 +95,14 @@ test_view_index,2,,pg_catalog.length(a)
 
 expected_indexes_binary = """
 name,index_position,on_position,on_expression
-expected_indexes_cloud,1,1,
-expected_indexes_cloud,2,2,
-expected_indexes_cloud,3,3,
-expected_indexes_cloud,4,4,
-expected_indexes_binary,1,1,
-expected_indexes_binary,2,2,
-expected_indexes_binary,3,3,
-expected_indexes_binary,4,4,
+expected_indexes_materialize_cloud,1,1,
+expected_indexes_materialize_cloud,2,2,
+expected_indexes_materialize_cloud,3,3,
+expected_indexes_materialize_cloud,4,4,
+expected_indexes_materialize_binary,1,1,
+expected_indexes_materialize_binary,2,2,
+expected_indexes_materialize_binary,3,3,
+expected_indexes_materialize_binary,4,4,
 test_materialized_view,1,1,
 test_materialized_view_index,1,1,
 test_materialized_view_index,1,1,

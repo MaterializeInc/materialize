@@ -32,10 +32,10 @@ select 1
 """
 
 catalog_sql = """
-select 
+select
     c.name as cluster
-from mz_materialized_views v 
-join mz_clusters c on v.cluster_id = c.id and v.name = 'override_cluster' 
+from mz_materialized_views v
+join mz_clusters c on v.cluster_id = c.id and v.name = 'override_cluster'
 """
 
 

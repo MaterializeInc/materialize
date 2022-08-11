@@ -23,9 +23,6 @@ from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
 from dbt.exceptions import RuntimeException
-from dbt.semver import versions_compatible
-
-MATERIALIZE_BINARY_VERSIONS = "<=0.26.4"
 
 
 @dataclass
@@ -82,17 +79,6 @@ class MaterializeAdapter(PostgresAdapter):
             )
 
         return relations
-
-    @staticmethod
-    def is_materialize_cloud(mz_version) -> bool:
-        mz_version_num = mz_version.split()[0].strip("v")
-        if (
-            versions_compatible(mz_version_num, MATERIALIZE_BINARY_VERSIONS)
-            and "dev" not in mz_version
-        ):
-            return False
-        else:
-            return True
 
     def _get_cluster(self) -> str:
         _, table = self.execute("SHOW CLUSTER", fetch=True)

@@ -34,14 +34,19 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session")
+def profile(request):
+    return request.config.getoption("--profile")
+
+
+@pytest.fixture(scope="session")
 def dbt_profile_target(request):
-    profile_type = request.config.getoption("--profile")
-    if profile_type == "materialize_binary":
+    profile = request.config.getoption("--profile")
+    if profile == "materialize_binary":
         target = materialize_binary_target()
-    elif profile_type == "materialize_cloud":
+    elif profile == "materialize_cloud":
         target = materialize_cloud_target()
     else:
-        raise ValueError(f"Invalid profile type '{profile_type}'")
+        raise ValueError(f"Invalid profile type '{profile}'")
     return target
 
 
@@ -63,8 +68,6 @@ def materialize_binary_target():
     }
 
 
-# The profile dictionary, used to write out profiles.yml
-# dbt will supply a unique schema per test, so we do not specify 'schema' here
 def materialize_cloud_target():
     return {
         "type": "materialize",

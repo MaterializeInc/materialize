@@ -34,9 +34,29 @@ from dbt.tests.util import (
     run_dbt,
 )
 
+expected = {
+    "materialize_cloud": {
+        "base": "materializedview",
+        "view_model": "view",
+        "table_model": "materializedview",
+        "swappable": "materializedview",
+    },
+    "materialize_binary": {
+        "base": "view",
+        "view_model": "view",
+        "table_model": "view",
+        "swappable": "view",
+    },
+}
+
 
 class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
+    @pytest.fixture(autouse=True)
+    def _pass_profile_value(self, profile):
+        self._profile = profile
+
     # Custom base test that removes the incremental portion and overrides the expected relations
+
     def test_base(self, project):
 
         # seed command
@@ -52,23 +72,7 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
         # names exist in result nodes
         check_result_nodes_by_name(results, ["view_model", "table_model", "swappable"])
 
-        mz_version = project.run_sql(f"select mz_version()", fetch="one")[0]
-
-        if project.adapter.is_materialize_cloud(mz_version):
-            expected = {
-                "base": "materializedview",
-                "view_model": "view",
-                "table_model": "materializedview",
-                "swappable": "materializedview",
-            }
-        else:
-            expected = {
-                "base": "view",
-                "view_model": "view",
-                "table_model": "view",
-                "swappable": "view",
-            }
-        check_relation_types(project.adapter, expected)
+        check_relation_types(project.adapter, expected[self._profile])
 
         # base table rowcount
         relation = relation_from_name(project.adapter, "base")

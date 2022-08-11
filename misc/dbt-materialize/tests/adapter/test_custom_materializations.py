@@ -30,6 +30,10 @@ from fixtures import (
 
 
 class TestCustomMaterializations:
+    @pytest.fixture(autouse=True)
+    def _pass_profile_value(self, profile):
+        self._profile = profile
+
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return {"name": "custom_materializations"}
@@ -37,8 +41,8 @@ class TestCustomMaterializations:
     @pytest.fixture(scope="class")
     def seeds(self):
         return {
-            "expected_indexes_cloud.csv": expected_indexes_cloud,
-            "expected_indexes_binary.csv": expected_indexes_binary,
+            "expected_indexes_materialize_cloud.csv": expected_indexes_cloud,
+            "expected_indexes_materialize_binary.csv": expected_indexes_binary,
         }
 
     @pytest.fixture(scope="class")
@@ -68,15 +72,9 @@ class TestCustomMaterializations:
             project.adapter, ["test_materialized_view", "test_view_index"]
         )
 
-        mz_version = project.run_sql(f"select mz_version()", fetch="one")[0]
-        if project.adapter.is_materialize_cloud(mz_version):
-            check_relations_equal(
-                project.adapter, ["actual_indexes", "expected_indexes_cloud"]
-            )
-        else:
-            check_relations_equal(
-                project.adapter, ["actual_indexes", "expected_indexes_binary"]
-            )
+        check_relations_equal(
+            project.adapter, ["actual_indexes", "expected_indexes_" + self._profile]
+        )
 
         # TODO(morsapaes): add test that ensures that the source/sink emit the
         # correct data once sinks land.
