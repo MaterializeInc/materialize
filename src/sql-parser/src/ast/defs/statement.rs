@@ -23,9 +23,9 @@ use std::fmt;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    SelectItem, SourceIncludeMetadata, TableAlias, TableConstraint, TableWithJoins,
-    UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, Envelope, Expr, Format, Ident,
+    KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -55,6 +55,7 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
+    AlterSource(AlterSourceStatement<T>),
     AlterSystemSet(AlterSystemSetStatement),
     AlterSystemReset(AlterSystemResetStatement),
     AlterSystemResetAll(AlterSystemResetAllStatement),
@@ -121,6 +122,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
+            Statement::AlterSource(stmt) => f.write_node(stmt),
             Statement::AlterSystemSet(stmt) => f.write_node(stmt),
             Statement::AlterSystemReset(stmt) => f.write_node(stmt),
             Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
@@ -1179,6 +1181,45 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
 }
 
 impl_display_t!(AlterIndexStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterSourceAction<T: AstInfo> {
+    SetOptions(Vec<CreateSourceOption<T>>),
+    ResetOptions(Vec<CreateSourceOptionName>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSourceStatement<T: AstInfo> {
+    pub source_name: UnresolvedObjectName,
+    pub if_exists: bool,
+    pub action: AlterSourceAction<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SOURCE ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.source_name);
+        f.write_str(" ");
+
+        match &self.action {
+            AlterSourceAction::SetOptions(options) => {
+                f.write_str("SET (");
+                f.write_node(&display::comma_separated(&options));
+                f.write_str(")");
+            }
+            AlterSourceAction::ResetOptions(options) => {
+                f.write_str("RESET (");
+                f.write_node(&display::comma_separated(&options));
+                f.write_str(")");
+            }
+        }
+    }
+}
+
+impl_display_t!(AlterSourceStatement);
 
 /// `ALTER SECRET ... AS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

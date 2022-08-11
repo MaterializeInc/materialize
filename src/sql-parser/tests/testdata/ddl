@@ -1027,9 +1027,24 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected RENAME, found SET
+error: Expected one of SIZE or REMOTE, found identifier "property"
 ALTER SOURCE name SET (property = true)
-                  ^
+                       ^
+
+parse-statement
+ALTER SOURCE name SET (SIZE LARGE)
+----
+ALTER SOURCE name SET (SIZE = large)
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
+
+parse-statement
+ALTER SOURCE name RESET (SIZE)
+----
+ALTER SOURCE name RESET (SIZE)
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
+
 
 parse-statement
 ALTER VIEW name SET (property = true)
