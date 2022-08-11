@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from typing import Optional
 
 import dbt.exceptions
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
@@ -26,6 +27,8 @@ SUPPORTED_MATERIALIZE_VERSIONS = ">=0.20.0"
 
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
+    cluster: Optional[str] = None
+
     @property
     def type(self):
         return "materialize"

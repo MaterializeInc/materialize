@@ -14,20 +14,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Any, List, Mapping, Optional
 
+from dbt.adapters.base.impl import AdapterConfig
 from dbt.adapters.materialize import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
+from dbt.exceptions import RuntimeException
 from dbt.semver import versions_compatible
 
 MATERIALIZE_BINARY_VERSIONS = "<=0.26.4"
 
 
+@dataclass
+class MaterializeConfig(AdapterConfig):
+    materialize_cluster: Optional[str] = True
+
+
 class MaterializeAdapter(PostgresAdapter):
     ConnectionManager = MaterializeConnectionManager
     Relation = MaterializeRelation
+
+    AdapterSpecificConfigs = MaterializeConfig
 
     @classmethod
     def is_cancelable(cls) -> bool:
@@ -83,3 +93,27 @@ class MaterializeAdapter(PostgresAdapter):
             return False
         else:
             return True
+
+    def _get_cluster(self) -> str:
+        _, table = self.execute("SHOW CLUSTER", fetch=True)
+        if len(table) == 0 or len(table[0]) == 0:
+            raise RuntimeException("Could not get current cluster: no results")
+        return str(table[0][0])
+
+    def _use_cluster(self, cluster: str):
+        self.execute("SET CLUSTER = '{}'".format(cluster))
+
+    def pre_model_hook(self, config: Mapping[str, Any]) -> Optional[str]:
+        default_cluster = self.config.credentials.cluster
+        cluster = config.get("materialize_cluster", default_cluster)
+        if cluster == default_cluster or cluster is None:
+            return None
+        previous = self._get_cluster()
+        self._use_cluster(cluster)
+        return previous
+
+    def post_model_hook(
+        self, config: Mapping[str, Any], context: Optional[str]
+    ) -> None:
+        if context is not None:
+            self._use_cluster(context)
