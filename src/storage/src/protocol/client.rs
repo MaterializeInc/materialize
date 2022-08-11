@@ -190,6 +190,20 @@ pub struct ExportSinkCommand<T> {
     pub description: StorageSinkDesc<CollectionMetadata, T>,
 }
 
+impl Arbitrary for ExportSinkCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<GlobalId>(),
+            any::<StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>(),
+        )
+            .prop_map(|(id, description)| Self { id, description })
+            .boxed()
+    }
+}
+
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageCommand {
         use proto_storage_command::Kind::*;
@@ -239,6 +253,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
         prop_oneof![
             proptest::collection::vec(any::<IngestSourceCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::IngestSources),
+            proptest::collection::vec(any::<ExportSinkCommand<mz_repr::Timestamp>>(), 1..4)
+                .prop_map(StorageCommand::ExportSinks),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
