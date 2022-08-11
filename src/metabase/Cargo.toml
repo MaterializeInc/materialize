@@ -3,7 +3,7 @@ name = "mz-metabase"
 description = "An API client for Metabase."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]
