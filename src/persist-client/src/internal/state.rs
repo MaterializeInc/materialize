@@ -181,6 +181,7 @@ where
         &mut self,
         reader_id: &ReaderId,
         seqno: SeqNo,
+        outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, Since<T>> {
@@ -189,6 +190,21 @@ where
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
         reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+
+        let seqno = match outstanding_seqno {
+            Some(outstanding_seqno) => {
+                assert!(
+                    outstanding_seqno >= reader_state.seqno,
+                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+                    is behind current reader_state ({:?})",
+                    outstanding_seqno,
+                    reader_state.seqno,
+                );
+                std::cmp::min(outstanding_seqno, seqno)
+            }
+            None => seqno,
+        };
+
         reader_state.seqno = seqno;
 
         let reader_current_since = if PartialOrder::less_than(&reader_state.since, new_since) {

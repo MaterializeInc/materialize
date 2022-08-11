@@ -273,11 +273,13 @@ where
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, state| {
-            let seqno = match outstanding_seqno {
-                Some(outstanding_seqno) => std::cmp::min(outstanding_seqno, seqno),
-                None => seqno,
-            };
-            state.downgrade_since(reader_id, seqno, new_since, heartbeat_timestamp_ms)
+            state.downgrade_since(
+                reader_id,
+                seqno,
+                outstanding_seqno,
+                new_since,
+                heartbeat_timestamp_ms,
+            )
         })
         .await
     }

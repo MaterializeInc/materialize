@@ -21,13 +21,13 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Map, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_ore::cast::CastFrom;
-use mz_persist::location::{ExternalError, SeqNo};
+use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::ReaderEnrichedHollowBatch;
+use mz_persist_client::read::{LeasedBatch, Subscribe};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -83,20 +83,26 @@ pub fn persist_source_core<G>(
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
+    // WARNING! If emulating any of this code, you should read the doc string
+    // on [`LeasedBatch`] and [`Subscribe`] or will likely run into intentional
+    // panics.
+    //
     // This source is split as such:
-    // 1. Sets up `async_stream`, which only yields data (hollow batches) on one
-    //    chosen worker. Generating hollow batches also generates `SeqNo` leases
-    //    on the chosen worker.
+    // 1. Sets up `async_stream`, which only yields data (hollow batches) on
+    //    one chosen worker. Generating hollow batches also generates
+    //    `consumed_batch` leases on the chosen worker, ensuring
+    //    `consumed_batch`s do not get GCed while in flight.
     // 2. Batch distribution: A timely source operator which continuously reads
     //    from that stream, and distributes the data among workers.
     // 3. Batch fetcher: A timely operator which downloads the batch's contents
     //    from S3, and outputs them to a timely stream. Additionally, the
-    //    operator returns the `SeqNo` lease to the original worker.
-    // 4. SeqNo leasor: A timely operator running only on the original worker
-    //    that collects returned `SeqNo` leases, dropping them, and allowing
-    //    compaction to occur.
-
-    let worker_index = scope.index();
+    //    operator returns the `ConsumedBatch` to the original worker, so it
+    //    can perform internal bookkeeping.
+    // 4. Consumed batch collector: A timely operator running only on the
+    //    original worker that collects workers' `LeasedBatch`es. Internally,
+    //    this drops the batch's `consumed_batch` lease, allowing compaction to
+    //    occur.
+    let worker_index = dbg!(scope.index());
     let peers = scope.peers();
     let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
 
@@ -107,10 +113,10 @@ where
     let data_shard = metadata.data_shard.clone();
     let as_of_stream = as_of;
 
-    // Lets the SeqNo lease-returning operator communicate with the
-    // SeqNo-leasing Subscribe.
-    let (seqno_lease_tx, seqno_lease_rx): (mpsc::Sender<Vec<SeqNo>>, mpsc::Receiver<Vec<SeqNo>>) =
-        mpsc::channel(1);
+    // Connects the Consumed batch collector operator with the batch-issuing
+    // Subscribe.
+    let (mut consumed_batch_tx, consumed_batch_rx) =
+        Subscribe::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>::new_batch_return_channels();
 
     // This is a generator that sets up an async `Stream` that can be continously polled to get the
     // values that are `yield`-ed from it's body.
@@ -135,21 +141,12 @@ where
             .expect("could not open persist shard");
 
         let mut subscription = read
-            .subscribe(as_of_stream)
+            .subscribe(as_of_stream, consumed_batch_rx)
             .await
             .expect("cannot serve requested as_of");
 
-        let mut seqno_lease_rx = seqno_lease_rx;
-
         loop {
-            // Unclear, but the `SeqNo` lease is generated as a function of
-            // generating batches that will be distributed to workers.
             yield subscription.next().await;
-            while let Ok(seqnos) = seqno_lease_rx.try_recv() {
-                for seqno in seqnos {
-                    subscription.drop_seqno_lease(seqno);
-                }
-            }
         }
     });
 
@@ -176,11 +173,11 @@ where
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
                         Some(Ok(batch)) => {
-                            let progress = batch.generate_progress();
                             let session_cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&session_cap);
 
-                            session.give((i, batch));
+                            let progress =
+                                batch.give_to_fetch_session_and_get_progress(i, &mut session);
 
                             // Round robin
                             i = (i + 1) % peers;
@@ -221,13 +218,13 @@ where
         scope.clone(),
     );
 
-    let fetcher_dist = |&(i, _): &(usize, ReaderEnrichedHollowBatch<Timestamp>)| u64::cast_from(i);
+    let fetcher_dist = |&(i, _): &(usize, LeasedBatch<Timestamp>)| u64::cast_from(i);
     let mut fetcher_input = fetcher_builder.new_input(&inner, Exchange::new(fetcher_dist));
     let (mut update_output, update_output_stream) = fetcher_builder.new_output();
-    let (mut seqno_lease_output, seqno_lease_output_stream) = fetcher_builder.new_output();
+    let (mut consumed_batch_output, consumed_batch_output_stream) = fetcher_builder.new_output();
 
     let update_output_port = update_output_stream.name().port;
-    let seqno_lease_port = seqno_lease_output_stream.name().port;
+    let consumed_batch_port = consumed_batch_output_stream.name().port;
 
     fetcher_builder.build_async(
         scope.clone(),
@@ -249,22 +246,28 @@ where
             initial_capabilities.clear();
 
             let mut output_handle = update_output.activate();
-            let mut seqno_lease_output_handle = seqno_lease_output.activate();
+            let mut consumed_batch_output_handle = consumed_batch_output.activate();
 
             while let Some((cap, data)) = fetcher_input.next() {
+                // `LeasedBatch`es cannot be dropped at this point w/o
+                // panicking, so swap them to an owned version.
+                let mut leased_batches = Vec::with_capacity(data.len());
+                data.swap(&mut leased_batches);
+
                 let update_cap = cap.delayed_for_output(cap.time(), update_output_port);
                 let mut update_session = output_handle.session(&update_cap);
 
-                let seqno_cap = cap.delayed_for_output(cap.time(), seqno_lease_port);
-                let mut seqno_session = seqno_lease_output_handle.session(&seqno_cap);
-                for (_idx, batch) in data.iter() {
+                let consumed_batch_cap = cap.delayed_for_output(cap.time(), consumed_batch_port);
+                let mut consumed_batch_session =
+                    consumed_batch_output_handle.session(&consumed_batch_cap);
+
+                for (_idx, batch) in leased_batches {
                     let mut updates = fetcher
-                        .fetch_batch(batch.clone())
+                        .fetch_and_return_batch(&mut consumed_batch_session, batch)
                         .await
                         .expect("shard_id generated for sources must match across all workers");
 
                     update_session.give_vec(&mut updates);
-                    seqno_session.give(batch.seqno());
                 }
             }
             false
@@ -272,35 +275,42 @@ where
     );
 
     // This operator is meant to only run on the chosen worker. All workers will
-    // exchange their fetched batches' `SeqNo` back to the leasor.
-    let mut seqno_leasor_builder = OperatorBuilder::new(
-        format!("persist_source {:?}: SeqNo leasor", source_id),
+    // exchange their fetched batches' `consumed_batch` back to the leasor.
+    let mut consumed_batch_builder = OperatorBuilder::new(
+        format!("persist_source {:?}: ConsumedBatch collector", source_id),
         scope.clone(),
     );
 
-    // Exchange all `SeqNo`s back to the chosen worker/leasor.
-    let seqno_leasor_dist = move |&_: &SeqNo| u64::cast_from(chosen_worker);
-    let mut seqno_leasor_input = seqno_leasor_builder
-        .new_input(&seqno_lease_output_stream, Exchange::new(seqno_leasor_dist));
+    // Exchange all `consumed_batch`s back to the chosen worker/leasor.
+    let consumed_batch_dist = move |&_: &LeasedBatch<Timestamp>| u64::cast_from(chosen_worker);
+    let mut consumed_batch_input = consumed_batch_builder.new_input(
+        &consumed_batch_output_stream,
+        Exchange::new(consumed_batch_dist),
+    );
 
-    seqno_leasor_builder.build_async(
+    let last_token = Rc::new(token);
+    let token = Rc::clone(&last_token);
+
+    consumed_batch_builder.build_async(
         scope.clone(),
         async_op!(|initial_capabilities, _frontiers| {
             initial_capabilities.clear();
 
-            // The chosen worker is the leasor.
+            // The chosen worker is the leasor because it issues batches.
             if worker_index != chosen_worker {
-                trace!("We are not the SeqNo leasor of {:?}, exiting...", source_id);
+                trace!(
+                    "We are not the batch leasor for {:?}, exiting...",
+                    source_id
+                );
                 return false;
             }
 
-            'outer: while let Some((_cap, data)) = seqno_leasor_input.next() {
-                if seqno_lease_tx.send(data.clone()).await.is_err() {
-                    // Subscribe loop dropped, which drops its ReadHandle,
-                    // which in turn drops all leased `SeqNo`s so doing
-                    // anything else here is both moot and impossible.
-                    break 'outer;
-                }
+            while let Some((_cap, data)) = consumed_batch_input.next() {
+                // `LeasedBatch`es cannot be dropped at this point w/o
+                // panicking, so swap them to an owned version.
+                let mut leased_batches = Vec::with_capacity(data.len());
+                data.swap(&mut leased_batches);
+                consumed_batch_tx.return_batches(leased_batches).await;
             }
 
             false

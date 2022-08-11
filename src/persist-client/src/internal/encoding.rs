@@ -23,14 +23,14 @@ use uuid::Uuid;
 
 use crate::error::CodecMismatch;
 use crate::internal::paths::PartialBlobKey;
-use crate::internal::state::proto_hollow_batch_reader_metadata;
+use crate::internal::state::{proto_lease_life_cycle, proto_leased_batch_metadata};
 use crate::internal::state::{
-    HollowBatch, ProtoHollowBatch, ProtoHollowBatchReaderMetadata, ProtoReadEnrichedHollowBatch,
+    HollowBatch, ProtoHollowBatch, ProtoLeaseLifeCycle, ProtoLeasedBatch, ProtoLeasedBatchMetadata,
     ProtoReaderState, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
     ProtoWriterState, ReaderState, State, StateCollections, WriterState,
 };
 use crate::internal::trace::Trace;
-use crate::read::{HollowBatchReaderMetadata, ReaderEnrichedHollowBatch, ReaderId};
+use crate::read::{LeaseLifeCycle, LeasedBatch, LeasedBatchMetadata, ReaderId};
 use crate::{ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
@@ -399,20 +399,18 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchReaderMetadata>
-    for HollowBatchReaderMetadata<T>
-{
-    fn into_proto(&self) -> ProtoHollowBatchReaderMetadata {
-        use proto_hollow_batch_reader_metadata::*;
-        ProtoHollowBatchReaderMetadata {
+impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatchMetadata> for LeasedBatchMetadata<T> {
+    fn into_proto(&self) -> ProtoLeasedBatchMetadata {
+        use proto_leased_batch_metadata::*;
+        ProtoLeasedBatchMetadata {
             kind: Some(match self {
-                HollowBatchReaderMetadata::Snapshot { as_of } => {
-                    Kind::Snapshot(ProtoHollowBatchReaderMetadataSnapshot {
+                LeasedBatchMetadata::Snapshot { as_of } => {
+                    Kind::Snapshot(ProtoLeasedBatchMetadataSnapshot {
                         as_of: Some(as_of.into_proto()),
                     })
                 }
-                HollowBatchReaderMetadata::Listen { as_of, until } => {
-                    Kind::Listen(ProtoHollowBatchReaderMetadataListen {
+                LeasedBatchMetadata::Listen { as_of, until } => {
+                    Kind::Listen(ProtoLeasedBatchMetadataListen {
                         as_of: Some(as_of.into_proto()),
                         until: Some(until.into_proto()),
                     })
@@ -421,25 +419,62 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchReaderMetadata>
         }
     }
 
-    fn from_proto(proto: ProtoHollowBatchReaderMetadata) -> Result<Self, TryFromProtoError> {
-        use proto_hollow_batch_reader_metadata::Kind::*;
+    fn from_proto(proto: ProtoLeasedBatchMetadata) -> Result<Self, TryFromProtoError> {
+        use proto_leased_batch_metadata::Kind::*;
         Ok(match proto.kind {
-            Some(Snapshot(snapshot)) => HollowBatchReaderMetadata::Snapshot {
+            Some(Snapshot(snapshot)) => LeasedBatchMetadata::Snapshot {
                 as_of: snapshot
                     .as_of
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Snapshot::as_of")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Snapshot::as_of")?,
             },
-            Some(Listen(listen)) => HollowBatchReaderMetadata::Listen {
+            Some(Listen(listen)) => LeasedBatchMetadata::Listen {
                 as_of: listen
                     .as_of
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::as_of")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::as_of")?,
                 until: listen
                     .until
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::until")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::until")?,
             },
             None => {
                 return Err(TryFromProtoError::missing_field(
-                    "ProtoHollowBatchReaderMetadata::Kind",
+                    "ProtoLeasedBatchMetadata::Kind",
+                ))
+            }
+        })
+    }
+}
+
+impl RustType<ProtoLeaseLifeCycle> for LeaseLifeCycle {
+    fn into_proto(&self) -> ProtoLeaseLifeCycle {
+        use proto_lease_life_cycle::*;
+        ProtoLeaseLifeCycle {
+            kind: Some(match self {
+                LeaseLifeCycle::Issued {
+                    seqno,
+                    local_drop: _,
+                } => Kind::Issued(ProtoLeaseLifeCycleIssued {
+                    seqno: seqno.into_proto(),
+                }),
+                LeaseLifeCycle::Consumed(seqno) => Kind::Consumed(ProtoLeaseLifeCycleConsumed {
+                    seqno: seqno.into_proto(),
+                }),
+                LeaseLifeCycle::Completed => Kind::Completed(ProtoLeaseLifeCycleCompleted {}),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoLeaseLifeCycle) -> Result<Self, TryFromProtoError> {
+        use proto_lease_life_cycle::Kind::*;
+        Ok(match proto.kind {
+            Some(Issued(issued)) => LeaseLifeCycle::Issued {
+                seqno: issued.seqno.into_rust()?,
+                local_drop: None,
+            },
+            Some(Consumed(issued)) => LeaseLifeCycle::Consumed(issued.seqno.into_rust()?),
+            Some(Completed(_)) => LeaseLifeCycle::Completed,
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoLeaseLifeCycle::Kind",
                 ))
             }
         })
@@ -447,47 +482,47 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchReaderMetadata>
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SerdeReaderEnrichedHollowBatch(Vec<u8>);
+pub struct SerdeLeasedBatch(Vec<u8>);
 
-impl<T: Timestamp + Codec64> From<ReaderEnrichedHollowBatch<T>> for SerdeReaderEnrichedHollowBatch {
-    fn from(x: ReaderEnrichedHollowBatch<T>) -> Self {
-        SerdeReaderEnrichedHollowBatch(x.into_proto().encode_to_vec())
+impl<T: Timestamp + Codec64> From<LeasedBatch<T>> for SerdeLeasedBatch {
+    fn from(x: LeasedBatch<T>) -> Self {
+        SerdeLeasedBatch(x.into_proto().encode_to_vec())
     }
 }
 
-impl<T: Timestamp + Codec64> From<SerdeReaderEnrichedHollowBatch> for ReaderEnrichedHollowBatch<T> {
-    fn from(x: SerdeReaderEnrichedHollowBatch) -> Self {
-        let proto = ProtoReadEnrichedHollowBatch::decode(x.0.as_slice())
-            .expect("internal error: invalid ProtoReadEnrichedHollowBatch");
+impl<T: Timestamp + Codec64> From<SerdeLeasedBatch> for LeasedBatch<T> {
+    fn from(x: SerdeLeasedBatch) -> Self {
+        let proto = ProtoLeasedBatch::decode(x.0.as_slice())
+            .expect("internal error: invalid ProtoLeasedBatch");
         proto
             .into_rust()
-            .expect("internal error: invalid ProtoReadEnrichedHollowBatch")
+            .expect("internal error: invalid ProtoLeasedBatch")
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoReadEnrichedHollowBatch>
-    for ReaderEnrichedHollowBatch<T>
-{
-    fn into_proto(&self) -> ProtoReadEnrichedHollowBatch {
-        ProtoReadEnrichedHollowBatch {
+impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatch> for LeasedBatch<T> {
+    fn into_proto(&self) -> ProtoLeasedBatch {
+        ProtoLeasedBatch {
             shard_id: self.shard_id.into_proto(),
-            reader_metadata: Some(self.reader_metadata.into_proto()),
+            reader_id: self.reader_id.into_proto(),
+            reader_metadata: Some(self.metadata.into_proto()),
             batch: Some(self.batch.into_proto()),
-            leased_seqno: self.leased_seqno.into_proto(),
+            leased_seqno: Some(self.leased_seqno.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoReadEnrichedHollowBatch) -> Result<Self, TryFromProtoError> {
-        Ok(ReaderEnrichedHollowBatch {
-            shard_id: proto.shard_id.into_rust()?,
-            reader_metadata: proto
+    fn from_proto(proto: ProtoLeasedBatch) -> Result<Self, TryFromProtoError> {
+        Ok(LeasedBatch::new(
+            proto.shard_id.into_rust()?,
+            proto.reader_id.into_rust()?,
+            proto
                 .reader_metadata
-                .into_rust_if_some("ProtoReadEnrichedHollowBatch::reader_metadata")?,
-            batch: proto
-                .batch
-                .into_rust_if_some("ProtoReadEnrichedHollowBatch::batch")?,
-            leased_seqno: proto.leased_seqno.into_rust()?,
-        })
+                .into_rust_if_some("ProtoLeasedBatch::reader_metadata")?,
+            proto.batch.into_rust_if_some("ProtoLeasedBatch::batch")?,
+            proto
+                .leased_seqno
+                .into_rust_if_some("ProtoLeasedBatch::leased_seqno")?,
+        ))
     }
 }
 

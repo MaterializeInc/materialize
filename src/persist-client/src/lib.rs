@@ -33,6 +33,7 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
+use tokio::sync::mpsc;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -368,6 +369,7 @@ impl PersistClient {
         .await?;
 
         let reader_id = ReaderId::new();
+        let (local_lease_return_tx, local_lease_return_rx) = mpsc::unbounded_channel();
         let (_, read_cap) = machine.register_reader(&reader_id, (self.cfg.now)()).await;
         let reader = ReadHandle {
             cfg: self.cfg.clone(),
@@ -380,6 +382,8 @@ impl PersistClient {
             last_heartbeat: Instant::now(),
             explicitly_expired: false,
             leased_seqnos: BTreeMap::new(),
+            local_lease_return_tx,
+            local_lease_return_rx,
         };
 
         Ok(reader)
@@ -764,8 +768,10 @@ mod tests {
                 .expect_open::<String, String, u64, i64>(shard_id1)
                 .await;
             let read1 = read1.batch_fetcher().await;
+            let (batch, res) = read1.fetch_batch(snap.pop().unwrap()).await;
+            read0.process_returned_leased_batch(batch);
             assert_eq!(
-                read1.fetch_batch(snap.pop().unwrap()).await.unwrap_err(),
+                res.unwrap_err(),
                 InvalidUsage::BatchNotFromThisShard {
                     batch_shard: shard_id0,
                     handle_shard: shard_id1,

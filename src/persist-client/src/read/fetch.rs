@@ -17,6 +17,8 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use timely::dataflow::channels::pushers::buffer::Session;
+use timely::dataflow::channels::pushers::{CounterCore, TeeCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, instrument, trace_span, Instrument};
@@ -29,13 +31,13 @@ use crate::error::InvalidUsage;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::PartialBlobKey;
-use crate::read::HollowBatchReaderMetadata;
+use crate::read::LeasedBatchMetadata;
 use crate::ShardId;
 
-use super::{ReadHandle, ReaderEnrichedHollowBatch};
+use super::{LeasedBatch, ReadHandle};
 
 /// Capable of fetch batches, and appropriately handling the metadata on
-/// [`ReaderEnrichedHollowBatch`]es.
+/// [`LeasedBatch`]es.
 #[derive(Debug)]
 pub struct BatchFetcher<K, V, T, D>
 where
@@ -72,21 +74,54 @@ where
         b
     }
 
-    /// Trade in an exchange-able [ReaderEnrichedHollowBatch] for the data it
-    /// represents.
+    /// Trade in an exchange-able [`LeasedBatch`] for the data it represents.
+    /// Additionally, handles updating the [`LeasedBatch`]'s metadata and giving
+    /// it to `session`, which should handle returning consumed batches to their
+    /// issuers.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
-    /// Trade in an exchange-able [ReaderEnrichedHollowBatch] for the data it
-    /// represents.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
-    pub async fn fetch_batch(
+    pub async fn fetch_and_return_batch(
         &self,
-        batch: ReaderEnrichedHollowBatch<T>,
+        session: &mut Session<
+            '_,
+            T,
+            Vec<LeasedBatch<T>>,
+            CounterCore<T, Vec<LeasedBatch<T>>, TeeCore<T, Vec<LeasedBatch<T>>>>,
+        >,
+        batch: LeasedBatch<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
+        let (consumed_batch, res) = self.fetch_batch(batch).await;
+        consumed_batch.give_to_batch_return_session(session).await;
+        res
+    }
+
+    /// Trade in an exchange-able [LeasedBatch] for the data it
+    /// represents.
+    ///
+    /// The [`LeasedBatch`] returned after fetching must be passed
+    /// back to issuer ([`ReadHandle::process_consumed_batch`],
+    /// [`Subscribe::process_consumed_batch`]), so that it can properly handle
+    /// internal bookkeeping.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
+    pub(crate) async fn fetch_batch(
+        &self,
+        mut batch: LeasedBatch<T>,
+    ) -> (
+        LeasedBatch<T>,
+        Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>>,
+    ) {
+        // We do this first to express that the batch has been handled in some
+        // way and must be returned.
+        batch.consume_lease();
+
         if batch.shard_id != self.shard_id {
-            return Err(InvalidUsage::BatchNotFromThisShard {
-                batch_shard: batch.shard_id,
-                handle_shard: self.shard_id,
-            });
+            let batch_shard = batch.shard_id.clone();
+            return (
+                batch,
+                Err(InvalidUsage::BatchNotFromThisShard {
+                    batch_shard,
+                    handle_shard: self.shard_id,
+                }),
+            );
         }
 
         let mut updates = Vec::new();
@@ -98,8 +133,8 @@ where
                 &key,
                 &batch.batch.desc.clone(),
                 |k, v, mut t, d| {
-                    match &batch.reader_metadata {
-                        HollowBatchReaderMetadata::Listen { as_of, until } => {
+                    match &batch.metadata {
+                        LeasedBatchMetadata::Listen { as_of, until } => {
                             // This time is covered by a snapshot
                             if !as_of.less_than(&t) {
                                 return;
@@ -116,7 +151,7 @@ where
                                 return;
                             }
                         }
-                        HollowBatchReaderMetadata::Snapshot { as_of } => {
+                        LeasedBatchMetadata::Snapshot { as_of } => {
                             // This time is covered by a listen
                             if as_of.less_than(&t) {
                                 return;
@@ -141,14 +176,11 @@ where
                 // If we do have a bug and a reader does encounter a missing blob, the state
                 // cannot be recovered, and our best option is to panic and retry the whole
                 // process.
-                panic!(
-                    "reader {} could not fetch batch part: {}",
-                    self.handle.reader_id, err
-                )
+                panic!("batch fetcher could not fetch batch part: {}", err)
             });
         }
 
-        Ok(updates)
+        (batch, Ok(updates))
     }
 }
 
