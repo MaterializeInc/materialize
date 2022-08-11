@@ -10,10 +10,14 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
+use std::collections::HashMap;
+
 use chrono::DurationRound;
 use tracing::{event, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
+use mz_ore::task;
+use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
@@ -63,16 +67,30 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
-            Message::StorageUsage => {
-                self.storage_usage_update().await;
+            Message::StorageUsageFetch => {
+                self.storage_usage_fetch().await;
+            }
+            Message::StorageUsageUpdate(sizes) => {
+                self.storage_usage_update(sizes).await;
             }
         }
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self) {
+    async fn storage_usage_fetch(&self) {
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let client = self.storage_usage_client.clone();
+        task::spawn(|| "storage_usage_fetch", async move {
+            let shard_sizes = client.shard_sizes().await;
+            internal_cmd_tx
+                .send(Message::StorageUsageUpdate(shard_sizes))
+                .expect("sending to internal_cmd_tx cannot fail")
+        });
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
         let object_id = None;
-        let shard_sizes = self.storage_usage_client.shard_sizes().await;
 
         let mut unk_storage = 0;
         let mut known_storage = 0;

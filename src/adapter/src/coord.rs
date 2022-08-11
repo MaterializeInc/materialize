@@ -95,6 +95,7 @@ use mz_ore::now::NowFn;
 use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
 use mz_persist_client::usage::StorageUsageClient;
+use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
@@ -171,7 +172,8 @@ pub enum Message<T = mz_repr::Timestamp> {
         conn_id: ConnectionId,
     },
     LinearizeReads(Vec<PendingTxn>),
-    StorageUsage,
+    StorageUsageFetch,
+    StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
 }
 
 #[derive(Derivative)]
@@ -776,7 +778,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
-                _ = storage_usage_update_interval.tick() => Message::StorageUsage,
+                _ = storage_usage_update_interval.tick() => Message::StorageUsageFetch,
             };
 
             // All message processing functions trace. Start a parent span for them to make
