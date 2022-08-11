@@ -99,8 +99,8 @@ impl<T: Timestamp + Lattice> Trace<T> {
         &self.spine.upper
     }
 
-    pub fn downgrade_since(&mut self, since: Antichain<T>) {
-        self.spine.since = since;
+    pub fn downgrade_since(&mut self, since: &Antichain<T>) {
+        self.spine.since.clone_from(since);
     }
 
     pub fn push_batch(&mut self, batch: HollowBatch<T>) {

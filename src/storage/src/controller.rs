@@ -653,7 +653,7 @@ where
 
             // Advance the collection's `since` as requested.
             if let Some(since) = &description.since {
-                read.downgrade_since(since.clone()).await;
+                read.downgrade_since(&since).await;
             }
 
             let collection_state =
@@ -1208,7 +1208,7 @@ mod persist_read_handles {
                                     for (id, read) in read_handles.iter_mut() {
                                         if let Some((span, since)) = downgrades.remove(id) {
                                             let fut = async move {
-                                                read.downgrade_since(since).instrument(span).await;
+                                                read.downgrade_since(&since).instrument(span).await;
                                             };
 
                                             futs.push(fut);
