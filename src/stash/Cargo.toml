@@ -3,7 +3,7 @@ name = "mz-stash"
 description = "Durable metadata storage."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [[bench]]

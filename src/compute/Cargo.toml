@@ -3,7 +3,7 @@ name = "mz-compute"
 description = "Materialize's compute layer."
 version = "0.26.1-dev"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]
