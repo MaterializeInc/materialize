@@ -751,9 +751,11 @@ mod tests {
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::r#impl::compact::{CompactReq, Compactor};
+    use crate::r#impl::paths::PartialBlobKey;
+    use crate::r#impl::state::ProtoStateRollup;
     use crate::read::{fetch_batch_part, Listen, ListenEvent};
     use crate::tests::new_test_client;
-    use crate::{PersistConfig, ShardId};
+    use crate::{GarbageCollector, PersistConfig, ShardId};
 
     use super::*;
 
@@ -790,15 +792,69 @@ mod tests {
 
             let state = Arc::new(Mutex::new(DatadrivenState::default()));
             let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+            let write = Arc::new(Mutex::new(
+                client
+                    .open_writer::<String, (), u64, i64>(shard_id)
+                    .await
+                    .expect("invalid shard types"),
+            ));
 
             f.run_async(move |tc| {
                 let shard_id = shard_id.clone();
                 let client = client.clone();
                 let state = Arc::clone(&state);
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
+                let write = Arc::clone(&write);
+
                 async move {
                     let mut state = state.lock().await;
+
                     match tc.directive.as_str() {
+                        // Scans consensus and returns all states with their SeqNos
+                        // and which batches they reference
+                        "consensus-scan" => {
+                            let from =
+                                SeqNo(get_u64(&tc.args, "from_seqno").expect("missing from_seqno"));
+                            let res = client.consensus.scan(&shard_id.to_string(), from).await;
+
+                            let mut s = String::new();
+                            let states = match res {
+                                Ok(states) => states,
+                                Err(err) => {
+                                    write!(s, "error: {}\n", err);
+                                    return s;
+                                }
+                            };
+                            for persisted_state in states {
+                                let persisted_state: ProtoStateRollup =
+                                    prost::Message::decode(&*persisted_state.data)
+                                        .expect("internal error: invalid encoded state");
+                                let mut batches = vec![];
+                                if let Some(trace) = persisted_state.trace.as_ref() {
+                                    for batch in trace.spine.iter() {
+                                        let part_keys: Vec<PartialBlobKey> = batch
+                                            .keys
+                                            .iter()
+                                            .map(|k| PartialBlobKey(k.to_owned()))
+                                            .collect();
+
+                                        for (batch_name, original_batch) in &state.batches {
+                                            if original_batch.keys == part_keys {
+                                                batches.push(batch_name.to_owned());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                write!(
+                                    s,
+                                    "seqno={} batches={}\n",
+                                    persisted_state.seqno,
+                                    batches.join(",")
+                                );
+                            }
+                            s
+                        }
                         "write-batch" => {
                             let output = get_arg(&tc.args, "output").expect("missing output");
                             let lower = get_u64(&tc.args, "lower").expect("missing lower");
@@ -854,6 +910,16 @@ mod tests {
                             let mut s = String::new();
                             for (idx, key) in batch.keys.iter().enumerate() {
                                 write!(s, "<part {idx}>\n");
+                                let blob_batch = client.blob.get(&key.complete(&shard_id)).await;
+                                match blob_batch {
+                                    Ok(Some(_)) | Err(_) => {}
+                                    // don't try to fetch/print the keys of the batch part
+                                    // if the blob store no longer has it
+                                    Ok(None) => {
+                                        s.push_str("<empty>\n");
+                                        continue;
+                                    }
+                                };
                                 fetch_batch_part(
                                     &shard_id,
                                     client.blob.as_ref(),
@@ -942,6 +1008,26 @@ mod tests {
                                 Err(err) => format!("error: {}\n", err),
                             }
                         }
+                        "gc" => {
+                            let old_seqno_since =
+                                SeqNo(get_u64(&tc.args, "from_seqno").expect("missing from_seqno"));
+                            let new_seqno_since =
+                                SeqNo(get_u64(&tc.args, "to_seqno").expect("missing to_seqno"));
+
+                            GarbageCollector::gc_and_truncate(
+                                Arc::clone(&client.consensus),
+                                Arc::clone(&client.blob),
+                                &client.metrics,
+                                GcReq {
+                                    shard_id,
+                                    old_seqno_since,
+                                    new_seqno_since,
+                                },
+                            )
+                            .await;
+
+                            "ok\n".into()
+                        }
                         "register-listen" => {
                             let output = get_arg(&tc.args, "output").expect("missing output");
                             let as_of = get_u64(&tc.args, "as-of").expect("missing as-of");
@@ -982,13 +1068,11 @@ mod tests {
                         "compare-and-append" => {
                             let input = get_arg(&tc.args, "input").expect("missing input");
                             let batch = state.batches.get(input).expect("unknown batch");
-                            let mut write = client
-                                .open_writer::<String, (), u64, i64>(shard_id)
-                                .await
-                                .expect("invalid shard types");
+                            let mut write = write.lock().await;
+                            let writer_id = write.writer_id.clone();
                             let (_, _) = write
                                 .machine
-                                .compare_and_append(batch, &write.writer_id)
+                                .compare_and_append(batch, &writer_id)
                                 .await
                                 .expect("indeterminate")
                                 .expect("invalid usage")
@@ -998,10 +1082,7 @@ mod tests {
                         "apply-merge-res" => {
                             let input = get_arg(&tc.args, "input").expect("missing input");
                             let batch = state.batches.get(input).expect("unknown batch");
-                            let mut write = client
-                                .open_writer::<String, (), u64, i64>(shard_id)
-                                .await
-                                .expect("invalid shard types");
+                            let mut write = write.lock().await;
                             let applied = write
                                 .machine
                                 .merge_res(&FueledMergeRes {

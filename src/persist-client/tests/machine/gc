@@ -1,0 +1,151 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This test uses a simplifying assumption that a batch is
+# always made up of exactly 1 batch part. This is because
+# batch parts are given random UUID names, meaning we can't
+# easily reference them in our expected test results. We
+# instead refer to a batch part by its batch name
+
+write-batch output=b0 lower=0 upper=1
+k1 0 1
+----
+parts=1 len=1
+
+write-batch output=b1 lower=1 upper=2
+k2 1 -1
+k3 1 1
+----
+parts=1 len=2
+
+write-batch output=b2 lower=2 upper=3
+k3 2 -1
+k4 2 1
+----
+parts=1 len=2
+
+# insert our first batch into state
+compare-and-append input=b0
+----
+ok
+
+# referencing seqnos directly is a bit fragile. as any changes
+# that add or subtract linearized operations from Machine
+# setup could throw off the indexing here.
+#
+# at the time of writing here, seqno 2 refers to the compare-
+# and-append batch written above
+
+# verify we have a new state that references the latest batch
+consensus-scan from_seqno=2
+----
+seqno=2 batches=b0
+
+# insert a second batch into state
+compare-and-append input=b1
+----
+ok
+
+# verify we have a new state that references both batches
+consensus-scan from_seqno=2
+----
+seqno=2 batches=b0
+seqno=3 batches=b0,b1
+
+# run gc up to our latest seqno
+gc from_seqno=0 to_seqno=3
+----
+ok
+
+# verify that gc removed all seqno less than the latest
+consensus-scan from_seqno=0
+----
+seqno=3 batches=b0,b1
+
+# insert another batch
+compare-and-append input=b2
+----
+ok
+
+consensus-scan from_seqno=2
+----
+seqno=3 batches=b0,b1
+seqno=4 batches=b0,b1,b2
+
+# compact and merge b0 and b1 into b0_1
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=2 since=0
+----
+parts=1 len=3
+
+apply-merge-res input=b0_1
+----
+true
+
+# verify that we b0_1 has replaced b0 and b1 in latest state
+consensus-scan from_seqno=0
+----
+seqno=3 batches=b0,b1
+seqno=4 batches=b0,b1,b2
+seqno=5 batches=b0_1,b2
+
+# run gc to clear only the oldest seqno
+gc from_seqno=0 to_seqno=4
+----
+ok
+
+consensus-scan from_seqno=0
+----
+seqno=4 batches=b0,b1,b2
+seqno=5 batches=b0_1,b2
+
+# verify that b0 and b1 still exist, because they're referenced in seqno 4
+fetch-batch input=b0
+----
+<part 0>
+k1 0 1
+
+fetch-batch input=b1
+----
+<part 0>
+k2 1 -1
+k3 1 1
+
+# run gc to clear up to the latest state.
+gc from_seqno=4 to_seqno=5
+----
+ok
+
+# we should only have the latest state now
+consensus-scan from_seqno=0
+----
+seqno=5 batches=b0_1,b2
+
+# and b0 and b1 should no longer exist in the blob store, as no states still reference them
+fetch-batch input=b0
+----
+<part 0>
+<empty>
+
+fetch-batch input=b1
+----
+<part 0>
+<empty>
+
+fetch-batch input=b0_1
+----
+<part 0>
+k1 0 1
+k2 1 -1
+k3 1 1
+
+fetch-batch input=b2
+----
+<part 0>
+k3 2 -1
+k4 2 1

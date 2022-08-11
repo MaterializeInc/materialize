@@ -51,7 +51,7 @@ impl PartId {
 /// Used to reduce the bytes needed to refer to a blob key in memory and
 /// in persistent state, all access to blobs are always within the context
 /// of an individual shard.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub struct PartialBlobKey(pub(crate) String);
 
 impl PartialBlobKey {
