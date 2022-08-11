@@ -83,21 +83,6 @@ Check any enabled region's status:
 ```bash
 mz regions status aws/us-east-1
 ```
-<!-- Delete any region using:
-
-Check any enabled region's status:
-
-```bash
-mz regions status aws/us-east-1
-```
-<!-- Delete any region using:
-
-```bash
-mz regions delete aws/us-east-1
-``` -->
-
-<!-- ***Delete command is followed by a prompt warning to avoid any accidental delete*** -->
-
 
 ### Shell
 

@@ -95,20 +95,9 @@ enum RegionsCommands {
         #[clap(possible_values = CloudProviderRegion::variants())]
         cloud_provider_region: String,
     },
-    // ------------------------------------------------------------------------
-    // Delete is currently disabled. Preserving the code for once is available.
-    // ------------------------------------------------------------------------
-    // Delete an existing region.
-    // Delete {
-    //     #[clap(possible_values = CloudProviderRegion::variants())]
-    //     cloud_provider_region: String,
-    // },
 }
 
-/**
- ** Internal types, struct and enums
- **/
-
+/// Internal types, struct and enums
 #[derive(Debug, Deserialize, Clone)]
 struct Region {
     environmentd_pgwire_address: String,
@@ -171,9 +160,7 @@ enum ExitMessage {
     Str(&'static str),
 }
 
-/**
- * Constants
- */
+/// Constants
 const PROFILES_DIR_NAME: &str = ".config/mz";
 const PROFILES_FILE_NAME: &str = "profiles.toml";
 const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/api/cloud-providers";

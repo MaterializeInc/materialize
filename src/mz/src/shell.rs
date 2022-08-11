@@ -18,9 +18,7 @@ use subprocess::Exec;
 /// Shell command
 /// ----------------------------
 
-/**
- * Parse host and port from the pgwire URL
- */
+/// Parse host and port from the pgwire URL
 pub(crate) fn parse_pgwire(region: &Region) -> (&str, &str) {
     let host = &region.environmentd_pgwire_address[..region.environmentd_pgwire_address.len() - 5];
     let port = &region.environmentd_pgwire_address
@@ -29,9 +27,7 @@ pub(crate) fn parse_pgwire(region: &Region) -> (&str, &str) {
     (host, port)
 }
 
-/**
- ** Runs psql as a subprocess command
- **/
+/// Runs psql as a subprocess command
 fn run_psql_shell(profile: Profile, region: &Region) {
     let (host, port) = parse_pgwire(region);
     let email = profile.email.clone();
@@ -51,9 +47,7 @@ fn run_psql_shell(profile: Profile, region: &Region) {
     assert!(output.success());
 }
 
-/**
- ** Runs pg_isready to check if a region is healthy
- **/
+/// Runs pg_isready to check if a region is healthy
 pub(crate) fn check_region_health(profile: Profile, region: &Region) -> bool {
     let (host, port) = parse_pgwire(region);
     let email = profile.email.clone();
@@ -75,16 +69,12 @@ pub(crate) fn check_region_health(profile: Profile, region: &Region) -> bool {
     output.success()
 }
 
-/**
- ** Turn a profile into a Materialize cloud instance password
- **/
+/// Turn a profile into a Materialize cloud instance password
 fn password_from_profile(profile: Profile) -> String {
     "mzp_".to_owned() + &profile.client_id + &profile.secret
 }
 
-/**
- ** Command to run a shell (psql) on a Materialize cloud instance
- **/
+/// Command to run a shell (psql) on a Materialize cloud instance
 pub(crate) async fn shell(
     client: Client,
     profile: Profile,
