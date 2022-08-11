@@ -56,7 +56,7 @@ INSERT INTO band_members VALUES
     (1, 3),
     (1, 4)
 
-# simple case: EXCEPT ALL with a const literal constraint
+# Simple case: EXCEPT ALL with a const literal constraint.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 (
@@ -87,7 +87,7 @@ Query:
 
 EOF
 
-# simple case: EXCEPT ALL with an IS NOT NULL filter
+# Simple case: EXCEPT ALL with an IS NOT NULL filter.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 (
@@ -117,7 +117,7 @@ Query:
 
 EOF
 
-# simple case: EXCEPT
+# Simple case: EXCEPT.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 SELECT name FROM people
@@ -145,8 +145,8 @@ Query:
 
 EOF
 
-# negative example: EXCEPT ALL that should not be confused for an EXCEPT
-# the two inputs have a Reduce *with aggregates*
+# Negative example: EXCEPT ALL that should not be confused for an EXCEPT
+# the two inputs have a Reduce *with aggregates*.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 SELECT MAX(id) FROM people GROUP BY name
@@ -179,10 +179,10 @@ Query:
 
 EOF
 
-# complex example: EXCEPT ALL
-# here ThresholdElision can only match in after some prior simplifications
-# and for some reason (TBD later) this means that we need to run it ad the
-# end of the physical pass
+# Complex example: EXCEPT ALL.
+# Here ThresholdElision can only match in after some prior simplifications
+# and for some reason (TBD later) this means that we need to run it at the
+# end of the physical pass.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 (
@@ -222,10 +222,10 @@ Query:
 
 EOF
 
-# complex example: EXCEPT
-# here ThresholdElision can only match in after some prior simplifications
-# and for some reason (TBD later) this means that we need to run it ad the
-# end of the physical pass
+# Complex example: EXCEPT.
+# Here ThresholdElision can only match in after some prior simplifications
+# and for some reason (TBD later) this means that we need to run it at the
+# end of the physical pass.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 (
@@ -262,5 +262,183 @@ Query:
 
 %2 =
 | Union %0 %1
+
+EOF
+
+# Complex example (unsupported): CTE with a join.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+WITH cte AS (SELECT people.id FROM people, bands)
+SELECT * FROM cte EXCEPT ALL SELECT * FROM cte where id > 5;
+----
+Source materialize.public.bands (u1):
+| Project ()
+
+Source materialize.public.people (u2):
+| Project (#0)
+
+Query:
+%0 =
+| Get materialize.public.people (u2)
+| Project (#0)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.bands (u1)
+| Project ()
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+
+%3 =
+| Get %2 (l0)
+| Filter (#0 > 5)
+| Negate
+
+%4 =
+| Union %2 %3
+| Threshold
+
+EOF
+
+# Complex example (unsupported): CTE with a DISTINCT.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+WITH cte AS (SELECT DISTINCT name FROM people)
+SELECT * FROM cte EXCEPT ALL SELECT * FROM cte WHERE name LIKE 'J%'
+----
+Source materialize.public.people (u2):
+| Project (#1)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.people (u2)
+| Project (#1)
+| Distinct group=(#0)
+
+%1 =
+| Get %0 (l0)
+| Filter "J%" ~~(#0)
+| Negate
+
+%2 =
+| Union %0 %1
+| Threshold
+
+EOF
+
+# Complex example (unsupported): CTE with a GROUP BY.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+WITH a(birth_year, no_people_born) AS (
+    SELECT EXTRACT(year from born), COUNT(*)
+    FROM people
+    GROUP BY EXTRACT(year from born)
+)
+SELECT * FROM a EXCEPT (SELECT * FROM a WHERE birth_year > 1940);
+----
+Source materialize.public.people (u2):
+| Project (#2)
+
+Query:
+%0 = Let l0 =
+| Get materialize.public.people (u2)
+| Project (#2)
+| Reduce group=(extract_year_d(#0))
+| | agg count(true)
+
+%1 =
+| Get %0 (l0)
+| Filter (#0 > 1940)
+| Negate
+
+%2 =
+| Union %0 %1
+| Threshold
+
+EOF
+
+# Complex example (unsupported): a chain of CTEs with:
+# (1) an EXCEPT ALL in cte1 (that is, a plan containing Negate),
+# (2) a non-pushable operation (Distinct) in the cte2,
+# (3) an EXCEPT in the final result,
+# The optimization still removes the Threshold operators in both
+# (1) and (3) because the non_negative value inferred for cte1
+# prior to the rewrite is maintained for downstream rewrites.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+WITH cte1 AS (
+    SELECT * FROM people
+    EXCEPT ALL
+    SELECT * FROM people WHERE name LIKE 'J%'
+), cte2 AS (
+    SELECT DISTINCT * FROM cte1
+)
+SELECT * FROM cte2
+EXCEPT
+SELECT * FROM cte2 WHERE name LIKE 'P%';
+----
+Source materialize.public.people (u2):
+| Project (#0..=#3)
+
+Query:
+%0 =
+| Get materialize.public.people (u2)
+
+%1 =
+| Get materialize.public.people (u2)
+| Filter "J%" ~~(#1)
+| Negate
+
+%2 = Let l0 =
+| Union %0 %1
+| Distinct group=(#0, #1, #2, #3)
+
+%3 =
+| Get %2 (l0)
+| Filter "P%" ~~(#1)
+| Negate
+
+%4 =
+| Union %2 %3
+| Threshold
+
+EOF
+
+# Complex example (unsupported): A - (σ(p)(A) ⊎ σ(q)(A)).
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT name FROM people
+EXCEPT ALL
+(
+    SELECT name FROM people WHERE id = 1
+    UNION ALL
+    SELECT name FROM people WHERE id = 2
+)
+----
+Source materialize.public.people (u2):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.people (u2)
+| Project (#1)
+
+%1 =
+| Get materialize.public.people (u2)
+| Filter (#0 = 1)
+| Project (#1)
+| Negate
+
+%2 =
+| Get materialize.public.people (u2)
+| Filter (#0 = 2)
+| Project (#1)
+| Negate
+
+%3 =
+| Union %0 %1 %2
+| Threshold
 
 EOF

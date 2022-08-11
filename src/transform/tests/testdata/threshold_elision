@@ -14,7 +14,7 @@ cat
 ok
 
 # simple positive test
-# (select * from x) except all (select * from x where a > 7)
+# (select * from x) except all (select * from x where a < 7)
 build apply=ThresholdElision
 (threshold
   (union [
@@ -37,7 +37,7 @@ build apply=ThresholdElision
 ----
 
 # simple positive test
-# (select * from x) except all (select * from x where a > 7)
+# (select * from x) except all (select * from x where a < 7)
 build apply=ThresholdElision
 (threshold
   (union [
@@ -61,7 +61,7 @@ build apply=ThresholdElision
 
 
 # simple negative test: EXCEPT ALL
-# (select * from x) except all (select * from y where a > 7)
+# (select * from x) except all (select * from y where a < 7)
 build apply=ThresholdElision
 (threshold
   (union [
@@ -85,7 +85,7 @@ build apply=ThresholdElision
 ----
 
 # simple positive test: EXCEPT
-# (select * from x) except (select * from x where a > 7)
+# (select * from x) except (select * from x where a < 7)
 build apply=ThresholdElision
 (threshold
   (union [
@@ -109,6 +109,44 @@ build apply=ThresholdElision
 ----
 ----
 
+# simple positive test: EXCEPT where the lhs has a Negate
+# with r as (select * from x except select * from x where a < 7)
+# select * from r except all select * from r where a > 9;
+build apply=ThresholdElision
+(let z
+    (threshold
+      (union [
+        (get x)
+        (negate
+          (filter (get x) [(call_binary lt #0 (7 Int64))])) ]))
+    (threshold
+      (union [
+        (get z)
+        (negate
+          (filter (get z) [(call_binary gt #0 (9 Int64))])) ])))
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+| Filter (#0 < 7)
+| Negate
+
+%2 = Let l0 =
+| Union %0 %1
+
+%3 =
+| Get %2 (l0)
+| Filter (#0 > 9)
+| Negate
+
+%4 =
+| Union %2 %3
+| Threshold
+----
+----
 
 # simple negative test: EXCEPT
 # (select * from x) except (select * from y where a > 7)
@@ -132,6 +170,45 @@ build apply=ThresholdElision
 
 %2 =
 | Union %0 %1
+| Threshold
+----
+----
+
+# (unsupported) positive test: EXCEPT where the lhs has a Negate
+# with r as (select * from x except select * from x where a < 7)
+# select * from r except all select * from r where a > 9;
+build apply=ThresholdElision
+(let z
+    (threshold
+      (union [
+        (get x)
+        (negate
+          (filter (get x) [(call_binary lt #0 (7 Int64))])) ]))
+    (threshold
+      (union [
+        (get z)
+        (negate
+          (filter (get z) [(call_binary gt #0 (9 Int64))])) ])))
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+| Filter (#0 < 7)
+| Negate
+
+%2 = Let l0 =
+| Union %0 %1
+
+%3 =
+| Get %2 (l0)
+| Filter (#0 > 9)
+| Negate
+
+%4 =
+| Union %2 %3
 | Threshold
 ----
 ----
