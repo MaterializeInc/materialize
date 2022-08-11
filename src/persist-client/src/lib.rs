@@ -30,7 +30,7 @@ use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tracing::{debug, instrument, trace};
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::async_runtime::CpuHeavyRuntime;
@@ -99,10 +99,6 @@ impl PersistLocation {
         ),
         ExternalError,
     > {
-        debug!(
-            "Location::open blob={} consensus={}",
-            self.blob_uri, self.consensus_uri,
-        );
         let blob = BlobConfig::try_from(&self.blob_uri).await?;
         let blob =
             retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
@@ -297,7 +293,6 @@ impl PersistClient {
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     ) -> Result<Self, ExternalError> {
-        trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
         Ok(PersistClient {
@@ -333,7 +328,6 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        trace!("Client::open shard_id={:?}", shard_id);
         Ok((
             self.open_writer(shard_id).await?,
             self.open_reader(shard_id).await?,
@@ -355,7 +349,6 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        trace!("Client::open_reader shard_id={:?}", shard_id);
         let gc = GarbageCollector::new(
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
@@ -401,7 +394,6 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        trace!("Client::open_writer shard_id={:?}", shard_id);
         let gc = GarbageCollector::new(
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),

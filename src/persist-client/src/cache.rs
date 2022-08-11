@@ -16,7 +16,7 @@ use std::sync::Arc;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
-use tracing::debug;
+use tracing::instrument;
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::r#impl::machine::retry_external;
@@ -66,14 +66,11 @@ impl PersistClientCache {
     /// durable to the given [PersistLocation].
     ///
     /// The same `location` may be used concurrently from multiple processes.
+    #[instrument(level = "debug", skip_all)]
     pub async fn open(
         &mut self,
         location: PersistLocation,
     ) -> Result<PersistClient, ExternalError> {
-        debug!(
-            "PersistClientCache::open blob={} consensus={}",
-            location.blob_uri, location.consensus_uri,
-        );
         let blob = self.open_blob(location.blob_uri).await?;
         let consensus = match self.consensus_by_uri.entry(location.consensus_uri) {
             Entry::Occupied(x) => Arc::clone(x.get()),
