@@ -9,6 +9,9 @@
 
 > INSERT INTO sink_table VALUES (3)
 
+> SELECT COUNT(*) FROM sink_table
+3
+
 $ kafka-verify format=avro sink=materialize.public.sink_sink sort-messages=true
 {"before":null,"after":{"row":{"f1":{"int":1}}}}
 {"before":null,"after":{"row":{"f1":{"int":2}}}}
