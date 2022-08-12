@@ -60,7 +60,7 @@ use crate::protocol::client::{
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
-use crate::types::sources::{IngestionDescription, SourceData};
+use crate::types::sources::IngestionDescription;
 
 mod hosts;
 mod rehydration;
@@ -872,7 +872,10 @@ where
                 .or_default()
                 .push(id);
 
-            let from_storage_metadata = self.collection(from)?.collection_metadata.clone();
+            let from_collection = self.collection(from)?;
+            let from_storage_metadata = from_collection.collection_metadata.clone();
+            // We've added the dependency above in `exported_collections` so this guaranteed not to change at least until the sink is started up.
+            let from_since = from_collection.implied_capability.clone();
 
             let initial_as_of = MetadataExportFetcher::get_stash_collection()
                 .insert_without_overwrite(
@@ -884,22 +887,6 @@ where
                 )
                 .await?
                 .initial_as_of;
-
-            // We've added the dependency above in `exported_collections` so this guaranteed not to change at least until the sink is started up.
-            let from_since = self
-                .persist
-                .lock()
-                .await
-                .open(self.persist_location.clone())
-                .await
-                .unwrap()
-                .open_reader::<SourceData, (), Self::Timestamp, Diff>(
-                    from_storage_metadata.data_shard,
-                )
-                .await
-                .expect("invalid persist usage")
-                .since()
-                .to_owned();
 
             let as_of = if PartialOrder::less_equal(&initial_as_of.frontier, &from_since) {
                 SinkAsOf {
@@ -1318,7 +1305,8 @@ pub struct CollectionState<T> {
     /// This accumulation will always contain `self.implied_capability`, but may also contain
     /// capabilities held by others who have read dependencies on this collection.
     pub read_capabilities: MutableAntichain<T>,
-    /// The implicit capability associated with collection creation.
+    /// The implicit capability associated with collection creation.  This should never be less
+    /// than the since of the associated persist collection.
     pub implied_capability: Antichain<T>,
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
