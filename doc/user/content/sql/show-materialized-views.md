@@ -1,12 +1,13 @@
 ---
 title: "SHOW MATERIALIZED VIEWS"
-description: "`SHOW MATERIALIZED VIEWS` returns a list of materialized views in your Materialize instances."
+description: "`SHOW MATERIALIZED VIEWS` returns a list of materialized views being maintained in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`SHOW MATERIALIZED VIEWS` returns a list of materialized views in your Materialize instances.
+`SHOW MATERIALIZED VIEWS` returns a list of materialized views being maintained
+in Materialize.
 
 ## Syntax
 
@@ -16,48 +17,38 @@ Field | Use
 ------|-----
 _schema&lowbar;name_ | The schema to show materialized views from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 _cluster&lowbar;name_ | The cluster to show materialized views from. If omitted, materialized views from all clusters are shown.
-**FULL** | Return details about your materialized views.
-
-## Details
-
-### Output format for `SHOW FULL MATERIALIZED VIEWS`
-
-`SHOW FULL MATERIALIZED VIEWS`'s output is a table, with this structure:
-
-```nofmt
- cluster | name  | type
----------+-------+------
- ...     | ...   | ...
-```
-
-Field | Meaning
-------|--------
-**cluster** | The name of the [cluster](/overview/key-concepts/#clusters) maintaining the materialized view.
-**name** | The name of the materialized view.
-**type** | Whether the materialized view was created by the `user` or the `system`.
+**FULL** | Returns all materialized views, including their associated cluster and type.
 
 ## Examples
-
-### Default behavior
 
 ```sql
 SHOW MATERIALIZED VIEWS;
 ```
-```nofmt
-         name
-----------------------
- my_materialized_view
-```
 
-### Show details about views
+```nofmt
+     name
+--------------
+ winning_bids
+```
 
 ```sql
 SHOW FULL MATERIALIZED VIEWS;
 ```
+
 ```nofmt
- cluster |         name         | type
----------+----------------------+------
- default | my_materialized_view | user
+ cluster |     name     | type
+---------+--------------+------
+ default | winning_bids | user
+```
+
+```sql
+SHOW MATERIALIZED VIEWS LIKE '%bid%';
+```
+
+```nofmt
+     name
+--------------
+ winning_bids
 ```
 
 ## Related pages

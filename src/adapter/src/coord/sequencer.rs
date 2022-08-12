@@ -377,7 +377,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 tx: tx.take(),
                                 span: tracing::Span::none(),
                             }))
-                            .expect("sending to internal_cmd_tx cannot fail");
+                            .expect("sending to self.internal_cmd_tx cannot fail");
                     }
                     Err(err) => tx.send(Err(err), session),
                 };
@@ -1077,8 +1077,9 @@ impl<S: Append + 'static> Coordinator<S> {
         task::spawn(
             || format!("sink_connection_ready:{}", sink.from),
             async move {
-                internal_cmd_tx
-                    .send(Message::SinkConnectionReady(SinkConnectionReady {
+                // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
+                let result =
+                    internal_cmd_tx.send(Message::SinkConnectionReady(SinkConnectionReady {
                         session,
                         tx,
                         id,
@@ -1086,8 +1087,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         result: sink_connection::build(connection_builder, id, connection_context)
                             .await,
                         compute_instance,
-                    }))
-                    .expect("sending to internal_cmd_tx cannot fail");
+                    }));
+                if let Err(e) = result {
+                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                }
             },
         );
     }
@@ -2970,11 +2973,13 @@ impl<S: Append + 'static> Coordinator<S> {
                             // We timed out, so remove the pending peek. This is
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
-                            internal_cmd_tx
-                                .send(Message::RemovePendingPeeks {
-                                    conn_id: session.conn_id(),
-                                })
-                                .expect("sending to internal_cmd_tx cannot fail");
+                            // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
+                            let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
+                                conn_id: session.conn_id(),
+                            });
+                            if let Err(e) = result {
+                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                            }
                             Err(AdapterError::StatementTimeout)
                         }
                     }
@@ -3022,16 +3027,18 @@ impl<S: Append + 'static> Coordinator<S> {
             } else {
                 diffs
             };
-            internal_cmd_tx
-                .send(Message::SendDiffs(SendDiffs {
-                    session,
-                    tx,
-                    id,
-                    diffs,
-                    kind,
-                    returning: returning_rows,
-                }))
-                .expect("sending to internal_cmd_tx cannot fail");
+            // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+            let result = internal_cmd_tx.send(Message::SendDiffs(SendDiffs {
+                session,
+                tx,
+                id,
+                diffs,
+                kind,
+                returning: returning_rows,
+            }));
+            if let Err(e) = result {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         });
     }
 
