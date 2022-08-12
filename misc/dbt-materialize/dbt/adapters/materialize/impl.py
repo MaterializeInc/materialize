@@ -27,7 +27,7 @@ from dbt.exceptions import RuntimeException
 
 @dataclass
 class MaterializeConfig(AdapterConfig):
-    materialize_cluster: Optional[str] = True
+    materialize_cluster: Optional[str] = None
 
 
 class MaterializeAdapter(PostgresAdapter):
