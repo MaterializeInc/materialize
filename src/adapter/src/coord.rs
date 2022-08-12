@@ -681,7 +681,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .expect("invalid updates")
             .await
-            .expect("One-shot shouldn't fail")
+            .expect("One-shot shouldn't be dropped during bootstrap")
             .unwrap();
 
         // Add builtin table updates the clear the contents of all system tables

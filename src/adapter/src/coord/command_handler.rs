@@ -427,19 +427,21 @@ impl<S: Append + 'static> Coordinator<S> {
                 let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
-                    internal_cmd_tx
-                        .send(Message::CreateSourceStatementReady(
-                            CreateSourceStatementReady {
-                                session,
-                                tx,
-                                result,
-                                params,
-                                depends_on,
-                                original_stmt,
-                                otel_ctx,
-                            },
-                        ))
-                        .expect("sending to internal_cmd_tx cannot fail");
+                    // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
+                    let result = internal_cmd_tx.send(Message::CreateSourceStatementReady(
+                        CreateSourceStatementReady {
+                            session,
+                            tx,
+                            result,
+                            params,
+                            depends_on,
+                            original_stmt,
+                            otel_ctx,
+                        },
+                    ));
+                    if let Err(e) = result {
+                        tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
                 });
             }
 
