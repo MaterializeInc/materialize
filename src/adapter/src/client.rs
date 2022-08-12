@@ -203,9 +203,10 @@ impl ConnClient {
     /// Returns an error if the user is not permitted to log in to the ClientType.
     fn is_user_disallowed_by_client_type(&self, user: &str) -> Result<(), AdapterError> {
         match (&self.inner.client_type, user) {
-            (ClientType::Internal, SYSTEM_USER) => Ok(()),
-            (ClientType::Internal, _) => Err(AdapterError::UnauthorizedLogin(user.to_string())),
-            (ClientType::External, _) => Ok(()),
+            (ClientType::External, SYSTEM_USER) => {
+                Err(AdapterError::UnauthorizedLogin(user.to_string()))
+            }
+            (ClientType::Internal, _) | (ClientType::External, _) => Ok(()),
         }
     }
 
