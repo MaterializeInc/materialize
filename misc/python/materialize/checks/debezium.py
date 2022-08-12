@@ -49,9 +49,12 @@ class DebeziumPostgres(Check):
 
                 $ schema-registry-wait-schema schema=postgres.public.debezium_table-value
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 # UPSERT is requred due to https://github.com/MaterializeInc/materialize/issues/14211
                 > CREATE SOURCE debezium_source1
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.debezium_table'
+                  FROM KAFKA CONNECTION kafka_conn
+                  TOPIC 'postgres.public.debezium_table'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE DEBEZIUM UPSERT;
 
@@ -79,7 +82,7 @@ class DebeziumPostgres(Check):
                 COMMIT;
 
                 > CREATE SOURCE debezium_source2
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.debezium_table'
+                  FROM KAFKA CONNECTION kafka_conn TOPIC 'postgres.public.debezium_table'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE DEBEZIUM UPSERT;
 
@@ -99,7 +102,7 @@ class DebeziumPostgres(Check):
                 COMMIT;
 
                 > CREATE SOURCE debezium_source3
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.debezium_table'
+                  FROM KAFKA CONNECTION kafka_conn TOPIC 'postgres.public.debezium_table'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE DEBEZIUM UPSERT;
 

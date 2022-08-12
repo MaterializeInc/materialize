@@ -23,16 +23,13 @@ def test_secrets(mz: MaterializeApplication) -> None:
             # Our Redpanda instance is not configured for SASL, so we can not
             # really establish a successful connection.
 
-            ! CREATE SOURCE secrets_source
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-secrets-topic-${testdrive.seed}' WITH (
-                  security_protocol = 'SASL_SSL',
-                  sasl_mechanisms = 'PLAIN',
-                  sasl_username = SECRET username,
-                  sasl_password = SECRET password
-              )
-              FORMAT BYTES
-              ENVELOPE NONE;
+            ! CREATE CONNECTION secrets_conn
+              FOR KAFKA
+              BROKER BROKER '${testdrive.kafka-addr}',
+              SASL MECHANISMS 'PLAIN',
+              SASL USERNAME = SECRET username,
+              SASL PASSWORD = SECRET passsword;
+
             contains: SSL handshake failed
             """
         )

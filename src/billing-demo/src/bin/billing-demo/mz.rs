@@ -58,10 +58,19 @@ pub async fn create_kafka_sink(
     schema_registry_url: &str,
 ) -> Result<String> {
     let query = format!(
-            "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
+        "CREATE CONNECTION IF NOT EXISTS {sink}_kafka_conn
+            FOR KAFKA BROKER '{kafka_url}'",
+        sink = sink_name,
+        kafka_url = kafka_url,
+    );
+
+    debug!("creating kafka connection=> {}", query);
+    mz_client::execute(&mz_client, &query).await?;
+
+    let query = format!(
+            "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA CONNECTION {sink}_kafka_conn TOPIC '{topic}' \
              WITH (consistency_topic = '{topic}-consistency') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
              sink = sink_name,
-             kafka_url = kafka_url,
              topic = sink_topic_name,
              schema_registry = schema_registry_url
          );

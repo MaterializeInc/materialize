@@ -14,11 +14,14 @@
 
 # Test that we invent field names for unnamed columns.
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 # See #9723
 #> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
 #
 #> CREATE SINK unnamed_cols_sink FROM unnamed_cols
-#  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-cols-sink'
+#  INTO KAFKA CONNECTION kafka_conn TOPIC 'unnamed-cols-sink'
 #  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 #
 #$ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
@@ -30,7 +33,7 @@
 #> CREATE MATERIALIZED VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
 #
 #> CREATE SINK clashing_cols_sink FROM clashing_cols
-#  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clashing-cols-sink'
+#  INTO KAFKA CONNECTION kafka_conn TOPIC 'clashing-cols-sink'
 #  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 #
 #$ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
@@ -43,7 +46,7 @@
   (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02')
 
 > CREATE SINK datetime_data_sink FROM datetime_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'datetime-data-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'datetime-data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messages=true
@@ -53,7 +56,7 @@ $ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messa
 > CREATE MATERIALIZED VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
 
 > CREATE SINK time_data_sink FROM time_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'time-data-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'time-data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=true
@@ -66,7 +69,7 @@ $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=
 
 # Sinks with JSON columns should not crash - see https://github.com/MaterializeInc/materialize/issues/4722
 > CREATE SINK json_data_sink FROM json_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-data-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'json-data-sink'
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
@@ -75,7 +78,7 @@ $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=
 > CREATE MATERIALIZED VIEW map_data (map) AS SELECT '{a => 1, b => 2}'::map[text=>int];
 
 > CREATE SINK map_sink FROM map_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'map-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'map-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
@@ -84,7 +87,7 @@ $ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
 > CREATE MATERIALIZED VIEW list_data (list) AS SELECT LIST[1, 2];
 
 > CREATE SINK list_sink FROM list_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'list-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'list-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
@@ -94,7 +97,7 @@ $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
 > CREATE MATERIALIZED VIEW namespace_value_data (namespace) AS SELECT 1;
 
 > CREATE SINK namespace_value_sink FROM namespace_value_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'namespace-value-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'namespace-value-sink'
   WITH (avro_value_fullname = 'abc.def.ghi')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
@@ -108,7 +111,7 @@ $ kafka-verify format=avro sink=materialize.public.namespace_value_sink sort-mes
 > CREATE MATERIALIZED VIEW namespace_key_value_data (a, b) AS SELECT * FROM (VALUES (1, 2));
 
 > CREATE SINK namespace_key_value_sink FROM namespace_key_value_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'namespace-key-value-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'namespace-key-value-sink'
   KEY (b)
   WITH (avro_key_fullname = 'some.neat.class.foo', avro_value_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -125,31 +128,31 @@ $ kafka-verify format=avro sink=materialize.public.namespace_key_value_sink sort
 > CREATE MATERIALIZED VIEW input (a, b) AS SELECT * FROM (VALUES (1, 2))
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a, a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Repeated column name in sink key: a
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink'
   WITH (avro_value_fullname = 'some.neat.class.foo', avro_key_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Cannot specify avro_key_fullname without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink'
   WITH (avro_key_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Cannot specify avro_key_fullname without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
   WITH (avro_key_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
   WITH (avro_value_fullname = 'some.neat.class.bar')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names

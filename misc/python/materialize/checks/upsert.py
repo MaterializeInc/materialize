@@ -48,8 +48,10 @@ class UpsertInsert(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-insert key-schema=${keyschema} schema=${schema} publish=true repeat=10000
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SOURCE upsert_insert
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-upsert-insert-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE UPSERT
@@ -99,8 +101,10 @@ class UpsertUpdate(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-update key-schema=${keyschema} schema=${schema} publish=true repeat=10000
                 {"key1": "${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SOURCE upsert_update
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-upsert-update-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE UPSERT
@@ -147,8 +151,10 @@ class UpsertDelete(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-delete key-schema=${keyschema} schema=${schema} publish=true repeat=30000
                 {"key1": "${kafka-ingest.iteration}"} {"f1": "${kafka-ingest.iteration}"}
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SOURCE upsert_delete
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-upsert-delete-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE UPSERT

@@ -21,8 +21,11 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT * FROM data
@@ -142,7 +145,7 @@ a  b
 # TODO(14221): Better error message!
 # Cannot create sink from unmaterialized view.
 ! CREATE SINK not_mat_sink2 FROM data_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-view2-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:collection identifier is not present
 
@@ -154,7 +157,7 @@ contains:collection identifier is not present
 # TODO(14221): Better error message!
 # or from an indexed unmaterialized view
 ! CREATE SINK not_mat_sink2 FROM test5
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-view2-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:collection identifier is not present
 
@@ -309,7 +312,7 @@ b  c
 $ kafka-create-topic topic=mat
 
 > CREATE SOURCE mat_data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mat-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-mat-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE DEFAULT INDEX ON mat_data
