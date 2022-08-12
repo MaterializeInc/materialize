@@ -1,20 +1,18 @@
 ---
 title: "CREATE MATERIALIZED VIEW"
-description: "`CREATE MATERIALIZED VIEW` creates a materialized view, which Materialize will incrementally maintain as updates occur to the underlying data."
+description: "`CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and incrementally updated as new data arrives."
 menu:
   main:
     parent: 'commands'
 ---
 
-`CREATE MATERIALIZED VIEW` creates a materialized view, which lets you retrieve
-incrementally updated results of a `SELECT` query very quickly. Despite the
-simplicity of creating a materialized view, it's Materialize's most powerful
-feature.
+`CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
+incrementally updated as new data arrives.
 
-## Conceptual framework
-
-`CREATE MATERIALIZED VIEW` computes and maintains the results of a `SELECT`
-query in memory. For more information, see [Key Concepts: Materialized views](/overview/key-concepts/#materialized-views).
+A materialized view specifies a [cluster](/overview/key-concepts/#clusters) that
+is tasked with keeping its results up-to-date, but **can be referenced in
+any cluster**. This allows you to effectively decouple the computational
+resources used for view maintenance from the resources used for query serving.
 
 ## Syntax
 
@@ -22,57 +20,73 @@ query in memory. For more information, see [Key Concepts: Materialized views](/o
 
 Field | Use
 ------|-----
-**OR REPLACE** | If a view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views depend on, nor can you replace a non-view object with a view.
-**IF NOT EXISTS** | If specified, _do not_ generate an error if a view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
-_view&lowbar;name_ | A name for the view.
+**OR REPLACE** | If a materialized view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views depend on, nor can you replace a non-view object with a view.
+**IF NOT EXISTS** | If specified, _do not_ generate an error if a materialized view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
+_view&lowbar;name_ | A name for the materialized view.
 **(** _col_ident_... **)** | Rename the `SELECT` statement's columns to the list of identifiers, both of which must be the same length. Note that this is required for statements that return multiple columns with the same identifier.
-_cluster&lowbar;name_ | The cluster to maintain this materialized view. If not provided, uses the session’s cluster variable.
-_select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want to materialize and maintain.
+_cluster&lowbar;name_ | The cluster to maintain this materialized view. If not specified, defaults to the active cluster.
+_select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you want to maintain incrementally updated.
 
 ## Details
 
-### Memory
+### Usage patterns
 
-Views are maintained in memory. Because of this, one must be sure that all
-intermediate stages of the query, as well as its result set can fit in the
-memory of a single machine, while also understanding the rate at which the
-query's result set will grow.
+Maintaining a materialized view in durable storage has resource and latency
+costs that should be carefully considered depending on the main usage of the
+view. It's a good idea to create a materialized view if:
 
-For more detail about how different clauses impact memory usage, check out our
-[`SELECT`](../select) documentation.
+* The results need to be available across clusters;
+* View maintenance and query serving would benefit from being scaled
+  independently;
+* The final consumer of the view is a sink or a [subscription](../tail).
+
+On the other hand, if you only need to access a view from a single cluster, you
+should consider creating a [non-materialized view](../create-view) and building
+an index on it instead. The index will incrementally maintain the results of
+the view updated in memory within that cluster, allowing you to avoid the costs
+and latency overhead of materialization.
+
+[//]: # "TODO(morsapaes) Point to relevant architecture patterns once these
+exist."
 
 ### Indexes
 
-A brief mention on indexes: Materialize automatically creates an in-memory index
-which stores all columns in the `SELECT` query's result set; this is the crucial
-structure that the view maintains to provide low-latency access to your query's
-results.
+Although you can query a materialized view directly, these queries will be
+issued against Materialize's storage layer. This is expected to be fast, but
+still slower than reading from memory. To improve the speed of queries on
+materialized views, we recommend creating [indexes](../create-index) based on
+common query patterns.
 
-Some things you might want to do with indexes...
+It's important to keep in mind that indexes are **local** to a cluster, and
+maintained in memory. As an example, if you create a materialized view and
+build an index on it in the `default` cluster, querying the view from a
+different cluster will _not_ use the index; you should create the appropriate
+indexes in each cluster you are referencing the materialized view in.
 
-- View the details of a view's indexes through [`SHOW INDEX`](../show-index).
-- If you find that your queries would benefit from other indexes, e.g. you want
-  to join two relations on some foreign key, you can [create
-  indexes](../create-index).
+[//]: # "TODO(morsapaes) Point to relevant operational guide on indexes once
+this exists+add detail about using indexes to optimize materialized view
+stacking."
 
 ## Examples
 
+### Creating a materialized view
+
 ```sql
-CREATE MATERIALIZED VIEW purchase_sum_by_region
-AS
-    SELECT sum(purchase.amount) AS region_sum, region.id AS region_id
-    FROM mysql_simple_region AS region
-    INNER JOIN mysql_simple_user AS user ON region.id = user.region_id
-    INNER JOIN mysql_simple_purchase AS purchase ON purchase.user_id = user.id
-    GROUP BY region.id;
+CREATE MATERIALIZED VIEW winning_bids AS
+SELECT auction_id,
+       bid_id,
+       item,
+       amount
+FROM highest_bid_per_auction
+WHERE extract(epoch FROM end_time) * 1000 < mz_logical_timestamp();
 ```
 
-In this example, as new users or purchases come in, the results of the view are
-incrementally updated. For example, if a new purchase comes in for a specific
-user, the underlying dataflow will determine which region that user belongs to,
-and then increment the `region_sum` field with those results.
+[//]: # "TODO(morsapaes) Add more elaborate examples with \timing that show
+things like querying materialized views from different clusters, indexed vs.
+non-indexed, and so on."
 
 ## Related pages
 
-- [`SELECT`](../select)
-- [`CREATE SOURCE`](../create-source)
+- [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)
+- [`SHOW CREATE MATERIALIZED VIEW`](../show-create-materialized-view)
+- [`DROP MATERIALIZED VIEW`](../drop-materialized-view)
