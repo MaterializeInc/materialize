@@ -51,8 +51,14 @@ message ProtoExportSinks {
     repeated ProtoExportSinkCommand exports = 1;
 }
 
+// TODO: move this to compute
 message ProtoFrontierUppersKind {
     repeated ProtoTrace traces = 1;
+}
+
+message ProtoStorageFrontierUppersKind {
+    repeated ProtoTrace traces = 1;
+    repeated ProtoTrace remap_traces = 2;
 }
 
 message ProtoTrace {
@@ -76,6 +82,6 @@ message ProtoStorageCommand {
 
 message ProtoStorageResponse {
     oneof kind {
-        ProtoFrontierUppersKind frontier_uppers = 1;
+        ProtoStorageFrontierUppersKind frontier_uppers = 1;
     }
 }

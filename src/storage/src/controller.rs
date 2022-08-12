@@ -55,7 +55,7 @@ use mz_stash::{self, StashError, TypedCollection};
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::protocol::client::{
     ExportSinkCommand, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
-    StorageCommand, StorageResponse, Update,
+    StorageCommand, StorageFrontierUppers, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
@@ -1164,8 +1164,8 @@ where
     async fn process(&mut self) -> Result<(), anyhow::Error> {
         match self.state.stashed_response.take() {
             None => Ok(()),
-            Some(StorageResponse::FrontierUppers(updates)) => {
-                self.update_write_frontiers(&updates).await?;
+            Some(StorageResponse::FrontierUppers(StorageFrontierUppers { data, remap: _ })) => {
+                self.update_write_frontiers(&data).await?;
                 Ok(())
             }
         }
@@ -1595,8 +1595,8 @@ mod persist_write_handles {
     use tracing::Instrument;
 
     use crate::controller::StorageError;
-    use crate::protocol::client::StorageResponse;
     use crate::protocol::client::Update;
+    use crate::protocol::client::{StorageFrontierUppers, StorageResponse};
     use crate::types::sources::SourceData;
 
     #[derive(Debug)]
@@ -1797,8 +1797,12 @@ mod persist_write_handles {
                             .partition_result();
 
                         // It is not strictly an error for the controller to hang up.
-                        let _ = frontier_responses
-                            .send(StorageResponse::FrontierUppers(change_batches));
+                        let _ = frontier_responses.send(StorageResponse::FrontierUppers(
+                            StorageFrontierUppers {
+                                data: change_batches,
+                                remap: vec![],
+                            },
+                        ));
 
                         if failed_appends.is_empty() {
                             Ok(())

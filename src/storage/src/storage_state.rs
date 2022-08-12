@@ -25,7 +25,7 @@ use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
 
 use crate::controller::CollectionMetadata;
-use crate::protocol::client::{StorageCommand, StorageResponse};
+use crate::protocol::client::{StorageCommand, StorageFrontierUppers, StorageResponse};
 use crate::sink::SinkBaseMetrics;
 use crate::types::connections::ConnectionContext;
 use crate::types::sinks::StorageSinkDesc;
@@ -293,8 +293,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
             &mut self.storage_state.frontiers.reported_remap_frontiers,
         );
 
-        if !data_changes.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(data_changes));
+        if !data_changes.is_empty() || !remap_changes.is_empty() {
+            self.send_storage_response(
+                response_tx,
+                StorageResponse::FrontierUppers(StorageFrontierUppers {
+                    data: data_changes,
+                    remap: remap_changes,
+                }),
+            );
         }
     }
 

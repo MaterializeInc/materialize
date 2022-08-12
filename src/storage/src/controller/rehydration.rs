@@ -39,8 +39,8 @@ use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 
 use crate::protocol::client::{
-    ExportSinkCommand, IngestSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
-    StorageResponse,
+    ExportSinkCommand, IngestSourceCommand, StorageClient, StorageCommand, StorageFrontierUppers,
+    StorageGrpcClient, StorageResponse,
 };
 
 /// A storage client that replays the command stream on failure.
@@ -299,8 +299,9 @@ where
 
     fn absorb_response(&mut self, response: StorageResponse<T>) -> Option<StorageResponse<T>> {
         match response {
-            StorageResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
+            StorageResponse::FrontierUppers(StorageFrontierUppers { mut data, remap }) => {
+                // TODO(guswynn): absorb the remap frontier as well
+                for (id, changes) in data.iter_mut() {
                     if let Some((reported, tracked)) = self.uppers.get_mut(id) {
                         // Apply changes to `tracked` frontier.
                         tracked.update_iter(changes.drain());
@@ -323,8 +324,11 @@ where
                         panic!("RehydratingStorageClient received FrontierUppers response for absent identifier {id}");
                     }
                 }
-                if !list.is_empty() {
-                    Some(StorageResponse::FrontierUppers(list))
+                if !data.is_empty() {
+                    Some(StorageResponse::FrontierUppers(StorageFrontierUppers {
+                        data,
+                        remap,
+                    }))
                 } else {
                     None
                 }

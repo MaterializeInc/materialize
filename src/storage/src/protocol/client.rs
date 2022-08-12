@@ -273,11 +273,17 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StorageFrontierUppers<T = mz_repr::Timestamp> {
+    pub data: Vec<(GlobalId, ChangeBatch<T>)>,
+    pub remap: Vec<(GlobalId, ChangeBatch<T>)>,
+}
+
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
+    FrontierUppers(StorageFrontierUppers<T>),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
@@ -285,7 +291,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
         use proto_storage_response::Kind::*;
         ProtoStorageResponse {
             kind: Some(match self {
-                StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
+                StorageResponse::FrontierUppers(uppers) => FrontierUppers(uppers.into_proto()),
             }),
         }
     }
@@ -308,10 +314,13 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
+        prop_oneof![(
+            proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4),
             proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
-                .prop_map(StorageResponse::FrontierUppers),
-        ]
+        )
+            .prop_map(|(data, remap)| StorageResponse::FrontierUppers(
+                StorageFrontierUppers { data, remap }
+            ))]
         .boxed()
     }
 }
@@ -389,8 +398,10 @@ where
     ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
         match response {
             // Avoid multiple retractions of minimum time, to present as updates from one worker.
-            StorageResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
+            //
+            // TODO(guswynn): absorb the remap frontier as well
+            StorageResponse::FrontierUppers(StorageFrontierUppers { mut data, remap }) => {
+                for (id, changes) in data.iter_mut() {
                     if let Some(frontier) = self.uppers.get_mut(id) {
                         let iter = frontier.update_iter(changes.drain());
                         changes.extend(iter);
@@ -402,18 +413,21 @@ where
                 // This is more verbose than `list.retain()` because that method cannot mutate
                 // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
                 let mut cursor = 0;
-                while let Some((_id, changes)) = list.get_mut(cursor) {
+                while let Some((_id, changes)) = data.get_mut(cursor) {
                     if changes.is_empty() {
-                        list.swap_remove(cursor);
+                        data.swap_remove(cursor);
                     } else {
                         cursor += 1;
                     }
                 }
 
-                if list.is_empty() {
+                if data.is_empty() {
                     None
                 } else {
-                    Some(Ok(StorageResponse::FrontierUppers(list)))
+                    Some(Ok(StorageResponse::FrontierUppers(StorageFrontierUppers {
+                        data,
+                        remap,
+                    })))
                 }
             }
         }
@@ -455,6 +469,22 @@ impl RustType<ProtoTrace> for (GlobalId, ChangeBatch<mz_repr::Timestamp>) {
                 .map(|update| (update.timestamp, update.diff)),
         );
         Ok((proto.id.into_rust_if_some("ProtoTrace::id")?, batch))
+    }
+}
+
+impl RustType<ProtoStorageFrontierUppersKind> for StorageFrontierUppers<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoStorageFrontierUppersKind {
+        ProtoStorageFrontierUppersKind {
+            traces: self.data.into_proto(),
+            remap_traces: self.remap.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageFrontierUppersKind) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            data: proto.traces.into_rust()?,
+            remap: proto.remap_traces.into_rust()?,
+        })
     }
 }
 
@@ -514,8 +544,16 @@ mod tests {
             let actual = actual.unwrap();
             let StorageResponse::FrontierUppers(expected_traces) = expect;
             let StorageResponse::FrontierUppers(actual_traces) = actual;
-            assert_eq!(actual_traces.len(), expected_traces.len());
-            for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
+            assert_eq!(actual_traces.data.len(), expected_traces.data.len());
+            assert_eq!(actual_traces.remap.len(), expected_traces.remap.len());
+
+            let comparisons = actual_traces
+                .data.into_iter()
+                .zip(expected_traces.data.into_iter())
+                .chain(actual_traces.remap.into_iter()
+                .zip(expected_traces.remap.into_iter()));
+
+            for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in comparisons {
                 assert_eq!(actual_id, expected_id);
                 // `ChangeBatch`es representing equivalent sets of
                 // changes could have different internal
