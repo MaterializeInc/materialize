@@ -22,7 +22,9 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::CodecMismatch;
+use crate::r#impl::compact::{CompactReq, CompactRes};
 use crate::r#impl::paths::PartialBlobKey;
+use crate::r#impl::service::{ProtoCompactReq, ProtoCompactRes};
 use crate::r#impl::state::proto_hollow_batch_reader_metadata;
 use crate::r#impl::state::{
     HollowBatch, ProtoHollowBatch, ProtoHollowBatchReaderMetadata, ProtoReadEnrichedHollowBatch,
@@ -446,6 +448,46 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchReaderMetadata>
                     "ProtoHollowBatchReaderMetadata::Kind",
                 ))
             }
+        })
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoCompactReq> for CompactReq<T> {
+    fn into_proto(&self) -> ProtoCompactReq {
+        ProtoCompactReq {
+            shard_id: self.shard_id.into_proto(),
+            desc: Some(self.desc.into_proto()),
+            inputs: self.inputs.into_proto(),
+            ts_codec: T::codec_name(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCompactReq) -> Result<Self, TryFromProtoError> {
+        if T::codec_name() != proto.ts_codec {
+            return Err(TryFromProtoError::CodecMismatch(format!(
+                "codec {} did not match req codec {}",
+                T::codec_name(),
+                proto.ts_codec
+            )));
+        }
+        Ok(CompactReq {
+            shard_id: proto.shard_id.into_rust()?,
+            desc: proto.desc.into_rust_if_some("desc")?,
+            inputs: proto.inputs.into_rust()?,
+        })
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoCompactRes> for CompactRes<T> {
+    fn into_proto(&self) -> ProtoCompactRes {
+        ProtoCompactRes {
+            output: Some(self.output.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoCompactRes) -> Result<Self, TryFromProtoError> {
+        Ok(CompactRes {
+            output: proto.output.into_rust_if_some("output")?,
         })
     }
 }

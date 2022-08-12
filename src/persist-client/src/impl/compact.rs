@@ -19,14 +19,17 @@ use differential_dataflow::trace::Description;
 use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::{ProtoType, RustType};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
+use tonic::transport::Channel;
 use tracing::{debug_span, warn, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
 use crate::r#impl::machine::{retry_external, Machine};
+use crate::r#impl::service::proto_persist_client::ProtoPersistClient;
 use crate::r#impl::state::HollowBatch;
 use crate::r#impl::trace::FueledMergeRes;
 use crate::read::fetch_batch_part;
@@ -55,6 +58,36 @@ pub struct CompactRes<T> {
     pub output: HollowBatch<T>,
 }
 
+#[derive(Debug, Clone)]
+struct CompactService {
+    client: Arc<tokio::sync::Mutex<ProtoPersistClient<Channel>>>,
+}
+
+impl CompactService {
+    pub async fn new(cfg: &PersistConfig) -> Result<Option<Self>, anyhow::Error> {
+        match cfg.remote_compact_addr.as_ref() {
+            None => Ok(None),
+            Some(addr) => Ok(Some({
+                let client = ProtoPersistClient::connect(addr.clone()).await?;
+                CompactService {
+                    client: Arc::new(tokio::sync::Mutex::new(client)),
+                }
+            })),
+        }
+    }
+
+    pub async fn compact<T, D>(&self, req: CompactReq<T>) -> Result<CompactRes<T>, anyhow::Error>
+    where
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let req = req.into_proto();
+        let res = self.client.lock().await.compact(req).await?;
+        let res = res.into_inner().into_rust()?;
+        Ok(res)
+    }
+}
+
 /// A service for performing physical and logical compaction.
 ///
 /// This will possibly be called over RPC in the future. Physical compaction is
@@ -67,23 +100,26 @@ pub struct Compactor {
     metrics: Arc<Metrics>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     writer_id: WriterId,
+    remote_compact_client: Option<CompactService>,
 }
 
 impl Compactor {
-    pub fn new(
+    pub async fn new(
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
-    ) -> Self {
-        Compactor {
+    ) -> Result<Self, anyhow::Error> {
+        let remote_compact_client = CompactService::new(&cfg).await?;
+        Ok(Compactor {
             cfg,
             blob,
             metrics,
             cpu_heavy_runtime,
             writer_id,
-        }
+            remote_compact_client,
+        })
     }
 
     pub fn compact_and_apply_background<K, V, T, D>(
@@ -116,6 +152,7 @@ impl Compactor {
         let blob = Arc::clone(&self.blob);
         let metrics = Arc::clone(&self.metrics);
         let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
+        let remote_compact_client = self.remote_compact_client.clone();
         let mut machine = machine.clone();
         let writer_id = self.writer_id.clone();
 
@@ -130,15 +167,20 @@ impl Compactor {
             async move {
                 metrics.compaction.started.inc();
                 let start = Instant::now();
-                let res = Self::compact::<T, D>(
-                    cfg,
-                    Arc::clone(&blob),
-                    Arc::clone(&metrics),
-                    Arc::clone(&cpu_heavy_runtime),
-                    req,
-                    writer_id,
-                )
-                .await;
+                let res: Result<CompactRes<T>, anyhow::Error> = match remote_compact_client {
+                    Some(client) => client.compact::<T, D>(req).await,
+                    None => {
+                        Self::compact::<T, D>(
+                            cfg,
+                            Arc::clone(&blob),
+                            Arc::clone(&metrics),
+                            Arc::clone(&cpu_heavy_runtime),
+                            req,
+                            writer_id,
+                        )
+                        .await
+                    }
+                };
                 metrics
                     .compaction
                     .seconds

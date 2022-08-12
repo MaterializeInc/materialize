@@ -49,6 +49,7 @@ pub mod batch;
 pub mod cache;
 pub mod error;
 pub mod read;
+pub mod rpc;
 pub mod usage;
 pub mod write;
 
@@ -63,6 +64,7 @@ pub(crate) mod r#impl {
     pub mod maintenance;
     pub mod metrics;
     pub mod paths;
+    pub mod service;
     pub mod state;
     pub mod trace;
 }
@@ -185,6 +187,8 @@ pub struct PersistConfig {
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
     pub consensus_connection_pool_max_size: usize,
+    /// WIP is this the right type?
+    pub remote_compact_addr: Option<String>,
 }
 
 // Tuning inputs:
@@ -244,6 +248,7 @@ impl PersistConfig {
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 50,
+            remote_compact_addr: None,
         }
     }
 }
@@ -405,15 +410,21 @@ impl PersistClient {
         )
         .await?;
         let writer_id = WriterId::new();
-        let compact = self.cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.cpu_heavy_runtime),
-                writer_id.clone(),
+        let compact = if self.cfg.compaction_enabled {
+            Some(
+                Compactor::new(
+                    self.cfg.clone(),
+                    Arc::clone(&self.blob),
+                    Arc::clone(&self.metrics),
+                    Arc::clone(&self.cpu_heavy_runtime),
+                    writer_id.clone(),
+                )
+                .await
+                .expect("WIP"),
             )
-        });
+        } else {
+            None
+        };
         let (shard_upper, _) = machine.register_writer(&writer_id, (self.cfg.now)()).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
@@ -475,6 +486,7 @@ mod tests {
     use crate::read::ListenEvent;
 
     use crate::r#impl::paths::BlobKey;
+    use crate::rpc::inprocess::InProcessServer;
     use proptest::prelude::*;
 
     use super::*;
@@ -489,9 +501,20 @@ mod tests {
         // Enable compaction in tests to ensure we get coverage.
         cache.cfg.compaction_enabled = true;
 
+        let blob_uri = "mem://".to_owned();
+        let _compact_server = InProcessServer::new(&mut cache, blob_uri.clone())
+            .await
+            .expect("failed to start compaction rpc server");
+
+        // WIP
+        cache.cfg.remote_compact_addr = Some(format!("http://{}", _compact_server.addr()));
+
+        // WIP
+        std::mem::forget(_compact_server);
+
         cache
             .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
+                blob_uri,
                 consensus_uri: "mem://".to_owned(),
             })
             .await

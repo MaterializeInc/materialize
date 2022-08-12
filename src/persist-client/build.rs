@@ -8,7 +8,13 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
-    prost_build::Config::new()
-        .compile_protos(&["persist-client/src/impl/state.proto"], &[".."])
+    tonic_build::configure()
+        .compile(
+            &[
+                "persist-client/src/impl/service.proto",
+                "persist-client/src/impl/state.proto",
+            ],
+            &[".."],
+        )
         .unwrap();
 }

@@ -25,6 +25,7 @@ use tracing::{info_span, Instrument};
 
 pub mod maelstrom;
 pub mod open_loop;
+pub mod persistd;
 pub mod source_example;
 
 #[derive(Debug, clap::Parser)]
@@ -39,6 +40,7 @@ struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
+    Persistd(crate::persistd::Args),
     Maelstrom(crate::maelstrom::Args),
     OpenLoop(crate::open_loop::Args),
     SourceExample(crate::source_example::Args),
@@ -64,6 +66,9 @@ fn main() {
 
     let root_span = info_span!("persistcli");
     let res = match args.command {
+        Command::Persistd(args) => {
+            runtime.block_on(crate::persistd::run(args).instrument(root_span))
+        }
         Command::Maelstrom(args) => runtime.block_on(async move {
             // Run the maelstrom stuff in a spawn_blocking because it internally
             // spawns tasks, so the runtime needs to be in the TLC.
