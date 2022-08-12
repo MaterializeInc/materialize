@@ -24,6 +24,8 @@ CREATE TABLE region  (
     r_comment    varchar(152)
 );
 
+CREATE INDEX pk_region_regionkey ON region (r_regionkey ASC);
+
 CREATE TABLE part (
     p_partkey     integer ,
     p_name        varchar(55) NOT NULL,
@@ -35,6 +37,8 @@ CREATE TABLE part (
     p_retailprice decimal(15, 2) NOT NULL,
     p_comment     varchar(23) NOT NULL
 );
+
+CREATE INDEX pk_part_partkey ON part (p_partkey ASC);
 
 CREATE TABLE supplier (
     s_suppkey     integer ,
