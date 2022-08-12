@@ -35,14 +35,17 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
 {"key1": "fish", "key2": 2} {"f1": "fish", "f2": 1000}
 {"key1": "fisch", "key2": 42} {"f1": "fish", "f2": 1000}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE upsert_input
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  FROM KAFKA CONNECTION kafka_conn TOPIC
   'testdrive-upsert-avro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 
 > CREATE SINK upsert_input_sink FROM upsert_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'upsert-input-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'upsert-input-sink'
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
@@ -134,20 +137,20 @@ $ kafka-create-topic topic=input
 
 # (PRIMARY KEY (id) NOT ENFORCED)
 > CREATE SOURCE input
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED VIEW input_keyed AS SELECT a, max(b) as b FROM input GROUP BY a
 
 > CREATE SINK input_sink FROM input_keyed
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
   WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 # requesting to key by (a, b) is fine when (a) is a unique key
 
 > CREATE SINK input_sink_multiple_keys FROM input_keyed
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b, a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b, a)
   WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
@@ -212,13 +215,13 @@ $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort
 $ kafka-create-topic topic=input-with-deletions
 
 > CREATE SOURCE input_with_deletions
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-with-deletions-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-with-deletions-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
 
 > CREATE SINK input_with_deletions_sink FROM input_with_deletions_keyed
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
@@ -272,23 +275,23 @@ $ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sor
 $ kafka-create-topic topic=non-keyed-input
 
 > CREATE SOURCE non_keyed_input
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-keyed-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-non-keyed-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK not_enforced_key FROM non_keyed_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'not-enforced-sink' KEY (a) NOT ENFORCED
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'not-enforced-sink' KEY (a) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 # Bad upsert keys
 
 ! CREATE SINK invalid_key FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
   WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (a), there are no valid keys
 
 ! CREATE SINK another_invalid_key FROM input_keyed
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b)
   WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (b), valid keys are: (a)
@@ -296,25 +299,25 @@ contains:Invalid upsert key: (b), valid keys are: (a)
 > CREATE MATERIALIZED VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
 
 ! CREATE SINK invalid_sub_key FROM input_keyed_ab
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
   WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (a), valid keys are: (a, b)
 
 ! CREATE SINK another_invalid_sub_key FROM input_keyed_ab
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b)
   WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (b), valid keys are: (a, b)
 
 ! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-sink'
   KEY (key1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (key1), valid keys are: (key1, key2)
 
 ! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-sink'
   KEY (key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (key2), valid keys are: (key1, key2)

@@ -13,8 +13,11 @@
 
 > CREATE MATERIALIZED VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SINK data_sink FROM data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
@@ -106,11 +109,11 @@ $ kafka-create-topic topic=input
 # input is processed in consistency batches and not all at once
 
 > CREATE SOURCE input
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK non_keyed_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'non-keyed-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink'
   WITH (consistency_topic = 'non-keyed-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
@@ -119,22 +122,22 @@ $ kafka-create-topic topic=input
 # the sinked relation has the natural primary key (a)
 
 > CREATE SINK non_keyed_sink_of_keyed_relation FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'non-keyed-sink-of-keyed-relation'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink-of-keyed-relation'
   WITH (consistency_topic = 'non-keyed-sink-of-keyed-relation-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK keyed_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'keyed-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'keyed-sink' KEY (a)
   WITH (consistency_topic = 'keyed-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK keyed_sink_of_keyed_relation FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'keyed-sink-of-keyed-relation' KEY (b)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'keyed-sink-of-keyed-relation' KEY (b)
   WITH (consistency_topic = 'keyed-sink-of-keyed-relation-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK multi_keyed_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'multi-keyed-sink' KEY (b, a)
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'multi-keyed-sink' KEY (b, a)
   WITH (consistency_topic = 'multi-keyed-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 

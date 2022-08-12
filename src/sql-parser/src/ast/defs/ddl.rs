@@ -1008,9 +1008,8 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 key,
                 consistency,
             } => {
-                f.write_str("KAFKA '");
+                f.write_str("KAFKA ");
                 f.write_node(connection);
-                f.write_str("'");
                 f.write_str(" TOPIC '");
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");

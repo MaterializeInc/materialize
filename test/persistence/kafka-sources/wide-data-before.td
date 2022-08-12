@@ -40,22 +40,25 @@ $ kafka-create-topic topic=wide-data-ten
 $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE wide_data_ten
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-wide-data-ten-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-wide-data-ten-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE;
 
 > CREATE MATERIALIZED VIEW wide_data_view AS SELECT wide_data_ten.f2 AS key, REPEAT('x', 512 * 1024) AS value FROM wide_data_ten;
 
 > CREATE SINK wide_data_sink FROM wide_data_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-wide-data-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-wide-data-${testdrive.seed}'
   KEY (key) NOT ENFORCED
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;
 
 > CREATE SOURCE wide_data_source
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-wide-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-wide-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   INCLUDE KEY AS key2
   ENVELOPE UPSERT;

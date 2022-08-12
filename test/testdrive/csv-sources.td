@@ -151,8 +151,11 @@ Rochester      NY         14618
 
 $ kafka-create-topic topic=dynamic
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE dynamic_csv (city, state, zip)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dynamic-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-dynamic-${testdrive.seed}'
   FORMAT CSV WITH 3 COLUMNS
 
 > SELECT * FROM dynamic_csv
@@ -225,7 +228,7 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   FORMAT CSV WITH HEADER (city, state, zip)
 
 > CREATE SINK static_csv_pkne_sink FROM static_csv_pkne
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'static-csv-pkne-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'static-csv-pkne-sink'
   KEY (zip)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 

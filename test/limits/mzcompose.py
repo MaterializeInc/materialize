@@ -376,8 +376,9 @@ class KafkaSinks(Generator):
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
         for i in cls.all():
             print(
-                f"""> CREATE SINK s{i} FROM v{i}
-              INTO KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'kafka-sink-same-source-{i}'
+                f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+              > CREATE SINK s{i} FROM v{i}
+              INTO KAFKA CONNECTION kafka_conn TOPIC 'kafka-sink-same-source-{i}'
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}';
         """
             )
@@ -402,8 +403,9 @@ class KafkaSinksSameSource(Generator):
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         for i in cls.all():
             print(
-                f"""> CREATE SINK s{i} FROM v1
-              INTO KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'kafka-sink-same-source-{i}'
+                f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+              > CREATE SINK s{i} FROM v1
+              INTO KAFKA CONNECTION kafka_conn TOPIC 'kafka-sink-same-source-{i}'
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}';
         """
             )

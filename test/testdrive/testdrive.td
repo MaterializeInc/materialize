@@ -81,10 +81,13 @@ contains:unknown catalog item 'UID'
 
 # kafka-verify sort-messages
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
 
 > CREATE SINK sort_messages_sink FROM sort_messages
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sort-messages-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'sort-messages-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messages=true
@@ -121,7 +124,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repea
 {"f1": "fish"}
 
 > CREATE SOURCE kafka_ingest_repeat_input
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  FROM KAFKA CONNECTION kafka_conn TOPIC
   'testdrive-kafka-ingest-repeat-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
@@ -159,7 +162,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 "h" {"a": "h"}
 
 > CREATE SOURCE kafka_ingest_no_partition
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
 
@@ -171,7 +174,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 > CREATE MATERIALIZED VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
 
 > CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'kafka-verify-regexp-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'kafka-verify-regexp-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true

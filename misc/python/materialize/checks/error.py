@@ -148,8 +148,10 @@ class DecodeError(Check):
                 $ kafka-ingest format=avro topic=decode-error schema=${schema-f1} publish=true repeat=1
                 {"f1": "A"}
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SOURCE decode_error
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-decode-error-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE NONE

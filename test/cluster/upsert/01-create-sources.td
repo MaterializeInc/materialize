@@ -53,8 +53,11 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "salamander"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "lizard"}}}
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE upsert
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
 
