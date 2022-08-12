@@ -126,8 +126,6 @@ pub enum AdapterError {
     TailOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
-    /// Unauthorized to login using the provided user.
-    UnauthorizedLogin(String),
     /// The specified function cannot be called
     UncallableFunction {
         func: UnmaterializableFunc,
@@ -366,9 +364,6 @@ impl fmt::Display for AdapterError {
                 f.write_str("TAIL in transactions must be the only read statement")
             }
             AdapterError::Transform(e) => e.fmt(f),
-            AdapterError::UnauthorizedLogin(user) => {
-                write!(f, "unauthorized login to user '{user}'")
-            }
             AdapterError::UncallableFunction { func, context } => {
                 write!(f, "cannot call {} in {}", func, context)
             }

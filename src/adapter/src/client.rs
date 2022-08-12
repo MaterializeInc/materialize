@@ -130,6 +130,11 @@ impl Client {
         let response = self.system_execute(stmt).await?;
         Ok(response.results.into_element())
     }
+
+    /// Returns the `ClientType` associated with this client.
+    pub fn client_type(&self) -> &ClientType {
+        &self.client_type
+    }
 }
 
 /// A coordinator client that is bound to a connection.
@@ -150,6 +155,11 @@ impl ConnClient {
         self.conn_id
     }
 
+    /// Returns the `ClientType` associated with this client.
+    pub fn client_type(&self) -> &ClientType {
+        self.inner.client_type()
+    }
+
     /// Upgrades this connection client to a session client.
     ///
     /// A session is a connection that has successfully negotiated parameters,
@@ -164,8 +174,6 @@ impl ConnClient {
         session: Session,
         create_user_if_not_exists: bool,
     ) -> Result<(SessionClient, StartupResponse), AdapterError> {
-        self.is_user_disallowed_by_client_type(session.user())?;
-
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a canceled message on it if a
@@ -197,16 +205,6 @@ impl ConnClient {
                 client.session.take();
                 Err(e)
             }
-        }
-    }
-
-    /// Returns an error if the user is not permitted to log in to the ClientType.
-    fn is_user_disallowed_by_client_type(&self, user: &str) -> Result<(), AdapterError> {
-        match (&self.inner.client_type, user) {
-            (ClientType::External, SYSTEM_USER) => {
-                Err(AdapterError::UnauthorizedLogin(user.to_string()))
-            }
-            (ClientType::Internal, _) | (ClientType::External, _) => Ok(()),
         }
     }
 

@@ -112,11 +112,11 @@ impl Server {
             )
             .nest("/prof/", mz_prof::http::router(&BUILD_INFO))
             .route("/static/*path", routing::get(root::handle_static))
-            .layer(Extension(adapter_client))
             .layer(middleware::from_fn(move |req, next| {
                 let frontegg = Arc::clone(&frontegg);
                 async move { auth(req, next, tls_mode, &frontegg).await }
             }))
+            .layer(Extension(adapter_client))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -220,6 +220,8 @@ enum AuthError {
     HttpsRequired,
     #[error("invalid username in client certificate")]
     InvalidCertUserName,
+    #[error("unauthorized login to user '{0}'")]
+    InvalidLogin(String),
     #[error("{0}")]
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
@@ -305,6 +307,16 @@ async fn auth<B>(
             let claims = frontegg.validate_access_token(&token, user.as_deref())?;
             claims.email
         }
+    };
+
+    // Validate that mz_system only logs in via an internal port.
+    let adapter_client = req.extensions().get::<mz_adapter::Client>().unwrap();
+    match (adapter_client.client_type(), user.as_str()) {
+        (mz_adapter::client::ClientType::External, mz_adapter::catalog::SYSTEM_USER) => {
+            return Err(AuthError::InvalidLogin(user))
+        }
+        (mz_adapter::client::ClientType::Internal, _)
+        | (mz_adapter::client::ClientType::External, _) => {}
     };
 
     // Create http default user for local usage.

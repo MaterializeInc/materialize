@@ -404,7 +404,6 @@ impl ErrorResponse {
             AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
-            AdapterError::UnauthorizedLogin(_) => SqlState::INSUFFICIENT_PRIVILEGE,
             AdapterError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
             AdapterError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
