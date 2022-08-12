@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use chrono::DurationRound;
-use tracing::{event, Level};
+use tracing::{event, warn, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
 use mz_ore::task;
@@ -82,9 +82,12 @@ impl<S: Append + 'static> Coordinator<S> {
         let client = self.storage_usage_client.clone();
         task::spawn(|| "storage_usage_fetch", async move {
             let shard_sizes = client.shard_sizes().await;
-            internal_cmd_tx
-                .send(Message::StorageUsageUpdate(shard_sizes))
-                .expect("sending to internal_cmd_tx cannot fail")
+            // It is not an error for shard sizes to become ready after `internal_cmd_rx`
+            // is dropped.
+            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(shard_sizes));
+            if let Err(e) = result {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         });
     }
 
