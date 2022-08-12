@@ -9,7 +9,7 @@
 
 //! Common operator transformations on timely streams and differential collections.
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
@@ -129,6 +129,17 @@ where
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
+
+    /// Replaces each record with another, with a new difference type.
+    ///
+    /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
+    /// and move the data into the difference component. This will allow differential dataflow to update in-place.
+    fn explode_one<D2, R2, L>(&self, logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+    where
+        D2: Data + Ord,
+        R2: Semigroup + Multiply<R>,
+        <R2 as Multiply<R>>::Output: Data + Semigroup,
+        L: FnMut(D1) -> (D2, R2) + 'static;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -261,5 +272,35 @@ where
             })
         });
         (ok_stream.as_collection(), err_stream.as_collection())
+    }
+
+    fn explode_one<D2, R2, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+    where
+        D2: Data + Ord,
+        R2: Semigroup + Multiply<R>,
+        <R2 as Multiply<R>>::Output: Data + Semigroup,
+        L: FnMut(D1) -> (D2, R2) + 'static,
+    {
+        let mut buffer = Vec::new();
+        let mut out = Vec::new();
+        self.inner
+            .unary(Pipeline, "ExplodeOne", move |_, _| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        data.swap(&mut buffer);
+                        out.extend(buffer.drain(..).map(|(x, t, d)| {
+                            let (x, d2) = logic(x);
+                            (x, t, d2.multiply(&d))
+                        }));
+                        differential_dataflow::consolidation::consolidate_updates(&mut out);
+                        if out.len() < out.capacity() / 2 {
+                            output.session(&time).give_iterator(out.drain(..));
+                        } else {
+                            output.session(&time).give_container(&mut out);
+                        }
+                    });
+                }
+            })
+            .as_collection()
     }
 }

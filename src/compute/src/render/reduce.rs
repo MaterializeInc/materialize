@@ -37,6 +37,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context};
 use crate::render::ArrangementFlavor;
@@ -250,7 +251,6 @@ where
 
         // Demux out the potential errors from key and value selector evaluation.
         use differential_dataflow::operators::consolidate::ConsolidateStream;
-        use mz_timely_util::operator::CollectionExt;
         let (ok, mut err) = key_val_input
             .as_collection()
             .consolidate_stream()
@@ -1145,7 +1145,7 @@ where
 
     let mut to_aggregate = Vec::new();
     // First, collect all non-distinct aggregations in one pass.
-    let easy_cases = collection.explode({
+    let easy_cases = collection.explode_one({
         let zero_diffs = zero_diffs.clone();
         move |(key, row)| {
             let mut diffs = zero_diffs.clone();
@@ -1163,7 +1163,7 @@ where
                 let datum = datum.1;
                 diffs[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
             }
-            Some((key, diffs))
+            (key, diffs)
         }
     });
     to_aggregate.push(easy_cases);
@@ -1178,13 +1178,13 @@ where
                 (key, row_buf.clone())
             })
             .distinct_core()
-            .explode({
+            .explode_one({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
                     let datum = row.iter().next().unwrap();
                     let mut diffs = zero_diffs.clone();
                     diffs[accumulable_index] = datum_to_accumulator(datum, &aggr.func);
-                    Some((key, diffs))
+                    (key, diffs)
                 }
             });
         to_aggregate.push(collection);
