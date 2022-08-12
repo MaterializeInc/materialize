@@ -265,7 +265,7 @@ Query:
 
 EOF
 
-# Complex example (unsupported): CTE with a join.
+# Complex example: CTE with a join.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 WITH cte AS (SELECT people.id FROM people, bands)
@@ -298,11 +298,10 @@ Query:
 
 %4 =
 | Union %2 %3
-| Threshold
 
 EOF
 
-# Complex example (unsupported): CTE with a DISTINCT.
+# Complex example: CTE with a DISTINCT.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 WITH cte AS (SELECT DISTINCT name FROM people)
@@ -324,11 +323,10 @@ Query:
 
 %2 =
 | Union %0 %1
-| Threshold
 
 EOF
 
-# Complex example (unsupported): CTE with a GROUP BY.
+# Complex example: CTE with a GROUP BY.
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR
 WITH a(birth_year, no_people_born) AS (
@@ -355,11 +353,10 @@ Query:
 
 %2 =
 | Union %0 %1
-| Threshold
 
 EOF
 
-# Complex example (unsupported): a chain of CTEs with:
+# Complex example: a chain of CTEs with:
 # (1) an EXCEPT ALL in cte1 (that is, a plan containing Negate),
 # (2) a non-pushable operation (Distinct) in the cte2,
 # (3) an EXCEPT in the final result,
@@ -402,7 +399,6 @@ Query:
 
 %4 =
 | Union %2 %3
-| Threshold
 
 EOF
 

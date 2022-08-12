@@ -144,7 +144,6 @@ build apply=ThresholdElision
 
 %4 =
 | Union %2 %3
-| Threshold
 ----
 ----
 
@@ -174,7 +173,7 @@ build apply=ThresholdElision
 ----
 ----
 
-# (unsupported) positive test: EXCEPT where the lhs has a Negate
+# positive test: EXCEPT where the lhs has a Negate
 # with r as (select * from x except select * from x where a < 7)
 # select * from r except all select * from r where a > 9;
 build apply=ThresholdElision
@@ -209,6 +208,5 @@ build apply=ThresholdElision
 
 %4 =
 | Union %2 %3
-| Threshold
 ----
 ----
