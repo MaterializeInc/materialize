@@ -18,7 +18,6 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::Collection;
@@ -40,8 +39,9 @@ use mz_storage::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context};
+use crate::render::reduce::monoids::ReductionMonoid;
 use crate::render::ArrangementFlavor;
-use crate::typedefs::RowSpine;
+use crate::typedefs::{RowKeySpine, RowSpine};
 
 /// Render a dataflow based on the provided plan.
 ///
@@ -664,20 +664,20 @@ where
                 ));
             }
 
-            (key, time, output)
+            ((key, ()), time, output)
         })
         .as_collection();
     partial
-        .arrange_by_self()
+        .arrange_named::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
             let mut row_buf = Row::default();
             move |_key, input, output| {
                 let mut row_packer = row_buf.packer();
                 let accum = &input[0].1;
                 for monoid in accum.iter() {
+                    use ReductionMonoid::*;
                     match monoid {
-                        monoids::ReductionMonoid::Min(row) => row_packer.extend(row.iter()),
-                        monoids::ReductionMonoid::Max(row) => row_packer.extend(row.iter()),
+                        Min(row) | Max(row) => row_packer.extend(row.iter()),
                     }
                 }
                 output.push((row_buf.clone(), 1));
@@ -1163,7 +1163,7 @@ where
                 let datum = datum.1;
                 diffs[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
             }
-            (key, diffs)
+            ((key, ()), diffs)
         }
     });
     to_aggregate.push(easy_cases);
@@ -1184,7 +1184,7 @@ where
                     let datum = row.iter().next().unwrap();
                     let mut diffs = zero_diffs.clone();
                     diffs[accumulable_index] = datum_to_accumulator(datum, &aggr.func);
-                    (key, diffs)
+                    ((key, ()), diffs)
                 }
             });
         to_aggregate.push(collection);
@@ -1193,7 +1193,7 @@ where
         differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate);
 
     collection
-        .arrange_by_self()
+        .arrange_named::<RowKeySpine<_, _, Vec<Accum>>>("ArrangeAccumulable")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
             let mut row_buf = Row::default();
             move |_key, input, output| {
