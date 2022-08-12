@@ -9,7 +9,6 @@
 
 > SELECT name FROM mz_roles;
 mz_system
-mz_http_default_user
 materialize
 superuser_login
 "space role"
