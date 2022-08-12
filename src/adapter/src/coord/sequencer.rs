@@ -3129,6 +3129,37 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
 
+    async fn sequence_alter_source(
+        &mut self,
+        session: &Session,
+        plan: AlterSourcePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        if let Some(host_config) = plan.config {
+            let host_config = self.catalog.resolve_storage_host_config(host_config)?;
+
+            let entry = self.catalog.get_entry(&plan.id);
+            let source = match entry.item() {
+                CatalogItem::Source(source) => source,
+                other => coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ()),
+            };
+
+            let op = catalog::Op::UpdateItem {
+                id: plan.id,
+                name: entry.name().clone(),
+                to_item: CatalogItem::Source(source.clone()),
+            };
+            self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+                .await?;
+
+            self.controller
+                .storage_mut()
+                .alter_collections(vec![(plan.id, host_config)])
+                .await
+                .unwrap();
+        }
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
+    }
+
     fn extract_secret(
         &mut self,
         session: &Session,
@@ -3160,14 +3191,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         return Ok(Vec::from(payload));
-    }
-
-    async fn sequence_alter_source(
-        &mut self,
-        _: &Session,
-        _: AlterSourcePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        coord_bail!("ALTER SOURCE not yet implemented")
     }
 
     async fn sequence_alter_system_set(

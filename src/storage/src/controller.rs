@@ -142,6 +142,11 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
+    async fn alter_collections(
+        &mut self,
+        collections: Vec<(GlobalId, StorageHostConfig)>,
+    ) -> Result<(), StorageError>;
+
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
@@ -700,6 +705,16 @@ where
             }
         }
 
+        Ok(())
+    }
+
+    async fn alter_collections(
+        &mut self,
+        collections: Vec<(GlobalId, StorageHostConfig)>,
+    ) -> Result<(), StorageError> {
+        for (id, config) in collections {
+            let _ = self.hosts.provision(id, config).await?;
+        }
         Ok(())
     }
 

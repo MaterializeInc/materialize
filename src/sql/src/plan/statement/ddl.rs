@@ -3727,16 +3727,57 @@ pub fn describe_alter_source(
     _: &StatementContext,
     _: AlterSourceStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
+    // TODO: put the options here, right?
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_alter_source(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("ALTER SOURCE")?;
-    let _: AlterSourceAction<Aug> = stmt.action;
-    let _: AlterSourcePlan = sql_bail!("ALTER SOURCE not yet implemented!");
+    let AlterSourceStatement {
+        source_name,
+        if_exists,
+        action,
+    } = stmt;
+    let source_name = normalize::unresolved_object_name(source_name)?;
+    let entry = match scx.catalog.resolve_item(&source_name) {
+        Ok(source) => source,
+        Err(_) if if_exists => {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Source,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if entry.item_type() != CatalogItemType::Source {
+        sql_bail!(
+            "{} is a {} not a source",
+            scx.catalog.resolve_full_name(entry.name()),
+            entry.item_type()
+        )
+    }
+    let id = entry.id();
+
+    let config = match action {
+        AlterSourceAction::SetOptions(options) => {
+            let CreateSourceOptionExtracted { size, remote, .. } =
+                CreateSourceOptionExtracted::try_from(options)?;
+
+            match (remote, size) {
+                (None, None) => None,
+                (None, Some(size)) => Some(StorageHostConfig::Managed { size }),
+                (Some(addr), None) => Some(StorageHostConfig::Remote { addr }),
+                (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+            }
+        }
+        AlterSourceAction::ResetOptions(_) => {
+            // TODO: decide what do do about resetting eg. REMOTE when we're currently managed
+            Some(StorageHostConfig::Undefined)
+        }
+    };
+
+    Ok(Plan::AlterSource(AlterSourcePlan { id, config }))
 }
 
 pub fn describe_alter_system_set(
