@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -238,26 +238,17 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     )
     .await?;
 
-    // set up storage usage client for collecting storage metrics
-    let storage_usage_response = {
-        let mut client_cache = config.controller.persist_clients.lock().await;
-        StorageUsageClient::open(
-            config.controller.persist_location.blob_uri.clone(),
-            &mut client_cache,
-        )
-        .await
-    };
-    info!(
-        "collecting storage metrics every {:?} seconds",
-        mz_adapter::catalog::DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL
-    );
+    // Initialize storage usage client.
+    let storage_usage_client = StorageUsageClient::open(
+        config.controller.persist_location.blob_uri.clone(),
+        &mut *config.controller.persist_clients.lock().await,
+    )
+    .await
+    .context("opening storage usage client")?;
 
-    let storage_usage_client = match storage_usage_response {
-        Ok(storageusageclient) => storageusageclient,
-        Err(error) => panic!("Problem opening storage usage client: {}", error),
-    };
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller).await;
+
     // Initialize adapter.
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
         dataflow_client: controller,
