@@ -119,6 +119,7 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
+    AlterSource(AlterSourcePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
@@ -453,6 +454,12 @@ pub struct AlterIndexSetOptionsPlan {
 pub struct AlterIndexResetOptionsPlan {
     pub id: GlobalId,
     pub options: HashSet<IndexOptionName>,
+}
+
+#[derive(Debug)]
+pub struct AlterSourcePlan {
+    pub id: GlobalId,
+    pub config: Option<StorageHostConfig>,
 }
 
 #[derive(Debug)]

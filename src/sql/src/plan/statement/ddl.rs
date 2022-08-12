@@ -20,19 +20,13 @@ use std::time::Duration;
 use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::display::comma_separated;
-use mz_sql_parser::ast::{
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    LoadGenerator, SetVariableValue, SshConnectionOption,
-};
-use mz_storage::source::generator::as_generator;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
 
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
+use mz_kafka_util::KafkaAddrs;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -40,6 +34,13 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_sql_parser::ast::display::comma_separated;
+use mz_sql_parser::ast::{
+    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, LoadGenerator, SetVariableValue,
+    SshConnectionOption,
+};
+use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::{
     Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
     StringOrSecret, TlsIdentity,
@@ -97,7 +98,7 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterNoopPlan, AlterSecretPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
     AlterSystemSetPlan, ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig,
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
     CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
@@ -3720,6 +3721,22 @@ pub fn plan_alter_secret(
     let secret_as = query::plan_secret_as(scx, value)?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
+}
+
+pub fn describe_alter_source(
+    _: &StatementContext,
+    _: AlterSourceStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_source(
+    scx: &StatementContext,
+    stmt: AlterSourceStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER SOURCE")?;
+    let _: AlterSourceAction<Aug> = stmt.action;
+    let _: AlterSourcePlan = sql_bail!("ALTER SOURCE not yet implemented!");
 }
 
 pub fn describe_alter_system_set(

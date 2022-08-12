@@ -41,7 +41,7 @@ use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, Cat
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
     ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
@@ -279,6 +279,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
+            }
+            Plan::AlterSource(plan) => {
+                tx.send(self.sequence_alter_source(&session, plan).await, session);
             }
             Plan::AlterSystemSet(plan) => {
                 tx.send(
@@ -3150,6 +3153,14 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         return Ok(Vec::from(payload));
+    }
+
+    async fn sequence_alter_source(
+        &mut self,
+        _: &Session,
+        _: AlterSourcePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        coord_bail!("ALTER SOURCE not yet implemented")
     }
 
     async fn sequence_alter_system_set(

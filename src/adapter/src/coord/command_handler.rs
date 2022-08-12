@@ -359,6 +359,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     // Statements below must by run singly (in Started).
                     Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
+                    | Statement::AlterSource(_)
                     | Statement::AlterObjectRename(_)
                     | Statement::AlterSystemSet(_)
                     | Statement::AlterSystemReset(_)
