@@ -25,6 +25,9 @@ from materialize.checks.actions import Initialize, KillComputed
 from materialize.checks.actions import KillStoraged as KillStoragedAction
 from materialize.checks.actions import Manipulate
 from materialize.checks.actions import RestartMz as RestartMzAction
+from materialize.checks.actions import (
+    RestartPostgresBackend as RestartPostgresBackendAction,
+)
 from materialize.checks.actions import StartComputed, StartMz, UseComputed, Validate
 from materialize.checks.checks import Check
 from materialize.mzcompose import Composition
@@ -130,5 +133,19 @@ class KillStoraged(Scenario):
             KillStoragedAction(),
             Manipulate(self.checks, phase=2),
             KillStoragedAction(),
+            Validate(self.checks),
+        ]
+
+
+class RestartPostgresBackend(Scenario):
+    def actions(self) -> List[Action]:
+        return [
+            StartMz(),
+            Initialize(self.checks),
+            RestartPostgresBackendAction(),
+            Manipulate(self.checks, phase=1),
+            RestartPostgresBackendAction(),
+            Manipulate(self.checks, phase=2),
+            RestartPostgresBackendAction(),
             Validate(self.checks),
         ]
