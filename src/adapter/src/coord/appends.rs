@@ -150,9 +150,11 @@ impl<S: Append + 'static> Coordinator<S> {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "group_commit_initiate", async move {
                 tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
-                internal_cmd_tx
-                    .send(Message::GroupCommitInitiate)
-                    .expect("sending to internal_cmd_tx cannot fail");
+                // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
+                let result = internal_cmd_tx.send(Message::GroupCommitInitiate);
+                if let Err(e) = result {
+                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                }
             });
         } else {
             self.group_commit_initiate().await;
@@ -296,19 +298,29 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .expect("invalid updates");
         if should_block {
-            append_fut.await.expect("One-shot shouldn't fail").unwrap();
+            // We may panic here if the storage controller has shut down, because we cannot
+            // correctly return control, nor can we simply hang here.
+            // TODO: Clean shutdown.
+            append_fut
+                .await
+                .expect("One-shot dropped while waiting synchronously")
+                .unwrap();
             self.group_commit_apply(timestamp, responses, true, write_lock_guard)
                 .await;
         } else {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "group_commit_apply", async move {
-                append_fut.await.expect("One-shot shouldn't fail").unwrap();
-                if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
-                    timestamp,
-                    responses,
-                    write_lock_guard,
-                )) {
-                    warn!("Server closed with non-responded writes, {e}");
+                if let Ok(response) = append_fut.await {
+                    response.unwrap();
+                    if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
+                        timestamp,
+                        responses,
+                        write_lock_guard,
+                    )) {
+                        warn!("Server closed with non-responded writes, {e}");
+                    }
+                } else {
+                    warn!("Writer terminated with writes in indefinite state");
                 }
             });
         }
@@ -376,7 +388,7 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
         self.internal_cmd_tx
             .send(Message::GroupCommitInitiate)
-            .expect("sending to internal_cmd_tx cannot fail");
+            .expect("sending to self.internal_cmd_tx cannot fail");
         self.pending_writes.push(pending_write_txn);
     }
 
@@ -415,9 +427,11 @@ impl<S: Append + 'static> Coordinator<S> {
         // TODO(guswynn): see if there is more relevant info to add to this name
         task::spawn(|| format!("defer_write:{id}"), async move {
             let guard = write_lock.lock_owned().await;
-            internal_cmd_tx
-                .send(Message::WriteLockGrant(guard))
-                .expect("sending to internal_cmd_tx cannot fail");
+            // It is not an error for this lock to be released after `internal_cmd_rx` to be dropped.
+            let result = internal_cmd_tx.send(Message::WriteLockGrant(guard));
+            if let Err(e) = result {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         });
     }
 
