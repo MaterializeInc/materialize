@@ -1,16 +1,16 @@
 ---
 title: "CREATE MATERIALIZED VIEW"
-description: "`CREATE MATERIALIZED VIEW` defines a view that is persisted in storage and incrementally updated as new data arrives."
+description: "`CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and incrementally updated as new data arrives."
 menu:
   main:
     parent: 'commands'
 ---
 
-`CREATE MATERIALIZED VIEW` defines a view that is persisted in storage and
+`CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
 incrementally updated as new data arrives.
 
 A materialized view specifies a [cluster](/overview/key-concepts/#clusters) that
-is tasked with maintaining its results up-to-date, but **can be referenced in
+is tasked with keeping its results up-to-date, but **can be referenced in
 any cluster**. This allows you to effectively decouple the computational
 resources used for view maintenance from the resources used for query serving.
 
@@ -38,7 +38,7 @@ view. It's a good idea to create a materialized view if:
 * The results need to be available across clusters;
 * View maintenance and query serving would benefit from being scaled
   independently;
-* The final consumer of the view is a [subscription](../tail).
+* The final consumer of the view is a sink or a [subscription](../tail).
 
 On the other hand, if you only need to access a view from a single cluster, you
 should consider creating a [non-materialized view](../create-view) and building
@@ -47,7 +47,7 @@ the view updated in memory within that cluster, allowing you to avoid the costs
 and latency overhead of materialization.
 
 [//]: # "TODO(morsapaes) Point to relevant architecture patterns once these
-exist+add sinks to the mix once these are supported (if relevant)."
+exist."
 
 ### Indexes
 
