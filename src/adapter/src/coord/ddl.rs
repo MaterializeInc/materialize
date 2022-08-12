@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use itertools::Itertools;
+use mz_storage::controller::ExportDescription;
+use timely::progress::Antichain;
 use tracing::Level;
 use tracing::{event, warn};
 
@@ -22,10 +24,10 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_stash::Append;
-use mz_storage::types::sinks::StorageSinkConnection;
-use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection};
+use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
 
-use crate::catalog::{CatalogItem, CatalogState, StorageSinkConnectionState};
+use crate::catalog::{CatalogItem, CatalogState, Sink, StorageSinkConnectionState};
 use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::Session;
@@ -334,6 +336,57 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("unable to drop temporary items for conn_id");
     }
 
+    async fn create_storage_export(
+        &mut self,
+        id: GlobalId,
+        sink: &Sink,
+        connection: StorageSinkConnection,
+    ) -> Result<(), AdapterError> {
+        // Validate `sink.from` is in fact a storage collection
+        self.controller.storage().collection(sink.from)?;
+
+        // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
+        // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
+        // that only things going forward are exported.
+        let timeline = self
+            .get_timeline(sink.from)
+            .unwrap_or(Timeline::EpochMilliseconds);
+        let now = self.ensure_timeline_state(timeline).await.oracle.read_ts();
+        let frontier = Antichain::from_elem(now);
+        let as_of = SinkAsOf {
+            frontier,
+            strict: !sink.with_snapshot,
+        };
+
+        let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
+        let storage_sink_desc = mz_storage::types::sinks::StorageSinkDesc {
+            from: sink.from,
+            from_desc: storage_sink_from_entry
+                .desc(&self.catalog.resolve_full_name(
+                    storage_sink_from_entry.name(),
+                    storage_sink_from_entry.conn_id(),
+                ))
+                .unwrap()
+                .into_owned(),
+            connection,
+            envelope: Some(sink.envelope),
+            as_of,
+            from_storage_metadata: (),
+        };
+
+        Ok(self
+            .controller
+            .storage_mut()
+            .create_exports(vec![(
+                id,
+                ExportDescription {
+                    sink: storage_sink_desc,
+                    remote_addr: None,
+                },
+            )])
+            .await?)
+    }
+
     pub(crate) async fn handle_sink_connection_ready(
         &mut self,
         id: GlobalId,
@@ -364,7 +417,7 @@ impl<S: Append + 'static> Coordinator<S> {
         ];
 
         let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
-        // XXX(chae): should this happen in the same task where we build the connection??  Or should it need to happen
+        // TODO(#14220): should this happen in the same task where we build the connection?  Or should it need to happen
         // after we update the catalog?
         match self.create_storage_export(id, &sink, connection).await {
             Ok(()) => Ok(()),

@@ -1264,7 +1264,15 @@ where
             .read_policy
             .frontier(collection.write_frontier.frontier());
 
-        // Also consider the write frontier of any exports
+        // Also consider the write frontier of any exports.  It's worth adding a quick note on write frontiers here.
+        //
+        // The write frontier that sinks communicate back to the controller indicates that all further writes will
+        // happen at a time `t` such that `!timely::ParitalOrder::less_than(&t, &write_frontier)` is true.  On restart,
+        // the sink will receive an SinkAsOf from this controller indicating that it should ignore everthing at or
+        // before the `since` of the from collection.  This will not miss any records because, if there were records not
+        // yet written out that have an uncompacted time of `since`, the write frontier previously reported from the
+        // sink must be less than `since` so we would not have compacted up to `since`!  This is tested by the kafka
+        // persistence tests.
         for export_id in self
             .state
             .exported_collections

@@ -79,7 +79,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as _};
+use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -102,16 +102,16 @@ use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ExportDescription};
+use mz_storage::controller::CollectionDescription;
 use mz_storage::types::connections::ConnectionContext;
-use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage::types::sinks::StorageSinkConnection;
 use mz_storage::types::sources::{IngestionDescription, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, Sink, StorageHostSizeMap, StorageSinkConnectionState,
+    ClusterReplicaSizeMap, StorageHostSizeMap, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -783,66 +783,6 @@ impl<S: Append + 'static> Coordinator<S> {
 
             self.handle_message(msg).await;
         }
-    }
-
-    async fn create_storage_export(
-        &mut self,
-        id: GlobalId,
-        sink: &Sink,
-        connection: StorageSinkConnection,
-    ) -> Result<(), AdapterError> {
-        // Validate `sink.from` is in fact a storage collection
-        self.controller.storage().collection(sink.from)?;
-
-        // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
-        // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
-        // that only things going forward are exported.
-        let timeline = self
-            .get_timeline(sink.from)
-            .unwrap_or(Timeline::EpochMilliseconds);
-        let now = if timeline == Timeline::EpochMilliseconds {
-            let now = self.now();
-            now.step_back().unwrap_or(now)
-        } else {
-            // For non realtime sources, we define now as the largest timestamp, not in
-            // advance of any object's upper. This is the largest timestamp that is closed
-            // to writes.
-            let id_bundle = self.ids_in_timeline(&timeline);
-            self.largest_not_in_advance_of_upper(&id_bundle)
-        };
-        let frontier = Antichain::from_elem(now);
-        let as_of = SinkAsOf {
-            frontier,
-            strict: !sink.with_snapshot,
-        };
-
-        let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
-        let storage_sink_desc = mz_storage::types::sinks::StorageSinkDesc {
-            from: sink.from,
-            from_desc: storage_sink_from_entry
-                .desc(&self.catalog.resolve_full_name(
-                    storage_sink_from_entry.name(),
-                    storage_sink_from_entry.conn_id(),
-                ))
-                .unwrap()
-                .into_owned(),
-            connection,
-            envelope: Some(sink.envelope),
-            as_of,
-            from_storage_metadata: (),
-        };
-
-        Ok(self
-            .controller
-            .storage_mut()
-            .create_exports(vec![(
-                id,
-                ExportDescription {
-                    sink: storage_sink_desc,
-                    remote_addr: None,
-                },
-            )])
-            .await?)
     }
 }
 

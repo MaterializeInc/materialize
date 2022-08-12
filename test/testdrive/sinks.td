@@ -65,12 +65,14 @@ contains:unable to publish value schema to registry in kafka sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://materialized:6875'
 contains:unable to publish value schema to registry in kafka sink
 
+# TODO(14221): Better error message!
 # Cannot create a sink from an unmaterialized view ...
 ! CREATE SINK bad_view FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:collection identifier is not present
 
+# TODO(14221): Better error message!
 # ...Even if that view is based on a materialized source
 ! CREATE SINK bad_view2 FROM v2
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'

@@ -99,8 +99,7 @@
 //! roughly "as correct as possible" even when errors are present in the errs
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use timely::communication::Allocate;

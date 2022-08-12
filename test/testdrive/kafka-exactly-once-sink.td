@@ -205,6 +205,7 @@ contains:reuse_topic requires that sink input dependencies are sources, material
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+# TODO(14221): Better error message!
 ! CREATE SINK output5 FROM input_kafka_dbz_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5-view-${testdrive.seed}'
   WITH (reuse_topic=true)

@@ -139,6 +139,7 @@ a  b
 3  1
 1  2
 
+# TODO(14221): Better error message!
 # Cannot create sink from unmaterialized view.
 ! CREATE SINK not_mat_sink2 FROM data_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
@@ -150,6 +151,7 @@ contains:collection identifier is not present
   SELECT b, max(a) AS c FROM data_view GROUP BY b
 > CREATE DEFAULT INDEX ON test5
 
+# TODO(14221): Better error message!
 # or from an indexed unmaterialized view
 ! CREATE SINK not_mat_sink2 FROM test5
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
