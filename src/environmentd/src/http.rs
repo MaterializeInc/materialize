@@ -276,7 +276,7 @@ async fn auth<B>(
     // Then, handle Frontegg authentication if required.
     let user = match frontegg {
         // If no Frontegg authentication, we can use the cert's username if
-        // present, otherwise the system user.
+        // present, otherwise the default HTTP user.
         None => user.unwrap_or_else(|| HTTP_DEFAULT_USER.to_string()),
         // If we require Frontegg auth, fetch credentials from the HTTP auth
         // header. Basic auth comes with a username/password, where the password
@@ -307,11 +307,13 @@ async fn auth<B>(
         }
     };
 
+    // Create http default user for local usage.
+    let create_default_user = frontegg.is_none() && tls_mode.is_none() && user == HTTP_DEFAULT_USER;
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
     req.extensions_mut().insert(AuthedUser {
         user,
-        create_if_not_exists: frontegg.is_some(),
+        create_if_not_exists: frontegg.is_some() || create_default_user,
     });
 
     // Run the request.

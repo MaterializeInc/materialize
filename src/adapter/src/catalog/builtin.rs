@@ -32,7 +32,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
 
-use crate::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
+use crate::catalog::SYSTEM_USER;
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -2109,10 +2109,6 @@ FROM mz_catalog.mz_roles r",
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: SYSTEM_USER };
 
-pub const MZ_HTTP_DEFAULT_USER: BuiltinRole = BuiltinRole {
-    name: HTTP_DEFAULT_USER,
-};
-
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
         Builtin::Type(&TYPE_ANY),
@@ -2295,8 +2291,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> =
-    Lazy::new(|| vec![MZ_SYSTEM, MZ_HTTP_DEFAULT_USER]);
+pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {
