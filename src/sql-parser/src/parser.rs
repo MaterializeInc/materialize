@@ -2433,8 +2433,11 @@ impl<'a> Parser<'a> {
 
     fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
         self.expect_keyword(KAFKA)?;
-        self.expect_keyword(BROKER)?;
-        let broker = self.parse_literal_string()?;
+        self.expect_keyword(CONNECTION)?;
+        let connection = KafkaConnection::Reference {
+            connection: self.parse_raw_name()?,
+        };
+
         self.expect_keyword(TOPIC)?;
         let topic = self.parse_literal_string()?;
         // one token of lookahead:
@@ -2460,7 +2463,7 @@ impl<'a> Parser<'a> {
             };
         let consistency = self.parse_kafka_consistency()?;
         Ok(CreateSinkConnection::Kafka {
-            broker,
+            connection,
             topic,
             key,
             consistency,

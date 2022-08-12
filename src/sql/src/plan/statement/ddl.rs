@@ -1837,11 +1837,11 @@ pub fn plan_create_materialized_view(
 
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
-    _scx: &StatementContext,
+    scx: &StatementContext,
+    connection: mz_sql_parser::ast::KafkaConnection<Aug>,
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-    broker: String,
     topic_prefix: String,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -1849,6 +1849,33 @@ fn kafka_sink_builder(
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
+    let config_options = kafka_util::extract_config(with_options)?;
+
+    let connection = match connection {
+        mz_sql_parser::ast::KafkaConnection::Reference { connection } => {
+            let item = scx.get_item_by_resolved_name(&connection)?;
+            // Get Kafka connection
+            let connection = match item.connection()? {
+                Connection::Kafka(connection) => connection.clone(),
+                _ => sql_bail!("{} is not a kafka connection", item.name()),
+            };
+            // TODO: Once we remove use of `String`-keyed options, we
+            // can remove this check because permitted values here will
+            // simply be a disjoint set of what `CONNECTION`s support.
+            for k in BTreeMap::<String, StringOrSecret>::from(connection.clone()).keys() {
+                if config_options.contains_key(k) {
+                    sql_bail!(
+                        "cannot set option {} for SINK using CONNECTION {}",
+                        k,
+                        scx.catalog.resolve_full_name(item.name())
+                    );
+                }
+            }
+            connection
+        }
+        mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
+    };
+
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
         Some(SqlValueOrSecret::Value(Value::String(topic))) => Some(topic),
@@ -1864,15 +1891,6 @@ fn kafka_sink_builder(
         None => false,
         Some(_) => sql_bail!("reuse_topic must be a boolean"),
     };
-    let mut config_options = kafka_util::extract_config(with_options)?;
-    config_options.insert(
-        "bootstrap.servers".into(),
-        // Normalize broker address
-        KafkaAddrs::from_str(&broker)
-            .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
-            .to_string()
-            .into(),
-    );
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
         Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
@@ -2016,7 +2034,7 @@ fn kafka_sink_builder(
 
     Ok(StorageSinkConnectionBuilder::Kafka(
         KafkaSinkConnectionBuilder {
-            connection: KafkaConnection::try_from(&mut config_options)?,
+            connection,
             options: config_options,
             format,
             topic_prefix,
@@ -2266,16 +2284,16 @@ pub fn plan_create_sink(
 
     let connection_builder = match connection {
         CreateSinkConnection::Kafka {
-            broker,
+            connection,
             topic,
             consistency,
             ..
         } => kafka_sink_builder(
             scx,
+            connection,
             format,
             consistency,
             &mut with_options,
-            broker,
             topic,
             relation_key_indices,
             key_desc_and_indices,

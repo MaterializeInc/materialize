@@ -992,7 +992,7 @@ impl_display_t!(LoadGeneratorOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSinkConnection<T: AstInfo> {
     Kafka {
-        broker: String,
+        connection: KafkaConnection<T>,
         topic: String,
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
@@ -1003,13 +1003,13 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             CreateSinkConnection::Kafka {
-                broker,
+                connection,
                 topic,
                 key,
                 consistency,
             } => {
-                f.write_str("KAFKA BROKER '");
-                f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("KAFKA '");
+                f.write_node(connection);
                 f.write_str("'");
                 f.write_str(" TOPIC '");
                 f.write_node(&display::escape_single_quote_string(topic));
