@@ -49,7 +49,6 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     build_info: &DUMMY_BUILD_INFO,
     timestamp_frequency: Duration::from_secs(1),
     now: NOW_ZERO.clone(),
-    storage_usage_collection_interval: Duration::from_secs(5),
 });
 
 /// A dummy [`CatalogItem`] implementation.

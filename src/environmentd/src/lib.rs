@@ -39,7 +39,7 @@ use mz_ore::tracing::OpenTelemetryEnableCallback;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::tcp_connection::ConnectionHandler;
 

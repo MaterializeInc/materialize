@@ -75,9 +75,7 @@ use crate::catalog::builtin::{
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{
-    ClusterReplicaSizeMap, Config, StorageHostSizeMap, DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL,
-};
+pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::BootstrapArgs;
 use crate::client::ConnectionId;
@@ -1746,7 +1744,6 @@ impl<S: Append> Catalog<S> {
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     timestamp_frequency: Duration::from_secs(1),
-                    storage_usage_collection_interval: DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL,
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,

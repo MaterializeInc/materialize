@@ -71,6 +71,7 @@ use std::num::NonZeroUsize;
 use std::ops::Neg;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -143,6 +144,9 @@ mod timestamp_selection;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
+
+/// The default interval at which to collect storage usage information.
+pub const DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// A dummy availability zone to use when no availability zones are explicitly
 /// specified.
@@ -344,8 +348,10 @@ pub struct Coordinator<S> {
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 
-    // Persist client for fetching storage metadata such as size metrics
+    // Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
+    /// The interval at which to collect storage usage information.
+    storage_usage_collection_interval: Duration,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -731,9 +737,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
 
-        // Trigger a storage usage metric collection on configured interval
+        // Trigger a storage usage metric collection on configured interval.
         let mut storage_usage_update_interval =
-            tokio::time::interval(self.catalog.config().storage_usage_collection_interval);
+            tokio::time::interval(self.storage_usage_collection_interval);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -908,6 +914,7 @@ pub async fn serve<S: Append + 'static>(
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,
+                storage_usage_collection_interval: DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
