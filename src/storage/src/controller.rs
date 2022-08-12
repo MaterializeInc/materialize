@@ -1208,7 +1208,11 @@ mod persist_read_handles {
                                     for (id, read) in read_handles.iter_mut() {
                                         if let Some((span, since)) = downgrades.remove(id) {
                                             let fut = async move {
-                                                read.downgrade_since(&since).instrument(span).await;
+                                                // Use maybe_downgrade_since here so that we opt
+                                                // into rate-limiting. It's okay for the since to
+                                                // lag behind a bit and this _greatly_ reduces the
+                                                // persist traffic.
+                                                read.maybe_downgrade_since(&since).instrument(span).await;
                                             };
 
                                             futs.push(fut);
