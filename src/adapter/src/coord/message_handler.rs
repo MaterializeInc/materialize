@@ -110,7 +110,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Err(err) = self
             .catalog_transact(
                 None,
-                vec![catalog::Op::UpdateStorageMetrics {
+                vec![catalog::Op::UpdateStorageUsage {
                     object_id,
                     size_bytes: known_storage,
                 }],

@@ -216,7 +216,7 @@ pub struct CatalogConfig {
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// How often to collect storage metrics (in seconds).
-    pub storage_metrics_collection_interval: Duration,
+    pub storage_usage_collection_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
@@ -607,7 +607,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     unsafe_mode: true,
     build_info: &DUMMY_BUILD_INFO,
     timestamp_frequency: Duration::from_secs(1),
-    storage_metrics_collection_interval: Duration::from_secs(5),
+    storage_usage_collection_interval: Duration::from_secs(5),
     now: NOW_ZERO.clone(),
 });
 

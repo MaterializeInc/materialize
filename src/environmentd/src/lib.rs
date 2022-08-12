@@ -249,7 +249,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     };
     info!(
         "collecting storage metrics every {:?} seconds",
-        mz_adapter::catalog::DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS
+        mz_adapter::catalog::DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL
     );
 
     let storage_usage_client = match storage_usage_response {

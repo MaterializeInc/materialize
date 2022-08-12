@@ -19,7 +19,7 @@ use serde_json::json;
 use timely::progress::Timestamp;
 use uuid::Uuid;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageMetrics};
+use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::ConcreteComputeInstanceReplicaConfig;
@@ -63,7 +63,7 @@ const SYSTEM_ROLE_ID_ALLOC_KEY: &str = "system_role";
 const COMPUTE_ID_ALLOC_KEY: &str = "compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
-pub(crate) const STORAGE_METRICS_ID_ALLOC_KEY: &str = "storagemetrics";
+pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
 async fn migrate<S: Append>(
     stash: &mut S,
@@ -333,7 +333,7 @@ async fn migrate<S: Append>(
         |txn: &mut Transaction<'_, S>, _bootstrap_args| {
             txn.id_allocator.insert(
                 IdAllocKey {
-                    name: STORAGE_METRICS_ID_ALLOC_KEY.into(),
+                    name: STORAGE_USAGE_ID_ALLOC_KEY.into(),
                 },
                 IdAllocValue { next_id: 1 },
             )?;
@@ -590,7 +590,7 @@ impl<S: Append> Connection<S> {
             .map(|ev| ev.event))
     }
 
-    pub async fn load_storage_metrics(&mut self) -> Result<impl Iterator<Item = Vec<u8>>, Error> {
+    pub async fn storage_usage(&mut self) -> Result<impl Iterator<Item = Vec<u8>>, Error> {
         Ok(COLLECTION_STORAGE_USAGE
             .peek_one(&mut self.stash)
             .await?
@@ -891,7 +891,7 @@ pub struct Transaction<'a, S> {
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(AuditLogKey, (), i64)>,
-    storage_usage_updates: Vec<(StorageMetricsKey, (), i64)>,
+    storage_usage_updates: Vec<(StorageUsageKey, (), i64)>,
 }
 
 impl<'a, S: Append> Transaction<'a, S> {
@@ -933,10 +933,10 @@ impl<'a, S: Append> Transaction<'a, S> {
         self.audit_log_updates.push((AuditLogKey { event }, (), 1));
     }
 
-    pub fn insert_storage_metrics_event(&mut self, metric: VersionedStorageMetrics) {
+    pub fn insert_storage_usage_event(&mut self, metric: VersionedStorageUsage) {
         let metric = metric.serialize();
         self.storage_usage_updates
-            .push((StorageMetricsKey { metric }, (), 1));
+            .push((StorageUsageKey { metric }, (), 1));
     }
 
     pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
@@ -1727,11 +1727,11 @@ struct AuditLogKey {
 impl_codec!(AuditLogKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct StorageMetricsKey {
+struct StorageUsageKey {
     #[prost(bytes)]
     metric: Vec<u8>,
 }
-impl_codec!(StorageMetricsKey);
+impl_codec!(StorageUsageKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct TimestampKey {
@@ -1790,5 +1790,5 @@ static COLLECTION_SYSTEM_CONFIGURATION: TypedCollection<
     ServerConfigurationValue,
 > = TypedCollection::new("system_configuration");
 static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");
-static COLLECTION_STORAGE_USAGE: TypedCollection<StorageMetricsKey, ()> =
+static COLLECTION_STORAGE_USAGE: TypedCollection<StorageUsageKey, ()> =
     TypedCollection::new("storage_usage");

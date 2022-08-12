@@ -733,7 +733,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Trigger a storage usage metric collection on configured interval
         let mut storage_usage_update_interval =
-            tokio::time::interval(self.catalog.config().storage_metrics_collection_interval);
+            tokio::time::interval(self.catalog.config().storage_usage_collection_interval);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is

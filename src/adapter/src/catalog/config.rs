@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -19,8 +20,8 @@ use mz_storage::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
 
-/// The default interval to collect storage usage information in seconds
-pub const DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS: u64 = 3600;
+/// The default interval at which to collect storage usage information.
+pub const DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// Configures a catalog.
 #[derive(Debug)]
