@@ -7,17 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+//! Moving data to external systems
 
-//! Materialize's compute layer.
+mod kafka;
+mod metrics;
 
-pub(crate) mod arrangement;
-pub mod communication;
-pub mod compute_state;
-pub(crate) mod logging;
-pub(crate) mod render;
-pub mod server;
-pub(crate) mod sink;
-mod typedefs;
+pub(crate) use metrics::KafkaBaseMetrics;
 
-pub use arrangement::manager::{TraceManager, TraceMetrics};
+pub use metrics::SinkBaseMetrics;

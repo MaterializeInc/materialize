@@ -65,7 +65,7 @@ use mz_sql::plan::{
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
 use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 
@@ -491,9 +491,6 @@ impl CatalogState {
             if let CatalogItem::Index(Index {
                 compute_instance, ..
             })
-            | CatalogItem::Sink(Sink {
-                compute_instance, ..
-            })
             | CatalogItem::MaterializedView(MaterializedView {
                 compute_instance, ..
             }) = item
@@ -567,9 +564,6 @@ impl CatalogState {
             .expect("catalog out of sync");
 
         if let CatalogItem::Index(Index {
-            compute_instance, ..
-        })
-        | CatalogItem::Sink(Sink {
             compute_instance, ..
         })
         | CatalogItem::MaterializedView(MaterializedView {
@@ -1249,17 +1243,16 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection: SinkConnectionState,
+    pub connection: StorageSinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
-    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub enum SinkConnectionState {
-    Pending(SinkConnectionBuilder),
-    Ready(SinkConnection),
+pub enum StorageSinkConnectionState {
+    Pending(StorageSinkConnectionBuilder),
+    Ready(StorageSinkConnection),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1413,8 +1406,8 @@ impl CatalogItem {
             | CatalogItem::Connection(_)
             | CatalogItem::StorageCollection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
-                SinkConnectionState::Pending(_) => true,
-                SinkConnectionState::Ready(_) => false,
+                StorageSinkConnectionState::Pending(_) => true,
+                StorageSinkConnectionState::Ready(_) => false,
             },
         }
     }
@@ -1660,7 +1653,7 @@ impl CatalogItemRebuilder {
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on COMPUTE and STORAGE nodes
     pub previous_index_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
-    pub previous_sink_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_sink_ids: Vec<GlobalId>,
     pub previous_materialized_view_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
     pub previous_source_ids: Vec<GlobalId>,
     // Used to update in memory catalog state
@@ -1677,7 +1670,7 @@ impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
             previous_index_ids: HashMap::new(),
-            previous_sink_ids: HashMap::new(),
+            previous_sink_ids: Vec::new(),
             previous_materialized_view_ids: HashMap::new(),
             previous_source_ids: Vec::new(),
             all_drop_ops: Vec::new(),
@@ -2355,11 +2348,7 @@ impl<S: Append> Catalog<S> {
                 CatalogItem::Table(_) | CatalogItem::Source(_) => {
                     migration_metadata.previous_source_ids.push(id)
                 }
-                CatalogItem::Sink(sink) => migration_metadata
-                    .previous_sink_ids
-                    .entry(sink.compute_instance)
-                    .or_default()
-                    .push(id),
+                CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
                 CatalogItem::Index(index) => migration_metadata
                     .previous_index_ids
                     .entry(index.compute_instance)
@@ -2422,9 +2411,7 @@ impl<S: Append> Catalog<S> {
         for (_, index_ids) in &mut migration_metadata.previous_index_ids {
             index_ids.reverse();
         }
-        for (_, sink_ids) in &mut migration_metadata.previous_sink_ids {
-            sink_ids.reverse();
-        }
+        migration_metadata.previous_sink_ids.reverse();
         migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();
         migration_metadata.user_drop_ops.reverse();
@@ -4120,11 +4107,10 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connection: SinkConnectionState::Pending(sink.connection_builder),
+                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
-                compute_instance: sink.compute_instance,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,

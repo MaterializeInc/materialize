@@ -13,95 +13,74 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::Scope;
 
-use mz_expr::{permutation_for_arrangement, MapFilterProject};
+use crate::controller::CollectionMetadata;
+use crate::source::persist_source;
+use crate::storage_state::{SinkToken, StorageState};
+use crate::types::errors::DataflowError;
+use crate::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkDesc};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SinkEnvelope};
 
-use crate::compute_state::SinkToken;
-use crate::render::context::Context;
+/// _Renders_ complete _differential_ [`Collection`]s
+/// that represent the sink and its errors as requested
+/// by the original `CREATE SINK` statement.
+pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
+    scope: &mut G,
+    storage_state: &mut StorageState,
+    tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+    import_ids: BTreeSet<GlobalId>,
+    sink_id: GlobalId,
+    sink: &StorageSinkDesc<CollectionMetadata>,
+) {
+    let sink_render = get_sink_render_for(&sink.connection);
 
-impl<G> Context<G, Row, Timestamp>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    /// Export the sink described by `sink` from the rendering context.
-    pub(crate) fn export_sink(
-        &mut self,
-        compute_state: &mut crate::compute_state::ComputeState,
-        tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
-        sink_id: GlobalId,
-        sink: &ComputeSinkDesc<CollectionMetadata>,
-    ) {
-        let sink_render = get_sink_render_for(&sink.connection);
-
-        // put together tokens that belong to the export
-        let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
-                needed_tokens.push(Rc::clone(&token))
-            }
+    // put together tokens that belong to the export
+    let mut needed_tokens = Vec::new();
+    for import_id in import_ids {
+        if let Some(token) = tokens.get(&import_id) {
+            needed_tokens.push(Rc::clone(&token))
         }
-
-        // TODO[btv] - We should determine the key and permutation to use during planning,
-        // rather than at runtime.
-        //
-        // This is basically an inlined version of the old `as_collection`.
-        let bundle = self
-            .lookup_id(mz_expr::Id::Global(sink.from))
-            .expect("Sink source collection not loaded");
-        let (ok_collection, err_collection) = if let Some(collection) = &bundle.collection {
-            collection.clone()
-        } else {
-            let (key, _arrangement) = bundle
-                .arranged
-                .iter()
-                .next()
-                .expect("Invariant violated: at least one collection must be present.");
-            let unthinned_arity = sink.from_desc.arity();
-            let (permutation, thinning) = permutation_for_arrangement(&key, unthinned_arity);
-            let mut mfp = MapFilterProject::new(unthinned_arity);
-            mfp.permute(permutation, thinning.len() + key.len());
-            bundle.as_collection_core(mfp, Some((key.clone(), None)))
-        };
-
-        // TODO(teskje): Remove envelope-wrapping once the Kafka sink has been
-        // moved to STORAGE.
-        let ok_collection = apply_sink_envelope(sink, &sink_render, ok_collection);
-
-        let sink_token = sink_render.render_continuous_sink(
-            compute_state,
-            sink,
-            sink_id,
-            ok_collection,
-            err_collection,
-        );
-
-        if let Some(sink_token) = sink_token {
-            needed_tokens.push(sink_token);
-        }
-
-        compute_state.sink_tokens.insert(
-            sink_id,
-            SinkToken {
-                token: Box::new(needed_tokens),
-                is_tail: matches!(sink.connection, ComputeSinkConnection::Tail(_)),
-            },
-        );
     }
+
+    let (ok_collection, err_collection, source_token) = persist_source::persist_source(
+        scope,
+        sink.from,
+        Arc::clone(&storage_state.persist_clients),
+        sink.from_storage_metadata.clone(),
+        sink.as_of.frontier.clone(),
+    );
+    needed_tokens.push(source_token);
+
+    // TODO(teskje): Remove envelope-wrapping once the Kafka sink has been
+    // moved to STORAGE.
+    let ok_collection = apply_sink_envelope(sink, &sink_render, ok_collection.as_collection());
+
+    let sink_token = sink_render.render_continuous_sink(
+        storage_state,
+        sink,
+        sink_id,
+        ok_collection,
+        err_collection.as_collection(),
+    );
+
+    if let Some(sink_token) = sink_token {
+        needed_tokens.push(sink_token);
+    }
+
+    storage_state
+        .sink_tokens
+        .insert(sink_id, SinkToken::new(Box::new(needed_tokens)));
 }
 
 #[allow(clippy::borrowed_box)]
 fn apply_sink_envelope<G>(
-    sink: &ComputeSinkDesc<CollectionMetadata>,
+    sink: &StorageSinkDesc<CollectionMetadata>,
     sink_render: &Box<dyn SinkRender<G>>,
     collection: Collection<G, Row, Diff>,
 ) -> Collection<G, (Option<Row>, Option<Row>), Diff>
@@ -223,8 +202,8 @@ where
     /// TODO
     fn render_continuous_sink(
         &self,
-        compute_state: &mut crate::compute_state::ComputeState,
-        sink: &ComputeSinkDesc<CollectionMetadata>,
+        storage_state: &mut StorageState,
+        sink: &StorageSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
@@ -233,14 +212,11 @@ where
         G: Scope<Timestamp = Timestamp>;
 }
 
-fn get_sink_render_for<G>(
-    connection: &ComputeSinkConnection<CollectionMetadata>,
-) -> Box<dyn SinkRender<G>>
+fn get_sink_render_for<G>(connection: &StorageSinkConnection) -> Box<dyn SinkRender<G>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     match connection {
-        ComputeSinkConnection::Tail(connection) => Box::new(connection.clone()),
-        ComputeSinkConnection::Persist(connection) => Box::new(connection.clone()),
+        StorageSinkConnection::Kafka(connection) => Box::new(connection.clone()),
     }
 }

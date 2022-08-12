@@ -149,6 +149,8 @@ t1
 > SELECT * FROM v2;
 3
 
+> CREATE MATERIALIZED VIEW v1mat AS SELECT * FROM v1;
+
 > CREATE INDEX i2 IN CLUSTER cluster2 ON t1 (f1);
 
 > SELECT f1 FROM t1;
@@ -183,7 +185,7 @@ A
 
 # Sinks
 
-> CREATE SINK sink1 FROM v1
+> CREATE SINK sink1 FROM v1mat
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 

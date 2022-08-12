@@ -22,7 +22,7 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage::types::sinks::KafkaSinkConnection;
+use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
@@ -34,7 +34,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
-    SinkConnection, SinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::coord::ReplicaMetadata;
 
@@ -430,12 +430,12 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
         if let Sink {
-            connection: SinkConnectionState::Ready(connection),
+            connection: StorageSinkConnectionState::Ready(connection),
             ..
         } = sink
         {
             match connection {
-                SinkConnection::Kafka(KafkaSinkConnection {
+                StorageSinkConnection::Kafka(KafkaSinkConnection {
                     topic, consistency, ..
                 }) => {
                     let consistency_topic = if let Some(consistency) = consistency {
@@ -453,7 +453,6 @@ impl CatalogState {
                         diff,
                     });
                 }
-                _ => (),
             }
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_SINKS),
@@ -464,8 +463,6 @@ impl CatalogState {
                     Datum::Int64(u64::from(schema_id) as i64),
                     Datum::String(name),
                     Datum::String(connection.name()),
-                    // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                    Datum::Int64(sink.compute_instance as i64),
                 ]),
                 diff,
             });

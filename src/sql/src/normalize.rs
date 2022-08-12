@@ -390,7 +390,6 @@ pub fn create_statement(
             name,
             connection: _,
             with_options: _,
-            in_cluster: _,
             format: _,
             envelope: _,
             with_snapshot: _,

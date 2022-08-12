@@ -533,7 +533,6 @@ impl_display_t!(CreateSourceStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
-    pub in_cluster: Option<T::ClusterName>,
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
     pub with_options: Vec<WithOption<T>>,
@@ -551,10 +550,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
-        }
         f.write_str(" FROM ");
         f.write_node(&self.from);
         f.write_str(" INTO ");

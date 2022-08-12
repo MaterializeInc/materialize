@@ -39,7 +39,7 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage::types::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
@@ -562,9 +562,8 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: SinkConnectionBuilder,
+    pub connection_builder: StorageSinkConnectionBuilder,
     pub envelope: SinkEnvelope,
-    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]

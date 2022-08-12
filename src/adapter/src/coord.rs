@@ -79,7 +79,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -102,16 +102,16 @@ use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ExportDescription};
+use mz_storage::controller::CollectionDescription;
 use mz_storage::types::connections::ConnectionContext;
-use mz_storage::types::sinks::{SinkAsOf, SinkConnection, TailSinkConnection};
+use mz_storage::types::sinks::StorageSinkConnection;
 use mz_storage::types::sources::{IngestionDescription, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, Sink, SinkConnectionState, StorageHostSizeMap,
+    ClusterReplicaSizeMap, StorageHostSizeMap, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -209,8 +209,7 @@ pub struct SinkConnectionReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
-    pub result: Result<SinkConnection, AdapterError>,
-    pub compute_instance: ComputeInstanceId,
+    pub result: Result<StorageSinkConnection, AdapterError>,
 }
 
 /// Configures a coordinator.
@@ -397,13 +396,6 @@ impl<S: Append + 'static> Coordinator<S> {
         .await;
 
         // Migrate builtin objects.
-        for (compute_id, sink_ids) in builtin_migration_metadata.previous_sink_ids {
-            self.controller
-                .compute_mut(compute_id)
-                .unwrap()
-                .drop_sinks_unvalidated(sink_ids)
-                .await?;
-        }
         for (compute_id, index_ids) in builtin_migration_metadata.previous_index_ids {
             self.controller
                 .compute_mut(compute_id)
@@ -427,6 +419,10 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .storage_mut()
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
+            .await?;
+        self.controller
+            .storage_mut()
+            .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids)
             .await?;
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
@@ -556,8 +552,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
-                        SinkConnectionState::Pending(builder) => builder,
-                        SinkConnectionState::Ready(_) => {
+                        StorageSinkConnectionState::Pending(builder) => builder,
+                        StorageSinkConnectionState::Ready(_) => {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
@@ -581,7 +577,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         entry.oid(),
                         connection,
                         // The sink should be established on a specific compute instance.
-                        sink.compute_instance,
                         None,
                     )
                     .await?;
@@ -788,41 +783,6 @@ impl<S: Append + 'static> Coordinator<S> {
 
             self.handle_message(msg).await;
         }
-    }
-
-    #[allow(dead_code)]
-    async fn create_storage_export(&mut self, id: GlobalId, sink: &Sink) {
-        let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
-        let storage_sink_desc = mz_storage::types::sinks::SinkDesc {
-            from: sink.from,
-            from_desc: storage_sink_from_entry
-                .desc(&self.catalog.resolve_full_name(
-                    storage_sink_from_entry.name(),
-                    storage_sink_from_entry.conn_id(),
-                ))
-                .unwrap()
-                .into_owned(),
-            connection: SinkConnection::Tail(TailSinkConnection {}),
-            envelope: Some(sink.envelope),
-            as_of: SinkAsOf {
-                frontier: Antichain::new(),
-                strict: false,
-            },
-        };
-
-        // TODO(chae): This is where we'll create the export/sink in storaged
-        let _ = self
-            .controller
-            .storage_mut()
-            .create_exports(vec![(
-                id,
-                ExportDescription {
-                    sink: storage_sink_desc,
-                    remote_addr: None,
-                },
-            )])
-            .await
-            .unwrap();
     }
 }
 

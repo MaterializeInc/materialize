@@ -19,12 +19,21 @@ import "storage/src/types/connections.proto";
 
 package mz_storage.types.sinks;
 
-message ProtoSinkDesc {
+message ProtoComputeSinkDesc {
     mz_repr.global_id.ProtoGlobalId from = 1;
     mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
-    ProtoSinkConnection connection = 3;
+    ProtoComputeSinkConnection connection = 3;
     optional ProtoSinkEnvelope envelope = 4;
     ProtoSinkAsOf as_of = 5;
+}
+
+message ProtoStorageSinkDesc {
+    mz_repr.global_id.ProtoGlobalId from = 1;
+    mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
+    ProtoStorageSinkConnection connection = 3;
+    optional ProtoSinkEnvelope envelope = 4;
+    ProtoSinkAsOf as_of = 5;
+    optional mz_storage.controller.ProtoCollectionMetadata from_storage_metadata = 6;
 }
 
 message ProtoSinkEnvelope {
@@ -34,11 +43,16 @@ message ProtoSinkEnvelope {
     }
 }
 
-message ProtoSinkConnection {
+message ProtoComputeSinkConnection {
+    oneof kind {
+        google.protobuf.Empty tail = 1;
+        ProtoPersistSinkConnection persist = 2;
+    }
+}
+
+message ProtoStorageSinkConnection {
     oneof kind {
         ProtoKafkaSinkConnection kafka = 1;
-        google.protobuf.Empty tail = 2;
-        ProtoPersistSinkConnection persist = 3;
     }
 }
 
@@ -84,4 +98,9 @@ message ProtoPublishedSchemaInfo {
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
     mz_storage.controller.ProtoCollectionMetadata storage_metadata = 2;
+}
+
+message ProtoDurableExportMetadata {
+    // This message is persisted to disk. Changes must be backwards compatible.
+    mz_storage.types.sinks.ProtoSinkAsOf initial_as_of = 1;
 }

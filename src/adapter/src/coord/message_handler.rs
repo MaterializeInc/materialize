@@ -244,7 +244,6 @@ impl<S: Append + 'static> Coordinator<S> {
             id,
             oid,
             result,
-            compute_instance,
         }: SinkConnectionReady,
     ) {
         match result {
@@ -258,15 +257,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
-                    self.handle_sink_connection_ready(
-                        id,
-                        oid,
-                        connection,
-                        compute_instance,
-                        Some(&session),
-                    )
-                    .await
-                    .expect("sinks should be validated by sequence_create_sink");
+                    self.handle_sink_connection_ready(id, oid, connection, Some(&session))
+                        .await
+                        // XXX(chae): I really don't like this -- especially as we're now doing cross
+                        // process calls to start a sink.
+                        .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connection. Report to the client that
