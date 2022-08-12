@@ -6,9 +6,9 @@ menu:
     parent: 'sql-patterns'
 ---
 
-The time to live (TTL) pattern helps to remove rows in views or tails using expiration times. You can use it to keep rows in views or tails until they are no longer useful or to trigger certain use cases.
+The **time to live (TTL)** pattern helps to remove rows in views, queries, tails, or sinks using expiration times, keeping rows until they are no longer useful, and enabling new use cases.
 
-The following examples are possible TTL use cases that you could achieve:
+The following examples are possible TTL use cases:
 
 - Trigger schedule tasks, like emails or messages
 - Store temporal offers for an e-commerce
@@ -19,14 +19,14 @@ Before continuing, make sure to understand how [temporal filters](/guides/tempor
 
 ## Pattern
 
-The pattern uses a temporal filter over a row’s **expiring time**.
-This time indicates when the query should drop the row.
+The pattern uses a temporal filter over a row's creation timestamp plus a TTL. The sum represents the row's **expiring time**. After reaching the expiring time, the query will drop the row.
 
+Pattern example:
 ```sql
   CREATE VIEW TTL_VIEW
-  SELECT *
+  SELECT (created_ts + ttl) as expiring_time
   FROM events
-  WHERE mz_logical_timestamp() < expiring_time;
+  WHERE mz_logical_timestamp() < (created_ts + ttl);
 ```
 
 To know the remaining time to live:
@@ -38,24 +38,26 @@ To know the remaining time to live:
 
 ## Example
 
-To have a crystal clear understanding of the pattern, let's build a task scheduling system. It will consist on a view filtering rows from a table. Each row in the table represents a task, and it contains its name, creation time, and TTL.
+To have a crystal clear understanding of the pattern, let's build a task tracking system. It will consist on a view filtering rows from a table. Each row in the table contains the name, creation timestamp, and TTL of a task.
 
-1.  First, we need to set up the table with its corresponding fields.
+1.  First, we need to set up the table:
     ```sql
-      CREATE TABLE tasks (name TEXT, created_date TIMESTAMP, ttl INTERVAL);
+      CREATE TABLE tasks (name TEXT, created_ts TIMESTAMP, ttl INTERVAL);
     ```
-1.  Add a task to send an email in the next five minutes:
+1.  Add some tasks to track:
     ```sql
       INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 minutes');
       INSERT INTO tasks VALUES ('time_to_eat', now(), INTERVAL '1 hour');
       INSERT INTO tasks VALUES ('security_block', now(), INTERVAL '1 day');
     ```
-1. Create a view using a temporal filter **over the expiring time**. For our example, the expiring time represents the sum between the task's `created_date` and its `ttl`.
+1. Create a view using a temporal filter **over the expiring time**. For our example, the expiring time represents the sum between the task's `created_ts` and its `ttl`.
     ```sql
-      CREATE MATERIALIZED VIEW tasks_scheduling AS
-      SELECT *
+      CREATE MATERIALIZED VIEW tracking_tasks AS
+      SELECT
+        name,
+        extract(epoch from (created_ts + ttl)) * 1000 as expiring_time
       FROM tasks
-      WHERE mz_logical_timestamp() < extract(epoch from (created_date + ttl)) * 1000;
+      WHERE mz_logical_timestamp() < extract(epoch from (created_ts + ttl)) * 1000;
     ```
 
     The filter clause will discard any row with an **expiring time** less or equal to `mz_logical_timestamp()`.
@@ -65,28 +67,26 @@ To have a crystal clear understanding of the pattern, let's build a task schedul
 
 - Run a query to know the time to live for a row:
   ```sql
-    SELECT
-      extract(epoch from (created_date + ttl)) -
-      (mz_logical_timestamp() / 1000) AS remaining_ttl
-    FROM tasks_scheduling
+    SELECT expiring_time - mz_logical_timestamp() AS remaining_ttl
+    FROM tracking_tasks
     WHERE name = 'time_to_eat';
   ```
 
 - Check if a particular row is still available:
   ```sql
   SELECT true
-  FROM tasks_scheduling
+  FROM tracking_tasks
   WHERE name = 'security_block';
   ```
 
 - Trigger an external process when a row expires:
   ```sql
     INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 seconds');
-    COPY( TAIL tasks_scheduling WITH (SNAPSHOT = false) ) TO STDOUT;
+    COPY( TAIL tracking_tasks WITH (SNAPSHOT = false) ) TO STDOUT;
 
   ```
   ```nofmt
-  mz_timestamp | mz_diff | event_name | event_timestamp | event_ttl |
-  -------------|---------|------------|-----------------|-----------|
-  ...          | -1      | send_email | ...             | ...       | <-- Time to send the email!
+  mz_timestamp | mz_diff | name       | expiring_time   |
+  -------------|---------|------------|-----------------|
+  ...          | -1      | send_email | ...             | <-- Time to send the email!
   ```
