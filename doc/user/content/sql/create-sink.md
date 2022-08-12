@@ -49,7 +49,7 @@ Field | Use
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink. If not provided, uses the session's `cluster` variable.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
-**KAFKA BROKER** _host_ | The Kafka broker's host name without the security protocol, which is specified by the [`WITH` options](#with-options). If you wish to specify multiple brokers (bootstrap servers) as an additional safeguard, use a comma-separated list. For example: `localhost:9092, localhost:9093`.
+**KAFKA CONNECTION** _conn_ | The Kafka [connection](../create-connection) where you want to sink data.
 **TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset.
 **TOPIC** _consistency&lowbar;topic_ | Makes the sink emit additional [consistency metadata](#consistency-metadata) to the named topic. Only valid for Kafka sinks. If `reuse_topic` is `true`, a default naming convention will be used when the topic name is not explicitly set. This is formed by appending `-consistency` to the output topic name.
@@ -185,9 +185,13 @@ In practice, each incoming event affects the final results exactly once, even if
 **Syntax**
 
 ```sql
+CREATE CONNECTION kafka_connection
+  FOR KAFKA
+    BROKER 'localhost:9092';
+
 CREATE SINK quotes_sink
 FROM quotes
-INTO KAFKA BROKER 'localhost:9092' TOPIC 'quotes-eo-sink'
+INTO KAFKA CONNECTION kafka_connection TOPIC 'quotes-eo-sink'
 CONSISTENCY (TOPIC 'quotes-eo-sink-consistency'
              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081')
 WITH (reuse_topic=true)
@@ -318,14 +322,14 @@ _data&lowbar;collections_ | This field is null for `BEGIN` records, and for `END
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
+FROM KAFKA CONNECTION kafka_connection TOPIC 'quotes'
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 ```sql
 CREATE SINK quotes_sink
 FROM quotes
-INTO KAFKA BROKER 'localhost' TOPIC 'quotes-sink'
+INTO KAFKA CONNECTION kafka_connection TOPIC 'quotes-sink'
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
@@ -334,7 +338,7 @@ FORMAT AVRO USING
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
+FROM KAFKA CONNECTION kafka_connection TOPIC 'quotes'
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
@@ -346,7 +350,7 @@ CREATE MATERIALIZED VIEW frank_quotes AS
 ```sql
 CREATE SINK frank_quotes_sink
 FROM frank_quotes
-INTO KAFKA BROKER 'localhost' TOPIC 'frank-quotes-sink'
+INTO KAFKA CONNECTION kafka_connection TOPIC 'frank-quotes-sink'
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
@@ -372,14 +376,14 @@ JOIN mz_kafka_sinks ON mz_sinks.id = mz_kafka_sinks.sink_id
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
+FROM KAFKA CONNECTION kafka_connection TOPIC 'quotes'
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 ```sql
 CREATE SINK quotes_sink
 FROM quotes
-INTO KAFKA BROKER 'localhost' TOPIC 'quotes-sink'
+INTO KAFKA CONNECTION kafka_connection TOPIC 'quotes-sink'
 FORMAT JSON;
 ```
 
@@ -387,7 +391,7 @@ FORMAT JSON;
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
+FROM KAFKA CONNECTION kafka_connection TOPIC 'quotes'
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
@@ -399,7 +403,7 @@ CREATE MATERIALIZED VIEW frank_quotes AS
 ```sql
 CREATE SINK frank_quotes_sink
 FROM frank_quotes
-INTO KAFKA BROKER 'localhost' TOPIC 'frank-quotes-sink'
+INTO KAFKA CONNECTION kafka_connection TOPIC 'frank-quotes-sink'
 FORMAT JSON;
 ```
 
