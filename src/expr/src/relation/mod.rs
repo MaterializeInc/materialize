@@ -1376,6 +1376,19 @@ impl MirRelationExpr {
             .chain(second)
             .chain(rest.into_iter().flatten())
     }
+
+    /// Return a vector of references to the subtrees of this expression
+    /// in post-visit order (the last element is `&self`).
+    pub fn post_order_vec(&self) -> Vec<&Self> {
+        let mut stack = vec![self];
+        let mut result = vec![];
+        while let Some(expr) = stack.pop() {
+            result.push(expr);
+            stack.extend(expr.children());
+        }
+        result.reverse();
+        result
+    }
 }
 
 impl VisitChildren<Self> for MirRelationExpr {
