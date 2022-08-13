@@ -1996,22 +1996,6 @@ impl<S: Append> Catalog<S> {
                     catalog.allocate_persisted_introspection_items().await
                 }
 
-                SerializedComputeInstanceReplicaLogging::Concrete(x) => {
-                    ConcreteComputeInstanceReplicaLogging::ConcreteViews(x.clone(), {
-                        // Build the views only if the cluster is configured with logging
-                        let inst = catalog
-                            .state
-                            .compute_instances_by_id
-                            .get(&instance_id)
-                            .unwrap();
-                        if inst.logging.is_some() {
-                            catalog.allocate_persisted_introspection_views().await
-                        } else {
-                            vec![]
-                        }
-                    })
-                }
-
                 SerializedComputeInstanceReplicaLogging::ConcreteViews(x, y) => {
                     ConcreteComputeInstanceReplicaLogging::ConcreteViews(x.clone(), y.clone())
                 }
@@ -4356,8 +4340,6 @@ pub enum SerializedComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
     /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
     Default,
-    /// Logging sources have been built for this replica.
-    Concrete(Vec<(LogVariant, GlobalId)>),
     /// Logging sources and views have been built for this replica.
     ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
@@ -4366,7 +4348,6 @@ impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceRe
     fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
         match conc {
             ConcreteComputeInstanceReplicaLogging::Default => Self::Default,
-            ConcreteComputeInstanceReplicaLogging::Concrete(x) => Self::Concrete(x),
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(x, y) => Self::ConcreteViews(x, y),
         }
     }
