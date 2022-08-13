@@ -7,16 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::{hash_map::Entry, BTreeMap};
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
-use timely::{progress::Antichain, PartialOrder};
 
-use timely::progress::frontier::AntichainRef;
-
-use crate::{Append, AppendBatch, Data, Diff, Id, Stash, StashCollection, StashError, Timestamp};
+use crate::{Append, AppendBatch, Data, Diff, Id, Stash, StashCollection, StashError};
 
 /// An in-memory Stash that is backed by another Stash but serves read requests
 /// from its memory. Write requests are propogated to the other Stash.
@@ -24,9 +21,7 @@ use crate::{Append, AppendBatch, Data, Diff, Id, Stash, StashCollection, StashEr
 pub struct Memory<S> {
     stash: S,
     collections: HashMap<String, Id>,
-    uppers: HashMap<Id, Antichain<Timestamp>>,
-    sinces: HashMap<Id, Antichain<Timestamp>>,
-    entries: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>>,
+    entries: HashMap<Id, BTreeMap<Vec<u8>, Vec<u8>>>,
 }
 
 impl<S: Stash> Memory<S> {
@@ -34,43 +29,7 @@ impl<S: Stash> Memory<S> {
         Self {
             stash,
             collections: HashMap::new(),
-            uppers: HashMap::new(),
-            sinces: HashMap::new(),
             entries: HashMap::new(),
-        }
-    }
-
-    async fn consolidate_collection<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let since = self.since(collection).await?;
-        self.consolidate_id(&collection.id, since);
-        Ok(())
-    }
-
-    fn consolidate_id(&mut self, collection_id: &Id, since: Antichain<Timestamp>) {
-        if let Some(entry) = self.entries.get_mut(collection_id) {
-            match since.as_option() {
-                Some(since) => {
-                    for ((_k, _v), ts, _diff) in entry.iter_mut() {
-                        if ts.less_than(since) {
-                            *ts = *since;
-                        }
-                    }
-                    differential_dataflow::consolidation::consolidate_updates(entry);
-                }
-                None => {
-                    // This will cause all calls to iter over this collection to always pass
-                    // through to the underlying stash, making those calls not cached. This isn't
-                    // currently a performance problem because the empty since is not used.
-                    self.entries.remove(collection_id);
-                }
-            }
         }
     }
 }
@@ -98,7 +57,7 @@ impl<S: Stash> Stash for Memory<S> {
     async fn iter<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
-    ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
+    ) -> Result<BTreeMap<K, V>, StashError>
     where
         K: Data,
         V: Data,
@@ -107,23 +66,23 @@ impl<S: Stash> Stash for Memory<S> {
             Entry::Occupied(entry) => entry
                 .get()
                 .iter()
-                .map(|((k, v), ts, diff)| {
+                .map(|(k, v)| {
                     let k: K = K::decode(k)?;
                     let v: V = V::decode(v)?;
-                    Ok(((k, v), *ts, *diff))
+                    Ok((k, v))
                 })
-                .collect::<Result<Vec<_>, StashError>>()?,
+                .collect::<Result<BTreeMap<_, _>, StashError>>()?,
             Entry::Vacant(entry) => {
                 let entries = self.stash.iter(collection).await?;
                 entry.insert(
                     entries
                         .iter()
-                        .map(|((k, v), ts, diff)| {
+                        .map(|(k, v)| {
                             let mut k_buf = Vec::new();
                             let mut v_buf = Vec::new();
                             k.encode(&mut k_buf);
                             v.encode(&mut v_buf);
-                            ((k_buf, v_buf), *ts, *diff)
+                            (k_buf, v_buf)
                         })
                         .collect(),
                 );
@@ -132,16 +91,16 @@ impl<S: Stash> Stash for Memory<S> {
         })
     }
 
-    async fn iter_key<K, V>(
+    async fn get_key<K, V>(
         &mut self,
         collection: StashCollection<K, V>,
         key: &K,
-    ) -> Result<Vec<(V, Timestamp, Diff)>, StashError>
+    ) -> Result<Option<V>, StashError>
     where
         K: Data,
         V: Data,
     {
-        self.stash.iter_key(collection, key).await
+        self.stash.get_key(collection, key).await
     }
 
     async fn update_many<K, V, I>(
@@ -152,145 +111,31 @@ impl<S: Stash> Stash for Memory<S> {
     where
         K: Data,
         V: Data,
-        I: IntoIterator<Item = ((K, V), Timestamp, Diff)> + Send,
+        I: IntoIterator<Item = ((K, V), Diff)> + Send,
         I::IntoIter: Send,
     {
         let entries: Vec<_> = entries.into_iter().collect();
         let local_entries: Vec<_> = entries
             .iter()
-            .map(|((k, v), ts, diff)| {
+            .map(|((k, v), diff)| {
                 let mut k_buf = Vec::new();
                 let mut v_buf = Vec::new();
                 k.encode(&mut k_buf);
                 v.encode(&mut v_buf);
-                ((k_buf, v_buf), *ts, *diff)
+                ((k_buf, v_buf), *diff)
             })
             .collect();
         self.stash.update_many(collection, entries).await?;
         // Only update the memory cache if it's already present.
         if let Some(entry) = self.entries.get_mut(&collection.id) {
-            entry.extend(local_entries);
-            self.consolidate_collection(collection).await?;
-        }
-        Ok(())
-    }
-
-    async fn seal<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        new_upper: AntichainRef<'_, Timestamp>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.seal_batch(&[(collection, new_upper.to_owned())]).await
-    }
-
-    async fn seal_batch<K, V>(
-        &mut self,
-        seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.stash.seal_batch(seals).await?;
-        for (collection, upper) in seals {
-            self.uppers.insert(collection.id, upper.clone());
-        }
-        Ok(())
-    }
-
-    async fn compact<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-        new_since: AntichainRef<'a, Timestamp>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.compact_batch(&[(collection, new_since.to_owned())])
-            .await
-    }
-
-    async fn compact_batch<K, V>(
-        &mut self,
-        compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.stash.compact_batch(compactions).await?;
-        for (collection, since) in compactions {
-            self.sinces.insert(collection.id, since.clone());
-            self.consolidate_collection(*collection).await?;
-        }
-        Ok(())
-    }
-
-    async fn consolidate<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.consolidate_batch(&[collection]).await
-    }
-
-    async fn consolidate_batch<K, V>(
-        &mut self,
-        collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.stash.consolidate_batch(collections).await?;
-        for collection in collections {
-            self.consolidate_collection(*collection).await?;
-        }
-        Ok(())
-    }
-
-    async fn since<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Antichain<Timestamp>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        Ok(match self.sinces.entry(collection.id) {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => {
-                let since = self.stash.since(collection).await?;
-                entry.insert(since.clone());
-                since
+            for ((k, v), diff) in local_entries {
+                match diff {
+                    Diff::Insert => entry.insert(k, v),
+                    Diff::Delete => entry.remove(&k),
+                };
             }
-        })
-    }
-
-    async fn upper<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Antichain<Timestamp>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        Ok(match self.uppers.entry(collection.id) {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => {
-                let upper = self.stash.upper(collection).await?;
-                entry.insert(upper.clone());
-                upper
-            }
-        })
+        }
+        Ok(())
     }
 
     async fn confirm_leadership(&mut self) -> Result<(), StashError> {
@@ -308,13 +153,14 @@ impl<S: Append> Append for Memory<S> {
         let batches: Vec<_> = batches.into_iter().collect();
         self.stash.append(batches.clone()).await?;
         for batch in batches {
-            self.uppers.insert(batch.collection_id, batch.upper);
-            self.sinces
-                .insert(batch.collection_id, batch.compact.clone());
             // Only update the memory cache if it's already present.
             if let Some(entry) = self.entries.get_mut(&batch.collection_id) {
-                entry.extend(batch.entries);
-                self.consolidate_id(&batch.collection_id, batch.compact);
+                for ((k, v), diff) in batch.entries {
+                    match diff {
+                        Diff::Insert => entry.insert(k, v),
+                        Diff::Delete => entry.remove(&k),
+                    };
+                }
             }
         }
         Ok(())

@@ -213,8 +213,6 @@ impl State {
                     CREATE TABLE fence AS SELECT * FROM {0}.fence;
                     CREATE TABLE collections AS SELECT * FROM {0}.collections;
                     CREATE TABLE data AS SELECT * FROM {0}.data;
-                    CREATE TABLE sinces AS SELECT * FROM {0}.sinces;
-                    CREATE TABLE uppers AS SELECT * FROM {0}.uppers;
                     ",
                     current_schema,
                 ))
