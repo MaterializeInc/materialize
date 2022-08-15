@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE VIEW static_view (f1) AS VALUES (1),(2),(3);
+> CREATE MATERIALIZED VIEW static_view (f1) AS VALUES (1),(2),(3);
 
 > CREATE SINK upgrade_kafka_sink FROM static_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'upgrade-kafka-sink'

@@ -217,31 +217,31 @@ fn test_audit_log() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-/// VersionedStorageMetrics describes the state of storage
-/// for the environment, such as storage used, at a point in time.
-/// These metrics are persisted in the catalog across restarts,
-/// so any updates to the schema will require a new version.
+/// Describes the environment's storage usage at a point in time.
+///
+/// This type is persisted in the catalog across restarts, so any updates to the
+/// schema will require a new version.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum VersionedStorageMetrics {
-    V1(StorageMetricsV1),
+pub enum VersionedStorageUsage {
+    V1(StorageUsageV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StorageMetricsV1 {
+pub struct StorageUsageV1 {
     pub id: u64,
     pub object_id: Option<String>,
     pub size_bytes: u64,
     pub collection_timestamp: EpochMillis,
 }
 
-impl StorageMetricsV1 {
+impl StorageUsageV1 {
     pub fn new(
         id: u64,
         object_id: Option<String>,
         size_bytes: u64,
         collection_timestamp: EpochMillis,
-    ) -> StorageMetricsV1 {
-        StorageMetricsV1 {
+    ) -> StorageUsageV1 {
+        StorageUsageV1 {
             id,
             object_id,
             size_bytes,
@@ -250,7 +250,7 @@ impl StorageMetricsV1 {
     }
 }
 
-impl VersionedStorageMetrics {
+impl VersionedStorageUsage {
     /// Create a new metric snapshot.
     /// This function must always require and produce the most
     /// recent variant of VersionedStorageMetrics.
@@ -260,7 +260,7 @@ impl VersionedStorageMetrics {
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     ) -> Self {
-        Self::V1(StorageMetricsV1::new(
+        Self::V1(StorageUsageV1::new(
             id,
             object_id,
             size_bytes,

@@ -15,6 +15,7 @@ pub mod controller;
 pub mod decode;
 pub mod protocol;
 pub mod render;
+pub mod sink;
 pub mod source;
 pub mod storage_state;
 pub mod types;

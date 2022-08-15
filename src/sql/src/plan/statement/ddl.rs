@@ -46,8 +46,8 @@ use mz_storage::types::connections::{
     StringOrSecret, TlsIdentity,
 };
 use mz_storage::types::sinks::{
-    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
-    SinkConnectionBuilder, SinkEnvelope,
+    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope,
+    StorageSinkConnectionBuilder,
 };
 use mz_storage::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -1826,7 +1826,7 @@ fn kafka_sink_builder(
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
-) -> Result<SinkConnectionBuilder, PlanError> {
+) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
         Some(SqlValueOrSecret::Value(Value::String(topic))) => Some(topic),
@@ -2014,24 +2014,26 @@ fn kafka_sink_builder(
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
-    Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
-        connection: KafkaConnection::try_from(&mut config_options)?,
-        options: config_options,
-        format,
-        topic_prefix,
-        consistency_topic_prefix: consistency_topic,
-        consistency_format,
-        topic_suffix_nonce,
-        partition_count,
-        replication_factor,
-        fuel: 10000,
-        relation_key_indices,
-        key_desc_and_indices,
-        value_desc,
-        reuse_topic,
-        transitive_source_dependencies,
-        retention,
-    }))
+    Ok(StorageSinkConnectionBuilder::Kafka(
+        KafkaSinkConnectionBuilder {
+            connection: KafkaConnection::try_from(&mut config_options)?,
+            options: config_options,
+            format,
+            topic_prefix,
+            consistency_topic_prefix: consistency_topic,
+            consistency_format,
+            topic_suffix_nonce,
+            partition_count,
+            replication_factor,
+            fuel: 10000,
+            relation_key_indices,
+            key_desc_and_indices,
+            value_desc,
+            reuse_topic,
+            transitive_source_dependencies,
+            retention,
+        },
+    ))
 }
 
 /// Determines the consistency configuration (topic and format) that should be used for a Kafka
@@ -2149,23 +2151,14 @@ pub fn describe_create_sink(
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    mut stmt: CreateSinkStatement<Aug>,
+    stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     scx.require_unsafe_mode("CREATE SINK")?;
-    let compute_instance = match &stmt.in_cluster {
-        None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.id,
-    };
-    stmt.in_cluster = Some(ResolvedClusterName {
-        id: compute_instance,
-        print_name: None,
-    });
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
         from,
-        in_cluster: _,
         connection,
         with_options,
         format,
@@ -2305,7 +2298,6 @@ pub fn plan_create_sink(
             from: from.id(),
             connection_builder,
             envelope,
-            compute_instance,
         },
         with_snapshot,
         if_not_exists,

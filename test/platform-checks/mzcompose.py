@@ -82,7 +82,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
     )
 
-    parser.add_argument("--check", metavar="CHECK", type=str, help="Check to run.")
+    parser.add_argument(
+        "--check", metavar="CHECK", type=str, action="append", help="Check(s) to run."
+    )
 
     args = parser.parse_args()
 
@@ -109,7 +111,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         [globals()[args.scenario]] if args.scenario else Scenario.__subclasses__()
     )
 
-    checks = [globals()[args.check]] if args.check else Check.__subclasses__()
+    checks = (
+        [globals()[c] for c in args.check] if args.check else Check.__subclasses__()
+    )
 
     for scenario_class in scenarios:
         print(f"Testing upgrade scenario {scenario_class}")
