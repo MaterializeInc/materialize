@@ -255,7 +255,7 @@ where
                     image: self.storaged_image.clone(),
                     args: &|assigned| {
                         vec![
-                            format!("--workers=1"),
+                            format!("--workers={}", allocation.workers),
                             format!(
                                 "--controller-listen-addr={}:{}",
                                 assigned.listen_host, assigned.ports["controller"]
