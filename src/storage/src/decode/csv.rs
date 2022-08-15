@@ -9,7 +9,7 @@
 
 use mz_repr::{Datum, Row};
 
-use crate::types::errors::DecodeErrorInner;
+use crate::types::errors::DecodeErrorKind;
 use crate::types::sources::encoding::CsvEncoding;
 use crate::types::transforms::LinearOperator;
 
@@ -71,7 +71,7 @@ impl CsvDecoderState {
         }
     }
 
-    pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DecodeErrorInner> {
+    pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         loop {
             let (result, n_input, n_output, n_ends) = self.csv_reader.read_record(
                 *chunk,
@@ -101,7 +101,7 @@ impl CsvDecoderState {
                         }
                         if ends_valid != self.n_cols {
                             self.events_error += 1;
-                            Err(DecodeErrorInner::Text(format!(
+                            Err(DecodeErrorKind::Text(format!(
                                 "CSV error at record number {}: expected {} columns, got {}.",
                                 self.total_events(),
                                 self.n_cols,
@@ -127,7 +127,7 @@ impl CsvDecoderState {
                                 }
                                 Err(e) => {
                                     self.events_error += 1;
-                                    Err(DecodeErrorInner::Text(format!(
+                                    Err(DecodeErrorKind::Text(format!(
                                         "CSV error at record number {}: invalid UTF-8 ({})",
                                         self.total_events(),
                                         e
@@ -148,7 +148,7 @@ impl CsvDecoderState {
                                 .enumerate()
                                 .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
                             if let Some((i, (actual, expected))) = mismatched {
-                                break Err(DecodeErrorInner::Text(format!(
+                                break Err(DecodeErrorKind::Text(format!(
                                     "source file contains incorrect columns '{:?}', \
                                      first mismatched column at index {} expected={} actual={}",
                                     row,

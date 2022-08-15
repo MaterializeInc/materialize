@@ -16,11 +16,11 @@ import "repr/src/row.proto";
 package mz_storage.types.errors;
 
 message ProtoDecodeError {
-    ProtoDecodeErrorInner inner = 1;
+    ProtoDecodeErrorKind kind = 1;
     optional bytes raw = 2;
 }
 
-message ProtoDecodeErrorInner {
+message ProtoDecodeErrorKind {
     oneof kind {
         string text = 1;
     }
@@ -52,7 +52,10 @@ message ProtoUpsertError {
     }
 }
 
-message ProtoEnvelopeError {
+// The "V1" suffix was requested by the storage team,
+// since they might want to repurpose/modify this field
+// in the future.
+message ProtoEnvelopeErrorV1 {
     oneof kind {
 	string debezium = 1;
 	ProtoUpsertError upsert = 2;
@@ -66,6 +69,6 @@ message ProtoDataflowError {
         ProtoDecodeError decode_error = 1;
         mz_expr.scalar.ProtoEvalError eval_error = 2;
         ProtoSourceError source_error = 3;
-	ProtoEnvelopeError envelope_error = 4;
+	ProtoEnvelopeErrorV1 envelope_error_v1 = 4;
     }
 }

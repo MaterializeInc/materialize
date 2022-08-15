@@ -53,7 +53,7 @@ use crate::types::sources::{IncludedColumnSource, MzOffset};
 use crate::types::transforms::LinearOperator;
 use crate::{
     source::{DecodeResult, SourceOutput},
-    types::errors::DecodeErrorInner,
+    types::errors::DecodeErrorKind,
 };
 
 mod avro;
@@ -148,17 +148,17 @@ pub(crate) enum PreDelimitedFormat {
 }
 
 impl PreDelimitedFormat {
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeErrorInner> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         match self {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeErrorInner::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
                 Ok(Some(Row::pack(Some(Datum::String(s)))))
             }
             PreDelimitedFormat::Regex(regex, row_buf) => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeErrorInner::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
                 let captures = match regex.captures(s) {
                     Some(captures) => captures,
                     None => return Ok(None),
@@ -195,7 +195,7 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
-    pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorInner> {
+    pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
@@ -221,7 +221,7 @@ impl DataDecoder {
     ///
     /// This is distinct from `next` because, for example, a CSV record should be returned even if it
     /// does not end in a newline.
-    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorInner> {
+    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         match &mut self.inner {
             DataDecoderInner::Csv(csv) => {
                 let result = csv.decode(bytes);
@@ -337,7 +337,7 @@ fn get_decoder(
 fn try_decode_delimited(
     decoder: &mut DataDecoder,
     value: Option<&Vec<u8>>,
-) -> Option<Result<Row, DecodeErrorInner>> {
+) -> Option<Result<Row, DecodeErrorKind>> {
     let value_buf = &mut value?.as_slice();
     let value = decoder.next(value_buf);
     if value.is_ok() && !value_buf.is_empty() {
@@ -345,7 +345,7 @@ fn try_decode_delimited(
             "Unexpected bytes remaining for decoded value: {:?}",
             value_buf
         );
-        return Some(Err(DecodeErrorInner::Text(err)));
+        return Some(Err(DecodeErrorKind::Text(err)));
     }
     value
         .transpose()
@@ -429,7 +429,7 @@ where
                     let key = key_decoder.as_mut().and_then(|decoder| {
                         try_decode_delimited(decoder, key.as_ref()).map(|result| {
                             result.map_err(|inner| DecodeError {
-                                inner,
+                                kind: inner,
                                 raw: key.clone(),
                             })
                         })
@@ -438,7 +438,7 @@ where
                     let value =
                         try_decode_delimited(&mut value_decoder, value.as_ref()).map(|result| {
                             result.map_err(|inner| DecodeError {
-                                inner,
+                                kind: inner,
                                 raw: value.clone(),
                             })
                         });
@@ -549,7 +549,7 @@ where
                             let data = &mut &value_buf[..];
                             let mut result = value_decoder.eof(data);
                             if result.is_ok() && !data.is_empty() {
-                                result = Err(DecodeErrorInner::Text(format!(
+                                result = Err(DecodeErrorKind::Text(format!(
                                     "Saw unexpected EOF with bytes remaining in buffer: {:?}",
                                     data
                                 )));
@@ -579,7 +579,7 @@ where
                                         value: Some(
                                             value
                                                 .map(|r| (r, 1))
-                                                .map_err(|inner| DecodeError { inner, raw: None }),
+                                                .map_err(|inner| DecodeError { kind: inner, raw: None }),
                                         ),
                                         position: position.into(),
                                         upstream_time_millis: *upstream_time_millis,
@@ -645,7 +645,7 @@ where
                                 value: Some(
                                     value
                                         .map(|r| (r, 1))
-                                        .map_err(|inner| DecodeError { inner, raw: None }),
+                                        .map_err(|inner| DecodeError { kind: inner, raw: None }),
                                 ),
                                 position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
@@ -660,7 +660,7 @@ where
                                 value: Some(
                                     value
                                         .map(|r| (r, 1))
-                                        .map_err(|inner| DecodeError { inner, raw: None }),
+                                        .map_err(|inner| DecodeError { kind: inner, raw: None }),
                                 ),
                                 position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
