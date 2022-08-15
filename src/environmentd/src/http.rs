@@ -226,8 +226,6 @@ enum AuthError {
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
     MissingHttpAuthentication,
-    #[error("missing username")]
-    MissingUserName,
     #[error("{0}")]
     MismatchedUser(&'static str),
 }
@@ -321,16 +319,11 @@ async fn auth<B>(
         | (mz_adapter::client::ClientType::External, _) => {}
     };
 
-    // Create http default user for local usage.
-    let create_default_user = frontegg.is_none() && tls_mode.is_none() && user == HTTP_DEFAULT_USER;
-    if !create_default_user && user == HTTP_DEFAULT_USER {
-        return Err(AuthError::MissingUserName);
-    }
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
     req.extensions_mut().insert(AuthedUser {
         user,
-        create_if_not_exists: frontegg.is_some() || create_default_user,
+        create_if_not_exists: frontegg.is_some() || !matches!(tls_mode, Some(TlsMode::AssumeUser)),
     });
 
     // Run the request.
