@@ -596,6 +596,7 @@ class Testdrive(Service):
         name: str = "testdrive",
         mzbuild: str = "testdrive",
         materialize_url: str = "postgres://materialize@materialized:6875",
+        materialize_url_internal: str = "postgres://materialize@materialized:6877",
         materialize_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
@@ -644,6 +645,7 @@ class Testdrive(Service):
                 f"--kafka-addr={kafka_url}",
                 "--schema-registry-url=http://schema-registry:8081",
                 f"--materialize-url={materialize_url}",
+                f"--materialize-url-internal={materialize_url_internal}",
             ]
 
         if aws_region:
