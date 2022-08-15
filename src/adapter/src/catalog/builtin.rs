@@ -842,7 +842,7 @@ pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
 };
 
 pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_operator_addresses",
+    name: "mz_dataflow_addresses",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
 };
@@ -1295,17 +1295,17 @@ pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
     name: "mz_dataflow_names",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_dataflow_names AS SELECT
-    mz_dataflow_operator_addresses.id,
-    mz_dataflow_operator_addresses.worker,
-    mz_dataflow_operator_addresses.address[1] AS local_id,
+    mz_dataflow_addresses.id,
+    mz_dataflow_addresses.worker,
+    mz_dataflow_addresses.address[1] AS local_id,
     mz_dataflow_operators.name
 FROM
-    mz_catalog.mz_dataflow_operator_addresses,
+    mz_catalog.mz_dataflow_addresses,
     mz_catalog.mz_dataflow_operators
 WHERE
-    mz_dataflow_operator_addresses.id = mz_dataflow_operators.id AND
-    mz_dataflow_operator_addresses.worker = mz_dataflow_operators.worker AND
-    mz_catalog.list_length(mz_dataflow_operator_addresses.address) = 1",
+    mz_dataflow_addresses.id = mz_dataflow_operators.id AND
+    mz_dataflow_addresses.worker = mz_dataflow_operators.worker AND
+    mz_catalog.list_length(mz_dataflow_addresses.address) = 1",
 };
 
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
@@ -1319,13 +1319,13 @@ pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
     mz_dataflow_names.name as dataflow_name
 FROM
     mz_catalog.mz_dataflow_operators,
-    mz_catalog.mz_dataflow_operator_addresses,
+    mz_catalog.mz_dataflow_addresses,
     mz_catalog.mz_dataflow_names
 WHERE
-    mz_dataflow_operators.id = mz_dataflow_operator_addresses.id AND
-    mz_dataflow_operators.worker = mz_dataflow_operator_addresses.worker AND
-    mz_dataflow_names.local_id = mz_dataflow_operator_addresses.address[1] AND
-    mz_dataflow_names.worker = mz_dataflow_operator_addresses.worker",
+    mz_dataflow_operators.id = mz_dataflow_addresses.id AND
+    mz_dataflow_operators.worker = mz_dataflow_addresses.worker AND
+    mz_dataflow_names.local_id = mz_dataflow_addresses.address[1] AND
+    mz_dataflow_names.worker = mz_dataflow_addresses.worker",
 };
 
 pub const MZ_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
