@@ -66,9 +66,9 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
             """
         )
     )
-    id = mz.environmentd.sql_query(
-        f"SELECT id FROM mz_sources WHERE name = 'source1'"
-    )[0][0]
+    id = mz.environmentd.sql_query(f"SELECT id FROM mz_sources WHERE name = 'source1'")[
+        0
+    ][0]
     assert id is not None
     storaged = f"pod/storage-{id}-0"
     wait(condition="condition=Ready", resource=storaged)
