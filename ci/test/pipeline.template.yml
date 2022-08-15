@@ -442,6 +442,17 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: resource-limits
+      label: Resource limits
+      depends_on: build-x86_64
+      timeout_in_minutes: 30
+      artifact_paths: junit_mzcompose_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: resource-limits
+      agents:
+        queue: linux-x86_64
+
   - id: persist-maelstrom
     label: Maelstrom coverage of persist
     depends_on: build-x86_64
