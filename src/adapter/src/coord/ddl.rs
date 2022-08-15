@@ -588,9 +588,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .user_sources()
                 .count()
                 .try_into()
-                .expect("number of sinks should fit into i32"),
+                .expect("number of sources should fit into i32"),
             new_sources,
-            SystemVars::max_sinks,
+            SystemVars::max_sources,
             "Source",
         )?;
         self.validate_resource_limit(
@@ -608,7 +608,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .user_materialized_views()
                 .count()
                 .try_into()
-                .expect("number of sinks should fit into i32"),
+                .expect("number of materialized views should fit into i32"),
             new_materialized_views,
             SystemVars::max_materialized_views,
             "Materialized view",

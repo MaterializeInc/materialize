@@ -911,7 +911,7 @@ impl SystemVars {
     }
 
     /// Returns the value of the `max_sources` configuration parameter.
-    pub fn max_source(&self) -> i32 {
+    pub fn max_sources(&self) -> i32 {
         *self.max_sources.value()
     }
 
