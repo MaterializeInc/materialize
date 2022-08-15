@@ -50,7 +50,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use mz_adapter::catalog::HTTP_DEFAULT_USER;
+use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_environmentd::TlsMode;
 use mz_frontegg_auth::{
     ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication, FronteggConfig, RefreshToken,
@@ -606,6 +606,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let (client_cert, client_key) = ca.request_client_cert("materialize")?;
     let (client_cert_other, client_key_other) = ca.request_client_cert("other")?;
     let (client_cert_cloud, client_key_cloud) = ca.request_client_cert("user@_.com")?;
+    let (client_cert_system, client_key_system) = ca.request_client_cert(SYSTEM_USER)?;
 
     let bad_ca = Ca::new_root("test ca")?;
     let (bad_client_cert, bad_client_key) = bad_ca.request_client_cert("materialize")?;
@@ -613,10 +614,18 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
-    let users = HashMap::from([(
-        (client_id.to_string(), secret.to_string()),
-        "user@_.com".to_string(),
-    )]);
+    let system_client_id = Uuid::new_v4();
+    let system_secret = Uuid::new_v4();
+    let users = HashMap::from([
+        (
+            (client_id.to_string(), secret.to_string()),
+            "user@_.com".to_string(),
+        ),
+        (
+            (system_client_id.to_string(), system_secret.to_string()),
+            SYSTEM_USER.to_string(),
+        ),
+    ]);
     let encoding_key = EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap())?;
     let timestamp = Arc::new(Mutex::new(500_000));
     let now = {
@@ -671,6 +680,10 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let frontegg_password = &format!("mzauth_{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
     let frontegg_header_basic = make_header(frontegg_basic);
+
+    let frontegg_system_password = &format!("mzauth_{system_client_id}{system_secret}");
+    let frontegg_system_basic = Authorization::basic(SYSTEM_USER, frontegg_system_password);
+    let frontegg_system_header_basic = make_header(frontegg_system_basic);
 
     let no_headers = HeaderMap::new();
 
@@ -735,6 +748,34 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                     b.set_ca_file(ca.ca_cert_path())?;
                     b.set_certificate_file(&client_cert, SslFiletype::PEM)?;
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
+                }),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_contains!(message, "unauthorized");
+                })),
+            },
+            // System user cannot login via external ports.
+            TestCase::Pgwire {
+                user: SYSTEM_USER,
+                password: Some(frontegg_system_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key_system, SslFiletype::PEM)
+                }),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                })),
+            },
+            TestCase::Http {
+                user: SYSTEM_USER,
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_system_header_basic,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key_system, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -971,6 +1012,26 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                     assert_eq!(message, "unauthorized");
                 })),
             },
+            // System user cannot login via external ports.
+            TestCase::Pgwire {
+                user: SYSTEM_USER,
+                password: Some(frontegg_system_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                })),
+            },
+            TestCase::Http {
+                user: SYSTEM_USER,
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_system_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_contains!(message, "unauthorized");
+                })),
+            },
         ],
     );
 
@@ -1027,6 +1088,16 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                     // due to OpenSSL or Hyper refactorings.
                     assert!(code.is_none());
                     assert_contains!(message, "ssl3_get_record:wrong version number");
+                })),
+            },
+            // System user cannot login via external ports.
+            TestCase::Pgwire {
+                user: SYSTEM_USER,
+                password: None,
+                ssl_mode: SslMode::Disable,
+                configure: Box::new(|_| Ok(())),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
                 })),
             },
         ],
@@ -1104,6 +1175,16 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
+            },
+            // System user cannot login via external ports.
+            TestCase::Pgwire {
+                user: SYSTEM_USER,
+                password: None,
+                ssl_mode: SslMode::Prefer,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                })),
             },
         ],
     );
@@ -1240,6 +1321,20 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                     b.set_private_key_file(&client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
+            },
+            // System user cannot login via external ports.
+            TestCase::Pgwire {
+                user: SYSTEM_USER,
+                password: None,
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key_system, SslFiletype::PEM)
+                }),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                })),
             },
         ],
     );
@@ -1406,6 +1501,34 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                     b.set_private_key_file(&client_key_other, SslFiletype::PEM)
                 }),
                 assert: Assert::Success,
+            },
+            // System user cannot login via external ports.
+            TestCase::Pgwire {
+                user: SYSTEM_USER,
+                password: None,
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key_system, SslFiletype::PEM)
+                }),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                })),
+            },
+            TestCase::Http {
+                user: SYSTEM_USER,
+                scheme: Scheme::HTTPS,
+                headers: &no_headers,
+                configure: Box::new(|b| {
+                    b.set_ca_file(ca.ca_cert_path())?;
+                    b.set_certificate_file(&client_cert_system, SslFiletype::PEM)?;
+                    b.set_private_key_file(&client_key_system, SslFiletype::PEM)
+                }),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_contains!(message, "unauthorized");
+                })),
             },
         ],
     );
