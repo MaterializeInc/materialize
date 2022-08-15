@@ -28,6 +28,9 @@ from materialize.checks.actions import RestartMz as RestartMzAction
 from materialize.checks.actions import (
     RestartPostgresBackend as RestartPostgresBackendAction,
 )
+from materialize.checks.actions import (
+    RestartSourcePostgres as RestartSourcePostgresAction,
+)
 from materialize.checks.actions import StartComputed, StartMz, UseComputed, Validate
 from materialize.checks.checks import Check
 from materialize.mzcompose import Composition
@@ -147,5 +150,19 @@ class RestartPostgresBackend(Scenario):
             RestartPostgresBackendAction(),
             Manipulate(self.checks, phase=2),
             RestartPostgresBackendAction(),
+            Validate(self.checks),
+        ]
+
+
+class RestartSourcePostgres(Scenario):
+    def actions(self) -> List[Action]:
+        return [
+            StartMz(),
+            Initialize(self.checks),
+            RestartSourcePostgresAction(),
+            Manipulate(self.checks, phase=1),
+            RestartSourcePostgresAction(),
+            Manipulate(self.checks, phase=2),
+            RestartSourcePostgresAction(),
             Validate(self.checks),
         ]

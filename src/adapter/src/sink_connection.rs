@@ -18,18 +18,19 @@ use mz_repr::GlobalId;
 use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
 use mz_storage::types::sinks::{
     KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
-    KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
+    KafkaSinkConsistencyConnection, PublishedSchemaInfo, StorageSinkConnection,
+    StorageSinkConnectionBuilder,
 };
 
 use crate::error::AdapterError;
 
 pub async fn build(
-    builder: SinkConnectionBuilder,
+    builder: StorageSinkConnectionBuilder,
     id: GlobalId,
     connection_context: ConnectionContext,
-) -> Result<SinkConnection, AdapterError> {
+) -> Result<StorageSinkConnection, AdapterError> {
     match builder {
-        SinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connection_context).await,
+        StorageSinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connection_context).await,
     }
 }
 
@@ -204,7 +205,7 @@ async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
     id: GlobalId,
     connection_context: ConnectionContext,
-) -> Result<SinkConnection, AdapterError> {
+) -> Result<StorageSinkConnection, AdapterError> {
     // Create Kafka topic
     let mut config = create_new_client_config(connection_context.librdkafka_log_level);
     builder
@@ -313,7 +314,7 @@ async fn build_kafka(
         _ => None,
     };
 
-    Ok(SinkConnection::Kafka(KafkaSinkConnection {
+    Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
         connection: builder.connection,
         options: builder.options,
         topic,

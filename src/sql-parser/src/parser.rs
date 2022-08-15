@@ -2216,7 +2216,6 @@ impl<'a> Parser<'a> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
-        let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
@@ -2253,7 +2252,6 @@ impl<'a> Parser<'a> {
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::CreateSink(CreateSinkStatement {
             name,
-            in_cluster,
             from,
             connection,
             with_options,
@@ -4533,7 +4531,7 @@ impl<'a> Parser<'a> {
             let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
                 Some(kw) => {
                     if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::Sink | ObjectType::MaterializedView) {
+                        if matches!(object_type, ObjectType::MaterializedView) {
                             // put `IN` back
                             self.prev_token();
                             (None, self.parse_optional_in_cluster()?)

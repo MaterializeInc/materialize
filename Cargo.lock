@@ -4085,6 +4085,7 @@ dependencies = [
  "rand",
  "rdkafka",
  "regex",
+ "scopeguard",
  "serde",
  "serde_json",
  "tempfile",

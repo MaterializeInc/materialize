@@ -11,7 +11,7 @@
 # Test various errors that can happen at CREATE SINK time and check how they are reported to the user
 #
 
-> CREATE VIEW v1 (f1) AS VALUES (1);
+> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (1);
 
 ! CREATE SINK invalid_port FROM v1
   INTO KAFKA BROKER '123:123:123'

@@ -24,7 +24,7 @@ use mz_compute_client::response::{TailBatch, TailResponse};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{SinkAsOf, SinkDesc, TailSinkConnection};
+use mz_storage::types::sinks::{ComputeSinkDesc, SinkAsOf, TailSinkConnection};
 
 use crate::render::sinks::SinkRender;
 
@@ -47,7 +47,7 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
-        sink: &SinkDesc<CollectionMetadata>,
+        sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
