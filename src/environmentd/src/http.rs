@@ -34,9 +34,6 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
-use mz_adapter::SessionClient;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::OpenTelemetryEnableCallback;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
@@ -47,8 +44,12 @@ use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
+use mz_adapter::catalog::HTTP_DEFAULT_USER;
 use mz_adapter::session::Session;
+use mz_adapter::SessionClient;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::tracing::OpenTelemetryEnableCallback;
 
 use crate::BUILD_INFO;
 
@@ -56,8 +57,6 @@ mod catalog;
 mod memory;
 mod root;
 mod sql;
-
-const SYSTEM_USER: &str = "mz_system";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -113,11 +112,11 @@ impl Server {
             )
             .nest("/prof/", mz_prof::http::router(&BUILD_INFO))
             .route("/static/*path", routing::get(root::handle_static))
-            .layer(Extension(adapter_client))
             .layer(middleware::from_fn(move |req, next| {
                 let frontegg = Arc::clone(&frontegg);
                 async move { auth(req, next, tls_mode, &frontegg).await }
             }))
+            .layer(Extension(adapter_client))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -221,6 +220,8 @@ enum AuthError {
     HttpsRequired,
     #[error("invalid username in client certificate")]
     InvalidCertUserName,
+    #[error("unauthorized login to user '{0}'")]
+    InvalidLogin(String),
     #[error("{0}")]
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
@@ -277,8 +278,8 @@ async fn auth<B>(
     // Then, handle Frontegg authentication if required.
     let user = match frontegg {
         // If no Frontegg authentication, we can use the cert's username if
-        // present, otherwise the system user.
-        None => user.unwrap_or_else(|| SYSTEM_USER.to_string()),
+        // present, otherwise the default HTTP user.
+        None => user.unwrap_or_else(|| HTTP_DEFAULT_USER.to_string()),
         // If we require Frontegg auth, fetch credentials from the HTTP auth
         // header. Basic auth comes with a username/password, where the password
         // is the client+secret pair. Bearer auth is an existing JWT that must
@@ -308,11 +309,21 @@ async fn auth<B>(
         }
     };
 
+    // Validate that mz_system only logs in via an internal port.
+    let adapter_client = req.extensions().get::<mz_adapter::Client>().unwrap();
+    match (adapter_client.client_type(), user.as_str()) {
+        (mz_adapter::client::ClientType::External, mz_adapter::catalog::SYSTEM_USER) => {
+            return Err(AuthError::InvalidLogin(user))
+        }
+        (mz_adapter::client::ClientType::Internal, _)
+        | (mz_adapter::client::ClientType::External, _) => {}
+    };
+
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
     req.extensions_mut().insert(AuthedUser {
         user,
-        create_if_not_exists: frontegg.is_some(),
+        create_if_not_exists: frontegg.is_some() || !matches!(tls_mode, Some(TlsMode::AssumeUser)),
     });
 
     // Run the request.

@@ -230,6 +230,16 @@ impl Server {
         config
     }
 
+    pub fn pg_config_internal(&self) -> postgres::Config {
+        let local_addr = self.inner.internal_sql_local_addr();
+        let mut config = postgres::Config::new();
+        config
+            .host(&Ipv4Addr::LOCALHOST.to_string())
+            .port(local_addr.port())
+            .user("materialize");
+        config
+    }
+
     pub fn pg_config_async(&self) -> tokio_postgres::Config {
         let local_addr = self.inner.sql_local_addr();
         let mut config = tokio_postgres::Config::new();

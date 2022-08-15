@@ -78,7 +78,6 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
 use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
@@ -95,6 +94,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
@@ -114,7 +114,7 @@ use crate::catalog::{
     self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
     ClusterReplicaSizeMap, StorageHostSizeMap, StorageSinkConnectionState,
 };
-use crate::client::{Client, ConnectionId, Handle};
+use crate::client::{Client, ClientType, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -815,7 +815,7 @@ pub async fn serve<S: Append + 'static>(
         connection_context,
         storage_usage_client,
     }: Config<S>,
-) -> Result<(Handle, Client), AdapterError> {
+) -> Result<(Handle, Client, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
@@ -933,8 +933,9 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx);
-            Ok((handle, client))
+            let external_client = Client::new(cmd_tx.clone(), ClientType::External);
+            let internal_client = Client::new(cmd_tx, ClientType::Internal);
+            Ok((handle, external_client, internal_client))
         }
         Err(e) => Err(e),
     }
