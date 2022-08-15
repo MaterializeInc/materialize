@@ -99,7 +99,10 @@ class Materialized(Service):
                 # HTTP and SQL ports in older versions of Materialize are the same
                 config_ports.pop()
 
-        command_list = ["--internal-sql-listen-addr=0.0.0.0:6877", "internal-http-listen-addr=0.0.0.0:6878"]
+        command_list = [
+            "--internal-sql-listen-addr=0.0.0.0:6877",
+            "--internal-http-listen-addr=0.0.0.0:6878",
+        ]
 
         if workers:
             command_list.append(f"--workers {workers}")

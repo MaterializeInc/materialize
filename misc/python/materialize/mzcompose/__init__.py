@@ -413,7 +413,7 @@ class Composition:
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
         with self.sql_cursor(
-                service=service, user=user, port=port, password=password
+            service=service, user=user, port=port, password=password
         ) as cursor:
             for statement in sqlparse.split(sql):
                 print(f"> {statement}")

@@ -145,5 +145,5 @@ class AlterSystem(Action):
         c.sql(
             f"ALTER SYSTEM SET {self.config_param} TO {self.value}",
             user="mz_system",
-            port=6877
+            port=6877,
         )
