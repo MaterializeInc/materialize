@@ -566,7 +566,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Op::DropTimeline(_)
                 | Op::RenameItem { .. }
                 | Op::UpdateComputeInstanceStatus { .. }
-                | Op::UpdateStorageMetrics { .. }
+                | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. } => {}
