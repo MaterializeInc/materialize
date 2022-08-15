@@ -527,6 +527,8 @@ impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
 }
 
 #[derive(Debug)]
+/// A wrapper around [Row] so that [serde_json] can produce human-readable
+/// output without changing the default serialization for Row.
 pub struct JSONRow(Row);
 
 impl JSONRow {
@@ -790,43 +792,63 @@ mod tests {
             row.push(Datum::String("world"));
             row.push(Datum::Int16(1000));
         });
+
+        // For ease of reading the expected output, construct a vec with
+        // type of datum + the expected output for that datm
         let all_types_of_datum = vec![
-            Datum::True,
-            Datum::False,
-            Datum::Null,
-            Datum::Dummy,
-            Datum::JsonNull,
-            Datum::UInt8(32),
-            Datum::from(0.1_f32),
-            Datum::from(-1.23),
-            Datum::Date(chrono::NaiveDate::from_ymd(2022, 8, 3)),
-            Datum::Time(chrono::NaiveTime::from_hms(12, 10, 22)),
-            Datum::Timestamp(chrono::NaiveDateTime::from_timestamp(1023123, 234)),
-            Datum::TimestampTz(chrono::DateTime::from_utc(
-                chrono::NaiveDateTime::from_timestamp(90234242, 234),
-                chrono::Utc,
-            )),
-            Datum::Uuid(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
-            Datum::Bytes(&[127, 23, 4]),
-            Datum::Interval(crate::adt::interval::Interval {
-                months: 1,
-                days: 2,
-                micros: 10,
-            }),
-            Datum::from(crate::adt::numeric::Numeric::from(10.234)),
-            array.unpack_first(),
-            list_datum.unpack_first(),
-            map_datum.unpack_first(),
+            (Datum::True, "true"),
+            (Datum::False, "false"),
+            (Datum::Null, "null"),
+            (Datum::Dummy, r#""Dummy""#),
+            (Datum::JsonNull, r#""JsonNull""#),
+            (Datum::UInt8(32), "32"),
+            (Datum::from(0.1_f32), "0.1"),
+            (Datum::from(-1.23), "-1.23"),
+            (
+                Datum::Date(chrono::NaiveDate::from_ymd(2022, 8, 3)),
+                r#""2022-08-03""#,
+            ),
+            (
+                Datum::Time(chrono::NaiveTime::from_hms(12, 10, 22)),
+                r#""12:10:22""#,
+            ),
+            (
+                Datum::Timestamp(chrono::NaiveDateTime::from_timestamp(1023123, 234)),
+                r#""1970-01-12T20:12:03.000000234""#,
+            ),
+            (
+                Datum::TimestampTz(chrono::DateTime::from_utc(
+                    chrono::NaiveDateTime::from_timestamp(90234242, 234),
+                    chrono::Utc,
+                )),
+                r#""1972-11-10T09:04:02.000000234Z""#,
+            ),
+            (
+                Datum::Uuid(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                r#""67e55044-10b1-426f-9247-bb680e5fe0c8""#,
+            ),
+            (Datum::Bytes(&[127, 23, 4]), "[127,23,4]"),
+            (
+                Datum::Interval(crate::adt::interval::Interval {
+                    months: 1,
+                    days: 2,
+                    micros: 10,
+                }),
+                r#"{"months":1,"days":2,"micros":10}"#,
+            ),
+            (
+                Datum::from(crate::adt::numeric::Numeric::from(10.234)),
+                r#""10.234""#,
+            ),
+            (array.unpack_first(), "[[12,20,-312],[0,-42,1231]]"),
+            (list_datum.unpack_first(), "[0,10]"),
+            (map_datum.unpack_first(), r#"{"hello":-1,"world":1000}"#),
         ];
-        let row = JSONRow(Row::pack(all_types_of_datum.into_iter()));
+        let (data, strings): (Vec<_>, Vec<_>) = all_types_of_datum.into_iter().unzip();
+        let row = JSONRow(Row::pack(data.into_iter()));
         let result = serde_json::to_string(&row);
-        let expected = "[true,false,null,\"Dummy\",\"JsonNull\",32,0.1,-1.23,\
-        \"2022-08-03\",\"12:10:22\",\"1970-01-12T20:12:03.000000234\",\
-        \"1972-11-10T09:04:02.000000234Z\",\"67e55044-10b1-426f-9247-bb680e5fe0c8\",\
-        [127,23,4],{\"months\":1,\"days\":2,\"micros\":10},\
-        {\"digits\":5,\"exponent\":-3,\"bits\":0,\"lsu\":[234,10,0,0,0,0,0,0,0,0,0,0,0]},\
-        [[12,20,-312],[0,-42,1231]],[0,10],{\"hello\":-1,\"world\":1000}]";
         assert!(result.is_ok());
+        let expected = format!("[{}]", strings.join(","));
         assert_eq!(result.unwrap(), expected);
     }
 }

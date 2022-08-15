@@ -155,7 +155,7 @@ impl<'a> Serialize for Datum<'a> {
             Array(a) => a.serialize(serializer),
             List(l) => l.serialize(serializer),
             Map(m) => m.serialize(serializer),
-            Numeric(n) => n.serialize(serializer),
+            Numeric(n) => serializer.serialize_str(&n.to_string()),
             Uuid(u) => u.serialize(serializer),
             Dummy => serializer.serialize_str("Dummy"),
             JsonNull => serializer.serialize_str("JsonNull"),
