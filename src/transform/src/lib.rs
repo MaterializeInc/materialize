@@ -30,6 +30,7 @@ use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_repr::GlobalId;
 
+pub mod attribute;
 pub mod canonicalize_mfp;
 pub mod column_knowledge;
 pub mod cse;
