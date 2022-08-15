@@ -33,6 +33,7 @@
 use std::{collections::HashSet, fmt};
 
 use mz_ore::{stack::RecursionLimitError, str::Indent, str::IndentLike};
+use serde::{Serialize, Serializer};
 
 use crate::{ColumnType, GlobalId, Row, ScalarType};
 
@@ -525,6 +526,27 @@ impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
     }
 }
 
+#[derive(Debug)]
+/// A wrapper around [Row] so that [serde_json] can produce human-readable
+/// output without changing the default serialization for Row.
+pub struct JSONRow(Row);
+
+impl JSONRow {
+    pub fn new(row: Row) -> Self {
+        Self(row)
+    }
+}
+
+impl Serialize for JSONRow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let row = self.0.unpack();
+        row.serialize(serializer)
+    }
+}
+
 /// A trait for humanizing components of an expression.
 ///
 /// This will be most often used as part of the rendering context
@@ -726,5 +748,107 @@ mod tests {
 
         assert!(act.is_ok());
         assert_eq!(act.unwrap(), exp);
+    }
+
+    #[test]
+    fn test_json_row_serialization() {
+        use crate::adt::array::ArrayDimension;
+        use crate::Datum;
+        // a 2 x 3 array
+        let mut array = Row::default();
+        array
+            .packer()
+            .push_array(
+                &[
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 2,
+                    },
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 3,
+                    },
+                ],
+                [
+                    Datum::Int32(12),
+                    Datum::Int32(20),
+                    Datum::Int32(-312),
+                    Datum::Int32(0),
+                    Datum::Int32(-42),
+                    Datum::Int32(1231),
+                ]
+                .into_iter(),
+            )
+            .unwrap();
+        let mut list_datum = Row::default();
+        list_datum.packer().push_list_with(|row| {
+            row.push(Datum::UInt32(0));
+            row.push(Datum::Int64(10));
+        });
+        let mut map_datum = Row::default();
+        map_datum.packer().push_dict_with(|row| {
+            row.push(Datum::String("hello"));
+            row.push(Datum::Int16(-1));
+            row.push(Datum::String("world"));
+            row.push(Datum::Int16(1000));
+        });
+
+        // For ease of reading the expected output, construct a vec with
+        // type of datum + the expected output for that datm
+        let all_types_of_datum = vec![
+            (Datum::True, "true"),
+            (Datum::False, "false"),
+            (Datum::Null, "null"),
+            (Datum::Dummy, r#""Dummy""#),
+            (Datum::JsonNull, r#""JsonNull""#),
+            (Datum::UInt8(32), "32"),
+            (Datum::from(0.1_f32), "0.1"),
+            (Datum::from(-1.23), "-1.23"),
+            (
+                Datum::Date(chrono::NaiveDate::from_ymd(2022, 8, 3)),
+                r#""2022-08-03""#,
+            ),
+            (
+                Datum::Time(chrono::NaiveTime::from_hms(12, 10, 22)),
+                r#""12:10:22""#,
+            ),
+            (
+                Datum::Timestamp(chrono::NaiveDateTime::from_timestamp(1023123, 234)),
+                r#""1970-01-12T20:12:03.000000234""#,
+            ),
+            (
+                Datum::TimestampTz(chrono::DateTime::from_utc(
+                    chrono::NaiveDateTime::from_timestamp(90234242, 234),
+                    chrono::Utc,
+                )),
+                r#""1972-11-10T09:04:02.000000234Z""#,
+            ),
+            (
+                Datum::Uuid(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                r#""67e55044-10b1-426f-9247-bb680e5fe0c8""#,
+            ),
+            (Datum::Bytes(&[127, 23, 4]), "[127,23,4]"),
+            (
+                Datum::Interval(crate::adt::interval::Interval {
+                    months: 1,
+                    days: 2,
+                    micros: 10,
+                }),
+                r#"{"months":1,"days":2,"micros":10}"#,
+            ),
+            (
+                Datum::from(crate::adt::numeric::Numeric::from(10.234)),
+                r#""10.234""#,
+            ),
+            (array.unpack_first(), "[[12,20,-312],[0,-42,1231]]"),
+            (list_datum.unpack_first(), "[0,10]"),
+            (map_datum.unpack_first(), r#"{"hello":-1,"world":1000}"#),
+        ];
+        let (data, strings): (Vec<_>, Vec<_>) = all_types_of_datum.into_iter().unzip();
+        let row = JSONRow(Row::pack(data.into_iter()));
+        let result = serde_json::to_string(&row);
+        assert!(result.is_ok());
+        let expected = format!("[{}]", strings.join(","));
+        assert_eq!(result.unwrap(), expected);
     }
 }
