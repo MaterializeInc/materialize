@@ -578,7 +578,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .user_tables()
                 .count()
                 .try_into()
-                .expect("number of tables should fir into i32"),
+                .expect("number of tables should fit into i32"),
             new_tables,
             SystemVars::max_tables,
             "Table",

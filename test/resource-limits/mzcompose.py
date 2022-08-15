@@ -21,7 +21,6 @@ from materialize.mzcompose.services import (
 SERVICES = [
     Materialized(),
     Testdrive(),
-    Postgres(),
 ]
 
 

@@ -673,17 +673,11 @@ pub enum RoleId {
 
 impl RoleId {
     pub fn is_system(&self) -> bool {
-        match self {
-            Self::System(_) => true,
-            Self::User(_) => false,
-        }
+        matches!(self, Self::System(_))
     }
 
     pub fn is_user(&self) -> bool {
-        match self {
-            Self::System(_) => false,
-            Self::User(_) => true,
-        }
+        matches!(self, Self::User(_))
     }
 }
 
