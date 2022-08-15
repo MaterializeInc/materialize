@@ -35,9 +35,9 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
-    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
 }
 
 impl PersistClientCache {
@@ -46,9 +46,9 @@ impl PersistClientCache {
         PersistClientCache {
             cfg,
             metrics: Arc::new(Metrics::new(registry)),
+            cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
             blob_by_uri: HashMap::new(),
             consensus_by_uri: HashMap::new(),
-            cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
         }
     }
 
