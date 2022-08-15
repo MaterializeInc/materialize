@@ -177,21 +177,21 @@ function View(props) {
         SELECT DISTINCT
           id, address
         FROM
-          mz_catalog.mz_dataflow_operator_addresses
+          mz_catalog.mz_dataflow_addresses
         WHERE
           id
           IN (
               SELECT
                 id
               FROM
-                mz_catalog.mz_dataflow_operator_addresses
+                mz_catalog.mz_dataflow_addresses
               WHERE
                 address[1]
                   = (
                       SELECT DISTINCT
                         address[1]
                       FROM
-                        mz_catalog.mz_dataflow_operator_addresses
+                        mz_catalog.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflow_id}
                     )
@@ -207,14 +207,14 @@ function View(props) {
               SELECT
                 id
               FROM
-                mz_catalog.mz_dataflow_operator_addresses
+                mz_catalog.mz_dataflow_addresses
               WHERE
                 address[1]
                   = (
                       SELECT DISTINCT
                         address[1]
                       FROM
-                        mz_catalog.mz_dataflow_operator_addresses
+                        mz_catalog.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflow_id}
                     )
@@ -232,14 +232,14 @@ function View(props) {
               SELECT
                 id
               FROM
-                mz_catalog.mz_dataflow_operator_addresses
+                mz_catalog.mz_dataflow_addresses
               WHERE
                 address[1]
                   = (
                       SELECT DISTINCT
                         address[1]
                       FROM
-                        mz_catalog.mz_dataflow_operator_addresses
+                        mz_catalog.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflow_id}
                     )
@@ -257,14 +257,14 @@ function View(props) {
               SELECT
                 id
               FROM
-                mz_catalog.mz_dataflow_operator_addresses
+                mz_catalog.mz_dataflow_addresses
               WHERE
                 address[1]
                   = (
                       SELECT DISTINCT
                         address[1]
                       FROM
-                        mz_catalog.mz_dataflow_operator_addresses
+                        mz_catalog.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflow_id}
                     )

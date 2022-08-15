@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, Utc};
 
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageMetrics};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
@@ -746,11 +746,11 @@ impl CatalogState {
 
     pub fn pack_storage_usage_update(
         &self,
-        event: &VersionedStorageMetrics,
+        event: &VersionedStorageUsage,
     ) -> Result<BuiltinTableUpdate, Error> {
         let (id, object_id, size_bytes, collection_timestamp): (u64, &Option<String>, u64, u64) =
             match event {
-                VersionedStorageMetrics::V1(ev) => {
+                VersionedStorageUsage::V1(ev) => {
                     (ev.id, &ev.object_id, ev.size_bytes, ev.collection_timestamp)
                 }
             };

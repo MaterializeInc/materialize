@@ -514,6 +514,16 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartPostgresBackend]
 
+  - id: checks-restart-source-postgres
+    label: "Checks + restart source Postgres"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres]
+
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build-x86_64

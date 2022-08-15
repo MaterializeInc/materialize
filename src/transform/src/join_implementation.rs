@@ -529,6 +529,7 @@ fn install_lifted_mfp(
                     expr.permute(&project);
                     // if column references refer to mapped expressions that have been
                     // lifted, replace the column reference with the mapped expression.
+                    #[allow(deprecated)]
                     expr.visit_mut_pre_post(
                         &mut |e| {
                             if let MirScalarExpr::Column(c) = e {

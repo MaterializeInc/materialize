@@ -71,13 +71,13 @@ use std::num::NonZeroUsize;
 use std::ops::Neg;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
 use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
@@ -94,6 +94,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
@@ -113,7 +114,7 @@ use crate::catalog::{
     self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
     ClusterReplicaSizeMap, StorageHostSizeMap, StorageSinkConnectionState,
 };
-use crate::client::{Client, ConnectionId, Handle};
+use crate::client::{Client, ClientType, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -143,6 +144,9 @@ mod timestamp_selection;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
+
+/// The default interval at which to collect storage usage information.
+pub const DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// A dummy availability zone to use when no availability zones are explicitly
 /// specified.
@@ -344,8 +348,10 @@ pub struct Coordinator<S> {
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 
-    // Persist client for fetching storage metadata such as size metrics
+    // Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
+    /// The interval at which to collect storage usage information.
+    storage_usage_collection_interval: Duration,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -731,9 +737,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
 
-        // Trigger a storage usage metric collection on configured interval
+        // Trigger a storage usage metric collection on configured interval.
         let mut storage_usage_update_interval =
-            tokio::time::interval(self.catalog.config().storage_metrics_collection_interval);
+            tokio::time::interval(self.storage_usage_collection_interval);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -809,7 +815,7 @@ pub async fn serve<S: Append + 'static>(
         connection_context,
         storage_usage_client,
     }: Config<S>,
-) -> Result<(Handle, Client), AdapterError> {
+) -> Result<(Handle, Client, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
@@ -908,6 +914,7 @@ pub async fn serve<S: Append + 'static>(
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,
+                storage_usage_collection_interval: DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
@@ -926,8 +933,9 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx);
-            Ok((handle, client))
+            let external_client = Client::new(cmd_tx.clone(), ClientType::External);
+            let internal_client = Client::new(cmd_tx, ClientType::Internal);
+            Ok((handle, external_client, internal_client))
         }
         Err(e) => Err(e),
     }

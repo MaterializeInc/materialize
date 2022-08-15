@@ -142,9 +142,6 @@ pub enum ConcreteComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
     /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
     Default,
-    /// Logging sources have been built for this replica. Upon system restart,
-    /// this will be replaced with ConcreteViews.
-    Concrete(Vec<(LogVariant, GlobalId)>),
     /// Logging sources and views have been built for this replica.
     ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
@@ -154,7 +151,6 @@ impl ConcreteComputeInstanceReplicaLogging {
     pub fn get_sources(&self) -> Vec<(LogVariant, GlobalId)> {
         match self {
             ConcreteComputeInstanceReplicaLogging::Default => vec![],
-            ConcreteComputeInstanceReplicaLogging::Concrete(logs) => logs.clone(),
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs.clone(),
         }
     }
@@ -163,7 +159,6 @@ impl ConcreteComputeInstanceReplicaLogging {
     pub fn get_views(&self) -> Vec<(LogView, GlobalId)> {
         match self {
             ConcreteComputeInstanceReplicaLogging::Default => vec![],
-            ConcreteComputeInstanceReplicaLogging::Concrete(_) => vec![],
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(_, views) => views.clone(),
         }
     }
