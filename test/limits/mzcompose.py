@@ -320,7 +320,7 @@ class KafkaSinks(Generator):
     @classmethod
     def body(cls) -> None:
         for i in cls.all():
-            print(f"> CREATE VIEW v{i} (f1) AS VALUES ({i})")
+            print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
         for i in cls.all():
             print(
                 f"""> CREATE SINK s{i} FROM v{i}
@@ -340,7 +340,7 @@ class KafkaSinksSameSource(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("> CREATE VIEW v1 (f1) AS VALUES (123)")
+        print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         for i in cls.all():
             print(
                 f"""> CREATE SINK s{i} FROM v1
