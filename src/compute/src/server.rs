@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::anyhow;
 use crossbeam_channel::{RecvError, TryRecvError};
@@ -19,6 +20,7 @@ use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::execute::execute_from;
+use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
 use tokio::sync::mpsc;
@@ -109,7 +111,12 @@ pub fn serve(
                 .unwrap();
             let _trace_metrics = trace_metrics.clone();
             let persist_clients = Arc::clone(&persist_clients);
+
+            let timer = Instant::now();
+            let cmd_sequencer = Sequencer::new(timely_worker, timer);
+
             Worker {
+                cmd_sequencer,
                 timely_worker,
                 client_rx,
                 compute_state: None,
@@ -159,6 +166,8 @@ type ResponseSender = mpsc::UnboundedSender<ComputeResponse>;
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
 struct Worker<'w, A: Allocate> {
+    /// Timely sequencer that broadcasts ComputeCommands among all workers.
+    cmd_sequencer: Sequencer<ComputeCommand<u64>>,
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
@@ -237,7 +246,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
             }
-            for cmd in cmds {
+
+            // Forward received commands to sequencer. As of now, only worker 0
+            // will ever receive commands.
+            for x in cmds.clone() {
+                self.cmd_sequencer.push(x.clone());
+            }
+
+            // Now process commands from sequencer
+            while let Some(cmd) = self.cmd_sequencer.next() {
                 self.handle_command(&mut response_tx, cmd);
             }
 

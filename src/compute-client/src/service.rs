@@ -27,7 +27,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
 
-use crate::command::{BuildDesc, ComputeCommand, DataflowDescription, ProtoComputeCommand};
+use crate::command::{ComputeCommand, ProtoComputeCommand};
 use crate::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, TailBatch, TailResponse,
 };
@@ -176,49 +176,51 @@ where
 {
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<ComputeCommand<T>> {
         self.observe_command(&command);
+        vec![]
 
-        match command {
-            ComputeCommand::CreateDataflows(dataflows) => {
-                let mut dataflows_parts = vec![Vec::new(); self.parts];
+        // TODO: Solve the large const problem somehow.
+        // match command {
+        //     ComputeCommand::CreateDataflows(dataflows) => {
+        //         let mut dataflows_parts = vec![Vec::new(); self.parts];
 
-                for dataflow in dataflows {
-                    // A list of descriptions of objects for each part to build.
-                    let mut builds_parts = vec![Vec::new(); self.parts];
-                    // Partition each build description among `parts`.
-                    for build_desc in dataflow.objects_to_build {
-                        let build_part = build_desc.plan.partition_among(self.parts);
-                        for (plan, objects_to_build) in
-                            build_part.into_iter().zip(builds_parts.iter_mut())
-                        {
-                            objects_to_build.push(BuildDesc {
-                                id: build_desc.id,
-                                plan,
-                            });
-                        }
-                    }
-                    // Each list of build descriptions results in a dataflow description.
-                    for (dataflows_part, objects_to_build) in
-                        dataflows_parts.iter_mut().zip(builds_parts)
-                    {
-                        dataflows_part.push(DataflowDescription {
-                            source_imports: dataflow.source_imports.clone(),
-                            index_imports: dataflow.index_imports.clone(),
-                            objects_to_build,
-                            index_exports: dataflow.index_exports.clone(),
-                            sink_exports: dataflow.sink_exports.clone(),
-                            as_of: dataflow.as_of.clone(),
-                            debug_name: dataflow.debug_name.clone(),
-                            id: dataflow.id,
-                        });
-                    }
-                }
-                dataflows_parts
-                    .into_iter()
-                    .map(ComputeCommand::CreateDataflows)
-                    .collect()
-            }
-            command => vec![command; self.parts],
-        }
+        //         for dataflow in dataflows {
+        //             // A list of descriptions of objects for each part to build.
+        //             let mut builds_parts = vec![Vec::new(); self.parts];
+        //             // Partition each build description among `parts`.
+        //             for build_desc in dataflow.objects_to_build {
+        //                 let build_part = build_desc.plan.partition_among(self.parts);
+        //                 for (plan, objects_to_build) in
+        //                     build_part.into_iter().zip(builds_parts.iter_mut())
+        //                 {
+        //                     objects_to_build.push(BuildDesc {
+        //                         id: build_desc.id,
+        //                         plan,
+        //                     });
+        //                 }
+        //             }
+        //             // Each list of build descriptions results in a dataflow description.
+        //             for (dataflows_part, objects_to_build) in
+        //                 dataflows_parts.iter_mut().zip(builds_parts)
+        //             {
+        //                 dataflows_part.push(DataflowDescription {
+        //                     source_imports: dataflow.source_imports.clone(),
+        //                     index_imports: dataflow.index_imports.clone(),
+        //                     objects_to_build,
+        //                     index_exports: dataflow.index_exports.clone(),
+        //                     sink_exports: dataflow.sink_exports.clone(),
+        //                     as_of: dataflow.as_of.clone(),
+        //                     debug_name: dataflow.debug_name.clone(),
+        //                     id: dataflow.id,
+        //                 });
+        //             }
+        //         }
+        //         dataflows_parts
+        //             .into_iter()
+        //             .map(ComputeCommand::CreateDataflows)
+        //             .collect()
+        //     }
+        //     command => vec![command; self.parts],
+        // }
     }
 
     fn absorb_response(

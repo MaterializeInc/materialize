@@ -119,15 +119,14 @@ impl<P, C, R> GenericClient<C, R> for Partitioned<P, C, R>
 where
     P: GenericClient<C, R>,
     (C, R): Partitionable<C, R>,
-    C: fmt::Debug + Send,
+    C: fmt::Debug + Send + Clone,
     R: fmt::Debug + Send,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-        let cmd_parts = self.state.split_command(cmd);
-        for (shard, cmd_part) in self.parts.iter_mut().zip(cmd_parts) {
-            shard.send(cmd_part).await?;
-        }
-        Ok(())
+        // Forward this to the first part, which will forward this command to all timely
+        // workers.
+        self.state.split_command(cmd.clone());
+        self.parts[0].send(cmd).await
     }
 
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
