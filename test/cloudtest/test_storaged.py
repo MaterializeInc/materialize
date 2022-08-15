@@ -48,6 +48,46 @@ def test_storaged_creation(mz: MaterializeApplication) -> None:
         wait(condition="condition=Ready", resource=storaged)
 
 
+def test_storaged_resizing(mz: MaterializeApplication) -> None:
+    """Test that resizing a given source causes the storaged to be replaced"""
+    mz.testdrive.run_string(
+        dedent(
+            """
+            $ kafka-create-topic topic=test
+
+            $ kafka-ingest format=bytes topic=test
+            ABC
+
+            > CREATE SOURCE source1
+              FROM KAFKA BROKER '${testdrive.kafka-addr}'
+              TOPIC 'testdrive-test-${testdrive.seed}'
+              FORMAT BYTES
+              ENVELOPE NONE;
+            """
+        )
+    )
+    id = mz.environmentd.sql_query(
+        f"SELECT id FROM mz_sources WHERE name = 'source1'"
+    )[0][0]
+    assert id is not None
+    storaged = f"pod/storage-{id}-0"
+    wait(condition="condition=Ready", resource=storaged)
+
+    mz.testdrive.run_string(
+        dedent(
+            """
+            > ALTER SOURCE source1
+              SET (SIZE '16');
+            """
+        ),
+        no_reset=True,
+    )
+
+    # TODO: verify that the new configuration is being picked up, if possible
+
+    wait(condition="condition=Ready", resource=storaged)
+
+
 def test_storaged_shutdown(mz: MaterializeApplication) -> None:
     """Test that dropping a source causes its respective storaged to shut down."""
     mz.testdrive.run_string(
