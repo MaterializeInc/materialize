@@ -27,6 +27,7 @@ use tokio::runtime::Handle;
 use tracing::{debug, debug_span, info, instrument, warn, Instrument};
 use uuid::Uuid;
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::{validate_truncate_batch, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
@@ -95,6 +96,7 @@ where
     pub(crate) gc: GarbageCollector,
     pub(crate) compact: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
     pub(crate) explicitly_expired: bool,
 
@@ -486,6 +488,7 @@ where
             size_hint,
             lower,
             Arc::clone(&self.blob),
+            Arc::clone(&self.cpu_heavy_runtime),
             self.machine.shard_id().clone(),
             self.writer_id.clone(),
         )

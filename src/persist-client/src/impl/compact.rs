@@ -183,6 +183,7 @@ impl Compactor {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        let parts_cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
         let compact_blocking = async move {
             let () = Self::validate_req(&req)?;
 
@@ -193,6 +194,7 @@ impl Compactor {
                 writer_id,
                 req.desc.lower().clone(),
                 Arc::clone(&blob),
+                parts_cpu_heavy_runtime,
                 &metrics.compaction.batch,
             );
 
