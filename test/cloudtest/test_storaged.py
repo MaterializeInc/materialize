@@ -71,7 +71,9 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
     ][0]
     assert id is not None
     storaged = f"pod/storage-{id}-0"
+
     wait(condition="condition=Ready", resource=storaged)
+    unaltered = mz.kubectl("get", storaged, "-o", "jsonpath=jsonpath='{.status.startTime}'")
 
     mz.testdrive.run_string(
         dedent(
@@ -83,9 +85,10 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    # TODO: verify that the new configuration is being picked up, if possible
-
     wait(condition="condition=Ready", resource=storaged)
+    altered = mz.kubectl("get", storaged, "-o", "jsonpath=jsonpath='{.status.startTime}'")
+
+    assert unaltered != altered, "Altering a source should restart the backing container"
 
 
 def test_storaged_shutdown(mz: MaterializeApplication) -> None:
