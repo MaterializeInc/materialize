@@ -139,7 +139,9 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
                 Ok(Self::Upsert(rust))
             }
             Some(Kind::Flat(text)) => Ok(Self::Flat(text)),
-            None => Err(TryFromProtoError::missing_field("ProtoEnvelopeErrorV1::kind")),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoEnvelopeErrorV1::kind",
+            )),
         }
     }
 }

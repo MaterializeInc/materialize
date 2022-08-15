@@ -576,11 +576,12 @@ where
 
                                     session.give(DecodeResult {
                                         key: None,
-                                        value: Some(
-                                            value
-                                                .map(|r| (r, 1))
-                                                .map_err(|inner| DecodeError { kind: inner, raw: None }),
-                                        ),
+                                        value: Some(value.map(|r| (r, 1)).map_err(|inner| {
+                                            DecodeError {
+                                                kind: inner,
+                                                raw: None,
+                                            }
+                                        })),
                                         position: position.into(),
                                         upstream_time_millis: *upstream_time_millis,
                                         partition: partition.clone(),
@@ -642,11 +643,10 @@ where
                         if value_bytes_remaining.is_empty() {
                             session.give(DecodeResult {
                                 key: None,
-                                value: Some(
-                                    value
-                                        .map(|r| (r, 1))
-                                        .map_err(|inner| DecodeError { kind: inner, raw: None }),
-                                ),
+                                value: Some(value.map(|r| (r, 1)).map_err(|inner| DecodeError {
+                                    kind: inner,
+                                    raw: None,
+                                })),
                                 position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
@@ -657,11 +657,10 @@ where
                         } else {
                             session.give(DecodeResult {
                                 key: None,
-                                value: Some(
-                                    value
-                                        .map(|r| (r, 1))
-                                        .map_err(|inner| DecodeError { kind: inner, raw: None }),
-                                ),
+                                value: Some(value.map(|r| (r, 1)).map_err(|inner| DecodeError {
+                                    kind: inner,
+                                    raw: None,
+                                })),
                                 position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
