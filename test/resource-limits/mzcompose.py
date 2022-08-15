@@ -8,15 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    Postgres,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
-
+from materialize.mzcompose.services import Materialized, Testdrive
 
 SERVICES = [
     Materialized(),
