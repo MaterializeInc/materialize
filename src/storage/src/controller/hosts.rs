@@ -309,7 +309,10 @@ where
                     cpu_limit: allocation.cpu_limit,
                     memory_limit: allocation.memory_limit,
                     scale: NonZeroUsize::new(1).unwrap(),
-                    labels: HashMap::new(),
+                    labels: HashMap::from_iter([(
+                        "size".to_string(),
+                        allocation.workers.to_string(),
+                    )]),
                     availability_zone: None,
                     // TODO: Decide on an A-A policy for storage hosts
                     anti_affinity: None,
