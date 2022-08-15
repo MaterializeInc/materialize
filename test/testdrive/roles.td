@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
+$ set-regex match=u\d{1,2} replacement=<RID>
 
 # Verify initial roles.
 > SELECT id, name FROM mz_roles
@@ -23,8 +24,6 @@ contains:non-superusers not yet supported
 contains:conflicting or redundant options
 ! CREATE ROLE foo LOGIN NOLOGIN SUPERUSER
 contains:conflicting or redundant options
-
-$ set-regex match=u\d{1,2} replacement=<RID>
 
 # Create roles using both syntaxes and verify their existence.
 > CREATE ROLE rj LOGIN SUPERUSER

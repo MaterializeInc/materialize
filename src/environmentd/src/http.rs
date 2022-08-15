@@ -34,7 +34,6 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
-use mz_adapter::catalog::HTTP_DEFAULT_USER;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
@@ -45,6 +44,7 @@ use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
+use mz_adapter::catalog::HTTP_DEFAULT_USER;
 use mz_adapter::session::Session;
 use mz_adapter::SessionClient;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
