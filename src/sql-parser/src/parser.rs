@@ -2130,7 +2130,7 @@ impl<'a> Parser<'a> {
         // New WITH block
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_create_source_option)?;
+            let options = self.parse_comma_separated(Parser::parse_source_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
@@ -2193,14 +2193,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses a single valid option in the WITH block of a create source
-    fn parse_create_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
+    fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
         let name = match self.expect_one_of_keywords(&[SIZE, REMOTE])? {
             SIZE => CreateSourceOptionName::Size,
             REMOTE => CreateSourceOptionName::Remote,
             _ => unreachable!(),
         };
+        Ok(name)
+    }
 
+    /// Parses a single valid option in the WITH block of a create source
+    fn parse_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
+        let name = self.parse_source_option_name()?;
         let _ = self.consume_token(&Token::Eq);
         Ok(CreateSourceOption {
             name,
@@ -2212,7 +2216,6 @@ impl<'a> Parser<'a> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
-        let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
@@ -2249,7 +2252,6 @@ impl<'a> Parser<'a> {
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::CreateSink(CreateSinkStatement {
             name,
-            in_cluster,
             from,
             connection,
             with_options,
@@ -3283,7 +3285,7 @@ impl<'a> Parser<'a> {
             SYSTEM,
         ])? {
             SINK => ObjectType::Sink,
-            SOURCE => ObjectType::Source,
+            SOURCE => return self.parse_alter_source(),
             VIEW => ObjectType::View,
             MATERIALIZED => {
                 self.expect_keyword(VIEW)?;
@@ -3308,6 +3310,47 @@ impl<'a> Parser<'a> {
             name,
             to_item_name,
         }))
+    }
+
+    fn parse_alter_source(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_object_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
+            RESET => {
+                self.expect_token(&Token::LParen)?;
+                let reset_options = self.parse_comma_separated(Parser::parse_source_option_name)?;
+                self.expect_token(&Token::RParen)?;
+
+                Statement::AlterSource(AlterSourceStatement {
+                    source_name: name,
+                    if_exists,
+                    action: AlterSourceAction::ResetOptions(reset_options),
+                })
+            }
+            SET => {
+                self.expect_token(&Token::LParen)?;
+                let set_options = self.parse_comma_separated(Parser::parse_source_option)?;
+                self.expect_token(&Token::RParen)?;
+                Statement::AlterSource(AlterSourceStatement {
+                    source_name: name,
+                    if_exists,
+                    action: AlterSourceAction::SetOptions(set_options),
+                })
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Source,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            _ => unreachable!(),
+        })
     }
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4488,7 +4531,7 @@ impl<'a> Parser<'a> {
             let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
                 Some(kw) => {
                     if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::Sink | ObjectType::MaterializedView) {
+                        if matches!(object_type, ObjectType::MaterializedView) {
                             // put `IN` back
                             self.prev_token();
                             (None, self.parse_optional_in_cluster()?)

@@ -23,14 +23,16 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tracing::{debug, instrument, trace};
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::async_runtime::CpuHeavyRuntime;
@@ -99,10 +101,6 @@ impl PersistLocation {
         ),
         ExternalError,
     > {
-        debug!(
-            "Location::open blob={} consensus={}",
-            self.blob_uri, self.consensus_uri,
-        );
         let blob = BlobConfig::try_from(&self.blob_uri).await?;
         let blob =
             retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
@@ -159,6 +157,8 @@ impl ShardId {
 /// The tunable knobs for persist.
 #[derive(Debug, Clone)]
 pub struct PersistConfig {
+    /// Info about which version of the code is running.
+    pub(crate) build_version: Version,
     /// A clock to use for all leasing and other non-debugging use.
     pub now: NowFn,
     /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -231,11 +231,12 @@ pub struct PersistConfig {
 //   value is a placeholder and should be revisited at some point.
 impl PersistConfig {
     /// Returns a new instance of [PersistConfig] with default tuning.
-    pub fn new(now: NowFn) -> Self {
+    pub fn new(build_info: &BuildInfo, now: NowFn) -> Self {
         // Escape hatch in case we need to disable compaction.
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         const MB: usize = 1024 * 1024;
         Self {
+            build_version: build_info.semver_version(),
             now,
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
@@ -244,13 +245,6 @@ impl PersistConfig {
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 50,
         }
-    }
-
-    /// Returns a new instance of [PersistConfig] with default tunings for unit tests
-    pub fn new_for_test(now: NowFn) -> Self {
-        let mut defaults = Self::new(now);
-        defaults.consensus_connection_pool_max_size = 1;
-        defaults
     }
 }
 
@@ -297,7 +291,6 @@ impl PersistClient {
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     ) -> Result<Self, ExternalError> {
-        trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
         Ok(PersistClient {
@@ -333,7 +326,6 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        trace!("Client::open shard_id={:?}", shard_id);
         Ok((
             self.open_writer(shard_id).await?,
             self.open_reader(shard_id).await?,
@@ -355,7 +347,6 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        trace!("Client::open_reader shard_id={:?}", shard_id);
         let gc = GarbageCollector::new(
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
@@ -401,7 +392,6 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        trace!("Client::open_writer shard_id={:?}", shard_id);
         let gc = GarbageCollector::new(
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
@@ -433,6 +423,7 @@ impl PersistClient {
             gc,
             compact,
             blob: Arc::clone(&self.blob),
+            cpu_heavy_runtime: Arc::clone(&self.cpu_heavy_runtime),
             upper: shard_upper.0,
             explicitly_expired: false,
         };
@@ -604,7 +595,7 @@ mod tests {
         );
 
         // Downgrading the since is tracked locally (but otherwise is a no-op).
-        read.downgrade_since(Antichain::from_elem(2)).await;
+        read.downgrade_since(&Antichain::from_elem(2)).await;
         assert_eq!(read.since(), &Antichain::from_elem(2));
     }
 
@@ -930,11 +921,11 @@ mod tests {
             .await;
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
-        assert_eq!(write2.fetch_recent_upper().await, Antichain::from_elem(3));
+        assert_eq!(write2.fetch_recent_upper().await, &Antichain::from_elem(3));
 
         // The writer-local upper should advance, even if it was another writer
         // that advanced the frontier.
-        assert_eq!(write2.upper().clone(), Antichain::from_elem(3));
+        assert_eq!(write2.upper(), &Antichain::from_elem(3));
     }
 
     #[tokio::test]

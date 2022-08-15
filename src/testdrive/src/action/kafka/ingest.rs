@@ -154,7 +154,9 @@ impl Transcoder {
                 match terminator {
                     Some(t) => {
                         row.read_until(*t, &mut out)?;
-                        out.pop();
+                        if out.last() == Some(&t) {
+                            out.pop();
+                        }
                     }
                     None => {
                         row.read_to_end(&mut out)?;

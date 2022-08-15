@@ -81,7 +81,7 @@ contains:unknown catalog item 'UID'
 
 # kafka-verify sort-messages
 
-> CREATE VIEW sort_messages (a) AS VALUES (2),(1),(3);
+> CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
 
 > CREATE SINK sort_messages_sink FROM sort_messages
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sort-messages-sink'
@@ -168,7 +168,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 
 # kafka-verify with regexp (the set-regexp from above is used)
 
-> CREATE VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
+> CREATE MATERIALIZED VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
 
 > CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'kafka-verify-regexp-sink'

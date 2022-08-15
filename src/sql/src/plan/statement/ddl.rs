@@ -20,19 +20,13 @@ use std::time::Duration;
 use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::display::comma_separated;
-use mz_sql_parser::ast::{
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    LoadGenerator, SetVariableValue, SshConnectionOption,
-};
-use mz_storage::source::generator::as_generator;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
 
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
+use mz_kafka_util::KafkaAddrs;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -40,13 +34,20 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_sql_parser::ast::display::comma_separated;
+use mz_sql_parser::ast::{
+    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, LoadGenerator, SetVariableValue,
+    SshConnectionOption,
+};
+use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::{
     Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
     StringOrSecret, TlsIdentity,
 };
 use mz_storage::types::sinks::{
-    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
-    SinkConnectionBuilder, SinkEnvelope,
+    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope,
+    StorageSinkConnectionBuilder,
 };
 use mz_storage::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -97,7 +98,7 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterNoopPlan, AlterSecretPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
     AlterSystemSetPlan, ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig,
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
     CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
@@ -822,7 +823,7 @@ pub fn plan_create_source(
     let CreateSourceOptionExtracted { size, remote, .. } =
         CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let host_config = match (remote.clone(), size) {
+    let host_config = match (remote, size) {
         (None, None) => StorageHostConfig::Undefined,
         (None, Some(size)) => StorageHostConfig::Managed { size },
         (Some(addr), None) => StorageHostConfig::Remote { addr },
@@ -869,7 +870,6 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        remote,
         host_config,
     }))
 }
@@ -1826,7 +1826,7 @@ fn kafka_sink_builder(
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
-) -> Result<SinkConnectionBuilder, PlanError> {
+) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
         Some(SqlValueOrSecret::Value(Value::String(topic))) => Some(topic),
@@ -2014,24 +2014,26 @@ fn kafka_sink_builder(
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
-    Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
-        connection: KafkaConnection::try_from(&mut config_options)?,
-        options: config_options,
-        format,
-        topic_prefix,
-        consistency_topic_prefix: consistency_topic,
-        consistency_format,
-        topic_suffix_nonce,
-        partition_count,
-        replication_factor,
-        fuel: 10000,
-        relation_key_indices,
-        key_desc_and_indices,
-        value_desc,
-        reuse_topic,
-        transitive_source_dependencies,
-        retention,
-    }))
+    Ok(StorageSinkConnectionBuilder::Kafka(
+        KafkaSinkConnectionBuilder {
+            connection: KafkaConnection::try_from(&mut config_options)?,
+            options: config_options,
+            format,
+            topic_prefix,
+            consistency_topic_prefix: consistency_topic,
+            consistency_format,
+            topic_suffix_nonce,
+            partition_count,
+            replication_factor,
+            fuel: 10000,
+            relation_key_indices,
+            key_desc_and_indices,
+            value_desc,
+            reuse_topic,
+            transitive_source_dependencies,
+            retention,
+        },
+    ))
 }
 
 /// Determines the consistency configuration (topic and format) that should be used for a Kafka
@@ -2149,23 +2151,14 @@ pub fn describe_create_sink(
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    mut stmt: CreateSinkStatement<Aug>,
+    stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     scx.require_unsafe_mode("CREATE SINK")?;
-    let compute_instance = match &stmt.in_cluster {
-        None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.id,
-    };
-    stmt.in_cluster = Some(ResolvedClusterName {
-        id: compute_instance,
-        print_name: None,
-    });
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
         from,
-        in_cluster: _,
         connection,
         with_options,
         format,
@@ -2305,7 +2298,6 @@ pub fn plan_create_sink(
             from: from.id(),
             connection_builder,
             envelope,
-            compute_instance,
         },
         with_snapshot,
         if_not_exists,
@@ -3721,6 +3713,22 @@ pub fn plan_alter_secret(
     let secret_as = query::plan_secret_as(scx, value)?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
+}
+
+pub fn describe_alter_source(
+    _: &StatementContext,
+    _: AlterSourceStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_source(
+    scx: &StatementContext,
+    stmt: AlterSourceStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER SOURCE")?;
+    let _: AlterSourceAction<Aug> = stmt.action;
+    let _: AlterSourcePlan = sql_bail!("ALTER SOURCE not yet implemented!");
 }
 
 pub fn describe_alter_system_set(

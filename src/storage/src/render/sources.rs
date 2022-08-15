@@ -323,9 +323,21 @@ where
 
                     let persist_clients = Arc::clone(&storage_state.persist_clients);
 
+                    // persit requires an `as_of`, and presents all data before that
+                    // `as_of` as if its at that `as_of`. We only care about if
+                    // the data is before the `resume_upper` or not, so we pick
+                    // the biggest `as_of` we can. We could always choose
+                    // 0, but that may have been compacted away.
                     let previous_as_of = match resume_upper.as_option() {
-                        None => Some(Timestamp::MAX),
-                        Some(&0) => None,
+                        None => {
+                            // We are at the end of time, so our `as_of` is everything.
+                            Some(Timestamp::MAX)
+                        }
+                        Some(&0) => {
+                            // We are the beginning of time (no data persisted yet), so we can
+                            // skip reading out of persist.
+                            None
+                        }
                         Some(&t) => Some(t - 1),
                     };
                     let (previous_ok_stream, previous_err_stream, previous_token) =

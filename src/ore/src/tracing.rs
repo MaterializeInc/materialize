@@ -207,13 +207,15 @@ where
     let service_name = service_name.to_string();
 
     let config = config.into();
+    // See: https://no-color.org/
+    let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
     let stderr_log_layer = fmt::layer()
         .event_format(PrefixFormat {
             inner: format(),
             prefix: config.stderr_log.prefix,
         })
         .with_writer(io::stderr)
-        .with_ansi(atty::is(atty::Stream::Stderr))
+        .with_ansi(!no_color && atty::is(atty::Stream::Stderr))
         .with_filter(config.stderr_log.filter);
 
     let (otel_layer, otel_reloader) = if let Some(otel_config) = config.opentelemetry {

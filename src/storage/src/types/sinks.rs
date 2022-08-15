@@ -29,15 +29,16 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sinks.rs"));
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SinkDesc<S = (), T = mz_repr::Timestamp> {
+pub struct StorageSinkDesc<S = (), T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
-    pub connection: SinkConnection<S>,
+    pub connection: StorageSinkConnection,
     pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf<T>,
+    pub from_storage_metadata: S,
 }
 
-impl Arbitrary for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
+impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -45,24 +46,97 @@ impl Arbitrary for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
         (
             any::<GlobalId>(),
             any::<RelationDesc>(),
-            any::<SinkConnection<CollectionMetadata>>(),
+            any::<StorageSinkConnection>(),
             any::<Option<SinkEnvelope>>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
+            any::<CollectionMetadata>(),
         )
-            .prop_map(|(from, from_desc, connection, envelope, as_of)| SinkDesc {
-                from,
-                from_desc,
-                connection,
-                envelope,
-                as_of,
-            })
+            .prop_map(
+                |(from, from_desc, connection, envelope, as_of, from_storage_metadata)| {
+                    StorageSinkDesc {
+                        from,
+                        from_desc,
+                        connection,
+                        envelope,
+                        as_of,
+                        from_storage_metadata,
+                    }
+                },
+            )
             .boxed()
     }
 }
 
-impl RustType<ProtoSinkDesc> for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoSinkDesc {
-        ProtoSinkDesc {
+impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoStorageSinkDesc {
+        ProtoStorageSinkDesc {
+            connection: Some(self.connection.into_proto()),
+            from: Some(self.from.into_proto()),
+            from_desc: Some(self.from_desc.into_proto()),
+            envelope: self.envelope.into_proto(),
+            as_of: Some(self.as_of.into_proto()),
+            from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageSinkDesc) -> Result<Self, TryFromProtoError> {
+        Ok(StorageSinkDesc {
+            from: proto.from.into_rust_if_some("ProtoStorageSinkDesc::from")?,
+            from_desc: proto
+                .from_desc
+                .into_rust_if_some("ProtoStorageSinkDesc::from_desc")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoStorageSinkDesc::connection")?,
+            envelope: proto.envelope.into_rust()?,
+            as_of: proto
+                .as_of
+                .into_rust_if_some("ProtoStorageSinkDesc::as_of")?,
+            from_storage_metadata: proto
+                .from_storage_metadata
+                .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
+        })
+    }
+}
+
+/// A sink for updates to a relational collection.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ComputeSinkDesc<S = (), T = mz_repr::Timestamp> {
+    pub from: GlobalId,
+    pub from_desc: RelationDesc,
+    pub connection: ComputeSinkConnection<S>,
+    pub envelope: Option<SinkEnvelope>,
+    pub as_of: SinkAsOf<T>,
+}
+
+impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<GlobalId>(),
+            any::<RelationDesc>(),
+            any::<ComputeSinkConnection<CollectionMetadata>>(),
+            any::<Option<SinkEnvelope>>(),
+            any::<SinkAsOf<mz_repr::Timestamp>>(),
+        )
+            .prop_map(
+                |(from, from_desc, connection, envelope, as_of)| ComputeSinkDesc {
+                    from,
+                    from_desc,
+                    connection,
+                    envelope,
+                    as_of,
+                },
+            )
+            .boxed()
+    }
+}
+
+impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoComputeSinkDesc {
+        ProtoComputeSinkDesc {
             connection: Some(self.connection.into_proto()),
             from: Some(self.from.into_proto()),
             from_desc: Some(self.from_desc.into_proto()),
@@ -71,17 +145,19 @@ impl RustType<ProtoSinkDesc> for SinkDesc<CollectionMetadata, mz_repr::Timestamp
         }
     }
 
-    fn from_proto(proto: ProtoSinkDesc) -> Result<Self, TryFromProtoError> {
-        Ok(SinkDesc {
-            from: proto.from.into_rust_if_some("ProtoSinkDesc::from")?,
+    fn from_proto(proto: ProtoComputeSinkDesc) -> Result<Self, TryFromProtoError> {
+        Ok(ComputeSinkDesc {
+            from: proto.from.into_rust_if_some("ProtoComputeSinkDesc::from")?,
             from_desc: proto
                 .from_desc
-                .into_rust_if_some("ProtoSinkDesc::from_desc")?,
+                .into_rust_if_some("ProtoComputeSinkDesc::from_desc")?,
             connection: proto
                 .connection
-                .into_rust_if_some("ProtoSinkDesc::connection")?,
+                .into_rust_if_some("ProtoComputeSinkDesc::connection")?,
             envelope: proto.envelope.into_rust()?,
-            as_of: proto.as_of.into_rust_if_some("ProtoSinkDesc::as_of")?,
+            as_of: proto
+                .as_of
+                .into_rust_if_some("ProtoComputeSinkDesc::as_of")?,
         })
     }
 }
@@ -155,33 +231,66 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum SinkConnection<S = ()> {
-    Kafka(KafkaSinkConnection),
+pub enum ComputeSinkConnection<S = ()> {
     Tail(TailSinkConnection),
     Persist(PersistSinkConnection<S>),
 }
 
-impl RustType<ProtoSinkConnection> for SinkConnection<CollectionMetadata> {
-    fn into_proto(&self) -> ProtoSinkConnection {
-        use proto_sink_connection::Kind;
-        ProtoSinkConnection {
+impl<S> ComputeSinkConnection<S> {
+    /// Returns the name of the sink connection.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ComputeSinkConnection::Tail(_) => "tail",
+            ComputeSinkConnection::Persist(_) => "persist",
+        }
+    }
+}
+
+impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMetadata> {
+    fn into_proto(&self) -> ProtoComputeSinkConnection {
+        use proto_compute_sink_connection::Kind;
+        ProtoComputeSinkConnection {
             kind: Some(match self {
-                SinkConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-                SinkConnection::Tail(_) => Kind::Tail(()),
-                SinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
+                ComputeSinkConnection::Tail(_tail) => Kind::Tail(()),
+                ComputeSinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoSinkConnection) -> Result<Self, TryFromProtoError> {
-        use proto_sink_connection::Kind;
+    fn from_proto(proto: ProtoComputeSinkConnection) -> Result<Self, TryFromProtoError> {
+        use proto_compute_sink_connection::Kind;
         let kind = proto
             .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkConnection::kind"))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoComputeSinkConnection::kind"))?;
         Ok(match kind {
-            Kind::Kafka(kafka) => SinkConnection::Kafka(kafka.into_rust()?),
-            Kind::Tail(()) => SinkConnection::Tail(TailSinkConnection {}),
-            Kind::Persist(persist) => SinkConnection::Persist(persist.into_rust()?),
+            Kind::Tail(_tail) => ComputeSinkConnection::Tail(TailSinkConnection {}),
+            Kind::Persist(persist) => ComputeSinkConnection::Persist(persist.into_rust()?),
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum StorageSinkConnection {
+    Kafka(KafkaSinkConnection),
+}
+
+impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
+    fn into_proto(&self) -> ProtoStorageSinkConnection {
+        use proto_storage_sink_connection::Kind;
+        ProtoStorageSinkConnection {
+            kind: Some(match self {
+                StorageSinkConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageSinkConnection) -> Result<Self, TryFromProtoError> {
+        use proto_storage_sink_connection::Kind;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageSinkConnection::kind"))?;
+        Ok(match kind {
+            Kind::Kafka(kafka) => StorageSinkConnection::Kafka(kafka.into_rust()?),
         })
     }
 }
@@ -412,13 +521,11 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
     }
 }
 
-impl<S> SinkConnection<S> {
+impl StorageSinkConnection {
     /// Returns the name of the sink connection.
     pub fn name(&self) -> &'static str {
         match self {
-            SinkConnection::Kafka(_) => "kafka",
-            SinkConnection::Tail(_) => "tail",
-            SinkConnection::Persist(_) => "persist",
+            StorageSinkConnection::Kafka(_) => "kafka",
         }
     }
 
@@ -435,12 +542,10 @@ impl<S> SinkConnection<S> {
     /// in order to advance the frontier that holds back upstream compaction
     /// of timestamp bindings.
     ///
-    /// See also [`transitive_source_dependencies`](SinkConnection::transitive_source_dependencies).
+    /// See also [`transitive_source_dependencies`](StorageSinkConnection::transitive_source_dependencies).
     pub fn requires_source_compaction_holdback(&self) -> bool {
         match self {
-            SinkConnection::Kafka(k) => k.exactly_once,
-            SinkConnection::Tail(_) => false,
-            SinkConnection::Persist(_) => false,
+            StorageSinkConnection::Kafka(k) => k.exactly_once,
         }
     }
 
@@ -448,9 +553,7 @@ impl<S> SinkConnection<S> {
     /// sink.
     pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
         match self {
-            SinkConnection::Kafka(k) => &k.transitive_source_dependencies,
-            SinkConnection::Tail(_) => &[],
-            SinkConnection::Persist(_) => &[],
+            StorageSinkConnection::Kafka(k) => &k.transitive_source_dependencies,
         }
     }
 }
@@ -459,7 +562,7 @@ impl<S> SinkConnection<S> {
 pub struct TailSinkConnection {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum SinkConnectionBuilder {
+pub enum StorageSinkConnectionBuilder {
     Kafka(KafkaSinkConnectionBuilder),
 }
 

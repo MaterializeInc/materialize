@@ -38,7 +38,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
-use mz_storage::types::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
+use mz_storage::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
 use crate::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
@@ -52,6 +52,12 @@ pub mod replicated;
 
 /// An abstraction allowing us to name different compute instances.
 pub type ComputeInstanceId = u64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ComputeSinkId {
+    pub compute_instance: ComputeInstanceId,
+    pub global_id: GlobalId,
+}
 
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
@@ -420,7 +426,7 @@ where
             let mut sink_exports = BTreeMap::new();
             for (id, se) in d.sink_exports {
                 let connection = match se.connection {
-                    SinkConnection::Persist(conn) => {
+                    ComputeSinkConnection::Persist(conn) => {
                         let metadata = self
                             .storage_controller
                             .collection(id)?
@@ -430,12 +436,11 @@ where
                             value_desc: conn.value_desc,
                             storage_metadata: metadata,
                         };
-                        SinkConnection::Persist(conn)
+                        ComputeSinkConnection::Persist(conn)
                     }
-                    SinkConnection::Kafka(conn) => SinkConnection::Kafka(conn),
-                    SinkConnection::Tail(conn) => SinkConnection::Tail(conn),
+                    ComputeSinkConnection::Tail(conn) => ComputeSinkConnection::Tail(conn),
                 };
-                let desc = SinkDesc {
+                let desc = ComputeSinkDesc {
                     from: se.from,
                     from_desc: se.from_desc,
                     connection,

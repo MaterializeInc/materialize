@@ -50,6 +50,8 @@ message ProtoWriterState {
 }
 
 message ProtoStateRollup {
+    string applier_version = 11;
+
     string shard_id = 1;
     string key_codec = 2;
     string val_codec = 3;

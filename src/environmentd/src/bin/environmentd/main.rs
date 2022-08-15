@@ -548,8 +548,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
-    let persist_clients =
-        PersistClientCache::new(PersistConfig::new(now.clone()), &metrics_registry);
+    let persist_clients = PersistClientCache::new(
+        PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
+        &metrics_registry,
+    );
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let orchestrator = Arc::new(TracingOrchestrator::new(
         orchestrator,

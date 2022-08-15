@@ -55,6 +55,8 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM s1;
                 > SELECT * FROM v2;
                 1
+
+                > DROP CLUSTER c1 CASCADE;
                 """
         )
     )

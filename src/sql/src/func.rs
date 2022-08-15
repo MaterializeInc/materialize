@@ -2334,6 +2334,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "to_timestamp" => Scalar {
             params!(Float64) => UnaryFunc::ToTimestamp(func::ToTimestamp), 1158;
         },
+        "trunc" => Scalar {
+            params!(Float32) => UnaryFunc::TruncFloat32(func::TruncFloat32), oid::FUNC_TRUNC_F32_OID;
+            params!(Float64) => UnaryFunc::TruncFloat64(func::TruncFloat64), 1343;
+            params!(Numeric) => UnaryFunc::TruncNumeric(func::TruncNumeric), 1710;
+        },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper), 871;
         },

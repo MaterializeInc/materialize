@@ -26,8 +26,9 @@ use mz_repr::{GlobalId, Timestamp};
 
 use crate::controller::CollectionMetadata;
 use crate::protocol::client::{StorageCommand, StorageResponse};
+use crate::sink::SinkBaseMetrics;
 use crate::types::connections::ConnectionContext;
-use crate::types::sinks::SinkDesc;
+use crate::types::sinks::StorageSinkDesc;
 use crate::types::sources::IngestionDescription;
 
 use crate::decode::metrics::DecodeMetrics;
@@ -68,11 +69,13 @@ pub struct StorageState {
     /// Descriptions of each installed ingestion.
     pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
-    pub exports: HashMap<GlobalId, SinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
+    pub exports: HashMap<GlobalId, StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
     pub source_metrics: SourceBaseMetrics,
+    /// Undocumented
+    pub sink_metrics: SinkBaseMetrics,
     /// Index of the associated timely dataflow worker.
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
@@ -82,6 +85,21 @@ pub struct StorageState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// Tokens that should be dropped when a dataflow is dropped to clean up
+    /// associated state.
+    pub sink_tokens: HashMap<GlobalId, SinkToken>,
+    /// Frontier of sink writes (all subsequent writes will be at times at or
+    /// equal to this frontier)
+    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+}
+
+/// A token that keeps a sink alive.
+pub struct SinkToken(Box<dyn Any>);
+impl SinkToken {
+    /// Create new token
+    pub fn new(t: Box<dyn Any>) -> Self {
+        Self(t)
+    }
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -180,25 +198,35 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .exports
                         .insert(export.id, export.description.clone());
 
-                    // TODO(chae): will we need sink_uppers/since tracking done here??
+                    self.storage_state.sink_write_frontiers.insert(
+                        export.id,
+                        Rc::new(RefCell::new(Antichain::from_elem(
+                            mz_repr::Timestamp::minimum(),
+                        ))),
+                    );
 
                     crate::render::build_export_dataflow(
                         &mut self.timely_worker,
                         &mut self.storage_state,
                         export.id,
                         export.description,
-                        export.resume_upper,
-                    )
+                    );
+
+                    self.storage_state.reported_frontiers.insert(
+                        export.id,
+                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                    );
                 }
             }
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
                     if frontier.is_empty() {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
-                        // Clean up per-source state.
+                        // Clean up per-source / per-sink state.
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
                         self.storage_state.source_tokens.remove(&id);
+                        self.storage_state.sink_tokens.remove(&id);
                     }
                 }
             }
@@ -219,7 +247,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut changes = Vec::new();
 
         // Check if any observed frontier should advance the reported frontiers.
-        for (id, frontier) in self.storage_state.source_uppers.iter() {
+        for (id, frontier) in self
+            .storage_state
+            .source_uppers
+            .iter()
+            .chain(self.storage_state.sink_write_frontiers.iter())
+        {
             let reported_frontier = self
                 .storage_state
                 .reported_frontiers
@@ -297,6 +330,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // Elide any ingestions we're already aware of while determining what
         // ingestions no longer exist.
         let mut stale_ingestions = self.storage_state.ingestions.keys().collect::<HashSet<_>>();
+        let mut stale_exports = self.storage_state.exports.keys().collect::<HashSet<_>>();
         for command in &mut commands {
             match command {
                 StorageCommand::IngestSources(ingestions) => {
@@ -317,14 +351,33 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     })
                 }
-                _ => (),
+                StorageCommand::ExportSinks(exports) => {
+                    exports.retain_mut(|export| {
+                        if let Some(existing) = self.storage_state.exports.get(&export.id) {
+                            stale_exports.remove(&export.id);
+                            // If we've been asked to create an export that is
+                            // already installed, the descriptions must match
+                            // exactly.
+                            assert_eq!(
+                                *existing, export.description,
+                                "New export with same ID {:?}",
+                                export.id,
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    })
+                }
+                StorageCommand::AllowCompaction(_) | StorageCommand::InitializationComplete => (),
             }
         }
 
-        // Synthesize a drop command to remove stale ingestions.
+        // Synthesize a drop command to remove stale ingestions and exports
         commands.push(StorageCommand::AllowCompaction(
             stale_ingestions
                 .into_iter()
+                .chain(stale_exports)
                 .map(|id| (*id, Antichain::new()))
                 .collect(),
         ));

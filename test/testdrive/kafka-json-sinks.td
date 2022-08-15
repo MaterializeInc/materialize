@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
+> CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
 
 > CREATE SINK simple_view_sink FROM simple_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-cols-sink'
@@ -27,7 +27,7 @@ $ kafka-verify format=json sink=materialize.public.simple_view_upsert key=true
 
 # Standard types
 
-> CREATE VIEW types_view AS
+> CREATE MATERIALIZED VIEW types_view AS
   SELECT TRUE::boolean c1,
   FALSE::boolean c2,
   NULL c3,
@@ -53,7 +53,7 @@ $ kafka-verify format=json sink=materialize.public.types_sink key=false
 
 # Special characters
 
-> CREATE VIEW special_characters_view AS
+> CREATE MATERIALIZED VIEW special_characters_view AS
   SELECT 'текст' c1, '"' c2, '''' c3, '\' c4, E'a\n\tb' c5
 
 > CREATE SINK special_characters_sink FROM special_characters_view
@@ -65,7 +65,7 @@ $ kafka-verify format=json sink=materialize.public.special_characters_sink key=f
 
 # Record
 
-> CREATE VIEW record_view AS SELECT simple_view FROM simple_view;
+> CREATE MATERIALIZED VIEW record_view AS SELECT simple_view FROM simple_view;
 
 > CREATE SINK record_sink FROM record_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'record-sink'
@@ -78,6 +78,9 @@ $ kafka-verify format=json sink=materialize.public.record_sink key=false
 ! CREATE VIEW duplicate_cols AS SELECT 'a1' AS a, 'a1' AS a;
 contains:column "a" specified more than once
 
+! CREATE MATERIALIZED VIEW duplicate_cols AS SELECT 'a1' AS a, 'a1' AS a;
+contains:column "a" specified more than once
+
 # Complex types
 
 > CREATE TYPE int4_list AS LIST (element_type = int4);
@@ -88,7 +91,7 @@ contains:column "a" specified more than once
 
 > CREATE TYPE int4_map_map AS MAP (key_type=text, value_type=int4_map);
 
-> CREATE VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
+> CREATE MATERIALIZED VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
 
 > CREATE SINK complex_type_sink FROM complex_type_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'complex-type-sink'
@@ -99,7 +102,7 @@ $ kafka-verify format=json sink=materialize.public.complex_type_sink key=false
 
 # testdrive will not automatically clean up types, so we need to do that ourselves
 
-> DROP VIEW complex_type_view CASCADE;
+> DROP MATERIALIZED VIEW complex_type_view CASCADE;
 
 > DROP TYPE int4_list_list;
 

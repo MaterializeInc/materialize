@@ -27,7 +27,7 @@ fn main() {
     mz_pgtest::walk(
         args.addr,
         args.user,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         &args.directory,
     );
 }

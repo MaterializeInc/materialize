@@ -5,7 +5,7 @@ version = "0.26.1-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]

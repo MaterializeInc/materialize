@@ -393,6 +393,7 @@ pub fn optimize(
     // `DatumKnowledge` in the stack are the `DatumKnowledge` corresponding to
     // the children.
 
+    #[allow(deprecated)]
     expr.visit_mut_pre_post(
         &mut |e| {
             // We should not eagerly memoize `if` branches that might not be taken.

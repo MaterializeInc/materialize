@@ -68,6 +68,20 @@ class RestartMz(Action):
         c.wait_for_materialized()
 
 
+class RestartPostgresBackend(Action):
+    def execute(self, c: Composition) -> None:
+        c.kill("postgres-backend")
+        c.up("postgres-backend")
+        c.wait_for_postgres(service="postgres-backend")
+
+
+class RestartSourcePostgres(Action):
+    def execute(self, c: Composition) -> None:
+        c.kill("postgres-source")
+        c.up("postgres-source")
+        c.wait_for_postgres(service="postgres-source")
+
+
 class KillStoraged(Action):
     def execute(self, c: Composition) -> None:
         # Depending on the workload, storaged may not be running, hence the || true

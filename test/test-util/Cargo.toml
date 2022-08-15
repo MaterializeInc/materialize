@@ -3,7 +3,7 @@ name = "mz-test-util"
 description = "Utilities for testing Materialize"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]

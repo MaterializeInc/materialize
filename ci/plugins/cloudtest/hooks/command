@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+# read_list PREFIX
+#
+# Appends the environment variables `PREFIX_0`, `PREFIX_1`, ... `PREFIX_N` to
+# the `result` global variable, stopping when `PREFIX_N` is an empty string.
+read_list() {
+    result=()
+
+    local i=0
+    local param="${1}_${i}"
+
+    if [[ "${!1:-}" ]]; then
+        echo "error: pytest arguments must be an array, not a string" >&2
+        exit 1
+    fi
+
+    while [[ "${!param:-}" ]]; do
+        result+=("${!param}")
+        i=$((i+1))
+        param="${1}_${i}"
+    done
+
+    [[ ${#result[@]} -gt 0 ]] || return 1
+}
+
+run_args=("--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml")
+if read_list BUILDKITE_PLUGIN_CLOUDTEST_ARGS; then
+    for arg in "${result[@]}"; do
+        run_args+=("$arg")
+    done
+fi
+
+# Make sure KinD is running
+
+echo "--- KinD: Make sure KinD is running ..."
+
+bin/ci-builder run stable kind create cluster --config misc/kind/cluster.yaml --wait 30s || true
+
+# Sometimes build cancellations prevent us from properly cleaning up the last
+# cloudtest run, so force a cleanup just in case
+
+echo "--- KinD: Purging containers and volumes from previous builds ..."
+
+bin/ci-builder run stable kubectl --context kind-kind delete all --all || true
+
+echo "+++ cloudtest: Running \`bin/pytest ${run_args[*]}\`" >&2
+
+bin/ci-builder run stable bin/pytest "${run_args[@]}"

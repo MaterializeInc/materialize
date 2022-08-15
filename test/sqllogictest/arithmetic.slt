@@ -498,6 +498,84 @@ SELECT round(CAST (5.0 AS float), 3.0)
 query error Cannot call function round\(double precision, double precision\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS float), CAST (3.0 AS float))
 
+query R
+SELECT trunc(CAST (1.5678 AS float))
+----
+1
+
+query R
+SELECT trunc(CAST (-1.4678 AS float))
+----
+-1
+
+query R
+SELECT trunc(CAST (1.5678 AS double precision))
+----
+1
+
+query R
+SELECT trunc(CAST (-1.4678 AS double precision))
+----
+-1
+
+query R
+SELECT trunc(1.5678)
+----
+1
+
+query R
+SELECT trunc(-1.5678)
+----
+-1
+
+query RRRRR
+SELECT trunc(1.1), trunc(1.111), trunc(100.1), trunc(100.11), trunc(-4.1)
+----
+1  1  100  100  -4
+
+# postgres converts ints to floats on trunc
+query R
+SELECT trunc(1)
+----
+1
+
+query R
+SELECT trunc(NULL)
+----
+NULL
+
+query R
+SELECT trunc(NULL::decimal)
+----
+NULL
+
+query R
+SELECT trunc((SELECT * FROM nums))
+----
+NULL
+
+query RRRR
+SELECT trunc('NaN'::decimal), trunc('Inf'::float), trunc(0), trunc(-0)
+----
+NaN  inf  0  0
+
+statement ok
+DELETE FROM nums
+
+statement ok
+INSERT INTO nums VALUES (1.5678)
+
+query R
+SELECT trunc(1.5678)
+----
+1
+
+statement ok
+DROP TABLE nums
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT trunc(true)
+
 query I
 SELECT 2147483646+1
 ----

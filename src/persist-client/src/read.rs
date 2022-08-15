@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, info, instrument, trace, trace_span, warn, Instrument};
+use tracing::{debug_span, info, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -159,11 +159,6 @@ where
     /// `ReadHandle::fetch_batch`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
     pub async fn next(&mut self) -> ReaderEnrichedHollowBatch<T> {
-        trace!(
-            "Subscribe::next as_of={:?}, frontier={:?}",
-            self.listen.as_of,
-            self.listen.frontier
-        );
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
@@ -180,11 +175,6 @@ where
     /// `storage::source::persist_source::persist_source_sharded`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
     pub async fn next_listen_events(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
-        trace!(
-            "Subscribe::next as_of={:?}, frontier={:?}",
-            self.listen.as_of,
-            self.listen.frontier
-        );
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
@@ -250,7 +240,7 @@ where
         // This listen only needs to distinguish things after its frontier
         // (initially as_of although the frontier is inclusive and the as_of
         // isn't). Be a good citizen and downgrade early.
-        ret.handle.downgrade_since(ret.since.clone()).await;
+        ret.handle.downgrade_since(&ret.since).await;
         ret
     }
 
@@ -358,7 +348,6 @@ where
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
-        trace!("Listen::next");
         let batch = self.next_batch().await;
         let progress = batch.batch.desc.upper().clone();
         let updates = self
@@ -432,7 +421,7 @@ where
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let new_since: timely::progress::Antichain<u64> = unimplemented!();
 /// # async {
-/// tokio::time::timeout(timeout, read.downgrade_since(new_since)).await
+/// tokio::time::timeout(timeout, read.downgrade_since(&new_since)).await
 /// # };
 /// ```
 #[derive(Debug)]
@@ -480,11 +469,10 @@ where
     /// This also acts as a heartbeat for the reader lease (including if called
     /// with `new_since` equal to `self.since()`, making the call a no-op).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
-        trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
+    pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         let (_seqno, current_reader_since, maintenance) = self
             .machine
-            .downgrade_since(&self.reader_id, &new_since, (self.cfg.now)())
+            .downgrade_since(&self.reader_id, new_since, (self.cfg.now)())
             .await;
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
@@ -511,8 +499,6 @@ where
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
-        trace!("ReadHandle::listen as_of={:?}", as_of);
-
         let () = self.machine.verify_listen(&as_of).await?;
         Ok(Listen::new(self, as_of).await)
     }
@@ -580,8 +566,6 @@ where
     /// [Self::listen].
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn subscribe(self, as_of: Antichain<T>) -> Result<Subscribe<K, V, T, D>, Since<T>> {
-        trace!("ReadHandle::subscribe as_of={:?}", as_of);
-
         let snapshot_batches = self.snapshot(as_of.clone()).await?.into();
         let listen = self.listen(as_of).await?;
         Ok(Subscribe::new(snapshot_batches, listen))
@@ -594,7 +578,6 @@ where
         &mut self,
         batch: ReaderEnrichedHollowBatch<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
-        trace!("ReadHandle::fetch_batch");
         if batch.shard_id != self.machine.shard_id() {
             return Err(InvalidUsage::BatchNotFromThisShard {
                 batch_shard: batch.shard_id,
@@ -668,7 +651,6 @@ where
     /// `since`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn clone(&self) -> Self {
-        trace!("ReadHandle::clone");
         let new_reader_id = ReaderId::new();
         let mut machine = self.machine.clone();
         let read_cap = machine.clone_reader(&new_reader_id, (self.cfg.now)()).await;
@@ -702,7 +684,7 @@ where
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 4;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(new_since.clone()).await;
+            self.downgrade_since(&new_since).await;
         }
     }
 
@@ -735,7 +717,6 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        trace!("ReadHandle::expire");
         self.machine.expire_reader(&self.reader_id).await;
         self.explicitly_expired = true;
     }
@@ -813,7 +794,6 @@ where
         let _ = handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
-                trace!("ReadHandle::expire");
                 machine.expire_reader(&reader_id).await;
             }
             .instrument(expire_span),

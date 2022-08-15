@@ -58,15 +58,16 @@ from materialize.mzcompose.services import Debezium, Materialized, Postgres, Red
 from materialize.mzcompose.services import Testdrive as TestdriveService
 
 SERVICES = [
-    Postgres(name="postgres"),
+    Postgres(name="postgres-backend"),
+    Postgres(name="postgres-source"),
     Redpanda(auto_create_topics=True),
     Debezium(),
     Materialized(
         options=" ".join(
             [
-                "--persist-consensus-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus",
-                "--storage-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=storage",
-                "--adapter-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=adapter",
+                "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
+                "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
+                "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
             ]
         )
     ),
@@ -81,21 +82,27 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
     )
 
-    parser.add_argument("--check", metavar="CHECK", type=str, help="Check to run.")
+    parser.add_argument(
+        "--check", metavar="CHECK", type=str, action="append", help="Check(s) to run."
+    )
 
     args = parser.parse_args()
 
     c.up("testdrive", persistent=True)
 
-    c.start_and_wait_for_tcp(services=["redpanda", "postgres", "debezium"])
-    c.wait_for_postgres(service="postgres")
+    c.start_and_wait_for_tcp(
+        services=["redpanda", "postgres-backend", "postgres-source", "debezium"]
+    )
+    for postgres in ["postgres-backend", "postgres-source"]:
+        c.wait_for_postgres(service=postgres)
+
     c.sql(
         sql=f"""
        CREATE SCHEMA IF NOT EXISTS consensus;
        CREATE SCHEMA IF NOT EXISTS storage;
        CREATE SCHEMA IF NOT EXISTS adapter;
     """,
-        service="postgres",
+        service="postgres-backend",
         user="postgres",
         password="postgres",
     )
@@ -104,7 +111,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         [globals()[args.scenario]] if args.scenario else Scenario.__subclasses__()
     )
 
-    checks = [globals()[args.check]] if args.check else Check.__subclasses__()
+    checks = (
+        [globals()[c] for c in args.check] if args.check else Check.__subclasses__()
+    )
 
     for scenario_class in scenarios:
         print(f"Testing upgrade scenario {scenario_class}")
