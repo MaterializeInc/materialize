@@ -14,7 +14,7 @@ In the context of this framework:
 # Running
 
 ```
-bin/mzcompose --find platform-checks run default --scenario=SCENARIO [--check=CHECK]
+bin/mzcompose --find platform-checks run default --scenario=SCENARIO [--check=CHECK] [--execution-mode= [--execution-mode={alltogether,oneatatime}]
 ```
 
 The list of Checks available can be found [here](https://dev.materialize.com/api/python/materialize/checks/checks.html#materialize.checks.checks.Check)
@@ -22,6 +22,13 @@ The list of Checks available can be found [here](https://dev.materialize.com/api
 The list of Scenarios is [here](https://dev.materialize.com/api/python/materialize/checks/scenarios.html#materialize.checks.scenarios.Scenario)
 
 The list of available Actions for use in Scenarios is [here](https://dev.materialize.com/api/python/materialize/checks/actions.html)
+
+In execution mode `altogether` (the defauklt), all Checks are run against a single Mz instance. This means more "stuff" happens
+against that single instance, which has the potential for exposing various bugs that do not happen in isolation. At the same time,
+a smaller number of adverse events can be injected in the test per unit of time.
+
+In execution mode `oneatatime`, each Check is run in isolation against a completely fresh Mz instance. This allows more events to happen
+per unit of time, but any issues that require greater load or variety of database objects will not show up.
 
 # Debugging CI failures
 
