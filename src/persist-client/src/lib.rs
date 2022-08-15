@@ -423,6 +423,7 @@ impl PersistClient {
             gc,
             compact,
             blob: Arc::clone(&self.blob),
+            cpu_heavy_runtime: Arc::clone(&self.cpu_heavy_runtime),
             upper: shard_upper.0,
             explicitly_expired: false,
         };
