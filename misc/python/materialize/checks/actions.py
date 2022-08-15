@@ -142,4 +142,8 @@ class AlterSystem(Action):
         self.value = value
 
     def execute(self, c: Composition) -> None:
-        c.sql(f"ALTER SYSTEM SET {self.config_param} TO {self.value}", user="mz_system", port=6877)
+        c.sql(
+            f"ALTER SYSTEM SET {self.config_param} TO {self.value}",
+            user="mz_system",
+            port=6877
+        )

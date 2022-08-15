@@ -17,7 +17,7 @@
 
 from typing import List, Type
 
-from materialize.checks.actions import Action
+from materialize.checks.actions import Action, AlterSystem
 from materialize.checks.actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
@@ -28,7 +28,7 @@ from materialize.checks.actions import RestartMz as RestartMzAction
 from materialize.checks.actions import (
     RestartPostgresBackend as RestartPostgresBackendAction,
 )
-from materialize.checks.actions import AlterSystem, StartComputed, StartMz, UseComputed, Validate
+from materialize.checks.actions import StartComputed, StartMz, UseComputed, Validate
 from materialize.checks.checks import Check
 from materialize.mzcompose import Composition
 

@@ -88,7 +88,9 @@ class Materialized(Service):
             volumes.extend(volumes_extra)
 
         config_ports: List[Union[str, int]] = (
-            [*ports, *extra_ports] if ports else [6875, 26257, *extra_ports, 6876, 6877, 6878]
+            [*ports, *extra_ports]
+            if ports
+            else [6875, 26257, *extra_ports, 6876, 6877, 6878]
         )
 
         if isinstance(image, str) and ":v" in image:
@@ -97,7 +99,7 @@ class Materialized(Service):
                 # HTTP and SQL ports in older versions of Materialize are the same
                 config_ports.pop()
 
-        command_list = ["--internal-sql-listen-addr=0.0.0.0:6877"]
+        command_list = ["--internal-sql-listen-addr=0.0.0.0:6877", "internal-http-listen-addr=0.0.0.0:6878"]
 
         if workers:
             command_list.append(f"--workers {workers}")
