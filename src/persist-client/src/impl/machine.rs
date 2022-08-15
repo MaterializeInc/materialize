@@ -894,6 +894,7 @@ mod tests {
                                 0,
                                 Antichain::from_elem(lower),
                                 Arc::clone(&client.blob),
+                                Arc::clone(&cpu_heavy_runtime),
                                 shard_id.clone(),
                                 WriterId::new(),
                             );
