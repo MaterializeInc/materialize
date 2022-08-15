@@ -26,7 +26,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
-use tracing::{error, info};
+use tracing::error;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
@@ -40,7 +40,6 @@ use mz_ore::tracing::OpenTelemetryEnableCallback;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
-use tracing::error;
 
 use crate::tcp_connection::ConnectionHandler;
 
