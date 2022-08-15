@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
-use futures::future::{self, try_join3, try_join_all, BoxFuture};
+use futures::future::{self, try_join3, try_join4, try_join_all, BoxFuture};
 use futures::future::{try_join, TryFutureExt};
 use futures::StreamExt;
 use postgres_openssl::MakeTlsConnector;
@@ -444,30 +444,19 @@ impl Postgres {
     }
 
     /// `compactions` has tuples of `(collection id, new since, Option<current
-    /// since>, Option<current upper>)`. The current since or upper can be `Some`
-    /// if it is already known.
+    /// upper>)`. The current upper can be `Some` if it is already known.
     async fn compact_batch_tx<'a, I>(
         stmts: &PreparedStatements,
         tx: &Transaction<'_>,
         compactions: I,
     ) -> Result<(), StashError>
     where
-        I: Iterator<
-            Item = (
-                Id,
-                &'a Antichain<Timestamp>,
-                Option<Antichain<Timestamp>>,
-                Option<Antichain<Timestamp>>,
-            ),
-        >,
+        I: Iterator<Item = (Id, &'a Antichain<Timestamp>, Option<Antichain<Timestamp>>)>,
     {
-        let futures = compactions.map(|(collection_id, new_since, since, upper)| {
+        let futures = compactions.map(|(collection_id, new_since, upper)| {
             try_join3(
                 async move {
-                    let since = match since {
-                        Some(since) => since,
-                        None => Self::since_tx(stmts, tx, collection_id).await?,
-                    };
+                    let since = Self::since_tx(stmts, tx, collection_id).await?;
                     if PartialOrder::less_than(new_since, &since) {
                         return Err(StashError::from(format!(
                             "compact request {} is less than the current since frontier {}",
@@ -502,20 +491,15 @@ impl Postgres {
         Ok(())
     }
 
-    /// `collections` has tuples of `(collection id, Option<current since>)`. The
-    /// current since can be `Some` if it is already known.
     async fn consolidate_batch_tx(
         stmts: &PreparedStatements,
         tx: &Transaction<'_>,
-        collections: Vec<(Id, Option<Antichain<Timestamp>>)>,
+        collections: &[Id],
     ) -> Result<(), StashError> {
         let mut futures = Vec::with_capacity(collections.len());
-        for (collection_id, since) in collections {
+        for collection_id in collections {
             futures.push(async move {
-                let since = match since {
-                    Some(since) => since,
-                    None => Self::since_tx(stmts, tx, collection_id).await?,
-                };
+                let since = Self::since_tx(stmts, tx, *collection_id).await?;
                 match since.into_option() {
                     Some(since) => {
                         let mut updates = tx
@@ -793,7 +777,7 @@ impl Stash for Postgres {
                     tx,
                     compactions
                         .iter()
-                        .map(|(collection, since)| (collection.id, since, None, None)),
+                        .map(|(collection, since)| (collection.id, since, None)),
                 )
                 .await
             })
@@ -801,32 +785,15 @@ impl Stash for Postgres {
         .await
     }
 
-    async fn consolidate<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
         self.consolidate_batch(&[collection]).await
     }
 
-    async fn consolidate_batch<K, V>(
-        &mut self,
-        collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let collections = collections
-            .iter()
-            .map(|collection| (collection.id, None))
-            .collect::<Vec<_>>();
+    async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
+        let collections = collections.to_vec();
         self.transact(|stmts, tx| {
             let collections = collections.clone();
-            Box::pin(async { Self::consolidate_batch_tx(stmts, tx, collections).await })
+            Box::pin(async move { Self::consolidate_batch_tx(stmts, tx, &collections).await })
         })
         .await
     }
@@ -875,64 +842,66 @@ impl From<tokio_postgres::Error> for StashError {
 #[async_trait]
 impl Append for Postgres {
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = AppendBatch> + Send + 'static,
-        I::IntoIter: Send,
-    {
-        let batches = batches.into_iter().collect::<Vec<_>>();
+    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        let batches = batches.to_vec();
         self.transact(move |stmts, tx| {
             let batches = batches.clone();
             Box::pin(async move {
-                let mut futures = Vec::with_capacity(batches.len());
-                for batch in batches {
-                    futures.push(async move {
-                        let (upper, since) = try_join(
-                            Self::upper_tx(stmts, tx, batch.collection_id),
-                            Self::since_tx(stmts, tx, batch.collection_id),
+                let futures = batches.into_iter().map(
+                    |AppendBatch {
+                         collection_id,
+                         lower,
+                         upper,
+                         compact,
+                         entries,
+                         ..
+                     }| {
+                        // Clone to appease rust async.
+                        let lower1 = lower.clone();
+                        let lower2 = lower.clone();
+                        let upper1 = upper.clone();
+                        try_join4(
+                            async move {
+                                let current_upper =
+                                    Self::upper_tx(stmts, tx, collection_id).await?;
+                                if current_upper != lower1 {
+                                    return Err(StashError::from("unexpected lower"));
+                                }
+                                Ok(())
+                            },
+                            async move {
+                                Self::update_many_tx(
+                                    stmts,
+                                    tx,
+                                    collection_id,
+                                    &entries,
+                                    Some(lower2),
+                                )
+                                .await
+                            },
+                            async move {
+                                Self::seal_batch_tx(
+                                    stmts,
+                                    tx,
+                                    std::iter::once((collection_id, &upper1, Some(lower))),
+                                )
+                                .await
+                            },
+                            async move {
+                                Self::compact_batch_tx(
+                                    stmts,
+                                    tx,
+                                    std::iter::once((collection_id, &compact, Some(upper))),
+                                )
+                                .await
+                            },
                         )
-                        .await?;
-                        if upper != batch.lower {
-                            return Err(StashError::from("unexpected lower"));
-                        }
-                        Self::update_many_tx(
-                            stmts,
-                            tx,
-                            batch.collection_id,
-                            &batch.entries,
-                            Some(upper.clone()),
-                        )
-                        .await?;
-                        Self::seal_batch_tx(
-                            stmts,
-                            tx,
-                            std::iter::once((batch.collection_id, &batch.upper, Some(upper))),
-                        )
-                        .await?;
-                        Self::compact_batch_tx(
-                            stmts,
-                            tx,
-                            std::iter::once((
-                                batch.collection_id,
-                                &batch.compact,
-                                Some(since),
-                                Some(batch.upper),
-                            )),
-                        )
-                        .await?;
-                        Self::consolidate_batch_tx(
-                            stmts,
-                            tx,
-                            vec![(batch.collection_id, Some(batch.compact))],
-                        )
-                        .await?;
-                        Ok(())
-                    });
-                }
-                try_join_all(futures).await?;
-                Ok(())
+                    },
+                );
+                try_join_all(futures).await
             })
         })
-        .await
+        .await?;
+        Ok(())
     }
 }

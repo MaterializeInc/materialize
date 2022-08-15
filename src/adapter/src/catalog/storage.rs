@@ -1367,7 +1367,10 @@ impl<'a, S: Append> Transaction<'a, S> {
         if batches.is_empty() {
             return Ok(());
         }
-        self.stash.append(batches).await.map_err(|e| e.into())
+        self.stash
+            .append_batch(&batches)
+            .await
+            .map_err(|e| e.into())
     }
 }
 
@@ -1424,7 +1427,7 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
     add_batch(stash, &mut batches, &COLLECTION_SYSTEM_CONFIGURATION).await?;
     add_batch(stash, &mut batches, &COLLECTION_AUDIT_LOG).await?;
     add_batch(stash, &mut batches, &COLLECTION_STORAGE_USAGE).await?;
-    stash.append(batches).await.map_err(|e| e.into())
+    stash.append(&batches).await.map_err(|e| e.into())
 }
 
 macro_rules! impl_codec {

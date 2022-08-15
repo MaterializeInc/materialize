@@ -191,10 +191,7 @@ impl Sqlite {
         Ok(())
     }
 
-    fn consolidate_batch_tx<'a, I>(tx: &Transaction<'a>, collections: I) -> Result<(), StashError>
-    where
-        I: Iterator<Item = Id>,
-    {
+    fn consolidate_batch_tx(tx: &Transaction, collections: &[Id]) -> Result<(), StashError> {
         let mut consolidation_stmt = tx.prepare(
             "DELETE FROM data
              WHERE collection_id = $collection_id AND time <= $since
@@ -207,7 +204,7 @@ impl Sqlite {
         let mut drop_stmt = tx.prepare("DELETE FROM data WHERE collection_id = $collection_id")?;
 
         for collection_id in collections {
-            let since = Self::since_tx(&tx, collection_id)?.into_option();
+            let since = Self::since_tx(&tx, *collection_id)?.into_option();
             match since {
                 Some(since) => {
                     let mut updates = consolidation_stmt
@@ -455,27 +452,13 @@ impl Stash for Sqlite {
         Ok(())
     }
 
-    async fn consolidate<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
         self.consolidate_batch(&[collection]).await
     }
 
-    async fn consolidate_batch<K, V>(
-        &mut self,
-        collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
         let tx = self.conn.transaction()?;
-        Self::consolidate_batch_tx(&tx, collections.iter().map(|collection| collection.id))?;
+        Self::consolidate_batch_tx(&tx, collections)?;
         tx.commit()?;
         Ok(())
     }
@@ -526,24 +509,17 @@ impl From<rusqlite::Error> for StashError {
 
 #[async_trait]
 impl Append for Sqlite {
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = AppendBatch> + Send,
-        I::IntoIter: Send,
-    {
+    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
         let tx = self.conn.transaction()?;
-        let mut consolidate = Vec::new();
         for batch in batches {
-            consolidate.push(batch.collection_id);
             let upper = Self::upper_tx(&tx, batch.collection_id)?;
             if upper != batch.lower {
                 return Err("unexpected lower".into());
             }
-            Self::update_many_tx(&tx, batch.collection_id, batch.entries.into_iter())?;
+            Self::update_many_tx(&tx, batch.collection_id, batch.entries.clone().into_iter())?;
             Self::seal_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.upper)))?;
             Self::compact_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.compact)))?;
         }
-        Self::consolidate_batch_tx(&tx, consolidate.iter().map(|id| *id))?;
         tx.commit()?;
         Ok(())
     }
