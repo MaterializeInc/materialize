@@ -1993,7 +1993,16 @@ impl<S: Append> Catalog<S> {
             // Instantiate the default logging settings for replicas
             let persisted_logs = match &serialized_config.persisted_logs {
                 SerializedComputeInstanceReplicaLogging::Default => {
-                    catalog.allocate_persisted_introspection_items().await
+                    let inst = catalog
+                        .state
+                        .compute_instances_by_id
+                        .get(&instance_id)
+                        .unwrap();
+                    if inst.logging.is_some() {
+                        catalog.allocate_persisted_introspection_items().await
+                    } else {
+                        ConcreteComputeInstanceReplicaLogging::ConcreteViews(vec![], vec![])
+                    }
                 }
 
                 SerializedComputeInstanceReplicaLogging::ConcreteViews(x, y) => {
