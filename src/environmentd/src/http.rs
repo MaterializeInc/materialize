@@ -226,6 +226,8 @@ enum AuthError {
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
     MissingHttpAuthentication,
+    #[error("missing username")]
+    MissingUserName,
     #[error("{0}")]
     MismatchedUser(&'static str),
 }
@@ -321,6 +323,9 @@ async fn auth<B>(
 
     // Create http default user for local usage.
     let create_default_user = frontegg.is_none() && tls_mode.is_none() && user == HTTP_DEFAULT_USER;
+    if !create_default_user && user == HTTP_DEFAULT_USER {
+        return Err(AuthError::MissingUserName);
+    }
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
     req.extensions_mut().insert(AuthedUser {
