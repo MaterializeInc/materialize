@@ -533,7 +533,7 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
         let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
         Retry::default()
             .factor(1.0)
-            .max_duration(Duration::from_secs(EXPIRES_IN_SECS + 1))
+            .max_duration(Duration::from_secs(EXPIRES_IN_SECS + 10))
             .retry(|_| {
                 let refreshes = *frontegg_server.refreshes.lock().unwrap();
                 if refreshes >= expected {
