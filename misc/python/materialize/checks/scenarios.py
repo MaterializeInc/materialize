@@ -149,6 +149,7 @@ class RestartPostgresBackend(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            AlterSystem("max_tables", "1000"),
             Initialize(self.checks),
             RestartPostgresBackendAction(),
             Manipulate(self.checks, phase=1),
