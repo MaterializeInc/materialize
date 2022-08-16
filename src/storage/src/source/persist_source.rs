@@ -18,7 +18,7 @@ use differential_dataflow::Hashable;
 use futures_util::Stream as FuturesStream;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::OkErr;
+use timely::dataflow::operators::{Map, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -54,6 +54,38 @@ pub fn persist_source<G>(
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
+    Rc<dyn Any>,
+)
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+{
+    let (stream, token) = persist_source_core(scope, source_id, persist_clients, metadata, as_of);
+    let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
+        Ok(row) => Ok((row, t, r)),
+        Err(err) => Err((err, t, r)),
+    });
+    (ok_stream, err_stream, token)
+}
+
+/// Creates a new source that reads from a persist shard, distributing the work
+/// of reading data to all timely workers.
+///
+/// Differs from `persist_source` by returning one stream including both values
+/// and errors.
+///
+/// TODO: deprecate this method when fixing issues with `persist_source_sharded`.
+///
+/// All times emitted will have been [advanced by] the given `as_of` frontier.
+///
+/// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
+pub fn persist_source_core<G>(
+    scope: &G,
+    source_id: GlobalId,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
+    metadata: CollectionMetadata,
+    as_of: Antichain<Timestamp>,
+) -> (
+    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
@@ -175,16 +207,16 @@ where
             }
         });
 
-    let (ok_stream, err_stream) = timely_stream.ok_err(|x| match x {
-        ((Ok(SourceData(Ok(row))), Ok(())), ts, diff) => Ok((row, ts, diff)),
-        ((Ok(SourceData(Err(err))), Ok(())), ts, diff) => Err((err, ts, diff)),
+    let stream = timely_stream.map(|x| match x {
+        ((Ok(SourceData(Ok(row))), Ok(())), ts, diff) => (Ok(row), ts, diff),
+        ((Ok(SourceData(Err(err))), Ok(())), ts, diff) => (Err(err), ts, diff),
         // TODO(petrosagg): error handling
         _ => panic!("decoding failed"),
     });
 
     let token = Rc::new(token);
 
-    (ok_stream, err_stream, token)
+    (stream, token)
 }
 
 /// Creates a new source that reads from a persist shard, distributing the work

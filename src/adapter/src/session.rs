@@ -27,18 +27,19 @@ use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
+use crate::catalog::SYSTEM_USER;
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::CoordTimestamp;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
 
-pub(crate) mod vars;
-
 pub use self::vars::{
     ClientSeverity, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
+
+pub(crate) mod vars;
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
 
@@ -67,7 +68,7 @@ impl<T: CoordTimestamp> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        Self::new_internal(DUMMY_CONNECTION_ID, "mz_system".into())
+        Self::new_internal(DUMMY_CONNECTION_ID, SYSTEM_USER.into())
     }
 
     fn new_internal(conn_id: ConnectionId, user: String) -> Session<T> {

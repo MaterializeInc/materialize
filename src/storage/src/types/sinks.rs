@@ -329,8 +329,6 @@ pub struct KafkaSinkConnection {
     pub published_schema_info: Option<PublishedSchemaInfo>,
     pub consistency: Option<KafkaSinkConsistencyConnection>,
     pub exactly_once: bool,
-    // Source dependencies for exactly-once sinks.
-    pub transitive_source_dependencies: Vec<GlobalId>,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
@@ -360,7 +358,6 @@ proptest::prop_compose! {
         published_schema_info in any::<Option<PublishedSchemaInfo>>(),
         consistency in any::<Option<KafkaSinkConsistencyConnection>>(),
         exactly_once in any::<bool>(),
-        transitive_source_dependencies in any::<Vec<GlobalId>>(),
         fuel in any::<usize>(),
     ) -> KafkaSinkConnection {
         KafkaSinkConnection {
@@ -374,7 +371,6 @@ proptest::prop_compose! {
             published_schema_info,
             consistency,
             exactly_once,
-            transitive_source_dependencies,
             fuel,
         }
     }
@@ -440,7 +436,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             published_schema_info: self.published_schema_info.into_proto(),
             consistency: self.consistency.into_proto(),
             exactly_once: self.exactly_once,
-            transitive_source_dependencies: self.transitive_source_dependencies.into_proto(),
             fuel: self.fuel.into_proto(),
         }
     }
@@ -466,7 +461,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             published_schema_info: proto.published_schema_info.into_rust()?,
             consistency: proto.consistency.into_rust()?,
             exactly_once: proto.exactly_once,
-            transitive_source_dependencies: proto.transitive_source_dependencies.into_rust()?,
             fuel: proto.fuel.into_rust()?,
         })
     }
@@ -528,34 +522,6 @@ impl StorageSinkConnection {
             StorageSinkConnection::Kafka(_) => "kafka",
         }
     }
-
-    /// Returns `true` if this sink requires sources to block timestamp binding
-    /// compaction until all sinks that depend on a given source have finished
-    /// writing out that timestamp.
-    ///
-    /// To achieve that, each sink will hold a `AntichainToken` for all of
-    /// the sources it depends on, and will advance all of its source
-    /// dependencies' compaction frontiers as it completes writes.
-    ///
-    /// Sinks that do need to hold back compaction need to insert an
-    /// [`Antichain`] into `StorageState::sink_write_frontiers` that they update
-    /// in order to advance the frontier that holds back upstream compaction
-    /// of timestamp bindings.
-    ///
-    /// See also [`transitive_source_dependencies`](StorageSinkConnection::transitive_source_dependencies).
-    pub fn requires_source_compaction_holdback(&self) -> bool {
-        match self {
-            StorageSinkConnection::Kafka(k) => k.exactly_once,
-        }
-    }
-
-    /// Returns the [`GlobalIds`](GlobalId) of the transitive sources of this
-    /// sink.
-    pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
-        match self {
-            StorageSinkConnection::Kafka(k) => &k.transitive_source_dependencies,
-        }
-    }
 }
 
 #[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -586,8 +552,6 @@ pub struct KafkaSinkConnectionBuilder {
     // Forces the sink to always write to the same topic across restarts instead
     // of picking a new topic each time.
     pub reuse_topic: bool,
-    // Source dependencies for exactly-once sinks.
-    pub transitive_source_dependencies: Vec<GlobalId>,
     pub retention: KafkaSinkConnectionRetention,
 }
 

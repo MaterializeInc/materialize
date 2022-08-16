@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from enum import Enum
+
 from materialize.checks.aggregation import *  # noqa: F401 F403
 from materialize.checks.alter_index import *  # noqa: F401 F403
 from materialize.checks.boolean_type import *  # noqa: F401 F403
@@ -54,7 +56,13 @@ from materialize.checks.upsert import *  # noqa: F401 F403
 from materialize.checks.users import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Debezium, Materialized, Postgres, Redpanda
+from materialize.mzcompose.services import (
+    Computed,
+    Debezium,
+    Materialized,
+    Postgres,
+    Redpanda,
+)
 from materialize.mzcompose.services import Testdrive as TestdriveService
 
 SERVICES = [
@@ -62,6 +70,9 @@ SERVICES = [
     Postgres(name="postgres-source"),
     Redpanda(auto_create_topics=True),
     Debezium(),
+    Computed(
+        name="computed_1"
+    ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(
         options=" ".join(
             [
@@ -75,19 +86,15 @@ SERVICES = [
 ]
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    # c.silent = True
+class ExecutionMode(Enum):
+    ALLTOGETHER = "alltogether"
+    ONEATATIME = "oneatatime"
 
-    parser.add_argument(
-        "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
-    )
+    def __str__(self) -> str:
+        return self.value
 
-    parser.add_argument(
-        "--check", metavar="CHECK", type=str, action="append", help="Check(s) to run."
-    )
 
-    args = parser.parse_args()
-
+def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
 
     c.start_and_wait_for_tcp(
@@ -107,6 +114,32 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         password="postgres",
     )
 
+
+def teardown(c: Composition) -> None:
+    c.rm(*[s.name for s in SERVICES], stop=True, destroy_volumes=True)
+    c.rm_volumes("mzdata", "pgdata", "tmp", force=True)
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # c.silent = True
+
+    parser.add_argument(
+        "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
+    )
+
+    parser.add_argument(
+        "--check", metavar="CHECK", type=str, action="append", help="Check(s) to run."
+    )
+
+    parser.add_argument(
+        "--execution-mode",
+        type=ExecutionMode,
+        choices=list(ExecutionMode),
+        default=ExecutionMode.ALLTOGETHER,
+    )
+
+    args = parser.parse_args()
+
     scenarios = (
         [globals()[args.scenario]] if args.scenario else Scenario.__subclasses__()
     )
@@ -116,6 +149,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     for scenario_class in scenarios:
-        print(f"Testing upgrade scenario {scenario_class}")
-        scenario = scenario_class(checks=checks)
-        scenario.run(c)
+        print(f"Testing scenario {scenario_class}...")
+        if args.execution_mode is ExecutionMode.ALLTOGETHER:
+            setup(c)
+            scenario = scenario_class(checks=checks)
+            scenario.run(c)
+            teardown(c)
+        elif args.execution_mode is ExecutionMode.ONEATATIME:
+            for check in checks:
+                print(f"Running individual check {check}, scenario {scenario_class}")
+                setup(c)
+                scenario = scenario_class(checks=[check])
+                scenario.run(c)
+                teardown(c)
+        else:
+            assert False

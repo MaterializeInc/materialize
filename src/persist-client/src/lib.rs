@@ -48,6 +48,7 @@ pub mod async_runtime;
 pub mod batch;
 pub mod cache;
 pub mod error;
+pub mod inspect;
 pub mod read;
 pub mod usage;
 pub mod write;
@@ -423,6 +424,7 @@ impl PersistClient {
             gc,
             compact,
             blob: Arc::clone(&self.blob),
+            cpu_heavy_runtime: Arc::clone(&self.cpu_heavy_runtime),
             upper: shard_upper.0,
             explicitly_expired: false,
         };

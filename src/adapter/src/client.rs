@@ -20,6 +20,7 @@ use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{Datum, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
+use crate::catalog::SYSTEM_USER;
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
     StartupResponse,
@@ -103,7 +104,7 @@ impl Client {
     /// a system user.
     pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, AdapterError> {
         let conn_client = self.new_conn()?;
-        let session = Session::new(conn_client.conn_id(), "mz_system".into());
+        let session = Session::new(conn_client.conn_id(), SYSTEM_USER.into());
         let (mut session_client, _) = conn_client.startup(session, false).await?;
         session_client.simple_execute(stmts).await
     }

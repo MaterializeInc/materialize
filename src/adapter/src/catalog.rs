@@ -93,7 +93,8 @@ pub mod builtin;
 pub mod storage;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
-const SYSTEM_USER: &str = "mz_system";
+pub const SYSTEM_USER: &str = "mz_system";
+pub const HTTP_DEFAULT_USER: &str = "anonymous_http_user";
 const CREATE_SQL_TODO: &str = "TODO";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -1643,7 +1644,9 @@ impl CatalogItemRebuilder {
             Self::SystemTable(item) => item,
             Self::Object(create_sql) => catalog
                 .parse_item(create_sql.clone(), None)
-                .unwrap_or_else(|_| panic!("invalid persisted create sql: {create_sql}")),
+                .unwrap_or_else(|error| {
+                    panic!("invalid persisted create sql ({error:?}): {create_sql}")
+                }),
         }
     }
 }
@@ -1993,7 +1996,16 @@ impl<S: Append> Catalog<S> {
             // Instantiate the default logging settings for replicas
             let persisted_logs = match &serialized_config.persisted_logs {
                 SerializedComputeInstanceReplicaLogging::Default => {
-                    catalog.allocate_persisted_introspection_items().await
+                    let inst = catalog
+                        .state
+                        .compute_instances_by_id
+                        .get(&instance_id)
+                        .unwrap();
+                    if inst.logging.is_some() {
+                        catalog.allocate_persisted_introspection_items().await
+                    } else {
+                        ConcreteComputeInstanceReplicaLogging::ConcreteViews(vec![], vec![])
+                    }
                 }
 
                 SerializedComputeInstanceReplicaLogging::ConcreteViews(x, y) => {
@@ -2285,8 +2297,7 @@ impl<S: Append> Catalog<S> {
 
         let id_fingerprint_map: HashMap<GlobalId, u64> = migrated_ids.into_iter().collect();
 
-        while !object_queue.is_empty() {
-            let id = object_queue.pop_front().unwrap();
+        while let Some(id) = object_queue.pop_front() {
             let entry = self.get_entry(&id);
 
             let new_id = match id {
@@ -4227,7 +4238,7 @@ impl<S: Append> Catalog<S> {
     }
 }
 
-fn is_reserved_name(name: &str) -> bool {
+pub fn is_reserved_name(name: &str) -> bool {
     BUILTIN_ROLE_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))

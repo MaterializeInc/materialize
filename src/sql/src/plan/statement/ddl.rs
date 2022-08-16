@@ -1814,7 +1814,7 @@ pub fn plan_create_materialized_view(
 
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
-    scx: &StatementContext,
+    _scx: &StatementContext,
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
@@ -1825,7 +1825,6 @@ fn kafka_sink_builder(
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
-    root_dependencies: &[&dyn CatalogItem],
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
@@ -1939,28 +1938,6 @@ fn kafka_sink_builder(
         consistency_topic,
     )?;
 
-    let transitive_source_dependencies: Vec<_> = if reuse_topic {
-        for item in root_dependencies.iter() {
-            if item.item_type() == CatalogItemType::Source {
-                if !item.source_desc()?.yields_stable_input() {
-                    sql_bail!(
-                    "reuse_topic requires that sink input dependencies are replayable, {} is not",
-                    scx.catalog.resolve_full_name(item.name())
-                );
-                }
-            } else if item.item_type() != CatalogItemType::Source {
-                sql_bail!(
-                    "reuse_topic requires that sink input dependencies are sources, {} is not",
-                    scx.catalog.resolve_full_name(item.name())
-                );
-            };
-        }
-
-        root_dependencies.iter().map(|i| i.id()).collect()
-    } else {
-        Vec::new()
-    };
-
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
         None => -1,
@@ -2030,7 +2007,6 @@ fn kafka_sink_builder(
             key_desc_and_indices,
             value_desc,
             reuse_topic,
-            transitive_source_dependencies,
             retention,
         },
     ))
@@ -2265,8 +2241,6 @@ pub fn plan_create_sink(
         sql_bail!("CREATE SINK ... AS OF is no longer supported");
     }
 
-    let root_user_dependencies = get_root_dependencies(scx, &[from.id()]);
-
     let connection_builder = match connection {
         CreateSinkConnection::Kafka {
             broker,
@@ -2285,7 +2259,6 @@ pub fn plan_create_sink(
             desc.into_owned(),
             envelope,
             suffix_nonce,
-            &root_user_dependencies,
         )?,
     };
 
@@ -2350,35 +2323,6 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
         user_keys,
         existing_keys
     )
-}
-
-/// Returns only those `CatalogItem`s that don't have any other user
-/// dependencies. Those are the root dependencies.
-fn get_root_dependencies<'a>(
-    scx: &'a StatementContext,
-    depends_on: &[GlobalId],
-) -> Vec<&'a dyn CatalogItem> {
-    let mut result = Vec::new();
-    let mut work_queue: Vec<&GlobalId> = Vec::new();
-    let mut visited = HashSet::new();
-    work_queue.extend(depends_on.iter().filter(|id| id.is_user()));
-
-    while let Some(dep) = work_queue.pop() {
-        let item = scx.get_item(&dep);
-        let transitive_uses = item.uses().iter().filter(|id| id.is_user());
-        let mut transitive_uses = transitive_uses.peekable();
-        if let Some(_) = transitive_uses.peek() {
-            for transitive_dep in transitive_uses {
-                if visited.insert(transitive_dep) {
-                    work_queue.push(transitive_dep);
-                }
-            }
-        } else {
-            // no transitive uses, so we must be a root dependency
-            result.push(item);
-        }
-    }
-    result
 }
 
 pub fn describe_create_index(

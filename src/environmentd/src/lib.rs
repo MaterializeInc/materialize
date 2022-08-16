@@ -26,6 +26,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
+use tracing::error;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
@@ -39,7 +40,6 @@ use mz_ore::tracing::OpenTelemetryEnableCallback;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
-use tracing::error;
 
 use crate::tcp_connection::ConnectionHandler;
 
@@ -284,6 +284,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             tls: pgwire_tls,
             adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
+            internal: false,
         });
 
         async move {
@@ -304,6 +305,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 tls: None,
                 adapter_client: adapter_client.clone(),
                 frontegg: None,
+                internal: true,
             });
             let mut incoming = TcpListenerStream::new(internal_sql_listener);
             async move {

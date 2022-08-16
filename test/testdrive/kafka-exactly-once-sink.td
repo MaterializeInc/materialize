@@ -189,11 +189,10 @@ New York,NY,10004
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-! CREATE SINK output3 FROM input_table
+> CREATE SINK output3 FROM input_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output3-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
 
 > CREATE SINK output4 FROM input_kafka_cdcv2_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output4-view-${testdrive.seed}'
@@ -217,23 +216,22 @@ contains:collection identifier is not present
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-! CREATE SINK output6 FROM input_table_mview
+> CREATE SINK output6 FROM input_table_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output6-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
 
+# TODO(14221): Better error message!
 ! CREATE SINK output7 FROM input_values_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output7-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_view is not
+contains:collection identifier is not present
 
-! CREATE SINK output8 FROM input_values_mview
+> CREATE SINK output8 FROM input_values_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output8-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_mview is not
 
 > CREATE SINK output12 FROM input_kafka_dbz_derived_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output12-view-${testdrive.seed}'

@@ -29,6 +29,7 @@ use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::retry_external;
 use crate::r#impl::metrics::{BatchWriteMetrics, Metrics};
@@ -197,6 +198,7 @@ where
         size_hint: usize,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         shard_id: ShardId,
         writer_id: WriterId,
     ) -> Self {
@@ -207,6 +209,7 @@ where
             writer_id,
             lower.clone(),
             Arc::clone(&blob),
+            cpu_heavy_runtime,
             &metrics.user,
         );
         Self {
@@ -338,6 +341,7 @@ pub(crate) struct BatchParts<T> {
     writer_id: WriterId,
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
+    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     writing_parts: VecDeque<(PartialBlobKey, JoinHandle<()>)>,
     finished_parts: Vec<PartialBlobKey>,
     batch_metrics: BatchWriteMetrics,
@@ -351,6 +355,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         writer_id: WriterId,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         batch_metrics: &BatchWriteMetrics,
     ) -> Self {
         BatchParts {
@@ -360,6 +365,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             writer_id,
             lower,
             blob,
+            cpu_heavy_runtime,
             writing_parts: VecDeque::new(),
             finished_parts: Vec::new(),
             batch_metrics: batch_metrics.clone(),
@@ -375,6 +381,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let desc = Description::new(self.lower.clone(), upper, since);
         let metrics = Arc::clone(&self.metrics);
         let blob = Arc::clone(&self.blob);
+        let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let batch_metrics = self.batch_metrics.clone();
         let partial_key = PartialBlobKey::new(&self.writer_id, &PartId::new());
         let key = partial_key.complete(&self.shard_id);
@@ -417,20 +424,18 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 };
 
                 let start = Instant::now();
-                let buf = mz_ore::task::spawn_blocking(
-                    || "batch::encode_part",
-                    move || {
+                let buf = cpu_heavy_runtime
+                    .spawn_named(|| "batch::encode_part", async move {
                         let mut buf = Vec::new();
                         batch.encode(&mut buf);
 
                         // Drop batch as soon as we can to reclaim its memory.
                         drop(batch);
                         Bytes::from(buf)
-                    },
-                )
-                .instrument(debug_span!("batch::encode_part"))
-                .await
-                .expect("part encode task failed");
+                    })
+                    .instrument(debug_span!("batch::encode_part"))
+                    .await
+                    .expect("part encode task failed");
                 // Can't use the `CodecMetrics::encode` helper because of async.
                 metrics.codecs.batch.encode_count.inc();
                 metrics

@@ -371,17 +371,17 @@ impl LogView {
                 "mz_arrangement_sizes_{}"),
 
             LogView::MzDataflowNames => (
-                "SELECT mz_dataflow_operator_addresses_{}.id,
-                        mz_dataflow_operator_addresses_{}.worker,
-                        mz_dataflow_operator_addresses_{}.address[1] AS local_id,
+                "SELECT mz_dataflow_addresses_{}.id,
+                        mz_dataflow_addresses_{}.worker,
+                        mz_dataflow_addresses_{}.address[1] AS local_id,
                         mz_dataflow_operators_{}.name
                  FROM
-                        mz_catalog.mz_dataflow_operator_addresses_{},
+                        mz_catalog.mz_dataflow_addresses_{},
                         mz_catalog.mz_dataflow_operators_{}
                  WHERE
-                        mz_dataflow_operator_addresses_{}.id = mz_dataflow_operators_{}.id AND
-                        mz_dataflow_operator_addresses_{}.worker = mz_dataflow_operators_{}.worker AND
-                        mz_catalog.list_length(mz_dataflow_operator_addresses_{}.address) = 1",
+                        mz_dataflow_addresses_{}.id = mz_dataflow_operators_{}.id AND
+                        mz_dataflow_addresses_{}.worker = mz_dataflow_operators_{}.worker AND
+                        mz_catalog.list_length(mz_dataflow_addresses_{}.address) = 1",
                 "mz_dataflow_names_{}"),
 
             LogView::MzDataflowOperatorDataflows => (
@@ -393,13 +393,13 @@ impl LogView {
                     mz_dataflow_names_{}.name as dataflow_name
                 FROM
                     mz_catalog.mz_dataflow_operators_{},
-                    mz_catalog.mz_dataflow_operator_addresses_{},
+                    mz_catalog.mz_dataflow_addresses_{},
                     mz_catalog.mz_dataflow_names_{}
                 WHERE
-                    mz_dataflow_operators_{}.id = mz_dataflow_operator_addresses_{}.id AND
-                    mz_dataflow_operators_{}.worker = mz_dataflow_operator_addresses_{}.worker AND
-                    mz_dataflow_names_{}.local_id = mz_dataflow_operator_addresses_{}.address[1] AND
-                    mz_dataflow_names_{}.worker = mz_dataflow_operator_addresses_{}.worker",
+                    mz_dataflow_operators_{}.id = mz_dataflow_addresses_{}.id AND
+                    mz_dataflow_operators_{}.worker = mz_dataflow_addresses_{}.worker AND
+                    mz_dataflow_names_{}.local_id = mz_dataflow_addresses_{}.address[1] AND
+                    mz_dataflow_names_{}.worker = mz_dataflow_addresses_{}.worker",
                 "mz_dataflow_operator_dataflows_{}"),
 
             LogView::MzDataflowOperatorReachability => (

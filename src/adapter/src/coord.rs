@@ -78,7 +78,6 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
 use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
@@ -95,6 +94,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
@@ -933,7 +933,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx);
+            let client = Client::new(cmd_tx.clone());
             Ok((handle, client))
         }
         Err(e) => Err(e),
