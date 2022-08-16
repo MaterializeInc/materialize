@@ -518,6 +518,7 @@ where
                             new_state.seqno(),
                             new_state
                         );
+                        self.state = new_state;
 
                         self.shard_metrics.set_since(self.state.since());
                         self.shard_metrics.set_upper(&self.state.upper());
@@ -541,7 +542,6 @@ where
                             lease_expiration,
                         };
 
-                        self.state = new_state;
                         return Ok((self.state.seqno(), Ok(work_ret), maintenance));
                     }
                     Err(current) => {
