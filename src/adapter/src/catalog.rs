@@ -25,7 +25,7 @@ use tracing::{info, trace};
 use uuid::Uuid;
 
 use mz_audit_log::{
-    EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent, VersionedStorageMetrics,
+    EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent, VersionedStorageUsage,
 };
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
@@ -65,7 +65,7 @@ use mz_sql::plan::{
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
 use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
-use mz_storage::types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 
@@ -75,9 +75,7 @@ use crate::catalog::builtin::{
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{
-    ClusterReplicaSizeMap, Config, StorageHostSizeMap, DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
-};
+pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::BootstrapArgs;
 use crate::client::ConnectionId;
@@ -95,7 +93,8 @@ pub mod builtin;
 pub mod storage;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
-const SYSTEM_USER: &str = "mz_system";
+pub const SYSTEM_USER: &str = "mz_system";
+pub const HTTP_DEFAULT_USER: &str = "anonymous_http_user";
 const CREATE_SQL_TODO: &str = "TODO";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -491,9 +490,6 @@ impl CatalogState {
             if let CatalogItem::Index(Index {
                 compute_instance, ..
             })
-            | CatalogItem::Sink(Sink {
-                compute_instance, ..
-            })
             | CatalogItem::MaterializedView(MaterializedView {
                 compute_instance, ..
             }) = item
@@ -567,9 +563,6 @@ impl CatalogState {
             .expect("catalog out of sync");
 
         if let CatalogItem::Index(Index {
-            compute_instance, ..
-        })
-        | CatalogItem::Sink(Sink {
             compute_instance, ..
         })
         | CatalogItem::MaterializedView(MaterializedView {
@@ -1249,17 +1242,16 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection: SinkConnectionState,
+    pub connection: StorageSinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
-    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub enum SinkConnectionState {
-    Pending(SinkConnectionBuilder),
-    Ready(SinkConnection),
+pub enum StorageSinkConnectionState {
+    Pending(StorageSinkConnectionBuilder),
+    Ready(StorageSinkConnection),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1413,8 +1405,8 @@ impl CatalogItem {
             | CatalogItem::Connection(_)
             | CatalogItem::StorageCollection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
-                SinkConnectionState::Pending(_) => true,
-                SinkConnectionState::Ready(_) => false,
+                StorageSinkConnectionState::Pending(_) => true,
+                StorageSinkConnectionState::Ready(_) => false,
             },
         }
     }
@@ -1652,7 +1644,9 @@ impl CatalogItemRebuilder {
             Self::SystemTable(item) => item,
             Self::Object(create_sql) => catalog
                 .parse_item(create_sql.clone(), None)
-                .unwrap_or_else(|_| panic!("invalid persisted create sql: {create_sql}")),
+                .unwrap_or_else(|error| {
+                    panic!("invalid persisted create sql ({error:?}): {create_sql}")
+                }),
         }
     }
 }
@@ -1660,7 +1654,7 @@ impl CatalogItemRebuilder {
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on COMPUTE and STORAGE nodes
     pub previous_index_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
-    pub previous_sink_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_sink_ids: Vec<GlobalId>,
     pub previous_materialized_view_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
     pub previous_source_ids: Vec<GlobalId>,
     // Used to update in memory catalog state
@@ -1677,7 +1671,7 @@ impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
             previous_index_ids: HashMap::new(),
-            previous_sink_ids: HashMap::new(),
+            previous_sink_ids: Vec::new(),
             previous_materialized_view_ids: HashMap::new(),
             previous_source_ids: Vec::new(),
             all_drop_ops: Vec::new(),
@@ -1753,9 +1747,6 @@ impl<S: Append> Catalog<S> {
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     timestamp_frequency: Duration::from_secs(1),
-                    storage_metrics_collection_interval: Duration::from_secs(
-                        DEFAULT_STORAGE_METRIC_INTERVAL_SECONDS,
-                    ),
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
@@ -2005,23 +1996,16 @@ impl<S: Append> Catalog<S> {
             // Instantiate the default logging settings for replicas
             let persisted_logs = match &serialized_config.persisted_logs {
                 SerializedComputeInstanceReplicaLogging::Default => {
-                    catalog.allocate_persisted_introspection_items().await
-                }
-
-                SerializedComputeInstanceReplicaLogging::Concrete(x) => {
-                    ConcreteComputeInstanceReplicaLogging::ConcreteViews(x.clone(), {
-                        // Build the views only if the cluster is configured with logging
-                        let inst = catalog
-                            .state
-                            .compute_instances_by_id
-                            .get(&instance_id)
-                            .unwrap();
-                        if inst.logging.is_some() {
-                            catalog.allocate_persisted_introspection_views().await
-                        } else {
-                            vec![]
-                        }
-                    })
+                    let inst = catalog
+                        .state
+                        .compute_instances_by_id
+                        .get(&instance_id)
+                        .unwrap();
+                    if inst.logging.is_some() {
+                        catalog.allocate_persisted_introspection_items().await
+                    } else {
+                        ConcreteComputeInstanceReplicaLogging::ConcreteViews(vec![], vec![])
+                    }
                 }
 
                 SerializedComputeInstanceReplicaLogging::ConcreteViews(x, y) => {
@@ -2135,9 +2119,9 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
-        let storage_metric_events = catalog.storage().await.load_storage_metrics().await?;
-        for event in storage_metric_events {
-            let event = VersionedStorageMetrics::deserialize(&event).unwrap();
+        let storage_usage_events = catalog.storage().await.storage_usage().await?;
+        for event in storage_usage_events {
+            let event = VersionedStorageUsage::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 
@@ -2313,8 +2297,7 @@ impl<S: Append> Catalog<S> {
 
         let id_fingerprint_map: HashMap<GlobalId, u64> = migrated_ids.into_iter().collect();
 
-        while !object_queue.is_empty() {
-            let id = object_queue.pop_front().unwrap();
+        while let Some(id) = object_queue.pop_front() {
             let entry = self.get_entry(&id);
 
             let new_id = match id {
@@ -2355,11 +2338,7 @@ impl<S: Append> Catalog<S> {
                 CatalogItem::Table(_) | CatalogItem::Source(_) => {
                     migration_metadata.previous_source_ids.push(id)
                 }
-                CatalogItem::Sink(sink) => migration_metadata
-                    .previous_sink_ids
-                    .entry(sink.compute_instance)
-                    .or_default()
-                    .push(id),
+                CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
                 CatalogItem::Index(index) => migration_metadata
                     .previous_index_ids
                     .entry(index.compute_instance)
@@ -2422,9 +2401,7 @@ impl<S: Append> Catalog<S> {
         for (_, index_ids) in &mut migration_metadata.previous_index_ids {
             index_ids.reverse();
         }
-        for (_, sink_ids) in &mut migration_metadata.previous_sink_ids {
-            sink_ids.reverse();
-        }
+        migration_metadata.previous_sink_ids.reverse();
         migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();
         migration_metadata.user_drop_ops.reverse();
@@ -3023,7 +3000,7 @@ impl<S: Append> Catalog<S> {
         Ok(())
     }
 
-    fn add_to_storage_metrics(
+    fn add_to_storage_usage(
         &self,
         tx: &mut storage::Transaction<S>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
@@ -3031,12 +3008,12 @@ impl<S: Append> Catalog<S> {
         size_bytes: u64,
     ) -> Result<(), Error> {
         let collection_timestamp = (self.state.config.now)();
-        let id = tx.get_and_increment_id(storage::STORAGE_METRICS_ID_ALLOC_KEY.to_string())?;
+        let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let event_details =
-            VersionedStorageMetrics::new(id, object_id, size_bytes, collection_timestamp);
+            VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
         builtin_table_updates.push(self.state.pack_storage_usage_update(&event_details)?);
-        tx.insert_storage_metrics_event(event_details);
+        tx.insert_storage_usage_event(event_details);
         Ok(())
     }
 
@@ -3700,11 +3677,11 @@ impl<S: Append> Catalog<S> {
 
                     vec![Action::UpdateComputeInstanceStatus { event }]
                 }
-                Op::UpdateStorageMetrics {
+                Op::UpdateStorageUsage {
                     object_id,
                     size_bytes,
                 } => {
-                    self.add_to_storage_metrics(
+                    self.add_to_storage_usage(
                         &mut tx,
                         &mut builtin_table_updates,
                         object_id,
@@ -4120,11 +4097,10 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connection: SinkConnectionState::Pending(sink.connection_builder),
+                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
-                compute_instance: sink.compute_instance,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
@@ -4321,7 +4297,7 @@ pub enum Op {
     UpdateComputeInstanceStatus {
         event: ComputeInstanceEvent,
     },
-    UpdateStorageMetrics {
+    UpdateStorageUsage {
         object_id: Option<String>,
         size_bytes: u64,
     },
@@ -4375,8 +4351,6 @@ pub enum SerializedComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
     /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
     Default,
-    /// Logging sources have been built for this replica.
-    Concrete(Vec<(LogVariant, GlobalId)>),
     /// Logging sources and views have been built for this replica.
     ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
@@ -4385,7 +4359,6 @@ impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceRe
     fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
         match conc {
             ConcreteComputeInstanceReplicaLogging::Default => Self::Default,
-            ConcreteComputeInstanceReplicaLogging::Concrete(x) => Self::Concrete(x),
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(x, y) => Self::ConcreteViews(x, y),
         }
     }

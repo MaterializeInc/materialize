@@ -273,12 +273,12 @@ where
                     );
                 }
             }
-            StorageCommand::ExportSinks(sinks) => {
-                for sink in sinks {
-                    self.exports.insert(sink.id, sink.clone());
+            StorageCommand::ExportSinks(exports) => {
+                for export in exports {
+                    self.exports.insert(export.id, export.clone());
                     // Initialize the uppers we are tracking
                     self.uppers.insert(
-                        sink.id,
+                        export.id,
                         (
                             Antichain::from_elem(T::minimum()),
                             MutableAntichain::new_bottom(T::minimum()),

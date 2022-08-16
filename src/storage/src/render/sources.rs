@@ -33,7 +33,7 @@ use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
 };
-use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use crate::types::sources::{encoding::*, *};
 use crate::types::transforms::LinearOperator;
 
@@ -340,36 +340,26 @@ where
                         }
                         Some(&t) => Some(t - 1),
                     };
-                    let (previous_ok_stream, previous_err_stream, previous_token) =
+                    let (previous_stream, previous_token) =
                         if let Some(previous_as_of) = previous_as_of {
-                            let (ok, err, tok) = persist_source::persist_source(
+                            let (stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 id,
                                 persist_clients,
                                 description.storage_metadata.clone(),
                                 Antichain::from_elem(previous_as_of),
                             );
-                            (ok, err, Some(tok))
+                            (stream, Some(tok))
                         } else {
-                            (
-                                std::iter::empty().to_stream(scope),
-                                std::iter::empty().to_stream(scope),
-                                None,
-                            )
+                            (std::iter::empty().to_stream(scope), None)
                         };
-                    let (previous_ok, previous_err) = (
-                        previous_ok_stream.as_collection(),
-                        previous_err_stream.as_collection(),
-                    );
-                    error_collections.push(previous_err);
-
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
                         &mut linear_operators,
                         description.typ.arity(),
                         upsert_envelope.clone(),
-                        previous_ok,
+                        previous_stream,
                         previous_token,
                     );
 
@@ -391,11 +381,11 @@ where
                     // place and re-use. There seem to be enough instances of this
                     // by now.
                     fn split_ok_err(
-                        x: (Result<Row, DecodeError>, u64, Diff),
+                        x: (Result<Row, DataflowError>, u64, Diff),
                     ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)> {
                         match x {
                             (Ok(row), ts, diff) => Ok((row, ts, diff)),
-                            (Err(err), ts, diff) => Err((err.into(), ts, diff)),
+                            (Err(err), ts, diff) => Err((err, ts, diff)),
                         }
                     }
 
@@ -536,7 +526,7 @@ where
 fn flatten_results_prepend_keys<G>(
     none_envelope: &NoneEnvelope,
     results: timely::dataflow::Stream<G, KV>,
-) -> timely::dataflow::Stream<G, Result<(Row, Diff), DecodeError>>
+) -> timely::dataflow::Stream<G, Result<(Row, Diff), DataflowError>>
 where
     G: Scope,
 {
@@ -548,7 +538,9 @@ where
     let null_key_columns = Row::pack_slice(&vec![Datum::Null; *key_arity]);
 
     match key_envelope {
-        KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
+        KeyEnvelope::None => {
+            results.flat_map(|KV { val, .. }| val.map(|result| result.map_err(Into::into)))
+        }
         KeyEnvelope::Flattened => results
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
@@ -586,17 +578,17 @@ where
 /// Handle possibly missing key or value portions of messages
 fn raise_key_value_errors(
     KV { key, val }: KV,
-) -> Option<Result<(Option<Row>, Row, Diff), DecodeError>> {
+) -> Option<Result<(Option<Row>, Row, Diff), DataflowError>> {
     match (key, val) {
         (Some(Ok(key)), Some(Ok((value, diff)))) => Some(Ok((Some(key), value, diff))),
         (None, Some(Ok((value, diff)))) => Some(Ok((None, value, diff))),
         // always prioritize the value error if either or both have an error
-        (_, Some(Err(e))) => Some(Err(e)),
-        (Some(Err(e)), _) => Some(Err(e)),
+        (_, Some(Err(e))) => Some(Err(e.into())),
+        (Some(Err(e)), _) => Some(Err(e.into())),
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
-        _ => Some(Err(DecodeError::Text(
+        _ => Some(Err(DataflowError::EnvelopeError(EnvelopeError::Flat(
             "Value not present for message".to_string(),
-        ))),
+        )))),
     }
 }

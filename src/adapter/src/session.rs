@@ -20,25 +20,26 @@ use derivative::Derivative;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::OwnedMutexGuard;
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::ComputeSinkId;
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
+use crate::catalog::SYSTEM_USER;
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::CoordTimestamp;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
 
-pub(crate) mod vars;
-
 pub use self::vars::{
     ClientSeverity, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
+
+pub(crate) mod vars;
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
 
@@ -52,7 +53,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     pcx: Option<PlanContext>,
     user: String,
     vars: SessionVars,
-    drop_sinks: Vec<(ComputeInstanceId, GlobalId)>,
+    drop_sinks: Vec<ComputeSinkId>,
 }
 
 impl<T: CoordTimestamp> Session<T> {
@@ -67,7 +68,7 @@ impl<T: CoordTimestamp> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        Self::new_internal(DUMMY_CONNECTION_ID, "mz_system".into())
+        Self::new_internal(DUMMY_CONNECTION_ID, SYSTEM_USER.into())
     }
 
     fn new_internal(conn_id: ConnectionId, user: String) -> Session<T> {
@@ -154,9 +155,7 @@ impl<T: CoordTimestamp> Session<T> {
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
-    pub fn clear_transaction(
-        &mut self,
-    ) -> (Vec<(ComputeInstanceId, GlobalId)>, TransactionStatus<T>) {
+    pub fn clear_transaction(&mut self) -> (Vec<ComputeSinkId>, TransactionStatus<T>) {
         self.portals.clear();
         self.pcx = None;
         let drop_sinks = mem::take(&mut self.drop_sinks);
@@ -238,8 +237,8 @@ impl<T: CoordTimestamp> Session<T> {
 
     /// Adds a sink that will need to be dropped when the current transaction is
     /// cleared.
-    pub fn add_drop_sink(&mut self, compute_instance: ComputeInstanceId, name: GlobalId) {
-        self.drop_sinks.push((compute_instance, name));
+    pub fn add_drop_sink(&mut self, id: ComputeSinkId) {
+        self.drop_sinks.push(id)
     }
 
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
@@ -405,7 +404,7 @@ impl<T: CoordTimestamp> Session<T> {
 
     /// Resets the session to its initial state. Returns sinks that need to be
     /// dropped.
-    pub fn reset(&mut self) -> Vec<(ComputeInstanceId, GlobalId)> {
+    pub fn reset(&mut self) -> Vec<ComputeSinkId> {
         let (drop_sinks, _) = self.clear_transaction();
         self.prepared_statements.clear();
         self.vars = SessionVars::default();

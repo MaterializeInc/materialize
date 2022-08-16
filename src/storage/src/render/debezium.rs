@@ -20,7 +20,7 @@ use mz_expr::EvalError;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::source::DecodeResult;
-use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::errors::{DataflowError, EnvelopeError};
 use crate::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, MzOffset,
@@ -70,7 +70,11 @@ where
                                 match res {
                                     Ok(b) => b,
                                     Err(err) => {
-                                        session.give((Err(err), cap.time().clone(), 1));
+                                        session.give((
+                                            Err(DataflowError::EnvelopeError(err)),
+                                            cap.time().clone(),
+                                            1,
+                                        ));
                                         continue;
                                     }
                                 }
@@ -315,7 +319,7 @@ where
                                             // We could theoretically use tx_cap_map.get(tx_id) here but for sake of
                                             // consistency, we output all errors at the data_cap time.
                                             output.session(&data_cap).give((
-                                                Err(err),
+                                                Err(DataflowError::EnvelopeError(err)),
                                                 *data_cap.time(),
                                                 1,
                                             ));
@@ -429,10 +433,10 @@ struct SqlServerLsn {
 }
 
 impl FromStr for SqlServerLsn {
-    type Err = DecodeError;
+    type Err = EnvelopeError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let make_err = || DecodeError::Text(format!("invalid lsn: {}", input));
+        let make_err = || EnvelopeError::Debezium(format!("invalid lsn: {}", input));
         // SQL Server change LSNs are 10-byte integers. Debezium
         // encodes them as hex, in the following format: xxxxxxxx:xxxxxxxx:xxxx
         if input.len() != 22 {
@@ -502,7 +506,7 @@ impl DebeziumDeduplicationState {
     fn extract_binlog_position(
         &mut self,
         value: &Row,
-    ) -> Result<Option<RowCoordinates>, DataflowError> {
+    ) -> Result<Option<RowCoordinates>, EnvelopeError> {
         match value.iter().nth(self.projection.source_idx).unwrap() {
             Datum::List(source) => {
                 // While reading a snapshot the row coordinates are useless, so early return None
@@ -549,8 +553,9 @@ impl DebeziumDeduplicationState {
                                 Datum::Null => return Ok(None),
                                 d => panic!("type error: expected text, found {:?}", d),
                             };
-                            let make_err =
-                                || DecodeError::Text(format!("invalid sequence: {:?}", sequence));
+                            let make_err = || {
+                                EnvelopeError::Debezium(format!("invalid sequence: {:?}", sequence))
+                            };
                             let sequence: Vec<Option<&str>> =
                                 serde_json::from_str(sequence).or_else(|_| Err(make_err()))?;
 
@@ -616,7 +621,7 @@ impl DebeziumDeduplicationState {
         }
     }
 
-    fn should_use_record(&mut self, value: &Row) -> Result<bool, DataflowError> {
+    fn should_use_record(&mut self, value: &Row) -> Result<bool, EnvelopeError> {
         let binlog_position = self.extract_binlog_position(value)?;
 
         self.messages_processed += 1;

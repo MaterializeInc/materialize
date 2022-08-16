@@ -47,6 +47,13 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "truncf64"]
+    fn trunc_float64(a: f64) -> f64 {
+        a.trunc()
+    }
+);
+
+sqlfunc!(
     #[sqlname = "ceilf64"]
     fn ceil_float64(a: f64) -> f64 {
         a.ceil()

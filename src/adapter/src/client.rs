@@ -20,6 +20,7 @@ use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{Datum, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
+use crate::catalog::SYSTEM_USER;
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
     StartupResponse,
@@ -67,6 +68,15 @@ impl Handle {
     }
 }
 
+/// Distinguishes between external and internal clients.
+#[derive(Debug, Clone)]
+pub enum ClientType {
+    /// Client that has connected over an external port.
+    External,
+    /// Client that has connected over an internal port.
+    Internal,
+}
+
 /// A coordinator client.
 ///
 /// A coordinator client is a simple handle to a communication channel with the
@@ -78,13 +88,15 @@ impl Handle {
 pub struct Client {
     cmd_tx: mpsc::UnboundedSender<Command>,
     id_alloc: Arc<IdAllocator<ConnectionId>>,
+    client_type: ClientType,
 }
 
 impl Client {
-    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
+    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>, client_type: ClientType) -> Client {
         Client {
             cmd_tx,
             id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
+            client_type,
         }
     }
 
@@ -103,7 +115,7 @@ impl Client {
     /// a system user.
     pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, AdapterError> {
         let conn_client = self.new_conn()?;
-        let session = Session::new(conn_client.conn_id(), "mz_system".into());
+        let session = Session::new(conn_client.conn_id(), SYSTEM_USER.into());
         let (mut session_client, _) = conn_client.startup(session, false).await?;
         session_client.simple_execute(stmts).await
     }
@@ -117,6 +129,11 @@ impl Client {
     pub async fn system_execute_one(&self, stmt: &str) -> Result<SimpleResult, AdapterError> {
         let response = self.system_execute(stmt).await?;
         Ok(response.results.into_element())
+    }
+
+    /// Returns the `ClientType` associated with this client.
+    pub fn client_type(&self) -> &ClientType {
+        &self.client_type
     }
 }
 
@@ -136,6 +153,11 @@ impl ConnClient {
     /// Returns the ID of the connection associated with this client.
     pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
+    }
+
+    /// Returns the `ClientType` associated with this client.
+    pub fn client_type(&self) -> &ClientType {
+        self.inner.client_type()
     }
 
     /// Upgrades this connection client to a session client.

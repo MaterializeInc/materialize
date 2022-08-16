@@ -45,7 +45,6 @@ use tracing::{span, Level};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
-use crate::sink::SinkBaseMetrics;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -71,8 +70,6 @@ pub struct ComputeState {
     pub pending_peeks: Vec<PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Undocumented
-    pub sink_metrics: SinkBaseMetrics,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// Configuration for sink connections.

@@ -32,7 +32,9 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
-use mz_storage::types::sinks::{PersistSinkConnection, SinkAsOf, SinkConnection, SinkDesc};
+use mz_storage::types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
+};
 
 use crate::catalog::{CatalogItem, CatalogState, MaterializedView, View};
 use crate::coord::ddl::CatalogTxn;
@@ -339,7 +341,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         &mut self,
         name: String,
         id: GlobalId,
-        sink_description: SinkDesc,
+        sink_description: ComputeSinkDesc,
     ) -> Result<DataflowDesc, AdapterError> {
         let mut dataflow = DataflowDesc::new(name);
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
@@ -352,7 +354,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         &mut self,
         dataflow: &mut DataflowDesc,
         id: GlobalId,
-        sink_description: SinkDesc,
+        sink_description: ComputeSinkDesc,
     ) -> Result<(), AdapterError> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;
@@ -395,10 +397,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
         }
 
-        let sink_description = SinkDesc {
+        let sink_description = ComputeSinkDesc {
             from: internal_view_id,
             from_desc: mview.desc.clone(),
-            connection: SinkConnection::Persist(PersistSinkConnection {
+            connection: ComputeSinkConnection::Persist(PersistSinkConnection {
                 value_desc: mview.desc.clone(),
                 storage_metadata: (),
             }),

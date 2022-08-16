@@ -12,7 +12,7 @@ use tokio::runtime::Handle as TokioHandle;
 use mz_interchange::avro::Decoder;
 use mz_repr::Row;
 
-use crate::types::errors::DecodeError;
+use crate::types::errors::DecodeErrorKind;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {
@@ -35,13 +35,13 @@ impl AvroDecoderState {
         })
     }
 
-    pub fn decode(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeError> {
+    pub fn decode(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         match self.tokio_handle.block_on(self.decoder.decode(bytes)) {
             Ok(row) => {
                 self.events_success += 1;
                 Ok(Some(row))
             }
-            Err(err) => Err(DecodeError::Text(format!(
+            Err(err) => Err(DecodeErrorKind::Text(format!(
                 "avro deserialization error: {:#}",
                 err
             ))),

@@ -8,11 +8,12 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
+$ set-regex match=u\d{1,2} replacement=<RID>
 
 # Verify initial roles.
 > SELECT id, name FROM mz_roles
 s1 mz_system
-u1 materialize
+<RID> materialize
 
 # Verify that invalid options are rejected.
 ! CREATE ROLE foo
@@ -29,9 +30,9 @@ contains:conflicting or redundant options
 > CREATE USER fms SUPERUSER
 > SELECT id, name FROM mz_roles
 s1 mz_system
-u1 materialize
-u2 rj
-u3 fms
+<RID> materialize
+<RID> rj
+<RID> fms
 
 # Dropping multiple roles should not have any effect if one of the role names
 # is bad...
@@ -39,26 +40,26 @@ u3 fms
 contains:unknown role 'bad'
 > SELECT id, name FROM mz_roles
 s1 mz_system
-u1 materialize
-u2 rj
-u3 fms
+<RID> materialize
+<RID> rj
+<RID> fms
 
 # ...unless IF EXISTS is specified.
 > DROP ROLE IF EXISTS rj, fms, bad
 > SELECT id, name FROM mz_roles
 s1 mz_system
-u1 materialize
+<RID> materialize
 
 # Verify that the single name version of DROP ROLE works too.
 > CREATE ROLE nlb LOGIN SUPERUSER
 > SELECT id, name FROM mz_roles
 s1 mz_system
-u1 materialize
-u4 nlb
+<RID> materialize
+<RID> nlb
 > DROP ROLE nlb
 > SELECT id, name FROM mz_roles
 s1 mz_system
-u1 materialize
+<RID> materialize
 > DROP ROLE IF EXISTS nlb
 
 # No dropping the current role.

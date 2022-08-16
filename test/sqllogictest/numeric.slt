@@ -1045,6 +1045,18 @@ SELECT floor(1.234), floor(-1.234), floor('NaN'::numeric)
 ----
 1  -2  NaN
 
+#trunc
+
+query RRR
+SELECT trunc(1.234), trunc(-1.234), trunc('NaN'::numeric)
+----
+1  -1  NaN
+
+query RR
+SELECT trunc(0.6), trunc(-0.6)
+----
+0  0
+
 # Exponential calculations
 
 ## Pow

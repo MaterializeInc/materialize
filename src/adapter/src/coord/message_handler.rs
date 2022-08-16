@@ -10,10 +10,14 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
+use std::collections::HashMap;
+
 use chrono::DurationRound;
-use tracing::{event, Level};
+use tracing::{event, warn, Level};
 
 use mz_controller::{ComputeInstanceEvent, ControllerResponse};
+use mz_ore::task;
+use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
@@ -63,16 +67,33 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
-            Message::StorageUsage => {
-                self.storage_usage_update().await;
+            Message::StorageUsageFetch => {
+                self.storage_usage_fetch().await;
+            }
+            Message::StorageUsageUpdate(sizes) => {
+                self.storage_usage_update(sizes).await;
             }
         }
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self) {
+    async fn storage_usage_fetch(&self) {
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let client = self.storage_usage_client.clone();
+        task::spawn(|| "storage_usage_fetch", async move {
+            let shard_sizes = client.shard_sizes().await;
+            // It is not an error for shard sizes to become ready after `internal_cmd_rx`
+            // is dropped.
+            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(shard_sizes));
+            if let Err(e) = result {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
+        });
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
         let object_id = None;
-        let shard_sizes = self.storage_usage_client.shard_sizes().await;
 
         let mut unk_storage = 0;
         let mut known_storage = 0;
@@ -89,7 +110,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Err(err) = self
             .catalog_transact(
                 None,
-                vec![catalog::Op::UpdateStorageMetrics {
+                vec![catalog::Op::UpdateStorageUsage {
                     object_id,
                     size_bytes: known_storage,
                 }],
@@ -226,7 +247,6 @@ impl<S: Append + 'static> Coordinator<S> {
             id,
             oid,
             result,
-            compute_instance,
         }: SinkConnectionReady,
     ) {
         match result {
@@ -240,15 +260,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
-                    self.handle_sink_connection_ready(
-                        id,
-                        oid,
-                        connection,
-                        compute_instance,
-                        Some(&session),
-                    )
-                    .await
-                    .expect("sinks should be validated by sequence_create_sink");
+                    self.handle_sink_connection_ready(id, oid, connection, Some(&session))
+                        .await
+                        // XXX(chae): I really don't like this -- especially as we're now doing cross
+                        // process calls to start a sink.
+                        .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connection. Report to the client that

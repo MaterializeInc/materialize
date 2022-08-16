@@ -19,7 +19,7 @@ use crate::cache::PersistClientCache;
 use crate::r#impl::paths::{BlobKey, BlobKeyPrefix};
 
 /// Provides access to storage usage metrics for a specific Blob
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StorageUsageClient {
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,

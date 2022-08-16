@@ -22,7 +22,7 @@ use tracing::{event, warn, Level};
 use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
@@ -41,7 +41,7 @@ use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, Cat
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
     ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
@@ -54,12 +54,15 @@ use mz_sql::plan::{
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy};
-use mz_storage::types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
+use mz_storage::types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
+    TailSinkConnection,
+};
 use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection,
-    SerializedComputeInstanceReplicaLocation,
+    SerializedComputeInstanceReplicaLocation, StorageSinkConnectionState,
 };
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -280,6 +283,9 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
             }
+            Plan::AlterSource(plan) => {
+                tx.send(self.sequence_alter_source(&session, plan).await, session);
+            }
             Plan::AlterSystemSet(plan) => {
                 tx.send(
                     self.sequence_alter_system_set(&session, plan).await,
@@ -306,7 +312,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(&session).await;
                     let drop_sinks = session.reset();
-                    self.drop_sinks(drop_sinks).await;
+                    self.drop_compute_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(AdapterError::OperationProhibitsTransaction(
@@ -374,7 +380,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 tx: tx.take(),
                                 span: tracing::Span::none(),
                             }))
-                            .expect("sending to internal_cmd_tx cannot fail");
+                            .expect("sending to self.internal_cmd_tx cannot fail");
                     }
                     Err(err) => tx.send(Err(err), session),
                 };
@@ -974,10 +980,6 @@ impl<S: Append + 'static> Coordinator<S> {
             if_not_exists,
         } = plan;
 
-        // The dataflow must (eventually) be built on a specific compute instance.
-        // Use this in `catalog_transact` and stash for eventual sink construction.
-        let compute_instance = sink.compute_instance;
-
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_user_id().await {
             Ok(id) => id,
@@ -994,64 +996,44 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
+        // Knowing that we're only handling kafka sinks here helps us simplify.
+        let StorageSinkConnectionBuilder::Kafka(connection_builder) =
+            sink.connection_builder.clone();
+
         // Then try to create a placeholder catalog item with an unknown
         // connection. If that fails, we're done, though if the client specified
         // `if_not_exists` we'll tell the client we succeeded.
         //
         // This placeholder catalog item reserves the name while we create
         // the sink connection, which could take an arbitrarily long time.
-        let op = catalog::Op::CreateItem {
+
+        let catalog_sink = catalog::Sink {
+            create_sql: sink.create_sql,
+            from: sink.from,
+            connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
+                connection_builder,
+            )),
+            envelope: sink.envelope,
+            with_snapshot,
+            depends_on,
+        };
+
+        let ops = vec![catalog::Op::CreateItem {
             id,
             oid,
             name,
-            item: CatalogItem::Sink(catalog::Sink {
-                create_sql: sink.create_sql,
-                from: sink.from,
-                connection: catalog::SinkConnectionState::Pending(sink.connection_builder.clone()),
-                envelope: sink.envelope,
-                with_snapshot,
-                depends_on,
-                compute_instance,
-            }),
-        };
+            item: CatalogItem::Sink(catalog_sink.clone()),
+        }];
 
-        let transact_result = self
-            .catalog_transact(
-                Some(&session),
-                vec![op],
-                |txn| -> Result<(), AdapterError> {
-                    let from_entry = txn.catalog.get_entry(&sink.from);
-                    // Insert a dummy dataflow to trigger validation before we try to actually create
-                    // the external sink resources (e.g. Kafka Topics)
-                    txn.dataflow_builder(sink.compute_instance)
-                        .build_sink_dataflow(
-                            "dummy".into(),
-                            id,
-                            mz_storage::types::sinks::SinkDesc {
-                                from: sink.from,
-                                from_desc: from_entry
-                                    .desc(
-                                        &txn.catalog.resolve_full_name(
-                                            from_entry.name(),
-                                            from_entry.conn_id(),
-                                        ),
-                                    )
-                                    .unwrap()
-                                    .into_owned(),
-                                connection: SinkConnection::Tail(TailSinkConnection {}),
-                                envelope: Some(sink.envelope),
-                                as_of: SinkAsOf {
-                                    frontier: Antichain::new(),
-                                    strict: false,
-                                },
-                            },
-                        )
-                        .map(|_ok| ())
-                },
-            )
+        let result = self
+            .catalog_transact(Some(&session), ops, move |txn| {
+                // Validate that the from collection is in fact a persist collection we can export.
+                txn.dataflow_client.storage().collection(sink.from)?;
+                Ok(())
+            })
             .await;
 
-        match transact_result {
+        match result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -1074,17 +1056,19 @@ impl<S: Append + 'static> Coordinator<S> {
         task::spawn(
             || format!("sink_connection_ready:{}", sink.from),
             async move {
-                internal_cmd_tx
-                    .send(Message::SinkConnectionReady(SinkConnectionReady {
+                // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
+                let result =
+                    internal_cmd_tx.send(Message::SinkConnectionReady(SinkConnectionReady {
                         session,
                         tx,
                         id,
                         oid,
                         result: sink_connection::build(connection_builder, id, connection_context)
                             .await,
-                        compute_instance,
-                    }))
-                    .expect("sending to internal_cmd_tx cannot fail");
+                    }));
+                if let Err(e) = result {
+                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                }
             },
         );
     }
@@ -2068,10 +2052,10 @@ impl<S: Append + 'static> Coordinator<S> {
             let timestamp =
                 coord.determine_timestamp(session, &id_bundle, &when, compute_instance)?;
 
-            Ok::<_, AdapterError>(SinkDesc {
+            Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
-                connection: SinkConnection::Tail(TailSinkConnection::default()),
+                connection: ComputeSinkConnection::Tail(TailSinkConnection::default()),
                 envelope: None,
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
@@ -2111,7 +2095,10 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let (sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
-        session.add_drop_sink(compute_instance, *sink_id);
+        session.add_drop_sink(ComputeSinkId {
+            compute_instance,
+            global_id: *sink_id,
+        });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails
@@ -2967,11 +2954,13 @@ impl<S: Append + 'static> Coordinator<S> {
                             // We timed out, so remove the pending peek. This is
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
-                            internal_cmd_tx
-                                .send(Message::RemovePendingPeeks {
-                                    conn_id: session.conn_id(),
-                                })
-                                .expect("sending to internal_cmd_tx cannot fail");
+                            // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
+                            let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
+                                conn_id: session.conn_id(),
+                            });
+                            if let Err(e) = result {
+                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                            }
                             Err(AdapterError::StatementTimeout)
                         }
                     }
@@ -3019,16 +3008,18 @@ impl<S: Append + 'static> Coordinator<S> {
             } else {
                 diffs
             };
-            internal_cmd_tx
-                .send(Message::SendDiffs(SendDiffs {
-                    session,
-                    tx,
-                    id,
-                    diffs,
-                    kind,
-                    returning: returning_rows,
-                }))
-                .expect("sending to internal_cmd_tx cannot fail");
+            // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+            let result = internal_cmd_tx.send(Message::SendDiffs(SendDiffs {
+                session,
+                tx,
+                id,
+                diffs,
+                kind,
+                returning: returning_rows,
+            }));
+            if let Err(e) = result {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         });
     }
 
@@ -3150,6 +3141,14 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         return Ok(Vec::from(payload));
+    }
+
+    async fn sequence_alter_source(
+        &mut self,
+        _: &Session,
+        _: AlterSourcePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        coord_bail!("ALTER SOURCE not yet implemented")
     }
 
     async fn sequence_alter_system_set(

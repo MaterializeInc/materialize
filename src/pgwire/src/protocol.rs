@@ -115,6 +115,18 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
 
+    // Validate that mz_system only logs in via an internal port.
+    match (adapter_client.client_type(), user.as_str()) {
+        (mz_adapter::client::ClientType::External, mz_adapter::catalog::SYSTEM_USER) => {
+            let msg = format!("unauthorized login to user '{user}'");
+            return conn
+                .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
+                .await;
+        }
+        (mz_adapter::client::ClientType::Internal, _)
+        | (mz_adapter::client::ClientType::External, _) => {}
+    };
+
     // Validate that the connection is compatible with the TLS mode.
     //
     // The match here explicitly spells out all cases to be resilient to

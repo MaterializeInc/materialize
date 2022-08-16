@@ -312,7 +312,7 @@ header {
 }
 
 .navbar {
-    background: $darkest-purple-v2;
+    background-image: linear-gradient( 90deg, hsl(313deg, 93%, 55%) 0%, hsl(309deg, 84%, 52%) 11%, hsl(304deg, 76%, 49%) 22%, hsl(298deg, 73%, 48%) 33%, hsl(292deg, 71%, 49%) 44%, hsl(286deg, 72%, 51%) 56%, hsl(279deg, 73%, 52%) 67%, hsl(271deg, 75%, 53%) 78%, hsl(262deg, 76%, 55%) 89%, hsl(252deg, 77%, 56%) 100% );
     color: $white-v2;
     font-weight: 600;
     font-size: 14px;
@@ -382,32 +382,25 @@ header {
         background-position: 0% 100%;
         background-size: 200% 300%;
         transition: background-position 0.3s ease-out;
+
+        &:hover {
+            background-position: 100% 100%;
+            text-decoration: none;
+        }
+
+        &.featured {
+            background: $medium-purple-v2;
+        }
+
+        &.featured:hover {
+            background: $dark-purple-v2;
+        }
     }
 
-    &:hover {
-        background-position: 100% 100%;
-        text-decoration: none;
-    }
 
-    &:featured {
-        background-size: 200% 200%;
-        background-image: linear-gradient(
-            300deg,
-            #c13aff 0%,
-            #7e52ff 31.36%,
-            #5c29f1 43.94%,
-            #e37ac2 76.56%,
-            #ff9067 85.53%
-        );
-        transition: all 0.2s ease-out;
-    }
-
-    &:featured:hover {
-        color: #fff;
-    }
 
     .secondary {
-        opacity: 0.5;
+        opacity: 0.85;
     }
 }
 

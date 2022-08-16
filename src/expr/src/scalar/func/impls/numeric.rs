@@ -138,6 +138,21 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "truncnumeric"]
+    fn trunc_numeric(mut a: Numeric) -> Numeric {
+        // trunc will be nop if has no fractional digits.
+        if a.exponent() >= 0 {
+            return a;
+        }
+        let mut cx = numeric::cx_datum();
+        cx.set_rounding(Rounding::Down);
+        cx.round(&mut a);
+        numeric::munge_numeric(&mut a).unwrap();
+        a
+    }
+);
+
+sqlfunc!(
     #[sqlname = "sqrtnumeric"]
     fn sqrt_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
         if a.is_negative() {

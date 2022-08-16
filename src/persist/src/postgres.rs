@@ -340,23 +340,19 @@ impl Consensus for PostgresConsensus {
         }
 
         let result = if let Some(expected) = expected {
-            // Only insert the new row if:
-            // - sequence number expected is already present
-            // - expected corresponds to the most recent sequence number
-            //   i.e. there is no other sequence number > expected already
-            //   present.
-            //
-            // This query has also been written to execute within a single
-            // network round-trip (instead of a slightly simpler implementation
-            // that would call `BEGIN` and have multiple `SELECT` queries).
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     EXISTS (
-                        SELECT * FROM consensus WHERE shard = $1 AND sequence_number = $4
-                     )
-                     AND NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
-                     )
-                     ON CONFLICT DO NOTHING";
+            // This query has been written to execute within a single
+            // network round-trip. The insert performance has been tuned
+            // against CockroachDB, ensuring it goes through the fast-path
+            // 1-phase commit of CRDB. Any changes to this query should
+            // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
+            // `auto commit`
+            let q = r#"
+                INSERT INTO consensus (shard, sequence_number, data)
+                SELECT $1, $2, $3
+                WHERE (SELECT sequence_number FROM consensus
+                       WHERE shard = $1
+                       ORDER BY sequence_number DESC LIMIT 1) = $4;
+            "#;
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client

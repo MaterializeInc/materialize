@@ -37,7 +37,7 @@ use mz_timely_util::progress::any_change_batch;
 use crate::controller::CollectionMetadata;
 use crate::protocol::client::proto_storage_client::ProtoStorageClient;
 use crate::protocol::client::proto_storage_server::ProtoStorage;
-use crate::types::sinks::SinkDesc;
+use crate::types::sinks::StorageSinkDesc;
 use crate::types::sources::IngestionDescription;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.protocol.client.rs"));
@@ -170,7 +170,6 @@ impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> 
         ProtoExportSinkCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
-            resume_upper: Some((&self.resume_upper).into()),
         }
     }
 
@@ -180,9 +179,6 @@ impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> 
             description: proto
                 .description
                 .into_rust_if_some("ProtoExportSinkCommand::description")?,
-            resume_upper: proto.resume_upper.map(Into::into).ok_or_else(|| {
-                TryFromProtoError::missing_field("ProtoExportSinkCommand::resume_upper")
-            })?,
         })
     }
 }
@@ -191,9 +187,21 @@ impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ExportSinkCommand<T> {
     pub id: GlobalId,
-    pub description: SinkDesc<CollectionMetadata, T>,
-    /// The upper frontier at which this export should resume.
-    pub resume_upper: Antichain<T>,
+    pub description: StorageSinkDesc<CollectionMetadata, T>,
+}
+
+impl Arbitrary for ExportSinkCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<GlobalId>(),
+            any::<StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>(),
+        )
+            .prop_map(|(id, description)| Self { id, description })
+            .boxed()
+    }
 }
 
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
@@ -245,6 +253,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
         prop_oneof![
             proptest::collection::vec(any::<IngestSourceCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::IngestSources),
+            proptest::collection::vec(any::<ExportSinkCommand<mz_repr::Timestamp>>(), 1..4)
+                .prop_map(StorageCommand::ExportSinks),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
@@ -347,7 +357,15 @@ where
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", ingestion.id, command);
                 }
             }
-            _ => {
+            StorageCommand::ExportSinks(exports) => {
+                for export in exports {
+                    let mut frontier = MutableAntichain::new();
+                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                    let previous = self.uppers.insert(export.id, frontier);
+                    assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
+                }
+            }
+            StorageCommand::AllowCompaction(_) | StorageCommand::InitializationComplete => {
                 // Other commands have no known impact on frontier tracking.
             }
         }

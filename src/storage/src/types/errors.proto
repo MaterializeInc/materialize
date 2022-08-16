@@ -11,10 +11,16 @@ syntax = "proto3";
 
 import "expr/src/scalar.proto";
 import "repr/src/global_id.proto";
+import "repr/src/row.proto";
 
 package mz_storage.types.errors;
 
 message ProtoDecodeError {
+    ProtoDecodeErrorKind kind = 1;
+    optional bytes raw = 2;
+}
+
+message ProtoDecodeErrorKind {
     oneof kind {
         string text = 1;
     }
@@ -34,10 +40,35 @@ message ProtoSourceError {
     ProtoSourceErrorDetails error = 2;
 }
 
+message ProtoUpsertValueError {
+    ProtoDataflowError inner = 1;
+    mz_repr.row.ProtoRow for_key = 2;
+}
+
+message ProtoUpsertError {
+    oneof kind {
+	ProtoDecodeError key_decode = 1;
+	ProtoUpsertValueError value = 2;
+    }
+}
+
+// The "V1" suffix was requested by the storage team,
+// since they might want to repurpose/modify this field
+// in the future.
+message ProtoEnvelopeErrorV1 {
+    oneof kind {
+	string debezium = 1;
+	ProtoUpsertError upsert = 2;
+	string flat = 3;
+    }
+}
+
+
 message ProtoDataflowError {
     oneof kind {
         ProtoDecodeError decode_error = 1;
         mz_expr.scalar.ProtoEvalError eval_error = 2;
         ProtoSourceError source_error = 3;
+	ProtoEnvelopeErrorV1 envelope_error_v1 = 4;
     }
 }
