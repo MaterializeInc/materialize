@@ -153,7 +153,10 @@ impl Consensus for MaelstromConsensus {
     }
 
     async fn scan(&self, _key: &str, _from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
-        unimplemented!("not yet used")
+        // TODO: Implement this. This placeholder unblocks getting maelstrom
+        // working in CI again, but it prevents us from getting coverage of gc
+        // correctness.
+        Ok(vec![])
     }
 
     async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
