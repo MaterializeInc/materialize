@@ -73,4 +73,3 @@ id creature
 -----------
 1  dragon
 2  cow
-
