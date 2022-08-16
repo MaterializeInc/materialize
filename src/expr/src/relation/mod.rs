@@ -1937,6 +1937,26 @@ impl Default for JoinImplementation {
     }
 }
 
+impl JoinImplementation {
+    /// Returns `true` iff the value is not [`JoinImplementation::Unimplemented`].
+    pub fn is_implemented(&self) -> bool {
+        match self {
+            Self::Unimplemented => false,
+            _ => true,
+        }
+    }
+
+    /// Returns an optional implementation name if the value is not [`JoinImplementation::Unimplemented`].
+    pub fn name(&self) -> Option<&'static str> {
+        match self {
+            Self::Differential(..) => Some("differential"),
+            Self::DeltaQuery(..) => Some("delta"),
+            Self::PredicateIndex(..) => Some("predicate_index"),
+            Self::Unimplemented => None,
+        }
+    }
+}
+
 /// Instructions for finishing the result of a query.
 ///
 /// The primary reason for the existence of this structure and attendant code
