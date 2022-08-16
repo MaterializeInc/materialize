@@ -171,11 +171,17 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         // TODO: (#13299) print out types?
         match self {
-            FastPathPlan::Constant(Ok(rows), _) => fmt_text_constant_rows(
-                f,
-                rows.iter().map(|(row, _, diff)| (row, diff)),
-                ctx.as_mut(),
-            ),
+            FastPathPlan::Constant(Ok(rows), _) => {
+                writeln!(f, "{}Constant", ctx.as_mut())?;
+                *ctx.as_mut() += 1;
+                fmt_text_constant_rows(
+                    f,
+                    rows.iter().map(|(row, _, diff)| (row, diff)),
+                    ctx.as_mut(),
+                )?;
+                *ctx.as_mut() -= 1;
+                Ok(())
+            }
             FastPathPlan::Constant(Err(err), _) => {
                 writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
             }

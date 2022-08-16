@@ -623,16 +623,13 @@ fn write_first_rows(
     first_rows: &Vec<(&Row, &crate::Diff)>,
     ctx: &mut Indent,
 ) -> fmt::Result {
-    ctx.indented(move |ctx| {
-        for (row, diff) in first_rows {
-            if **diff == 1 {
-                writeln!(f, "{}- {}", ctx, row)?;
-            } else {
-                writeln!(f, "{}- ({} x {})", ctx, row, diff)?;
-            }
+    for (row, diff) in first_rows {
+        if **diff == 1 {
+            writeln!(f, "{}- {}", ctx, row)?;
+        } else {
+            writeln!(f, "{}- ({} x {})", ctx, row, diff)?;
         }
-        Ok(())
-    })?;
+    }
     Ok(())
 }
 
@@ -644,7 +641,6 @@ pub fn fmt_text_constant_rows<'a, I>(
 where
     I: Iterator<Item = (&'a Row, &'a crate::Diff)>,
 {
-    writeln!(f, "{}Constant", ctx)?;
     let mut row_count = 0;
     let mut first_rows = Vec::with_capacity(20);
     for _ in 0..20 {
@@ -655,12 +651,9 @@ where
     }
     let rest_of_row_count = rows.into_iter().map(|(_, diff)| diff).sum::<crate::Diff>();
     if rest_of_row_count != 0 {
-        ctx.indented(move |ctx| {
-            writeln!(f, "{}total_rows: {}", ctx, row_count + rest_of_row_count)?;
-            writeln!(f, "{}first_rows:", ctx)?;
-            write_first_rows(f, &first_rows, ctx)?;
-            Ok(())
-        })?;
+        writeln!(f, "{}total_rows: {}", ctx, row_count + rest_of_row_count)?;
+        writeln!(f, "{}first_rows:", ctx)?;
+        ctx.indented(move |ctx| write_first_rows(f, &first_rows, ctx))?;
     } else {
         write_first_rows(f, &first_rows, ctx)?;
     }
