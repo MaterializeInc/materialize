@@ -2435,28 +2435,19 @@ impl<'a> Parser<'a> {
 
     fn parse_kafka_consistency(&mut self) -> Result<Option<KafkaConsistency<Raw>>, ParserError> {
         if self.parse_keyword(CONSISTENCY) {
-            // We would prefer for all consistency parameters to be
-            // parenthesized, but for backwards compatibility we support an
-            // unparenthesized syntax that has some ambiguity issues
-            // (see #8231).
-            //
-            // Bad:
-            //     CONSISTENCY TOPIC 'foo' CONSISTENCY FORMAT 'bar' WITH (format_option = 'blah')
-            // Good:
-            //     CONSISTENCY (TOPIC 'foo' FORMAT 'bar' WITH (format_option = 'blah'))
-            let parenthesized = self.consume_token(&Token::LParen);
+            self.expect_token(&Token::LParen)?;
+
             self.expect_keyword(TOPIC)?;
             let topic = self.parse_literal_string()?;
-            let topic_format = if (parenthesized && self.parse_keyword(FORMAT))
-                || (!parenthesized && self.parse_keywords(&[CONSISTENCY, FORMAT]))
-            {
+
+            let topic_format = if self.parse_keyword(FORMAT) {
                 Some(self.parse_format()?)
             } else {
                 None
             };
-            if parenthesized {
-                self.expect_token(&Token::RParen)?;
-            }
+
+            self.expect_token(&Token::RParen)?;
+
             Ok(Some(KafkaConsistency {
                 topic,
                 topic_format,
