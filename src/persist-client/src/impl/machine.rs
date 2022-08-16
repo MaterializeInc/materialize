@@ -814,6 +814,12 @@ mod tests {
 
             let state = Arc::new(Mutex::new(DatadrivenState::default()));
             let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+            let write = Arc::new(Mutex::new(
+                client
+                    .open_writer::<String, (), u64, i64>(shard_id)
+                    .await
+                    .expect("invalid shard types"),
+            ));
             let now = SYSTEM_TIME.clone();
 
             f.run_async(move |tc| {
@@ -821,6 +827,7 @@ mod tests {
                 let client = client.clone();
                 let state = Arc::clone(&state);
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
+                let write = Arc::clone(&write);
                 let now = now.clone();
                 async move {
                     let mut state = state.lock().await;
@@ -1089,7 +1096,7 @@ mod tests {
                             let writer_id = write.writer_id.clone();
                             let (_, _) = write
                                 .machine
-                                .compare_and_append(batch, &write.writer_id, now())
+                                .compare_and_append(batch, &writer_id, now())
                                 .await
                                 .expect("indeterminate")
                                 .expect("invalid usage")
@@ -1127,7 +1134,6 @@ mod tests {
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;
         let consensus = Arc::clone(&write.machine.consensus);
-        let now = SYSTEM_TIME.clone();
 
         // Write a bunch of batches. This should result in a bounded number of
         // live entries in consensus.
@@ -1138,7 +1144,11 @@ mod tests {
                 .await;
             let (_, writer_maintenance) = write
                 .machine
-                .compare_and_append(&batch.into_hollow_batch(), &write.writer_id, now())
+                .compare_and_append(
+                    &batch.into_hollow_batch(),
+                    &write.writer_id,
+                    (write.cfg.now)(),
+                )
                 .await
                 .expect("external durability failed")
                 .expect("invalid usage")

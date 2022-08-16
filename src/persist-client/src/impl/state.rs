@@ -256,9 +256,11 @@ where
             .get_mut(id)
             // The only (tm) ways to hit this are (1) inventing a WriterId
             // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) isn't implemented yet, so it feels
-            // okay to leave this for followup work.
-            .expect("TODO: Implement automatic lease renewals")
+            // (1) is a gross mis-use and (2) may happen if the writer did
+            // not get to heartbeat for a long time. Writers are expected to
+            // append updates regularly, even empty batches to maintain their
+            // lease.
+            .expect("WriterId is not registered")
     }
 
     fn update_since(&mut self) {
@@ -867,7 +869,10 @@ mod tests {
     fn expire_writer() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
         let now = SYSTEM_TIME.clone();
 
         let writer_id_one = WriterId::new();

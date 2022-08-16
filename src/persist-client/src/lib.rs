@@ -1283,7 +1283,7 @@ mod tests {
         let now = Arc::new(AtomicU64::new(0));
         let now_clone = Arc::clone(&now);
         let mut cache = new_test_client_cache();
-        cache.cfg.now = NowFn::from(move || now_clone.load(Ordering::Relaxed));
+        cache.cfg.now = NowFn::from(move || now_clone.load(Ordering::SeqCst));
         let (mut write, _) = cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
@@ -1299,35 +1299,35 @@ mod tests {
 
         // we won't heartbeat if enough time hasn't passed
         let heartbeat = write.last_heartbeat;
-        now.fetch_add(1, Ordering::Relaxed);
+        now.fetch_add(1, Ordering::SeqCst);
         write.maybe_heartbeat_writer().await;
         assert_eq!(write.last_heartbeat, heartbeat);
 
         // but we will heartbeat if we're past half our lease duration
-        now.fetch_add(lease_duration_ms / 2, Ordering::Relaxed);
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
         write.maybe_heartbeat_writer().await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::Relaxed));
+        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
 
         // performing a compare_and_append should also heartbeat the writer
-        now.fetch_add(lease_duration_ms / 2, Ordering::Relaxed);
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
         write.expect_compare_and_append(&data[0..1], 0, 2).await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::Relaxed));
+        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
 
         // preparing a batch should heartbeat if it fills up a full batch part
-        now.fetch_add(lease_duration_ms / 2, Ordering::Relaxed);
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
         write.expect_batch(&data[1..3], 1, 4).await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::Relaxed));
+        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
 
         // but a batch operation that doesn't fill up a full batch part should NOT heartbeat.
         // presumably it didn't take long to prepare <1 full batch part, and it'll be heartbeated
         // as part of a subsequent compare_and_append
         let heartbeat = write.last_heartbeat;
-        now.fetch_add(lease_duration_ms / 2, Ordering::Relaxed);
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
         write.expect_batch(&[], 0, 1).await;
         assert_eq!(write.last_heartbeat, heartbeat);
 
         // one more check: failed calls to append should heartbeat
-        now.fetch_add(lease_duration_ms / 2, Ordering::Relaxed);
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
         let _failed_append = write
             .append(
                 &data[3..],
@@ -1335,10 +1335,10 @@ mod tests {
                 Antichain::from_elem(100),
             )
             .await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::Relaxed));
+        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
 
         // and verify that other handles can expire our writer as routine maintenance
-        now.fetch_add(lease_duration_ms * 2, Ordering::Relaxed);
+        now.fetch_add(lease_duration_ms * 2, Ordering::SeqCst);
         let (_, mut read) = cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
@@ -1351,7 +1351,7 @@ mod tests {
 
         let (_, maintenance) = read
             .machine
-            .heartbeat_reader(&read.reader_id, now.load(Ordering::Relaxed))
+            .heartbeat_reader(&read.reader_id, now.load(Ordering::SeqCst))
             .await;
         maintenance
             .perform_awaitable(&read.machine.clone(), &read.gc.clone())

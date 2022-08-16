@@ -34,7 +34,7 @@ use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::{HollowBatch, Upper};
-use crate::{parse_id, GarbageCollector, PersistConfig};
+use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -178,15 +178,7 @@ where
         D: Send + Sync,
     {
         let batch = self.batch(updates, lower.clone(), upper.clone()).await?;
-        let res = self.append_batch(batch, lower, upper).await;
-        if !matches!(res, Ok(Ok(()))) {
-            // it's possible a client using `append_batch` continually fails if
-            // it's racing with another writer. that's perfectly fine, but we should
-            // be sure to heartbeat our writer explicitly if it's not getting a
-            // chance to renew its lease through `[Self::compare_and_append]`
-            self.maybe_heartbeat_writer().await;
-        }
-        res
+        self.append_batch(batch, lower, upper).await
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -342,6 +334,12 @@ where
                 }
                 Ok(Err(current_upper)) => {
                     let Upper(current_upper) = current_upper;
+
+                    // it's possible a client using `append_batch` continually fails if
+                    // it's racing with another writer. that's perfectly fine, but we should
+                    // be sure to heartbeat our writer explicitly if it's not getting a
+                    // chance to renew its lease through `[Self::compare_and_append]`
+                    self.maybe_heartbeat_writer().await;
 
                     // We tried to to a non-contiguous append, that won't work.
                     if PartialOrder::less_than(&current_upper, &lower) {
