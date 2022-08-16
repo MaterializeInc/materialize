@@ -1407,6 +1407,60 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+// Tests that you can have simultaneous connections on the internal and external ports without
+// crashing
+fn test_internal_ports() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    {
+        let mut external_client = server.connect(postgres::NoTls)?;
+        let mut internal_client = server
+            .pg_config_internal()
+            .user(SYSTEM_USER)
+            .connect(postgres::NoTls)?;
+
+        assert_eq!(
+            1,
+            external_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+        assert_eq!(
+            1,
+            internal_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+    }
+
+    {
+        let mut external_client = server.connect(postgres::NoTls)?;
+        let mut internal_client = server
+            .pg_config_internal()
+            .user(SYSTEM_USER)
+            .connect(postgres::NoTls)?;
+
+        assert_eq!(
+            1,
+            external_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+        assert_eq!(
+            1,
+            internal_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+    }
+
+    Ok(())
+}
+
 /// Group commit will block writes until the current time has advanced. This can make
 /// performing inserts while using deterministic time difficult. This is a helper
 /// method to perform writes and advance the current time.

@@ -309,15 +309,9 @@ async fn auth<B>(
         }
     };
 
-    // Validate that mz_system only logs in via an internal port.
-    let adapter_client = req.extensions().get::<mz_adapter::Client>().unwrap();
-    match (adapter_client.client_type(), user.as_str()) {
-        (mz_adapter::client::ClientType::External, mz_adapter::catalog::SYSTEM_USER) => {
-            return Err(AuthError::InvalidLogin(user))
-        }
-        (mz_adapter::client::ClientType::Internal, _)
-        | (mz_adapter::client::ClientType::External, _) => {}
-    };
+    if mz_adapter::catalog::is_reserved_name(user.as_str()) {
+        return Err(AuthError::InvalidLogin(user));
+    }
 
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.

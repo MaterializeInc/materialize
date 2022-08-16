@@ -40,6 +40,9 @@ pub struct Config {
     /// a valid Frontegg API token as a password to authenticate. Otherwise,
     /// password authentication is disabled.
     pub frontegg: Option<FronteggAuthentication>,
+    /// Whether this is an internal server that permits access to restricted
+    /// system resources.
+    pub internal: bool,
 }
 
 /// Configures a server's TLS encryption and authentication.
@@ -66,6 +69,7 @@ pub struct Server {
     tls: Option<TlsConfig>,
     adapter_client: mz_adapter::Client,
     frontegg: Option<FronteggAuthentication>,
+    internal: bool,
 }
 
 impl Server {
@@ -75,6 +79,7 @@ impl Server {
             tls: config.tls,
             adapter_client: config.adapter_client,
             frontegg: config.frontegg,
+            internal: config.internal,
         }
     }
 
@@ -109,6 +114,7 @@ impl Server {
                         version,
                         params,
                         frontegg: self.frontegg.as_ref(),
+                        internal: self.internal,
                     })
                     .await?;
                     conn.flush().await?;

@@ -250,23 +250,22 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let controller = mz_controller::Controller::new(config.controller).await;
 
     // Initialize adapter.
-    let (adapter_handle, external_adapter_client, internal_adapter_client) =
-        mz_adapter::serve(mz_adapter::Config {
-            dataflow_client: controller,
-            storage: adapter_storage,
-            unsafe_mode: config.unsafe_mode,
-            build_info: &BUILD_INFO,
-            metrics_registry: config.metrics_registry.clone(),
-            now: config.now,
-            secrets_controller: config.secrets_controller,
-            cluster_replica_sizes: config.cluster_replica_sizes,
-            storage_host_sizes: config.storage_host_sizes,
-            default_storage_host_size: config.default_storage_host_size,
-            availability_zones: config.availability_zones,
-            connection_context: config.connection_context,
-            storage_usage_client,
-        })
-        .await?;
+    let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
+        dataflow_client: controller,
+        storage: adapter_storage,
+        unsafe_mode: config.unsafe_mode,
+        build_info: &BUILD_INFO,
+        metrics_registry: config.metrics_registry.clone(),
+        now: config.now,
+        secrets_controller: config.secrets_controller,
+        cluster_replica_sizes: config.cluster_replica_sizes,
+        storage_host_sizes: config.storage_host_sizes,
+        default_storage_host_size: config.default_storage_host_size,
+        availability_zones: config.availability_zones,
+        connection_context: config.connection_context,
+        storage_usage_client,
+    })
+    .await?;
 
     // TODO(benesch): replace both `TCPListenerStream`s below with
     // `<type>_listener.incoming()` if that is
@@ -283,8 +282,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     task::spawn(|| "pgwire_server", {
         let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
-            adapter_client: external_adapter_client.clone(),
+            adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
+            internal: false,
         });
 
         async move {
@@ -303,8 +303,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         task::spawn(|| "internal_pgwire_server", {
             let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 tls: None,
-                adapter_client: internal_adapter_client,
+                adapter_client: adapter_client.clone(),
                 frontegg: None,
+                internal: true,
             });
             let mut incoming = TcpListenerStream::new(internal_sql_listener);
             async move {
@@ -322,7 +323,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             let http_server = http::Server::new(http::Config {
                 tls: http_tls,
                 frontegg: config.frontegg,
-                adapter_client: external_adapter_client,
+                adapter_client,
                 allowed_origin: config.cors_allowed_origin,
             });
             let mut incoming = TcpListenerStream::new(http_listener);
