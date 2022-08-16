@@ -25,13 +25,21 @@ ALTER SYSTEM SET max_tables = 2
 ! CREATE TABLE t3 (a INT)
 contains:Table resource limit of 2 cannot be exceeded. Current amount is 2.
 
+> DROP TABLE t2;
+
+> CREATE TABLE t3 (a INT)
+
+! CREATE TABLE t4 (a INT)
+contains:Table resource limit of 2 cannot be exceeded. Current amount is 2.
+
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_tables = 25
 
 > SHOW max_tables
 25
 
-> CREATE TABLE t3 (a INT)
+> CREATE TABLE t4 (a INT)
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_objects_per_schema = 2
@@ -79,13 +87,21 @@ ALTER SYSTEM SET max_clusters = 3
 ! CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
 contains:Cluster resource limit of 3 cannot be exceeded. Current amount is 3.
 
+> DROP CLUSTER c2 CASCADE;
+
+> CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
+
+! CREATE CLUSTER c4 REPLICAS (r (SIZE '1'));
+contains:Cluster resource limit of 3 cannot be exceeded. Current amount is 3.
+
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_clusters = 4
 
 > SHOW max_clusters
 4
 
-> CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
+> CREATE CLUSTER c4 REPLICAS (r (SIZE '1'));
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_replicas_per_cluster = 1
@@ -228,3 +244,9 @@ ALTER SYSTEM RESET ALL
 
 > SHOW max_schemas_per_database
 1000
+
+> DROP CLUSTER c1 CASCADE
+
+> DROP CLUSTER c3 CASCADE
+
+> DROP CLUSTER c4 CASCADE
