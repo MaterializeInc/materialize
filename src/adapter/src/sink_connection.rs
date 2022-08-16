@@ -325,7 +325,6 @@ async fn build_kafka(
         published_schema_info,
         consistency,
         exactly_once: builder.reuse_topic,
-        transitive_source_dependencies: builder.transitive_source_dependencies,
         fuel: builder.fuel,
     }))
 }

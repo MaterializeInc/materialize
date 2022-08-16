@@ -16,7 +16,9 @@
 > INSERT INTO sink_table VALUES (1);
 
 > CREATE SINK sink_sink FROM sink_table
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-exactly-once-sink-${testdrive.seed}'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+  TOPIC 'testdrive-exactly-once-sink-${testdrive.seed}'
+  WITH (reuse_topic = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
 
 > INSERT INTO sink_table VALUES (2);

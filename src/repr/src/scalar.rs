@@ -22,7 +22,7 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use uuid::Uuid;
 
 use mz_lowertest::MzReflect;
@@ -124,6 +124,44 @@ pub enum Datum<'a> {
     // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
+}
+
+/// This implementation of serialize is designed to be able to print out Datums
+/// in a human-readable way in JSON. This implementation may not suit other
+/// serialization purposes.
+impl<'a> Serialize for Datum<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use Datum::*;
+        match self {
+            False => serializer.serialize_bool(false),
+            True => serializer.serialize_bool(true),
+            Int16(i) => serializer.serialize_i16(*i),
+            Int32(i) => serializer.serialize_i32(*i),
+            Int64(i) => serializer.serialize_i64(*i),
+            UInt8(u) => serializer.serialize_u8(*u),
+            UInt32(u) => serializer.serialize_u32(*u),
+            Float32(f) => serializer.serialize_f32(**f),
+            Float64(f) => serializer.serialize_f64(**f),
+            Date(d) => d.serialize(serializer),
+            Time(t) => t.serialize(serializer),
+            Timestamp(ts) => ts.serialize(serializer),
+            TimestampTz(tstz) => tstz.serialize(serializer),
+            Interval(i) => i.serialize(serializer),
+            Bytes(b) => serializer.serialize_bytes(b),
+            String(s) => serializer.serialize_str(s),
+            Array(a) => a.serialize(serializer),
+            List(l) => l.serialize(serializer),
+            Map(m) => m.serialize(serializer),
+            Numeric(n) => serializer.serialize_str(&n.to_string()),
+            Uuid(u) => u.serialize(serializer),
+            Dummy => serializer.serialize_str("Dummy"),
+            JsonNull => serializer.serialize_str("JsonNull"),
+            Null => serializer.serialize_none(),
+        }
+    }
 }
 
 impl TryFrom<Datum<'_>> for bool {

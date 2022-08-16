@@ -73,3 +73,4 @@ tempfile = "3.2.0"
 
 [build-dependencies]
 prost-build = { version = "0.10.3", features = ["vendored"] }
+serde = { version = "1.0.140", features = ["derive"] }

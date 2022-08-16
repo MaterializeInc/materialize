@@ -35,8 +35,8 @@ def schemas() -> str:
     )
 
 
-class Sink(Check):
-    """Test that repeated inserts of the same record are properly handled"""
+class SinkUpsert(Check):
+    """Basic Check on sinks from an upsert source"""
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -174,6 +174,96 @@ class Sink(Check):
                 > DROP SOURCE sink_view2;
 
                 > DROP SOURCE sink_view3;
+            """
+            )
+        )
+
+
+class SinkTables(Check):
+    """Sink and re-ingest a large transaction from a table source"""
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas()
+            + dedent(
+                """
+                > CREATE TABLE sink_large_transaction_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
+                > CREATE DEFAULT INDEX ON sink_large_transaction_table;
+
+                > INSERT INTO sink_large_transaction_table SELECT generate_series, REPEAT('x', 1024) FROM generate_series(1, 100000);
+
+                > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
+
+                > CREATE SINK sink_large_transaction_sink1 FROM sink_large_transaction_view
+                  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+                  TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}'
+                  WITH (reuse_topic=true)
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+                """
+            )
+        )
+
+    def manipulate(self) -> List[Testdrive]:
+        return [
+            Testdrive(schemas() + dedent(s))
+            for s in [
+                """
+                > UPDATE sink_large_transaction_table SET f2 = REPEAT('y', 1024)
+                """,
+                """
+                > UPDATE sink_large_transaction_table SET f2 = REPEAT('z', 1024)
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                # We check the contents of the sink topics by re-ingesting them.
+                > CREATE SOURCE sink_large_transaction_source
+                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}'
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+                  ENVELOPE NONE
+
+                > CREATE MATERIALIZED VIEW sink_large_transaction_view2
+                  AS
+                  SELECT COUNT(*) AS c1 , COUNT(f1) AS c2, COUNT(DISTINCT f1) AS c3 , MIN(f1), MAX(f1)
+                  FROM (
+                    SELECT (before).f1, (before).f2 FROM sink_large_transaction_source
+                  )
+
+                > CREATE MATERIALIZED VIEW sink_large_transaction_view3
+                  AS
+                  SELECT COUNT(*) AS c1 , COUNT(f1) AS c2, COUNT(DISTINCT f1) AS c3 , MIN(f1), MAX(f1)
+                  FROM (
+                    SELECT (after).f1, (after).f2 FROM sink_large_transaction_source
+                  )
+
+                > CREATE MATERIALIZED VIEW sink_large_transaction_view4
+                  AS
+                  SELECT LEFT(f2, 1), SUM(c)
+                  FROM (
+                    SELECT (after).f2, COUNT(*) AS c FROM sink_large_transaction_source GROUP BY (after).f2
+                    UNION ALL
+                    SELECT (before).f2, -COUNT(*) AS c  FROM sink_large_transaction_source GROUP BY (before).f2
+                  )
+                  GROUP BY f2
+
+                > SELECT * FROM sink_large_transaction_view2
+                500000 200000 100000 0 99999
+
+                > SELECT * FROM sink_large_transaction_view3
+                500000 300000 100000 0 99999
+
+                > SELECT * FROM sink_large_transaction_view4
+                <null> -100000
+                x 0
+                y 0
+                z 100000
+
+                > DROP SOURCE sink_large_transaction_source CASCADE;
             """
             )
         )

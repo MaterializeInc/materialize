@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Collection;
+use differential_dataflow::{AsCollection, Collection};
 use mz_ore::permutations::inverse_argsort;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
@@ -27,12 +27,13 @@ use timely::progress::{Antichain, ChangeBatch};
 use tracing::{error, info};
 
 use mz_expr::{EvalError, MirScalarExpr};
-use mz_ore::result::ResultExt;
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::operator::StreamExt;
 
 use crate::source::DecodeResult;
-use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::errors::{
+    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
+};
 use crate::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
 use crate::types::transforms::LinearOperator;
 
@@ -62,7 +63,7 @@ pub(crate) fn upsert<G>(
     // Full arity, including the key columns
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
-    previous_ok: Collection<G, Row, Diff>,
+    previous: Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     previous_token: Option<Rc<dyn Any>>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -152,19 +153,29 @@ where
         None
     };
 
+    // Break `previous` into:
+    // On the one hand, "Ok" and "Err(UpsertError)", which we know how to deal with, and,
+    // On the other hand, "Err(everything eles)", which we don't.
+    let (previous, mut errs) = previous.ok_err(|(d, t, r)| match d {
+        Ok(row) => Ok((Ok(row), t, r)),
+        Err(DataflowError::EnvelopeError(EnvelopeError::Upsert(err))) => Ok((Err(err), t, r)),
+        Err(err) => Err((err, t, r)),
+    });
+
     let upsert_output = upsert_core(
         stream,
         predicates,
         position_or,
         as_of_frontier,
         upsert_envelope,
-        previous_ok,
+        previous.as_collection(),
         previous_token,
     );
-    let (mut oks, mut errs) = upsert_output.ok_err(|(data, time, diff)| match data {
+    let (mut oks, errs2) = upsert_output.ok_err(|(data, time, diff)| match data {
         Ok(data) => Ok((data, time, diff)),
         Err(err) => Err((err, time, diff)),
     });
+    errs = errs.concat(&errs2);
 
     // If we have temporal predicates do the thing they have to do.
     if let Some(plan) = temporal_plan {
@@ -218,10 +229,10 @@ fn evaluate(
 /// Given a stream of rows and a description of the columns that form their key,
 /// produce a stream of keys and thinned values.
 fn extract_kv<G: Scope>(
-    records: Collection<G, Row, Diff>,
+    records: Collection<G, Result<Row, UpsertError>, Diff>,
     key_indices_sorted: Vec<usize>,
     key_indices: &[usize],
-) -> Collection<G, (Row, Row), Diff> {
+) -> Collection<G, (Result<Row, DecodeError>, Result<Row, DataflowError>), Diff> {
     debug_assert!({
         let mut verified_sorted = key_indices.to_vec();
         verified_sorted.sort_unstable();
@@ -238,33 +249,49 @@ fn extract_kv<G: Scope>(
     let mut key_row_buf = Row::default();
     let mut key_dv = DatumVec::default();
     let key_unsort_permutation = inverse_argsort(key_indices);
-    records.map(move |row| {
-        let mut row_packer = row_buf.packer();
-        let mut key_row_packer = key_row_buf.packer();
-        let values = &mut row.iter();
-        let mut next_idx = 0;
-        let mut key_dv = key_dv.borrow();
-        for &key_idx in key_indices_sorted.iter() {
-            // First, push the datums that are before `key_idx`
-            row_packer.extend(values.take(key_idx - next_idx));
-            // Then, add the key field to whichever buffer we're using for the key
-            let key_datum = values.next().unwrap();
-            if key_cols_are_sorted {
-                key_row_packer.push(key_datum);
-            } else {
-                key_dv.push(key_datum);
-            }
-            next_idx = key_idx + 1;
-        }
-        // Finally, push any columns after the last key index
-        row_packer.extend(values);
+    records.map(move |result| {
+        match result {
+            Ok(row) => {
+                let mut row_packer = row_buf.packer();
+                let mut key_row_packer = key_row_buf.packer();
+                let values = &mut row.iter();
+                let mut next_idx = 0;
+                let mut key_dv = key_dv.borrow();
+                for &key_idx in key_indices_sorted.iter() {
+                    // First, push the datums that are before `key_idx`
+                    row_packer.extend(values.take(key_idx - next_idx));
+                    // Then, add the key field to whichever buffer we're using for the key
+                    let key_datum = values.next().unwrap();
+                    if key_cols_are_sorted {
+                        key_row_packer.push(key_datum);
+                    } else {
+                        key_dv.push(key_datum);
+                    }
+                    next_idx = key_idx + 1;
+                }
+                // Finally, push any columns after the last key index
+                row_packer.extend(values);
 
-        if !key_cols_are_sorted {
-            for &i in key_unsort_permutation.iter() {
-                key_row_packer.push(key_dv[i])
+                if !key_cols_are_sorted {
+                    for &i in key_unsort_permutation.iter() {
+                        key_row_packer.push(key_dv[i])
+                    }
+                }
+                (Ok(key_row_buf.clone()), Ok(row_buf.clone()))
             }
+            Err(UpsertError::KeyDecode(err)) => (
+                Err(err.clone()),
+                Err(DataflowError::EnvelopeError(EnvelopeError::Upsert(
+                    UpsertError::KeyDecode(err),
+                ))),
+            ),
+            Err(UpsertError::Value(UpsertValueError { inner, for_key })) => (
+                Ok(for_key.clone()),
+                Err(DataflowError::EnvelopeError(EnvelopeError::Upsert(
+                    UpsertError::Value(UpsertValueError { inner, for_key }),
+                ))),
+            ),
         }
-        (key_row_buf.clone(), row_buf.clone())
     })
 }
 
@@ -275,7 +302,7 @@ fn upsert_core<G>(
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
     upsert_envelope: UpsertEnvelope,
-    previous_ok: Collection<G, Row, Diff>,
+    previous: Collection<G, Result<Row, UpsertError>, Diff>,
     mut previous_token: Option<Rc<dyn Any>>,
 ) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
 where
@@ -288,7 +315,7 @@ where
     key_indices_sorted.sort_unstable();
 
     let previous_ok = extract_kv(
-        previous_ok,
+        previous,
         key_indices_sorted.clone(),
         &upsert_envelope.key_indices,
     );
@@ -348,14 +375,6 @@ where
                     // This is thought to be fine for our current purposes, but we will need to rethink it once the Persist team has
                     // thought harder about what guarantees/APIs they want to offer relating to bounded-memory consolidation.
                     // Tracked here: https://github.com/MaterializeInc/materialize/issues/14086
-                    //
-                    // TODO[btv] Note that we're only looking at `Ok` records here -- the `Err` entries go directly to the error
-                    // stream during source rendering before we ever get here. That means that if an `Err` made it into the
-                    // persisted state, and we restart before it's retracted, the user will never have a chance to retract it
-                    // and the source will be permanently dead. In my opinion, this should be considered a bug and fixed before GA,
-                    // but fixing it will require a bit of surgery, because right now the type of errors we store in persist don't
-                    // allow us to recover the original key and value separately.
-                    // Tracked here: https://github.com/MaterializeInc/materialize/issues/14084
                     previous_input.for_each(|_cap, data| {
                         data.swap(&mut repop_scratch_vector);
                         initial_values_multiset.extend(
@@ -381,12 +400,12 @@ where
                                 r == 1,
                                 "The upsert state should have exactly one value per key"
                             );
-                            match new_current_values.entry(Ok(k)) {
+                            match new_current_values.entry(k) {
                                 Entry::Occupied(_oe) => {
                                     panic!("The upsert state should have exactly one value per key")
                                 }
                                 Entry::Vacant(ve) => {
-                                    ve.insert(Ok(v));
+                                    ve.insert(v);
                                 }
                             }
                         }
@@ -487,7 +506,7 @@ fn process_new_data(
             .entry(key);
 
         let new_entry = UpsertSourceData {
-            value: new_value.map(ResultExt::err_into).map(|res| {
+            value: new_value.map(|res| {
                 res.map(|(v, diff)| match diff {
                     1 => v,
                     _ => unreachable!(
@@ -495,6 +514,7 @@ fn process_new_data(
                                         with no explicit diff"
                     ),
                 })
+                .map_err(Into::into)
             }),
             position: new_position,
             // upsert sources don't have a column for this, so setting it to
@@ -565,37 +585,40 @@ fn process_pending_values_batch(
     removed_times.push(time.clone());
     for (key, data) in map.drain() {
         // decode key and value, and apply predicates/projections to they combined key/value
-        //
-        // TODO(mcsherry): we could record key decoding errors as the value
-        // which would allow us to recover from key decoding errors by a
-        // later retraction of the key (it will never decode correctly, but
-        // we could produce and then remove the error from the output).
         if let Some(decoded_key) = key {
             let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =
                 match (decoded_key, data.value) {
-                    (Err(key_decode_error), _) => {
-                        (
-                            Err(key_decode_error.clone()),
-                            // `DecodeError` converted to a `DataflowError`
-                            // that we will eventually emit later below
-                            Err(key_decode_error.into()),
-                        )
+                    (Err(key_decode_error), Some(_)) => {
+                        let err = DataflowError::EnvelopeError(EnvelopeError::Upsert(
+                            UpsertError::KeyDecode(key_decode_error.clone()),
+                        ));
+                        (Err(key_decode_error), Err(err))
                     }
+                    (Err(key_decode_error), None) => (Err(key_decode_error), Ok(None)),
                     (Ok(decoded_key), None) => (Ok(decoded_key), Ok(None)),
                     (Ok(decoded_key), Some(value)) => {
-                        let decoded_value = value.and_then(|row| {
-                            build_datum_vec_for_evaluation(
-                                dv,
-                                &upsert_envelope.style,
-                                &row,
-                                &decoded_key,
-                            )
-                            .map_or(Ok(None), |mut datums| {
-                                datums.extend(data.metadata.iter());
-                                evaluate(&datums, &predicates, &position_or, row_packer)
-                                    .map_err(DataflowError::from)
+                        let decoded_value = value
+                            .and_then(|row| {
+                                build_datum_vec_for_evaluation(
+                                    dv,
+                                    &upsert_envelope.style,
+                                    &row,
+                                    &decoded_key,
+                                )
+                                .map_or(Ok(None), |mut datums| {
+                                    datums.extend(data.metadata.iter());
+                                    evaluate(&datums, &predicates, &position_or, row_packer)
+                                        .map_err(Into::into)
+                                })
                             })
-                        });
+                            .map_err(|err| {
+                                DataflowError::EnvelopeError(EnvelopeError::Upsert(
+                                    UpsertError::Value(UpsertValueError {
+                                        inner: Box::new(err),
+                                        for_key: decoded_key.clone(),
+                                    }),
+                                ))
+                            });
                         (Ok(decoded_key), decoded_value)
                     }
                 };
@@ -644,17 +667,8 @@ fn process_pending_values_batch(
             };
 
             if let Some(old_value) = old_value {
-                // Ensure we put the source in a permanently error'd state
-                // than to keep on trucking with wrong results.
-                //
-                // TODO(guswynn): consider changing the key-type of
-                // the `current_values` map to allow us to retract
-                // errors. Currently, the `DecodeError` key type would
-                // retract unrelated errors with the same message.
-                if !decoded_key.is_err() {
-                    // retract old value
-                    session.give((old_value, cap.time().clone(), -1));
-                }
+                // retract old value
+                session.give((old_value, cap.time().clone(), -1));
             }
             if let Some(new_value) = new_value {
                 // give new value
