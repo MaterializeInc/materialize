@@ -58,15 +58,15 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
 Threshold
   Union
     Distinct
-      Project #1
-        Map #0
-          Project #0
+      Project (#1)
+        Map (#0)
+          Project (#0)
             Get materialize.public.t
     Negate
       Distinct
-        Project #1
-          Map #0
-            Project #1
+        Project (#1)
+          Map (#0)
+            Project (#1)
               Get materialize.public.mv
 
 EOF

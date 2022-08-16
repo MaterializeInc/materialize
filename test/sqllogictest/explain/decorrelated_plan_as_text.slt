@@ -68,6 +68,16 @@ Let // { subtree_size: 52 }
           Map (#0) // { subtree_size: 2 }
             Get l7 // { subtree_size: 1 }
   Where
+    l7 =
+      Project (#0, #1) // { subtree_size: 4 }
+        Map (4) // { subtree_size: 3 }
+          Map (3) // { subtree_size: 2 }
+            Get l6 // { subtree_size: 1 }
+    l6 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Constant // { subtree_size: 1 }
+          - ()
     l5 =
       Union // { subtree_size: 11 }
         Project (#2, #3) // { subtree_size: 5 }
@@ -85,26 +95,16 @@ Let // { subtree_size: 52 }
         Map (2) // { subtree_size: 3 }
           Map (1) // { subtree_size: 2 }
             Get l3 // { subtree_size: 1 }
-    l2 =
-      Project (#0, #1) // { subtree_size: 4 }
-        Map (2) // { subtree_size: 3 }
-          Map (1) // { subtree_size: 2 }
-            Get l1 // { subtree_size: 1 }
-    l7 =
-      Project (#0, #1) // { subtree_size: 4 }
-        Map (4) // { subtree_size: 3 }
-          Map (3) // { subtree_size: 2 }
-            Get l6 // { subtree_size: 1 }
     l3 =
       CrossJoin // { subtree_size: 3 }
         Get l0 // { subtree_size: 1 }
         Constant // { subtree_size: 1 }
           - ()
-    l6 =
-      CrossJoin // { subtree_size: 3 }
-        Get l0 // { subtree_size: 1 }
-        Constant // { subtree_size: 1 }
-          - ()
+    l2 =
+      Project (#0, #1) // { subtree_size: 4 }
+        Map (2) // { subtree_size: 3 }
+          Map (1) // { subtree_size: 2 }
+            Get l1 // { subtree_size: 1 }
     l1 =
       CrossJoin // { subtree_size: 3 }
         Get l0 // { subtree_size: 1 }
@@ -464,6 +464,19 @@ Let // { subtree_size: 86 }
             Filter (#1 > 1) // { subtree_size: 3 }
               Reduce group_by=[#0] aggregates=[count(true)] // { subtree_size: 2 }
                 Get l8 // { subtree_size: 1 }
+    l8 =
+      Project (#0, #1) // { subtree_size: 6 }
+        TopK group_by=[#0] limit=1 monotonic=false // { subtree_size: 5 }
+          Filter (#2 = #0) // { subtree_size: 4 }
+            CrossJoin // { subtree_size: 3 }
+              Get l7 // { subtree_size: 1 }
+              Get materialize.public.mv // { subtree_size: 1 }
+    l7 =
+      Distinct group_by=[#1] // { subtree_size: 2 }
+        Get l6 // { subtree_size: 1 }
+    l6 =
+      Distinct group_by=[#0, #1] // { subtree_size: 2 }
+        Get l1 // { subtree_size: 1 }
     l5 =
       Union // { subtree_size: 7 }
         Get l4 // { subtree_size: 1 }
@@ -472,13 +485,6 @@ Let // { subtree_size: 86 }
             Filter (#1 > 1) // { subtree_size: 3 }
               Reduce group_by=[#0] aggregates=[count(true)] // { subtree_size: 2 }
                 Get l4 // { subtree_size: 1 }
-    l8 =
-      Project (#0, #1) // { subtree_size: 6 }
-        TopK group_by=[#0] limit=1 monotonic=false // { subtree_size: 5 }
-          Filter (#2 = #0) // { subtree_size: 4 }
-            CrossJoin // { subtree_size: 3 }
-              Get l7 // { subtree_size: 1 }
-              Get materialize.public.mv // { subtree_size: 1 }
     l4 =
       Project (#0, #1) // { subtree_size: 6 }
         TopK group_by=[#0] limit=1 monotonic=false // { subtree_size: 5 }
@@ -486,15 +492,9 @@ Let // { subtree_size: 86 }
             CrossJoin // { subtree_size: 3 }
               Get l3 // { subtree_size: 1 }
               Get materialize.public.v // { subtree_size: 1 }
-    l7 =
-      Distinct group_by=[#1] // { subtree_size: 2 }
-        Get l6 // { subtree_size: 1 }
     l3 =
       Distinct group_by=[#1] // { subtree_size: 2 }
         Get l2 // { subtree_size: 1 }
-    l6 =
-      Distinct group_by=[#0, #1] // { subtree_size: 2 }
-        Get l1 // { subtree_size: 1 }
     l2 =
       Distinct group_by=[#0, #1] // { subtree_size: 2 }
         Get l1 // { subtree_size: 1 }
