@@ -31,606 +31,544 @@ mode cockroach
 
 # Test constant error.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT 1 / 0
 ----
-Let
-  Project (#0)
-    Map ((1 / 0))
-      Let
-        Get l1
-        Where
-          l1 =
-            CrossJoin
-              Get l0
-              Constant
-                - ()
+Let // { subtree_size: 9 }
+  Project (#0) // { subtree_size: 3 }
+    Map ((1 / 0)) // { subtree_size: 2 }
+      Get l1 // { subtree_size: 1 }
   Where
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Constant // { subtree_size: 1 }
+          - ()
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
-Let
-  Union
-    Project (#2, #3)
-      Project (#0..=#3)
-        Map (#1)
-          Map (#0)
-            Let
-              Get l5
-              Where
-                l5 =
-                  Union
-                    Project (#2, #3)
-                      Project (#0..=#3)
-                        Map (#1)
-                          Map (#0)
-                            Let
-                              Get l2
-                              Where
-                                l2 =
-                                  Project (#0, #1)
-                                    Map (2)
-                                      Map (1)
-                                        Let
-                                          Get l1
-                                          Where
-                                            l1 =
-                                              CrossJoin
-                                                Get l0
-                                                Constant
-                                                  - ()
-                    Project (#2, #3)
-                      Project (#0..=#3)
-                        Map (#1)
-                          Map (#0)
-                            Let
-                              Get l4
-                              Where
-                                l4 =
-                                  Project (#0, #1)
-                                    Map (2)
-                                      Map (1)
-                                        Let
-                                          Get l3
-                                          Where
-                                            l3 =
-                                              CrossJoin
-                                                Get l0
-                                                Constant
-                                                  - ()
-    Project (#2, #3)
-      Project (#0..=#3)
-        Map (#1)
-          Map (#0)
-            Let
-              Get l7
-              Where
-                l7 =
-                  Project (#0, #1)
-                    Map (4)
-                      Map (3)
-                        Let
-                          Get l6
-                          Where
-                            l6 =
-                              CrossJoin
-                                Get l0
-                                Constant
-                                  - ()
+Let // { subtree_size: 52 }
+  Union // { subtree_size: 11 }
+    Project (#2, #3) // { subtree_size: 5 }
+      Project (#0..=#3) // { subtree_size: 4 }
+        Map (#1) // { subtree_size: 3 }
+          Map (#0) // { subtree_size: 2 }
+            Get l5 // { subtree_size: 1 }
+    Project (#2, #3) // { subtree_size: 5 }
+      Project (#0..=#3) // { subtree_size: 4 }
+        Map (#1) // { subtree_size: 3 }
+          Map (#0) // { subtree_size: 2 }
+            Get l7 // { subtree_size: 1 }
   Where
+    l5 =
+      Union // { subtree_size: 11 }
+        Project (#2, #3) // { subtree_size: 5 }
+          Project (#0..=#3) // { subtree_size: 4 }
+            Map (#1) // { subtree_size: 3 }
+              Map (#0) // { subtree_size: 2 }
+                Get l2 // { subtree_size: 1 }
+        Project (#2, #3) // { subtree_size: 5 }
+          Project (#0..=#3) // { subtree_size: 4 }
+            Map (#1) // { subtree_size: 3 }
+              Map (#0) // { subtree_size: 2 }
+                Get l4 // { subtree_size: 1 }
+    l4 =
+      Project (#0, #1) // { subtree_size: 4 }
+        Map (2) // { subtree_size: 3 }
+          Map (1) // { subtree_size: 2 }
+            Get l3 // { subtree_size: 1 }
+    l2 =
+      Project (#0, #1) // { subtree_size: 4 }
+        Map (2) // { subtree_size: 3 }
+          Map (1) // { subtree_size: 2 }
+            Get l1 // { subtree_size: 1 }
+    l7 =
+      Project (#0, #1) // { subtree_size: 4 }
+        Map (4) // { subtree_size: 3 }
+          Map (3) // { subtree_size: 2 }
+            Get l6 // { subtree_size: 1 }
+    l3 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Constant // { subtree_size: 1 }
+          - ()
+    l6 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Constant // { subtree_size: 1 }
+          - ()
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Constant // { subtree_size: 1 }
+          - ()
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test basic linear chains.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
 ----
-Let
-  Project (#2, #3)
-    Project (#0..=#3)
-      Map ((#0 + #1))
-        Map (1)
-          Let
-            Get l1
-            Where
-              l1 =
-                Filter (((#0 > 0) AND (#1 < 0)) AND ((#0 + #1) > 0))
-                  CrossJoin
-                    Get l0
-                    Get materialize.public.mv
+Let // { subtree_size: 12 }
+  Project (#2, #3) // { subtree_size: 5 }
+    Project (#0..=#3) // { subtree_size: 4 }
+      Map ((#0 + #1)) // { subtree_size: 3 }
+        Map (1) // { subtree_size: 2 }
+          Get l1 // { subtree_size: 1 }
   Where
+    l1 =
+      Filter (((#0 > 0) AND (#1 < 0)) AND ((#0 + #1) > 0)) // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l0 // { subtree_size: 1 }
+          Get materialize.public.mv // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test table functions in the select clause (FlatMap).
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT generate_series(a, b) from t
 ----
-Let
-  Project (#2)
-    Let
-      Filter true
-        FlatMap generate_series(#0, #1, 1)
-          Get l1
-      Where
-        l1 =
-          CrossJoin
-            Get l0
-            Get materialize.public.t
+Let // { subtree_size: 10 }
+  Project (#2) // { subtree_size: 4 }
+    Filter true // { subtree_size: 3 }
+      FlatMap generate_series(#0, #1, 1) // { subtree_size: 2 }
+        Get l1 // { subtree_size: 1 }
   Where
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
-Let
-  Threshold
-    Union
-      Distinct group_by=[#0]
-        Project (#1)
-          Project (#0, #1)
-            Map (#0)
-              Let
-                Get l1
-                Where
-                  l1 =
-                    Project (#0)
-                      CrossJoin
-                        Get l0
-                        Get materialize.public.t
-      Negate
-        Distinct group_by=[#0]
-          Project (#1)
-            Project (#0, #1)
-              Map (#0)
-                Let
-                  Get l2
-                  Where
-                    l2 =
-                      Project (#1)
-                        CrossJoin
-                          Get l0
-                          Get materialize.public.mv
+Let // { subtree_size: 25 }
+  Threshold // { subtree_size: 13 }
+    Union // { subtree_size: 12 }
+      Distinct group_by=[#0] // { subtree_size: 5 }
+        Project (#1) // { subtree_size: 4 }
+          Project (#0, #1) // { subtree_size: 3 }
+            Map (#0) // { subtree_size: 2 }
+              Get l1 // { subtree_size: 1 }
+      Negate // { subtree_size: 6 }
+        Distinct group_by=[#0] // { subtree_size: 5 }
+          Project (#1) // { subtree_size: 4 }
+            Project (#0, #1) // { subtree_size: 3 }
+              Map (#0) // { subtree_size: 2 }
+                Get l2 // { subtree_size: 1 }
   Where
+    l2 =
+      Project (#1) // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l0 // { subtree_size: 1 }
+          Get materialize.public.mv // { subtree_size: 1 }
+    l1 =
+      Project (#0) // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l0 // { subtree_size: 1 }
+          Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
-Let
-  Threshold
-    Union
-      Project (#1)
-        Project (#0, #1)
-          Map (#0)
-            Let
-              Get l1
-              Where
-                l1 =
-                  Project (#0)
-                    CrossJoin
-                      Get l0
-                      Get materialize.public.t
-      Negate
-        Project (#1)
-          Project (#0, #1)
-            Map (#0)
-              Let
-                Get l2
-                Where
-                  l2 =
-                    Project (#1)
-                      CrossJoin
-                        Get l0
-                        Get materialize.public.mv
+Let // { subtree_size: 23 }
+  Threshold // { subtree_size: 11 }
+    Union // { subtree_size: 10 }
+      Project (#1) // { subtree_size: 4 }
+        Project (#0, #1) // { subtree_size: 3 }
+          Map (#0) // { subtree_size: 2 }
+            Get l1 // { subtree_size: 1 }
+      Negate // { subtree_size: 5 }
+        Project (#1) // { subtree_size: 4 }
+          Project (#0, #1) // { subtree_size: 3 }
+            Map (#0) // { subtree_size: 2 }
+              Get l2 // { subtree_size: 1 }
   Where
+    l2 =
+      Project (#1) // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l0 // { subtree_size: 1 }
+          Get materialize.public.mv // { subtree_size: 1 }
+    l1 =
+      Project (#0) // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l0 // { subtree_size: 1 }
+          Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test TopK.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 VIEW ov
 ----
-Let
-  Project (#0, #1)
-    TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false
-      CrossJoin
-        Get l0
-        Get materialize.public.t
+Let // { subtree_size: 7 }
+  Project (#0, #1) // { subtree_size: 5 }
+    TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false // { subtree_size: 4 }
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
   Where
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test Finish.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
-  Let
-    CrossJoin
-      Get l0
-      Get materialize.public.t
+  Let // { subtree_size: 5 }
+    CrossJoin // { subtree_size: 3 }
+      Get l0 // { subtree_size: 1 }
+      Get materialize.public.t // { subtree_size: 1 }
     Where
       l0 =
-        Constant
+        Constant // { subtree_size: 1 }
           - ()
 
 EOF
 
 # Test Reduce (global).
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
-Let
-  Project (#2)
-    Project (#0..=#2)
-      Map (abs((#0 - #1)))
-        Let
-          Get l2
-          Where
-            l2 =
-              Let
-                Union
-                  Get l1
-                  CrossJoin
-                    Project ()
-                      CrossJoin
-                        Union
-                          Negate
-                            Distinct
-                              Get l1
-                          Distinct
-                            Get l0
-                        Get l0
-                    Constant
-                      - (null, null)
-                Where
-                  l1 =
-                    Reduce aggregates=[min(#0), max(#0)]
-                      CrossJoin
-                        Get l0
-                        Get materialize.public.t
+Let // { subtree_size: 25 }
+  Project (#2) // { subtree_size: 4 }
+    Project (#0..=#2) // { subtree_size: 3 }
+      Map (abs((#0 - #1))) // { subtree_size: 2 }
+        Get l2 // { subtree_size: 1 }
   Where
+    l2 =
+      Union // { subtree_size: 13 }
+        Get l1 // { subtree_size: 1 }
+        CrossJoin // { subtree_size: 11 }
+          Project () // { subtree_size: 9 }
+            CrossJoin // { subtree_size: 8 }
+              Union // { subtree_size: 6 }
+                Negate // { subtree_size: 3 }
+                  Distinct // { subtree_size: 2 }
+                    Get l1 // { subtree_size: 1 }
+                Distinct // { subtree_size: 2 }
+                  Get l0 // { subtree_size: 1 }
+              Get l0 // { subtree_size: 1 }
+          Constant // { subtree_size: 1 }
+            - (null, null)
+    l1 =
+      Reduce aggregates=[min(#0), max(#0)] // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l0 // { subtree_size: 1 }
+          Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test Reduce (local).
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
-Let
-  Project (#3)
-    Project (#0..=#3)
-      Map (abs((#1 - #2)))
-        Let
-          Get l2
-          Where
-            l2 =
-              Reduce group_by=[#2] aggregates=[min(#0), max(#0)]
-                Project (#0..=#2)
-                  Map (#1)
-                    Let
-                      Get l1
-                      Where
-                        l1 =
-                          CrossJoin
-                            Get l0
-                            Get materialize.public.t
+Let // { subtree_size: 15 }
+  Project (#3) // { subtree_size: 4 }
+    Project (#0..=#3) // { subtree_size: 3 }
+      Map (abs((#1 - #2))) // { subtree_size: 2 }
+        Get l2 // { subtree_size: 1 }
   Where
+    l2 =
+      Reduce group_by=[#2] aggregates=[min(#0), max(#0)] // { subtree_size: 4 }
+        Project (#0..=#2) // { subtree_size: 3 }
+          Map (#1) // { subtree_size: 2 }
+            Get l1 // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test EXISTS subqueries.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
-Let
-  Project (#0, #1)
-    Filter #2
-      Let
-        Project (#0, #1, #3)
-          Join on=(#1 = #2)
-            Get l4
-            Let
-              Union
-                Get l6
-                CrossJoin
-                  Project (#0)
-                    Join on=(#0 = #1)
-                      Union
-                        Negate
-                          Distinct group_by=[#0]
-                            Get l6
-                        Distinct group_by=[#0]
-                          Get l5
-                      Get l5
-                  Constant
-                    - (false)
-              Where
-                l6 =
-                  CrossJoin
-                    Distinct group_by=[#0]
-                      Filter (#0 > #2)
-                        CrossJoin
-                          Get l5
-                          Get materialize.public.mv
-                    Constant
-                      - (true)
-        Where
-          l5 =
-            Distinct group_by=[#1]
-              Get l4
-          l4 =
-            Project (#0, #1)
-              Filter #2
-                Let
-                  Project (#0, #1, #3)
-                    Join on=(#0 = #2)
-                      Get l1
-                      Let
-                        Union
-                          Get l3
-                          CrossJoin
-                            Project (#0)
-                              Join on=(#0 = #1)
-                                Union
-                                  Negate
-                                    Distinct group_by=[#0]
-                                      Get l3
-                                  Distinct group_by=[#0]
-                                    Get l2
-                                Get l2
-                            Constant
-                              - (false)
-                        Where
-                          l3 =
-                            CrossJoin
-                              Distinct group_by=[#0]
-                                Filter (#0 < #1)
-                                  CrossJoin
-                                    Get l2
-                                    Get materialize.public.mv
-                              Constant
-                                - (true)
-                  Where
-                    l2 =
-                      Distinct group_by=[#0]
-                        Get l1
-                    l1 =
-                      Filter (true AND true)
-                        CrossJoin
-                          Get l0
-                          Get materialize.public.t
+Let // { subtree_size: 66 }
+  Project (#0, #1) // { subtree_size: 18 }
+    Filter #2 // { subtree_size: 17 }
+      Project (#0, #1, #3) // { subtree_size: 16 }
+        Join on=(#1 = #2) // { subtree_size: 15 }
+          Get l4 // { subtree_size: 1 }
+          Union // { subtree_size: 13 }
+            Get l6 // { subtree_size: 1 }
+            CrossJoin // { subtree_size: 11 }
+              Project (#0) // { subtree_size: 9 }
+                Join on=(#0 = #1) // { subtree_size: 8 }
+                  Union // { subtree_size: 6 }
+                    Negate // { subtree_size: 3 }
+                      Distinct group_by=[#0] // { subtree_size: 2 }
+                        Get l6 // { subtree_size: 1 }
+                    Distinct group_by=[#0] // { subtree_size: 2 }
+                      Get l5 // { subtree_size: 1 }
+                  Get l5 // { subtree_size: 1 }
+              Constant // { subtree_size: 1 }
+                - (false)
   Where
+    l6 =
+      CrossJoin // { subtree_size: 7 }
+        Distinct group_by=[#0] // { subtree_size: 5 }
+          Filter (#0 > #2) // { subtree_size: 4 }
+            CrossJoin // { subtree_size: 3 }
+              Get l5 // { subtree_size: 1 }
+              Get materialize.public.mv // { subtree_size: 1 }
+        Constant // { subtree_size: 1 }
+          - (true)
+    l5 =
+      Distinct group_by=[#1] // { subtree_size: 2 }
+        Get l4 // { subtree_size: 1 }
+    l4 =
+      Project (#0, #1) // { subtree_size: 18 }
+        Filter #2 // { subtree_size: 17 }
+          Project (#0, #1, #3) // { subtree_size: 16 }
+            Join on=(#0 = #2) // { subtree_size: 15 }
+              Get l1 // { subtree_size: 1 }
+              Union // { subtree_size: 13 }
+                Get l3 // { subtree_size: 1 }
+                CrossJoin // { subtree_size: 11 }
+                  Project (#0) // { subtree_size: 9 }
+                    Join on=(#0 = #1) // { subtree_size: 8 }
+                      Union // { subtree_size: 6 }
+                        Negate // { subtree_size: 3 }
+                          Distinct group_by=[#0] // { subtree_size: 2 }
+                            Get l3 // { subtree_size: 1 }
+                        Distinct group_by=[#0] // { subtree_size: 2 }
+                          Get l2 // { subtree_size: 1 }
+                      Get l2 // { subtree_size: 1 }
+                  Constant // { subtree_size: 1 }
+                    - (false)
+    l3 =
+      CrossJoin // { subtree_size: 7 }
+        Distinct group_by=[#0] // { subtree_size: 5 }
+          Filter (#0 < #1) // { subtree_size: 4 }
+            CrossJoin // { subtree_size: 3 }
+              Get l2 // { subtree_size: 1 }
+              Get materialize.public.mv // { subtree_size: 1 }
+        Constant // { subtree_size: 1 }
+          - (true)
+    l2 =
+      Distinct group_by=[#0] // { subtree_size: 2 }
+        Get l1 // { subtree_size: 1 }
+    l1 =
+      Filter (true AND true) // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l0 // { subtree_size: 1 }
+          Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test SELECT subqueries.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
-Let
-  Project (#2, #3)
-    Project (#0, #1, #8, #9)
-      Map (#7)
-        Map (#4)
-          Let
-            Join on=(eq(#0, #2, #5) AND eq(#1, #3, #6))
-              Get l1
-              Let
-                Project (#0, #1, #3)
-                  Join on=(#1 = #2)
-                    Get l2
-                    Let
-                      Union
-                        Get l5
-                        CrossJoin
-                          Project (#0)
-                            Join on=(#0 = #1)
-                              Union
-                                Negate
-                                  Distinct group_by=[#0]
-                                    Get l5
-                                Distinct group_by=[#0]
-                                  Get l3
-                              Get l3
-                          Constant
-                            - (null)
-                      Where
-                        l5 =
-                          Let
-                            Union
-                              Get l4
-                              Map (error("more than one record produced in subquery"))
-                                Project (#0)
-                                  Filter (#1 > 1)
-                                    Reduce group_by=[#0] aggregates=[count(true)]
-                                      Get l4
-                            Where
-                              l4 =
-                                Project (#0, #1)
-                                  TopK group_by=[#0] limit=1 monotonic=false
-                                    Filter (#2 = #0)
-                                      CrossJoin
-                                        Get l3
-                                        Get materialize.public.v
-                Where
-                  l3 =
-                    Distinct group_by=[#1]
-                      Get l2
-                  l2 =
-                    Distinct group_by=[#0, #1]
-                      Get l1
-              Let
-                Project (#0, #1, #3)
-                  Join on=(#1 = #2)
-                    Get l6
-                    Let
-                      Union
-                        Get l9
-                        CrossJoin
-                          Project (#0)
-                            Join on=(#0 = #1)
-                              Union
-                                Negate
-                                  Distinct group_by=[#0]
-                                    Get l9
-                                Distinct group_by=[#0]
-                                  Get l7
-                              Get l7
-                          Constant
-                            - (null)
-                      Where
-                        l9 =
-                          Let
-                            Union
-                              Get l8
-                              Map (error("more than one record produced in subquery"))
-                                Project (#0)
-                                  Filter (#1 > 1)
-                                    Reduce group_by=[#0] aggregates=[count(true)]
-                                      Get l8
-                            Where
-                              l8 =
-                                Project (#0, #1)
-                                  TopK group_by=[#0] limit=1 monotonic=false
-                                    Filter (#2 = #0)
-                                      CrossJoin
-                                        Get l7
-                                        Get materialize.public.mv
-                Where
-                  l7 =
-                    Distinct group_by=[#1]
-                      Get l6
-                  l6 =
-                    Distinct group_by=[#0, #1]
-                      Get l1
-            Where
-              l1 =
-                CrossJoin
-                  Get l0
-                  Get materialize.public.t
+Let // { subtree_size: 86 }
+  Project (#2, #3) // { subtree_size: 38 }
+    Project (#0, #1, #8, #9) // { subtree_size: 37 }
+      Map (#7) // { subtree_size: 36 }
+        Map (#4) // { subtree_size: 35 }
+          Join on=(eq(#0, #2, #5) AND eq(#1, #3, #6)) // { subtree_size: 34 }
+            Get l1 // { subtree_size: 1 }
+            Project (#0, #1, #3) // { subtree_size: 16 }
+              Join on=(#1 = #2) // { subtree_size: 15 }
+                Get l2 // { subtree_size: 1 }
+                Union // { subtree_size: 13 }
+                  Get l5 // { subtree_size: 1 }
+                  CrossJoin // { subtree_size: 11 }
+                    Project (#0) // { subtree_size: 9 }
+                      Join on=(#0 = #1) // { subtree_size: 8 }
+                        Union // { subtree_size: 6 }
+                          Negate // { subtree_size: 3 }
+                            Distinct group_by=[#0] // { subtree_size: 2 }
+                              Get l5 // { subtree_size: 1 }
+                          Distinct group_by=[#0] // { subtree_size: 2 }
+                            Get l3 // { subtree_size: 1 }
+                        Get l3 // { subtree_size: 1 }
+                    Constant // { subtree_size: 1 }
+                      - (null)
+            Project (#0, #1, #3) // { subtree_size: 16 }
+              Join on=(#1 = #2) // { subtree_size: 15 }
+                Get l6 // { subtree_size: 1 }
+                Union // { subtree_size: 13 }
+                  Get l9 // { subtree_size: 1 }
+                  CrossJoin // { subtree_size: 11 }
+                    Project (#0) // { subtree_size: 9 }
+                      Join on=(#0 = #1) // { subtree_size: 8 }
+                        Union // { subtree_size: 6 }
+                          Negate // { subtree_size: 3 }
+                            Distinct group_by=[#0] // { subtree_size: 2 }
+                              Get l9 // { subtree_size: 1 }
+                          Distinct group_by=[#0] // { subtree_size: 2 }
+                            Get l7 // { subtree_size: 1 }
+                        Get l7 // { subtree_size: 1 }
+                    Constant // { subtree_size: 1 }
+                      - (null)
   Where
+    l9 =
+      Union // { subtree_size: 7 }
+        Get l8 // { subtree_size: 1 }
+        Map (error("more than one record produced in subquery")) // { subtree_size: 5 }
+          Project (#0) // { subtree_size: 4 }
+            Filter (#1 > 1) // { subtree_size: 3 }
+              Reduce group_by=[#0] aggregates=[count(true)] // { subtree_size: 2 }
+                Get l8 // { subtree_size: 1 }
+    l5 =
+      Union // { subtree_size: 7 }
+        Get l4 // { subtree_size: 1 }
+        Map (error("more than one record produced in subquery")) // { subtree_size: 5 }
+          Project (#0) // { subtree_size: 4 }
+            Filter (#1 > 1) // { subtree_size: 3 }
+              Reduce group_by=[#0] aggregates=[count(true)] // { subtree_size: 2 }
+                Get l4 // { subtree_size: 1 }
+    l8 =
+      Project (#0, #1) // { subtree_size: 6 }
+        TopK group_by=[#0] limit=1 monotonic=false // { subtree_size: 5 }
+          Filter (#2 = #0) // { subtree_size: 4 }
+            CrossJoin // { subtree_size: 3 }
+              Get l7 // { subtree_size: 1 }
+              Get materialize.public.mv // { subtree_size: 1 }
+    l4 =
+      Project (#0, #1) // { subtree_size: 6 }
+        TopK group_by=[#0] limit=1 monotonic=false // { subtree_size: 5 }
+          Filter (#2 = #0) // { subtree_size: 4 }
+            CrossJoin // { subtree_size: 3 }
+              Get l3 // { subtree_size: 1 }
+              Get materialize.public.v // { subtree_size: 1 }
+    l7 =
+      Distinct group_by=[#1] // { subtree_size: 2 }
+        Get l6 // { subtree_size: 1 }
+    l3 =
+      Distinct group_by=[#1] // { subtree_size: 2 }
+        Get l2 // { subtree_size: 1 }
+    l6 =
+      Distinct group_by=[#0, #1] // { subtree_size: 2 }
+        Get l1 // { subtree_size: 1 }
+    l2 =
+      Distinct group_by=[#0, #1] // { subtree_size: 2 }
+        Get l1 // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test CrossJoin derived from a comma join without a predicate.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT t1.a, t2.a FROM t as t1, t as t2
 ----
-Let
-  Project (#0, #2)
-    Let
-      Get l3
-      Where
-        l3 =
-          Filter true
-            Project (#0..=#3)
-              CrossJoin
-                Get l1
-                Get l2
-        l2 =
-          CrossJoin
-            Get l0
-            Get materialize.public.t
-        l1 =
-          CrossJoin
-            Get l0
-            Get materialize.public.t
+Let // { subtree_size: 18 }
+  Project (#0, #2) // { subtree_size: 2 }
+    Get l3 // { subtree_size: 1 }
   Where
+    l3 =
+      Filter true // { subtree_size: 5 }
+        Project (#0..=#3) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l1 // { subtree_size: 1 }
+            Get l2 // { subtree_size: 1 }
+    l2 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test CrossJoin derived from an INNER JOIN with a trivial ON clause.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
 ----
-Let
-  Project (#0, #2)
-    Let
-      Get l3
-      Where
-        l3 =
-          Filter true
-            Project (#0..=#3)
-              CrossJoin
-                Get l1
-                Get l2
-        l2 =
-          CrossJoin
-            Get l0
-            Get materialize.public.t
-        l1 =
-          CrossJoin
-            Get l0
-            Get materialize.public.t
+Let // { subtree_size: 18 }
+  Project (#0, #2) // { subtree_size: 2 }
+    Get l3 // { subtree_size: 1 }
   Where
+    l3 =
+      Filter true // { subtree_size: 5 }
+        Project (#0..=#3) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l1 // { subtree_size: 1 }
+            Get l2 // { subtree_size: 1 }
+    l2 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test InnerJoin (comma syntax).
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT t1.a, t2.a
 FROM
   t as t1,
@@ -638,208 +576,188 @@ FROM
   t as t3
 WHERE t1.b = t2.b AND t2.b = t3.b
 ----
-Let
-  Project (#0, #2)
-    Filter ((#1 = #3) AND (#3 = #5))
-      Let
-        Get l6
-        Where
-          l6 =
-            Filter true
-              Project (#0..=#5)
-                CrossJoin
-                  Get l4
-                  Get l5
-          l5 =
-            CrossJoin
-              Get l0
-              Get materialize.public.t
-          l4 =
-            Let
-              Get l3
-              Where
-                l3 =
-                  Filter true
-                    Project (#0..=#3)
-                      CrossJoin
-                        Get l1
-                        Get l2
-                l2 =
-                  CrossJoin
-                    Get l0
-                    Get materialize.public.t
-                l1 =
-                  CrossJoin
-                    Get l0
-                    Get materialize.public.t
+Let // { subtree_size: 31 }
+  Project (#0, #2) // { subtree_size: 3 }
+    Filter ((#1 = #3) AND (#3 = #5)) // { subtree_size: 2 }
+      Get l6 // { subtree_size: 1 }
   Where
+    l6 =
+      Filter true // { subtree_size: 5 }
+        Project (#0..=#5) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l4 // { subtree_size: 1 }
+            Get l5 // { subtree_size: 1 }
+    l5 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
+    l4 =
+      Get l3 // { subtree_size: 1 }
+    l3 =
+      Filter true // { subtree_size: 5 }
+        Project (#0..=#3) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l1 // { subtree_size: 1 }
+            Get l2 // { subtree_size: 1 }
+    l2 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test InnerJoin (ON syntax).
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT t1.a, t2.a
 FROM t as t1
 INNER JOIN t as t2 ON t1.b = t2.b
 INNER JOIN t as t3 ON t2.b = t3.b
 ----
-Let
-  Project (#0, #2)
-    Let
-      Get l6
-      Where
-        l6 =
-          Filter (#3 = #5)
-            Project (#0..=#5)
-              CrossJoin
-                Get l4
-                Get l5
-        l5 =
-          CrossJoin
-            Get l0
-            Get materialize.public.t
-        l4 =
-          Let
-            Get l3
-            Where
-              l3 =
-                Filter (#1 = #3)
-                  Project (#0..=#3)
-                    CrossJoin
-                      Get l1
-                      Get l2
-              l2 =
-                CrossJoin
-                  Get l0
-                  Get materialize.public.t
-              l1 =
-                CrossJoin
-                  Get l0
-                  Get materialize.public.t
+Let // { subtree_size: 30 }
+  Project (#0, #2) // { subtree_size: 2 }
+    Get l6 // { subtree_size: 1 }
   Where
+    l6 =
+      Filter (#3 = #5) // { subtree_size: 5 }
+        Project (#0..=#5) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l4 // { subtree_size: 1 }
+            Get l5 // { subtree_size: 1 }
+    l5 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
+    l4 =
+      Get l3 // { subtree_size: 1 }
+    l3 =
+      Filter (#1 = #3) // { subtree_size: 5 }
+        Project (#0..=#3) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l1 // { subtree_size: 1 }
+            Get l2 // { subtree_size: 1 }
+    l2 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test InnerJoin (ON syntax).
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT t1.a, t2.a
 FROM t as t1
 LEFT JOIN t as t2 ON t1.b = t2.b
 RIGHT JOIN t as t3 ON t2.b = t3.b
 ----
-Let
-  Project (#0, #2)
-    Let
-      Union
-        Project (#2..=#5, #0, #1)
-          Map (null, null, null, null)
-            Union
-              Negate
-                Project (#0, #1)
-                  Join on=(#1 = #2)
-                    Get l6
-                    Get l8
-              Get l6
-        Get l7
-      Where
-        l8 =
-          Distinct group_by=[#0]
-            Project (#3)
-              Get l7
-        l7 =
-          Filter (#3 = #5)
-            Project (#0..=#5)
-              CrossJoin
-                Get l5
-                Get l6
-        l6 =
-          CrossJoin
-            Get l0
-            Get materialize.public.t
-        l5 =
-          Let
-            Union
-              Map (null, null)
-                Union
-                  Negate
-                    Project (#0, #1)
-                      Join on=(#1 = #2)
-                        Get l1
-                        Get l4
-                  Get l1
-              Get l3
-            Where
-              l4 =
-                Distinct group_by=[#0]
-                  Project (#1)
-                    Get l3
-              l3 =
-                Filter (#1 = #3)
-                  Project (#0..=#3)
-                    CrossJoin
-                      Get l1
-                      Get l2
-              l2 =
-                CrossJoin
-                  Get l0
-                  Get materialize.public.t
-              l1 =
-                CrossJoin
-                  Get l0
-                  Get materialize.public.t
+Let // { subtree_size: 57 }
+  Project (#0, #2) // { subtree_size: 12 }
+    Union // { subtree_size: 11 }
+      Project (#2..=#5, #0, #1) // { subtree_size: 9 }
+        Map (null, null, null, null) // { subtree_size: 8 }
+          Union // { subtree_size: 7 }
+            Negate // { subtree_size: 5 }
+              Project (#0, #1) // { subtree_size: 4 }
+                Join on=(#1 = #2) // { subtree_size: 3 }
+                  Get l6 // { subtree_size: 1 }
+                  Get l8 // { subtree_size: 1 }
+            Get l6 // { subtree_size: 1 }
+      Get l7 // { subtree_size: 1 }
   Where
+    l8 =
+      Distinct group_by=[#0] // { subtree_size: 3 }
+        Project (#3) // { subtree_size: 2 }
+          Get l7 // { subtree_size: 1 }
+    l7 =
+      Filter (#3 = #5) // { subtree_size: 5 }
+        Project (#0..=#5) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l5 // { subtree_size: 1 }
+            Get l6 // { subtree_size: 1 }
+    l6 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
+    l5 =
+      Union // { subtree_size: 10 }
+        Map (null, null) // { subtree_size: 8 }
+          Union // { subtree_size: 7 }
+            Negate // { subtree_size: 5 }
+              Project (#0, #1) // { subtree_size: 4 }
+                Join on=(#1 = #2) // { subtree_size: 3 }
+                  Get l1 // { subtree_size: 1 }
+                  Get l4 // { subtree_size: 1 }
+            Get l1 // { subtree_size: 1 }
+        Get l3 // { subtree_size: 1 }
+    l4 =
+      Distinct group_by=[#0] // { subtree_size: 3 }
+        Project (#1) // { subtree_size: 2 }
+          Get l3 // { subtree_size: 1 }
+    l3 =
+      Filter (#1 = #3) // { subtree_size: 5 }
+        Project (#0..=#3) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l1 // { subtree_size: 1 }
+            Get l2 // { subtree_size: 1 }
+    l2 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
 
 # Test a single CTE.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
 ----
-Let
-  Project (#2)
-    Let
-      Project (#0..=#2)
-        Map ((#0 + #1))
-          Let
-            Get l4
-            Where
-              l4 =
-                Let
-                  Get l3
-                  Where
-                    l3 =
-                      Filter true
-                        Project (#0, #1)
-                          CrossJoin
-                            Get l2
-                            Get l2
-      Where
-        l2 =
-          Project (#2)
-            Project (#0..=#2)
-              Map ((#0 * #1))
-                Let
-                  Get l1
-                  Where
-                    l1 =
-                      CrossJoin
-                        Get l0
-                        Get materialize.public.t
+Let // { subtree_size: 23 }
+  Project (#2) // { subtree_size: 4 }
+    Project (#0..=#2) // { subtree_size: 3 }
+      Map ((#0 + #1)) // { subtree_size: 2 }
+        Get l4 // { subtree_size: 1 }
   Where
+    l4 =
+      Get l3 // { subtree_size: 1 }
+    l3 =
+      Filter true // { subtree_size: 5 }
+        Project (#0, #1) // { subtree_size: 4 }
+          CrossJoin // { subtree_size: 3 }
+            Get l2 // { subtree_size: 1 }
+            Get l2 // { subtree_size: 1 }
+    l2 =
+      Project (#2) // { subtree_size: 4 }
+        Project (#0..=#2) // { subtree_size: 3 }
+          Map ((#0 * #1)) // { subtree_size: 2 }
+            Get l1 // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
@@ -847,7 +765,7 @@ EOF
 # Test multiple CTEs: a case where we cannot pull the let statement up through
 # the join because the local l0 is correlated against the lhs of the enclosing join.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT
   *
 FROM
@@ -867,87 +785,73 @@ FROM
     SELECT * FROM r4 WHERE r4.m != r1.a OR (r4.m IS NOT NULL AND r1.a IS NULL)
   ) as r5;
 ----
-Let
-  Filter true
-    Let
-      Project (#0..=#2, #4)
-        Join on=(#0 = #3)
-          Get l5
-          Let
-            Filter ((#1 != #0) OR ((#1) IS NOT NULL AND (#0) IS NULL))
-              Get l8
-            Where
-              l8 =
-                Let
-                  Union
-                    Get l7
-                    CrossJoin
-                      Project (#0)
-                        Join on=(#0 = #1)
-                          Union
-                            Negate
-                              Distinct group_by=[#0]
-                                Get l7
-                            Distinct group_by=[#0]
-                              Get l6
-                          Get l6
-                      Constant
-                        - (null)
-                  Where
-                    l7 =
-                      Reduce group_by=[#0] aggregates=[max((#0 * #1))]
-                        CrossJoin
-                          Get l6
-                          Get materialize.public.t
-      Where
-        l6 =
-          Distinct group_by=[#0]
-            Get l5
+Let // { subtree_size: 63 }
+  Filter true // { subtree_size: 6 }
+    Project (#0..=#2, #4) // { subtree_size: 5 }
+      Join on=(#0 = #3) // { subtree_size: 4 }
+        Get l5 // { subtree_size: 1 }
+        Filter ((#1 != #0) OR ((#1) IS NOT NULL AND (#0) IS NULL)) // { subtree_size: 2 }
+          Get l8 // { subtree_size: 1 }
   Where
+    l8 =
+      Union // { subtree_size: 13 }
+        Get l7 // { subtree_size: 1 }
+        CrossJoin // { subtree_size: 11 }
+          Project (#0) // { subtree_size: 9 }
+            Join on=(#0 = #1) // { subtree_size: 8 }
+              Union // { subtree_size: 6 }
+                Negate // { subtree_size: 3 }
+                  Distinct group_by=[#0] // { subtree_size: 2 }
+                    Get l7 // { subtree_size: 1 }
+                Distinct group_by=[#0] // { subtree_size: 2 }
+                  Get l6 // { subtree_size: 1 }
+              Get l6 // { subtree_size: 1 }
+          Constant // { subtree_size: 1 }
+            - (null)
+    l7 =
+      Reduce group_by=[#0] aggregates=[max((#0 * #1))] // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l6 // { subtree_size: 1 }
+          Get materialize.public.t // { subtree_size: 1 }
+    l6 =
+      Distinct group_by=[#0] // { subtree_size: 2 }
+        Get l5 // { subtree_size: 1 }
     l5 =
-      Let
-        Filter true
-          Let
-            Project (#0, #1, #3)
-              Join on=(#0 = #2)
-                Get l1
-                Let
-                  Filter (#1 != #0)
-                    Get l4
-                  Where
-                    l4 =
-                      Let
-                        Union
-                          Get l3
-                          CrossJoin
-                            Project (#0)
-                              Join on=(#0 = #1)
-                                Union
-                                  Negate
-                                    Distinct group_by=[#0]
-                                      Get l3
-                                  Distinct group_by=[#0]
-                                    Get l2
-                                Get l2
-                            Constant
-                              - (null)
-                        Where
-                          l3 =
-                            Reduce group_by=[#0] aggregates=[max((#0 * #1))]
-                              CrossJoin
-                                Get l2
-                                Get materialize.public.t
-            Where
-              l2 =
-                Distinct group_by=[#0]
-                  Get l1
-        Where
-          l1 =
-            CrossJoin
-              Get l0
-              Get materialize.public.t
+      Filter true // { subtree_size: 6 }
+        Project (#0, #1, #3) // { subtree_size: 5 }
+          Join on=(#0 = #2) // { subtree_size: 4 }
+            Get l1 // { subtree_size: 1 }
+            Filter (#1 != #0) // { subtree_size: 2 }
+              Get l4 // { subtree_size: 1 }
+    l4 =
+      Union // { subtree_size: 13 }
+        Get l3 // { subtree_size: 1 }
+        CrossJoin // { subtree_size: 11 }
+          Project (#0) // { subtree_size: 9 }
+            Join on=(#0 = #1) // { subtree_size: 8 }
+              Union // { subtree_size: 6 }
+                Negate // { subtree_size: 3 }
+                  Distinct group_by=[#0] // { subtree_size: 2 }
+                    Get l3 // { subtree_size: 1 }
+                Distinct group_by=[#0] // { subtree_size: 2 }
+                  Get l2 // { subtree_size: 1 }
+              Get l2 // { subtree_size: 1 }
+          Constant // { subtree_size: 1 }
+            - (null)
+    l3 =
+      Reduce group_by=[#0] aggregates=[max((#0 * #1))] // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l2 // { subtree_size: 1 }
+          Get materialize.public.t // { subtree_size: 1 }
+    l2 =
+      Distinct group_by=[#0] // { subtree_size: 2 }
+        Get l1 // { subtree_size: 1 }
+    l1 =
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF
@@ -956,7 +860,7 @@ EOF
 # through the join because the local l0 is correlated against the lhs of
 # the enclosing join.
 query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
+EXPLAIN DECORRELATED PLAN WITH(subtree_size) AS TEXT FOR
 SELECT
   *
 FROM
@@ -979,83 +883,71 @@ FROM
     WHERE a != r1.a
   ) as r5;
 ----
-Let
-  Filter true
-    Let
-      Project (#0, #1, #3, #4)
-        Join on=(#0 = #2)
-          Get l1
-          Let
-            Filter (#0 != #0)
-              Filter true
-                Let
-                  Project (#0, #1, #4)
-                    Join on=(#1 = #2 AND #0 = #3)
-                      Get l4
-                      Let
-                        Filter ((#1 = #0) AND (#2 > 5))
-                          Get l7
-                        Where
-                          l7 =
-                            Let
-                              Union
-                                Get l6
-                                CrossJoin
-                                  Project (#0, #1)
-                                    Join on=(#0 = #2 AND #1 = #3)
-                                      Union
-                                        Negate
-                                          Distinct group_by=[#0, #1]
-                                            Get l6
-                                        Distinct group_by=[#0, #1]
-                                          Get l5
-                                      Get l5
-                                  Constant
-                                    - (null)
-                              Where
-                                l6 =
-                                  Reduce group_by=[#0, #1] aggregates=[max((#1 * #2))]
-                                    CrossJoin
-                                      Get l5
-                                      Get materialize.public.t
-                  Where
-                    l5 =
-                      Distinct group_by=[#1, #0]
-                        Get l4
-            Where
-              l4 =
-                Let
-                  Union
-                    Get l3
-                    CrossJoin
-                      Project (#0)
-                        Join on=(#0 = #1)
-                          Union
-                            Negate
-                              Distinct group_by=[#0]
-                                Get l3
-                            Distinct group_by=[#0]
-                              Get l2
-                          Get l2
-                      Constant
-                        - (null)
-                  Where
-                    l3 =
-                      Reduce group_by=[#0] aggregates=[max((#0 * #1))]
-                        CrossJoin
-                          Get l2
-                          Get materialize.public.t
-      Where
-        l2 =
-          Distinct group_by=[#0]
-            Get l1
+Let // { subtree_size: 61 }
+  Filter true // { subtree_size: 11 }
+    Project (#0, #1, #3, #4) // { subtree_size: 10 }
+      Join on=(#0 = #2) // { subtree_size: 9 }
+        Get l1 // { subtree_size: 1 }
+        Filter (#0 != #0) // { subtree_size: 7 }
+          Filter true // { subtree_size: 6 }
+            Project (#0, #1, #4) // { subtree_size: 5 }
+              Join on=(#1 = #2 AND #0 = #3) // { subtree_size: 4 }
+                Get l4 // { subtree_size: 1 }
+                Filter ((#1 = #0) AND (#2 > 5)) // { subtree_size: 2 }
+                  Get l7 // { subtree_size: 1 }
   Where
+    l7 =
+      Union // { subtree_size: 13 }
+        Get l6 // { subtree_size: 1 }
+        CrossJoin // { subtree_size: 11 }
+          Project (#0, #1) // { subtree_size: 9 }
+            Join on=(#0 = #2 AND #1 = #3) // { subtree_size: 8 }
+              Union // { subtree_size: 6 }
+                Negate // { subtree_size: 3 }
+                  Distinct group_by=[#0, #1] // { subtree_size: 2 }
+                    Get l6 // { subtree_size: 1 }
+                Distinct group_by=[#0, #1] // { subtree_size: 2 }
+                  Get l5 // { subtree_size: 1 }
+              Get l5 // { subtree_size: 1 }
+          Constant // { subtree_size: 1 }
+            - (null)
+    l6 =
+      Reduce group_by=[#0, #1] aggregates=[max((#1 * #2))] // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l5 // { subtree_size: 1 }
+          Get materialize.public.t // { subtree_size: 1 }
+    l5 =
+      Distinct group_by=[#1, #0] // { subtree_size: 2 }
+        Get l4 // { subtree_size: 1 }
+    l4 =
+      Union // { subtree_size: 13 }
+        Get l3 // { subtree_size: 1 }
+        CrossJoin // { subtree_size: 11 }
+          Project (#0) // { subtree_size: 9 }
+            Join on=(#0 = #1) // { subtree_size: 8 }
+              Union // { subtree_size: 6 }
+                Negate // { subtree_size: 3 }
+                  Distinct group_by=[#0] // { subtree_size: 2 }
+                    Get l3 // { subtree_size: 1 }
+                Distinct group_by=[#0] // { subtree_size: 2 }
+                  Get l2 // { subtree_size: 1 }
+              Get l2 // { subtree_size: 1 }
+          Constant // { subtree_size: 1 }
+            - (null)
+    l3 =
+      Reduce group_by=[#0] aggregates=[max((#0 * #1))] // { subtree_size: 4 }
+        CrossJoin // { subtree_size: 3 }
+          Get l2 // { subtree_size: 1 }
+          Get materialize.public.t // { subtree_size: 1 }
+    l2 =
+      Distinct group_by=[#0] // { subtree_size: 2 }
+        Get l1 // { subtree_size: 1 }
     l1 =
-      CrossJoin
-        Get l0
-        Get materialize.public.t
+      CrossJoin // { subtree_size: 3 }
+        Get l0 // { subtree_size: 1 }
+        Get materialize.public.t // { subtree_size: 1 }
     l0 =
-      Constant
+      Constant // { subtree_size: 1 }
         - ()
 
 EOF

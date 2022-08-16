@@ -12,6 +12,7 @@
 pub(crate) mod text;
 
 use std::collections::HashMap;
+use std::iter::once;
 
 use mz_compute_client::command::DataflowDescription;
 use mz_expr::{
@@ -41,6 +42,12 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
+        // unless raw plans are explicitly requested
+        // normalize the representation of nested Let bindings
+        if !config.raw_plans {
+            normalize_lets_in_tree(self.0)?;
+        }
+
         let plan = AnnotatedPlan::try_from(config, self.0)?;
         Ok(ExplainSinglePlan { context, plan })
     }
@@ -67,6 +74,12 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
             .iter_mut()
             .rev()
             .map(|build_desc| {
+                // unless raw plans are explicitly requested
+                // normalize the representation of nested Let bindings
+                if !config.raw_plans {
+                    normalize_lets_in_tree(build_desc.plan.as_inner_mut())?;
+                }
+
                 let id = context
                     .humanizer
                     .humanize_id(build_desc.id)
@@ -98,7 +111,6 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
         })
     }
 }
-
 struct ExplainAttributes<'a> {
     config: &'a ExplainConfig,
     non_negative: NonNegative,
@@ -174,6 +186,337 @@ impl<'a> Visitor<MirRelationExpr> for ExplainAttributes<'a> {
         if self.config.non_negative {
             self.non_negative.derive(expr, &self.subtree_size);
             self.non_negative.handle_env_tasks();
+        }
+    }
+}
+
+/// Normalizes occurrences of nested `Let` bindings in the entire tree
+/// rooted at the given `expr`.
+///
+/// This just applies [`normalize_lets_at_root`] bottom up once.
+fn normalize_lets_in_tree<'a>(expr: &'a mut MirRelationExpr) -> Result<(), RecursionLimitError> {
+    expr.visit_mut_post(&mut |expr: &mut MirRelationExpr| {
+        let mut normalized_root = normalize_lets_at_root(expr.take_dangerous());
+        std::mem::swap(expr, &mut normalized_root);
+    })
+}
+
+/// Normalizes occurrences of nested `Let` bindings at the root of the
+/// given `expr`.
+///
+/// The general form of a `Let` binding is
+/// ```text
+/// let
+///   ${id} = ${value}
+/// in
+///   ${body}
+/// ```
+/// Let ⟦-〛 denote a translated expression.
+/// There are three basic cases for implementing ⟦-〛 that depend
+/// on the surrounding context of a matched `Let` binding.
+///
+/// ## Case 1: An inner `Let` appearing in a relational operator `op`
+/// Rewrite
+/// ```text
+/// 〚 op(
+///     ${prefix},
+///     let
+///       ${id} = ${value}
+///     in
+///       ${body},
+///     ${suffix}
+///   ) 〛
+/// ```
+/// as
+/// ```text
+/// let
+///   ${id} = ${value}
+/// in
+///   ⟦ op(${prefix}, ${body}, ${suffix}) 〛
+/// ```
+///
+/// ## Case 2: An inner `Let` appearing in the `value` of an enclosing outer `Let`
+/// Rewrite
+/// ```text
+/// 〚 let
+///     ${id_1} =
+///       let
+///         ${id_2} = ${value_2}
+///       in
+///         ${body_2}
+///   in
+///     ${body_1} 〛
+/// ```
+/// as
+/// ```text
+/// let
+///   ${id_2} = ${value_2}
+/// in
+///   〚 let
+///       ${id_1} = ${body_2}
+///     in
+///       ${body_1} 〛
+/// ```
+///
+/// ## Case 3: An inner `Let` appearing in the `body` of an enclosing outer `Let`
+/// ```text
+/// 〚 let
+///     ${id_1} = ${value_1}
+///   in
+///     let
+///       ${lhs_2} = ${value_2}
+///     in
+///       ${body_2} 〛
+/// ```
+/// Do nothing.
+fn normalize_lets_at_root(expr: MirRelationExpr) -> MirRelationExpr {
+    use MirRelationExpr::*;
+    match expr {
+        // base cases: do nothing
+        result @ Constant { rows: _, typ: _ } => result,
+        result @ Get { id: _, typ: _ } => result,
+        Let {
+            id: id_1,
+            value: value_1,
+            body: body_1,
+        } => {
+            // Case 2
+            if let Let {
+                id: id_2,
+                value: value_2,
+                body: body_2,
+            } = *value_1
+            {
+                Let {
+                    id: id_2,
+                    value: value_2,
+                    body: Box::new(normalize_lets_at_root(Let {
+                        id: id_1,
+                        value: body_2,
+                        body: body_1,
+                    })),
+                }
+            } else {
+                Let {
+                    id: id_1,
+                    value: value_1,
+                    body: body_1,
+                }
+            }
+        }
+        // Case 1
+        Project { input, outputs } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(Project {
+                        input: body,
+                        outputs,
+                    })),
+                }
+            } else {
+                Project { input, outputs }
+            }
+        }
+        Map { input, scalars } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(Map {
+                        input: body,
+                        scalars,
+                    })),
+                }
+            } else {
+                Map { input, scalars }
+            }
+        }
+        FlatMap { input, func, exprs } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(FlatMap {
+                        input: body,
+                        func,
+                        exprs,
+                    })),
+                }
+            } else {
+                FlatMap { input, func, exprs }
+            }
+        }
+        Filter { input, predicates } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(Filter {
+                        input: body,
+                        predicates,
+                    })),
+                }
+            } else {
+                Filter { input, predicates }
+            }
+        }
+        Join {
+            inputs,
+            equivalences,
+            implementation,
+        } => {
+            let mut bindings = vec![];
+
+            let inputs = inputs
+                .into_iter()
+                .map(|input| {
+                    if let Let { id, value, body } = input {
+                        bindings.push((id, value));
+                        *body
+                    } else {
+                        input
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let mut result = Join {
+                inputs,
+                equivalences,
+                implementation,
+            };
+            for (id, value) in bindings.drain(..).rev() {
+                result = Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(result)),
+                };
+            }
+
+            result
+        }
+        Reduce {
+            input,
+            group_key,
+            aggregates,
+            monotonic,
+            expected_group_size,
+        } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(Reduce {
+                        input: body,
+                        group_key,
+                        aggregates,
+                        monotonic,
+                        expected_group_size,
+                    })),
+                }
+            } else {
+                Reduce {
+                    input,
+                    group_key,
+                    aggregates,
+                    monotonic,
+                    expected_group_size,
+                }
+            }
+        }
+        TopK {
+            input,
+            group_key,
+            order_key,
+            limit,
+            offset,
+            monotonic,
+        } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(TopK {
+                        input: body,
+                        group_key,
+                        order_key,
+                        limit,
+                        offset,
+                        monotonic,
+                    })),
+                }
+            } else {
+                TopK {
+                    input,
+                    group_key,
+                    order_key,
+                    limit,
+                    offset,
+                    monotonic,
+                }
+            }
+        }
+        Negate { input } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(Negate { input: body })),
+                }
+            } else {
+                Negate { input }
+            }
+        }
+        Threshold { input } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(Threshold { input: body })),
+                }
+            } else {
+                Threshold { input }
+            }
+        }
+        Union { base, inputs } => {
+            let mut bindings = vec![];
+
+            let mut inputs = once(*base)
+                .chain(inputs)
+                .into_iter()
+                .map(|input| {
+                    if let Let { id, value, body } = input {
+                        bindings.push((id, value));
+                        *body
+                    } else {
+                        input
+                    }
+                })
+                .collect::<Vec<_>>();
+            let base = Box::new(inputs.remove(0));
+
+            let mut result = Union { base, inputs };
+            for (id, value) in bindings.drain(..).rev() {
+                result = Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(result)),
+                };
+            }
+
+            result
+        }
+        ArrangeBy { input, keys } => {
+            if let Let { id, value, body } = *input {
+                Let {
+                    id,
+                    value,
+                    body: Box::new(normalize_lets_at_root(ArrangeBy { input: body, keys })),
+                }
+            } else {
+                ArrangeBy { input, keys }
+            }
         }
     }
 }
