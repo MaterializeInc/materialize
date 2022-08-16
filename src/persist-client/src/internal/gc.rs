@@ -16,9 +16,9 @@ use std::time::Instant;
 use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, Instrument, Span};
 
-use crate::r#impl::machine::retry_external;
-use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::state::ProtoStateRollup;
+use crate::internal::machine::retry_external;
+use crate::internal::paths::PartialBlobKey;
+use crate::internal::state::ProtoStateRollup;
 use crate::{Metrics, ShardId};
 
 #[derive(Debug, Clone)]

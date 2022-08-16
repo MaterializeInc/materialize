@@ -16,7 +16,7 @@ use crate::{retry_external, Metrics, ShardId};
 use mz_persist::location::{Blob, ExternalError};
 
 use crate::cache::PersistClientCache;
-use crate::r#impl::paths::{BlobKey, BlobKeyPrefix};
+use crate::internal::paths::{BlobKey, BlobKeyPrefix};
 
 /// Provides access to storage usage metrics for a specific Blob
 #[derive(Clone, Debug)]
@@ -36,7 +36,7 @@ impl StorageUsageClient {
         Ok(StorageUsageClient { blob, metrics })
     }
 
-    /// Returns the size (in bytes) of all blobs owned by a given [crate::ShardId]
+    /// Returns the size (in bytes) of all blobs owned by a given [ShardId]
     pub async fn shard_size(&self, shard_id: &ShardId) -> u64 {
         retry_external(
             &self.metrics.retries.external.storage_usage_shard_size,
@@ -45,11 +45,11 @@ impl StorageUsageClient {
         .await
     }
 
-    /// Returns a map of [crate::ShardId] to its size (in bytes) stored in persist,
-    /// as well as the total bytes stored for unattributable data (the map key is None)
-    /// where the shard id is unknown. This latter count _should_ always be 0, so it
-    /// being nonzero indicates either persist wrote an invalid blob key, or another
-    /// process is storing data under the same path (!)
+    /// Returns a map of [ShardId] to its size (in bytes) stored in persist, as
+    /// well as the total bytes stored for unattributable data (the map key is
+    /// None) where the shard id is unknown. This latter count _should_ always
+    /// be 0, so it being nonzero indicates either persist wrote an invalid blob
+    /// key, or another process is storing data under the same path (!)
     pub async fn shard_sizes(&self) -> HashMap<Option<ShardId>, u64> {
         retry_external(
             &self.metrics.retries.external.storage_usage_shard_size,
@@ -74,7 +74,8 @@ impl StorageUsageClient {
         .await
     }
 
-    /// Returns the size (in bytes) of a subset of blobs specified by [crate::impl::paths::BlobKeyPrefix]
+    /// Returns the size (in bytes) of a subset of blobs specified by
+    /// [BlobKeyPrefix]
     ///
     /// Can be safely called within retry_external to ensure it succeeds
     async fn size(&self, prefix: BlobKeyPrefix<'_>) -> Result<u64, ExternalError> {

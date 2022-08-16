@@ -28,16 +28,16 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::{CodecMismatch, InvalidUsage};
-use crate::r#impl::compact::CompactReq;
-use crate::r#impl::gc::GcReq;
-use crate::r#impl::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
-use crate::r#impl::metrics::{
+use crate::internal::compact::CompactReq;
+use crate::internal::gc::GcReq;
+use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
+use crate::internal::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics, ShardMetrics,
 };
-use crate::r#impl::state::{
+use crate::internal::state::{
     HollowBatch, ReaderState, Since, State, StateCollections, Upper, WriterState,
 };
-use crate::r#impl::trace::FueledMergeRes;
+use crate::internal::trace::FueledMergeRes;
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -772,9 +772,9 @@ mod tests {
 
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
-    use crate::r#impl::compact::{CompactReq, Compactor};
-    use crate::r#impl::paths::PartialBlobKey;
-    use crate::r#impl::state::ProtoStateRollup;
+    use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::paths::PartialBlobKey;
+    use crate::internal::state::ProtoStateRollup;
     use crate::read::{fetch_batch_part, Listen, ListenEvent};
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistConfig, ShardId};

@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package mz_persist_client.impl.state;
+package mz_persist_client.internal.state;
 
 message ProtoU64Antichain {
     repeated int64 elements = 1;
