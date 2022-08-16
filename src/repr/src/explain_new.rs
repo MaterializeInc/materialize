@@ -356,20 +356,48 @@ impl From<RecursionLimitError> for ExplainError {
     }
 }
 
-/// A configuration supported by all [`Explain`] implementations
-/// derived in this crate.
+/// A set of options for controlling the output of [`Explain`] implementations.
 #[derive(Debug)]
 pub struct ExplainConfig {
-    pub types: bool,
+    /// Render implemented MIR `Join` nodes in a way which reflects the implementation.
+    pub join_impls: bool,
+    /// Show the `non_negative` in the explanation if it is supported by the backing IR.
+    pub non_negative: bool,
+    /// Don't normalize plans before explaining them.
+    pub raw_plans: bool,
+    /// Disable virtual syntax in the explanation.
+    pub raw_syntax: bool,
+    /// Show the `subtree_size` attribute in the explanation if it is supported by the backing IR.
+    pub subtree_size: bool,
+    /// Print optimization timings (currently unsupported).
     pub timing: bool,
+    /// Show the `type` attribute in the explanation (currently unsupported by all IRs).
+    pub types: bool,
+}
+
+impl ExplainConfig {
+    pub fn requires_attributes(&self) -> bool {
+        self.subtree_size || self.non_negative
+    }
 }
 
 impl TryFrom<HashSet<String>> for ExplainConfig {
     type Error = anyhow::Error;
     fn try_from(mut config_flags: HashSet<String>) -> Result<Self, anyhow::Error> {
+        // If `WITH(raw)` is specified, ensure that the config will be as
+        // representative for the original plan as possible.
+        if config_flags.remove("raw") {
+            config_flags.insert("raw_plans".into());
+            config_flags.insert("raw_syntax".into());
+        }
         let result = ExplainConfig {
-            types: config_flags.remove("types"),
+            join_impls: config_flags.remove("join_impls"),
+            non_negative: config_flags.remove("non_negative"),
+            raw_plans: config_flags.remove("raw_plans"),
+            raw_syntax: config_flags.remove("raw_syntax"),
+            subtree_size: config_flags.remove("subtree_size"),
             timing: config_flags.remove("timing"),
+            types: config_flags.remove("types"),
         };
         if config_flags.is_empty() {
             Ok(result)
@@ -730,6 +758,11 @@ mod tests {
 
         let format = ExplainFormat::Text;
         let config = ExplainConfig {
+            join_impls: false,
+            non_negative: false,
+            raw_plans: false,
+            raw_syntax: false,
+            subtree_size: false,
             timing: true,
             types: false,
         };

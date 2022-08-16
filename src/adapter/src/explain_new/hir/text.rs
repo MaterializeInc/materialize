@@ -28,8 +28,20 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
     ) -> fmt::Result {
-        use HirRelationExpr::*;
+        if ctx.config.raw_syntax {
+            self.fmt_raw_syntax(f, ctx)
+        } else {
+            self.fmt_virtual_syntax(f, ctx)
+        }
+    }
+}
 
+impl<'a> Displayable<'a, HirRelationExpr> {
+    fn fmt_virtual_syntax(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
+    ) -> fmt::Result {
         if let Some(Except { all, lhs, rhs }) = Hir::un_except(&self.0) {
             if all {
                 writeln!(f, "{}ExceptAll", ctx.indent)?;
@@ -40,174 +52,182 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
                 Displayable::from(lhs).fmt_text(f, ctx)?;
                 Displayable::from(rhs).fmt_text(f, ctx)?;
                 Ok(())
-            })?
+            })?;
         } else {
-            match &self.0 {
-                Constant { rows, .. } => {
-                    fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)?;
-                }
-                Let {
+            // fallback to raw syntax formatting as a last resort
+            self.fmt_raw_syntax(f, ctx)?;
+        }
+
+        Ok(())
+    }
+
+    fn fmt_raw_syntax(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
+    ) -> fmt::Result {
+        use HirRelationExpr::*;
+        match &self.0 {
+            Constant { rows, .. } => {
+                fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)?;
+            }
+            Let {
+                name: _,
+                id,
+                value,
+                body,
+            } => {
+                let mut bindings = vec![(id, value.as_ref())];
+                let mut head = body.as_ref();
+
+                // Render Let-blocks nested in the body an outer Let-block in one step
+                // with a flattened list of bindings
+                while let Let {
                     name: _,
                     id,
                     value,
                     body,
-                } => {
-                    let mut bindings = vec![(id, value.as_ref())];
-                    let mut head = body.as_ref();
+                } = head
+                {
+                    bindings.push((id, value.as_ref()));
+                    head = body.as_ref();
+                }
 
-                    // Render Let-blocks nested in the body an outer Let-block in one step
-                    // with a flattened list of bindings
-                    while let Let {
-                        name: _,
-                        id,
-                        value,
-                        body,
-                    } = head
-                    {
-                        bindings.push((id, value.as_ref()));
-                        head = body.as_ref();
-                    }
-
-                    // The body comes first in the text output format in order to
-                    // align with the format convention the dataflow is rendered
-                    // top to bottom
-                    writeln!(f, "{}Let", ctx.indent)?;
+                // The body comes first in the text output format in order to
+                // align with the format convention the dataflow is rendered
+                // top to bottom
+                writeln!(f, "{}Let", ctx.indent)?;
+                ctx.indented(|ctx| {
+                    Displayable::from(head).fmt_text(f, ctx)?;
+                    writeln!(f, "{}Where", ctx.indent)?;
                     ctx.indented(|ctx| {
-                        Displayable::from(head).fmt_text(f, ctx)?;
-                        writeln!(f, "{}Where", ctx.indent)?;
-                        ctx.indented(|ctx| {
-                            for (id, value) in bindings.iter().rev() {
-                                // TODO: print the name and not the id
-                                writeln!(f, "{}{} =", ctx.indent, *id)?;
-                                ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
-                            }
-                            Ok(())
-                        })?;
-                        Ok(())
-                    })?;
-                }
-                Get { id, .. } => match id {
-                    Id::Local(id) => {
-                        // TODO: resolve local id to the human-readable name from the context
-                        writeln!(f, "{}Get {}", ctx.indent, id)?;
-                    }
-                    Id::Global(id) => {
-                        let humanized_id = ctx.humanizer.humanize_id(*id).ok_or(fmt::Error)?;
-                        writeln!(f, "{}Get {}", ctx.indent, humanized_id)?;
-                    }
-                },
-                Project { outputs, input } => {
-                    let outputs = Indices(outputs);
-                    writeln!(f, "{}Project ({})", ctx.indent, outputs)?;
-                    ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
-                }
-                Map { scalars, input } => {
-                    let scalars = separated_text(", ", scalars.iter().map(Displayable::from));
-                    writeln!(f, "{}Map ({})", ctx.indent, scalars)?;
-                    ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
-                }
-                CallTable { func, exprs } => {
-                    let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
-                    writeln!(f, "{}CallTable {}({})", ctx.indent, func, exprs)?;
-                }
-                Filter { predicates, input } => {
-                    let predicates =
-                        separated_text(" AND ", predicates.iter().map(Displayable::from));
-                    writeln!(f, "{}Filter {}", ctx.indent, predicates)?;
-                    ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
-                }
-                Join {
-                    left,
-                    right,
-                    on,
-                    kind,
-                } => {
-                    if on.is_literal_true() && kind == &JoinKind::Inner {
-                        write!(f, "{}CrossJoin", ctx.indent)?;
-                    } else {
-                        write!(f, "{}{}Join ", ctx.indent, kind)?;
-                        Displayable::from(on).fmt_text(f, &mut ())?;
-                    }
-                    writeln!(f)?;
-                    ctx.indented(|ctx| {
-                        Displayable::from(left.as_ref()).fmt_text(f, ctx)?;
-                        Displayable::from(right.as_ref()).fmt_text(f, ctx)?;
-                        Ok(())
-                    })?;
-                }
-                Reduce {
-                    group_key,
-                    aggregates,
-                    expected_group_size,
-                    input,
-                } => {
-                    write!(f, "{}Reduce", ctx.indent)?;
-                    if group_key.len() > 0 {
-                        let group_key = Indices(group_key);
-                        write!(f, " group_by=[{}]", group_key)?;
-                    }
-                    if aggregates.len() > 0 {
-                        let aggregates =
-                            separated_text(", ", aggregates.iter().map(Displayable::from));
-                        write!(f, " aggregates=[{}]", aggregates)?;
-                    }
-                    if let Some(expected_group_size) = expected_group_size {
-                        write!(f, " exp_group_size={}", expected_group_size)?;
-                    }
-                    writeln!(f)?;
-                    ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
-                }
-                Distinct { input } => {
-                    writeln!(f, "{}Distinct", ctx.indent)?;
-                    ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
-                }
-                TopK {
-                    group_key,
-                    order_key,
-                    limit,
-                    offset,
-                    input,
-                } => {
-                    write!(f, "{}TopK", ctx.indent)?;
-                    if group_key.len() > 0 {
-                        let group_by = Indices(group_key);
-                        write!(f, " group_by=[{}]", group_by)?;
-                    }
-                    if order_key.len() > 0 {
-                        let order_by = separated(", ", order_key);
-                        write!(f, " order_by=[{}]", order_by)?;
-                    }
-                    if let Some(limit) = limit {
-                        write!(f, " limit={}", limit)?;
-                    }
-                    if offset > &0 {
-                        write!(f, " offset={}", offset)?
-                    }
-                    writeln!(f)?;
-                    ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
-                }
-                Negate { input } => {
-                    writeln!(f, "{}Negate", ctx.indent)?;
-                    ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
-                }
-                Threshold { input } => {
-                    writeln!(f, "{}Threshold", ctx.indent)?;
-                    ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
-                }
-                Union { base, inputs } => {
-                    writeln!(f, "{}Union", ctx.indent)?;
-                    ctx.indented(|ctx| {
-                        Displayable::from(base.as_ref()).fmt_text(f, ctx)?;
-                        for input in inputs.iter() {
-                            Displayable::from(input).fmt_text(f, ctx)?;
+                        for (id, value) in bindings.iter().rev() {
+                            // TODO: print the name and not the id
+                            writeln!(f, "{}{} =", ctx.indent, *id)?;
+                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
                         }
                         Ok(())
                     })?;
+                    Ok(())
+                })?;
+            }
+            Get { id, .. } => match id {
+                Id::Local(id) => {
+                    // TODO: resolve local id to the human-readable name from the context
+                    writeln!(f, "{}Get {}", ctx.indent, id)?;
                 }
+                Id::Global(id) => {
+                    let humanized_id = ctx.humanizer.humanize_id(*id).ok_or(fmt::Error)?;
+                    writeln!(f, "{}Get {}", ctx.indent, humanized_id)?;
+                }
+            },
+            Project { outputs, input } => {
+                let outputs = Indices(outputs);
+                writeln!(f, "{}Project ({})", ctx.indent, outputs)?;
+                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+            }
+            Map { scalars, input } => {
+                let scalars = separated_text(", ", scalars.iter().map(Displayable::from));
+                writeln!(f, "{}Map ({})", ctx.indent, scalars)?;
+                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+            }
+            CallTable { func, exprs } => {
+                let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                writeln!(f, "{}CallTable {}({})", ctx.indent, func, exprs)?;
+            }
+            Filter { predicates, input } => {
+                let predicates = separated_text(" AND ", predicates.iter().map(Displayable::from));
+                writeln!(f, "{}Filter {}", ctx.indent, predicates)?;
+                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+            }
+            Join {
+                left,
+                right,
+                on,
+                kind,
+            } => {
+                if on.is_literal_true() && kind == &JoinKind::Inner {
+                    write!(f, "{}CrossJoin", ctx.indent)?;
+                } else {
+                    write!(f, "{}{}Join ", ctx.indent, kind)?;
+                    Displayable::from(on).fmt_text(f, &mut ())?;
+                }
+                writeln!(f)?;
+                ctx.indented(|ctx| {
+                    Displayable::from(left.as_ref()).fmt_text(f, ctx)?;
+                    Displayable::from(right.as_ref()).fmt_text(f, ctx)?;
+                    Ok(())
+                })?;
+            }
+            Reduce {
+                group_key,
+                aggregates,
+                expected_group_size,
+                input,
+            } => {
+                write!(f, "{}Reduce", ctx.indent)?;
+                if group_key.len() > 0 {
+                    let group_key = Indices(group_key);
+                    write!(f, " group_by=[{}]", group_key)?;
+                }
+                if aggregates.len() > 0 {
+                    let aggregates = separated_text(", ", aggregates.iter().map(Displayable::from));
+                    write!(f, " aggregates=[{}]", aggregates)?;
+                }
+                if let Some(expected_group_size) = expected_group_size {
+                    write!(f, " exp_group_size={}", expected_group_size)?;
+                }
+                writeln!(f)?;
+                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+            }
+            Distinct { input } => {
+                writeln!(f, "{}Distinct", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+            }
+            TopK {
+                group_key,
+                order_key,
+                limit,
+                offset,
+                input,
+            } => {
+                write!(f, "{}TopK", ctx.indent)?;
+                if group_key.len() > 0 {
+                    let group_by = Indices(group_key);
+                    write!(f, " group_by=[{}]", group_by)?;
+                }
+                if order_key.len() > 0 {
+                    let order_by = separated(", ", order_key);
+                    write!(f, " order_by=[{}]", order_by)?;
+                }
+                if let Some(limit) = limit {
+                    write!(f, " limit={}", limit)?;
+                }
+                if offset > &0 {
+                    write!(f, " offset={}", offset)?
+                }
+                writeln!(f)?;
+                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+            }
+            Negate { input } => {
+                writeln!(f, "{}Negate", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+            }
+            Threshold { input } => {
+                writeln!(f, "{}Threshold", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+            }
+            Union { base, inputs } => {
+                writeln!(f, "{}Union", ctx.indent)?;
+                ctx.indented(|ctx| {
+                    Displayable::from(base.as_ref()).fmt_text(f, ctx)?;
+                    for input in inputs.iter() {
+                        Displayable::from(input).fmt_text(f, ctx)?;
+                    }
+                    Ok(())
+                })?;
             }
         }
-
-        // TODO: relation types
 
         Ok(())
     }

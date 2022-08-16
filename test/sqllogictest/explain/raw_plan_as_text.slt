@@ -52,6 +52,27 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
+EXPLAIN RAW PLAN WITH (raw_syntax) AS TEXT FOR
+SELECT a FROM t EXCEPT SELECT b FROM mv
+----
+Threshold
+  Union
+    Distinct
+      Project #1
+        Map #0
+          Project #0
+            Get materialize.public.t
+    Negate
+      Distinct
+        Project #1
+          Map #0
+            Project #1
+              Get materialize.public.mv
+
+EOF
+
+# Test virtual syntax (EXCEPT).
+query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
@@ -67,7 +88,7 @@ Except
 
 EOF
 
-# Test Threshold, Union, Distinct, Negate.
+# Test virtual syntax (EXCEPT ALL).
 query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
@@ -249,7 +270,7 @@ Project (#0, #2)
 
 EOF
 
-# Test a single CTEs.
+# Test a single CTE.
 query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT x.v + 5 FROM x
