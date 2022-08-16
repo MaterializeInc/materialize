@@ -1408,7 +1408,7 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
 }
 
 // Test that trying to alter an invalid system param returns an error.
-// This really belongs in the resource_limits.td testdrive, but testdrive
+// This really belongs in the resource-limits.td testdrive, but testdrive
 // doesn't allow you to specify a connection and expect a failure which is
 // needed for this test.
 #[test]
