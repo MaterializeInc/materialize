@@ -54,6 +54,10 @@ class MaterializeConnectionManager(PostgresConnectionManager):
                 f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
             )
 
+        creds = connection.credentials
+        if creds.cluster:
+            cursor.execute("SET cluster = '{}'".format(creds.cluster))
+
         return connection
 
     # Disable transactions. Materialize transactions do not support arbitrary
