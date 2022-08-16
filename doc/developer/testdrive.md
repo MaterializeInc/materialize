@@ -478,6 +478,8 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `testdrive.materialize-sql-addr`
 
+#### `testdrive.materialize-sql-addr-internal`
+
 #### `testdrive.materialize-user`
 
 ## Accessing the environment variables

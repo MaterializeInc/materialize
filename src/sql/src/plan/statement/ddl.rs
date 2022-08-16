@@ -3683,10 +3683,9 @@ pub fn describe_alter_system_set(
 }
 
 pub fn plan_alter_system_set(
-    scx: &StatementContext,
+    _: &StatementContext,
     AlterSystemSetStatement { name, value }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("ALTER SYSTEM")?;
     let name = name.to_string();
     if matches!(&value, SetVariableValue::Literal(value) if matches!(value, mz_sql_parser::ast::Value::Null))
     {
@@ -3703,10 +3702,9 @@ pub fn describe_alter_system_reset(
 }
 
 pub fn plan_alter_system_reset(
-    scx: &StatementContext,
+    _: &StatementContext,
     AlterSystemResetStatement { name }: AlterSystemResetStatement,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("ALTER SYSTEM")?;
     let name = name.to_string();
     Ok(Plan::AlterSystemReset(AlterSystemResetPlan { name }))
 }
@@ -3719,9 +3717,8 @@ pub fn describe_alter_system_reset_all(
 }
 
 pub fn plan_alter_system_reset_all(
-    scx: &StatementContext,
+    _: &StatementContext,
     _: AlterSystemResetAllStatement,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("ALTER SYSTEM")?;
     Ok(Plan::AlterSystemResetAll(AlterSystemResetAllPlan {}))
 }

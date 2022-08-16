@@ -118,6 +118,13 @@ struct Args {
         value_name = "URL"
     )]
     materialize_url: tokio_postgres::Config,
+    /// materialize SQL internal connection string.
+    #[clap(
+        long,
+        default_value = "postgres://materialize@localhost:6877",
+        value_name = "INTERNAL_URL"
+    )]
+    materialize_url_internal: tokio_postgres::Config,
     /// The port on which Materialize is listening for untrusted HTTP connections.
     ///
     /// The hostname is taken from `materialize_url`.
@@ -304,6 +311,7 @@ async fn main() {
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,
+        materialize_pgconfig_internal: args.materialize_url_internal,
         materialize_http_port: args.materialize_http_port,
         materialize_params: args.materialize_param,
         materialize_catalog_postgres_stash: args.validate_postgres_stash,

@@ -1407,9 +1407,9 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
 // Tests that you can have simultaneous connections on the internal and external ports without
 // crashing
+#[test]
 fn test_internal_ports() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -1457,6 +1457,39 @@ fn test_internal_ports() -> Result<(), Box<dyn Error>> {
                 .get::<_, i32>(0)
         );
     }
+
+    Ok(())
+}
+
+// Test that trying to alter an invalid system param returns an error.
+// This really belongs in the resource-limits.td testdrive, but testdrive
+// doesn't allow you to specify a connection and expect a failure which is
+// needed for this test.
+#[test]
+fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(SYSTEM_USER)
+        .connect(postgres::NoTls)?;
+
+    mz_client.batch_execute(&"ALTER SYSTEM SET max_tables TO 2")?;
+    let res = mz_client
+        .batch_execute(&"ALTER SYSTEM SET invalid_param TO 42")
+        .unwrap_err();
+    assert!(res
+        .to_string()
+        .contains("unrecognized configuration parameter \"invalid_param\""));
+    let res = mz_client
+        .batch_execute(&"ALTER SYSTEM RESET invalid_param")
+        .unwrap_err();
+    assert!(res
+        .to_string()
+        .contains("unrecognized configuration parameter \"invalid_param\""));
 
     Ok(())
 }
