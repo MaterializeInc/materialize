@@ -1262,6 +1262,20 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             for n in computeds:
                 c.up(n.name)
 
+            # Increase resource limits
+            c.testdrive(
+                dedent(
+                    """
+                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
+
+                    """
+                    f"""
+                    $ postgres-execute connection=mz_system
+                    ALTER SYSTEM SET max_clusters = {args.clusters * 10}
+                    ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
+                    """
+                )
+            )
             # Create some input data
             c.testdrive(
                 dedent(
