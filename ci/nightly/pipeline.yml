@@ -36,6 +36,12 @@ steps:
           - { value: zippy-kafka-sources }
           - { value: zippy-user-tables }
           - { value: secrets }
+          - { value: checks-oneatatime-drop-create-default-replica }
+          - { value: checks-oneatatime-restart-computed }
+          - { value: checks-oneatatime-restart-entire-mz }
+          - { value: checks-oneatatime-restart-environmentd-storaged }
+          - { value: checks-oneatatime-kill-storaged }
+          - { value: checks-oneatatime-restart-postgres-backend }
           - { value: unused-deps }
         multiple: true
         required: false
@@ -261,56 +267,6 @@ steps:
           composition: zippy
           args: [--scenario=UserTables, --actions=1000]
 
-  - id: checks-drop-create-default-replica
-    label: "Checks + DROP/CREATE replica"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=DropCreateDefaultReplica]
-
-  - id: checks-restart-computed
-    label: "Checks + restart computed"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartComputed]
-
-  - id: checks-restart-entire-mz
-    label: "Checks + restart of the entire Mz"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEntireMz]
-
-  - id: checks-restart-environmentd-storaged
-    label: "Checks + restart of environmentd & storaged"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEnvironmentdStoraged]
-
-  - id: checks-kill-storaged
-    label: "Checks + kill storaged"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=KillStoraged]
-
   - id: secrets
     label: "Secrets"
     timeout_in_minutes: 30
@@ -319,6 +275,66 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: secrets
+
+  - id: checks-oneatatime-drop-create-default-replica
+    label: "Checks oneatatime + DROP/CREATE replica"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=DropCreateDefaultReplica, --execution-mode=oneatatime]
+
+  - id: checks-oneatatime-restart-computed
+    label: "Checks oneatatime + restart computed"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartComputed, --execution-mode=oneatatime]
+
+  - id: checks-oneatatime-restart-entire-mz
+    label: "Checks oneatatime + restart of the entire Mz"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEntireMz, --execution-mode=oneatatime]
+
+  - id: checks-oneatatime-restart-environmentd-storaged
+    label: "Checks oneatatime + restart of environmentd & storaged"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEnvironmentdStoraged, --execution-mode=oneatatime]
+
+  - id: checks-oneatatime-kill-storaged
+    label: "Checks oneatatime + kill storaged"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=KillStoraged, --execution-mode=oneatatime]
+
+  - id: checks-oneatatime-restart-postgres-backend
+    label: "Checks oneatatime + restart Postgres backend"
+    timeout_in_minutes: 300
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartPostgresBackend, --execution-mode=oneatatime]
 
   - id: persistence-failpoints
     label: Persistence failpoints
