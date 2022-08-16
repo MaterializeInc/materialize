@@ -250,9 +250,7 @@ class KafkaRecordsEnvelopeNone(Generator):
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        print(
-            f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeNone.COUNT * 10};"
-        )
+        print(f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeNone.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeNone.COUNT * 10};"
