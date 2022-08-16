@@ -69,7 +69,7 @@ class Materialized(Service):
                 "STORAGED_LOG_FILTER",
                 "COMPUTED_LOG_FILTER",
                 "INTERNAL_SQL_LISTEN_ADDR=0.0.0.0:6877",
-                "INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878"
+                "INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
             ]
 
         if forward_aws_credentials:

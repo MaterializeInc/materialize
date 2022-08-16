@@ -234,14 +234,15 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.sql("DROP CLUSTER default CASCADE")
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
 
+
 def workflow_test_resource_limits(c: Composition) -> None:
     """Test resource limits in Materialize."""
 
     c.down(destroy_volumes=True)
 
     with c.override(
-            Testdrive(),
-            Materialized(),
+        Testdrive(),
+        Materialized(),
     ):
         c.up("materialized")
         c.wait_for_materialized()
