@@ -281,7 +281,6 @@ impl MetricsVecs {
                 storage_usage_shard_size: self.retry_metrics("storage_usage::shard_size"),
             },
             append_batch: self.retry_metrics("append_batch"),
-            fetch_batch_part: self.retry_metrics("fetch_batch_part"),
             idempotent_cmd: self.retry_metrics("idempotent_cmd"),
             next_listen_batch: self.retry_metrics("next_listen_batch"),
             snapshot: self.retry_metrics("snapshot"),
@@ -433,7 +432,6 @@ pub struct RetriesMetrics {
     pub(crate) external: RetryExternal,
 
     pub(crate) append_batch: RetryMetrics,
-    pub(crate) fetch_batch_part: RetryMetrics,
     pub(crate) idempotent_cmd: RetryMetrics,
     pub(crate) next_listen_batch: RetryMetrics,
     pub(crate) snapshot: RetryMetrics,
