@@ -4229,7 +4229,7 @@ impl<S: Append> Catalog<S> {
     }
 }
 
-fn is_reserved_name(name: &str) -> bool {
+pub fn is_reserved_name(name: &str) -> bool {
     BUILTIN_ROLE_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
