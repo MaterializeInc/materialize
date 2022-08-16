@@ -58,7 +58,7 @@ impl Generator for Auction {
         ]
     }
 
-    fn by_seed(&self, now: NowFn, seed: Option<u64>) -> Box<dyn Iterator<Item = Row>> {
+    fn by_seed(&self, now: NowFn, seed: Option<u64>) -> Box<dyn Iterator<Item = Vec<Row>>> {
         let mut pending = VecDeque::new();
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
         let mut counter = 0;
@@ -77,7 +77,7 @@ impl Generator for Auction {
                             now + chrono::Duration::seconds(10),
                         )), // end time
                     ]);
-                    pending.push_back(auction);
+                    pending.push_back(vec![auction]);
                     const MAX_BIDS: i64 = 10;
                     for i in 0..rng.gen_range(2..MAX_BIDS) {
                         let mut bid = Row::with_capacity(2);
@@ -91,7 +91,7 @@ impl Generator for Auction {
                                 now + chrono::Duration::seconds(i),
                             )), // bid time
                         ]);
-                        pending.push_back(bid);
+                        pending.push_back(vec![bid]);
                     }
                 }
                 pending.pop_front()
