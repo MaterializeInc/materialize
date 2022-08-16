@@ -63,8 +63,8 @@ class RestartEntireMz(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks),
             AlterSystem("max_tables", "1000"),
+            Initialize(self.checks),
             RestartMzAction(),
             Manipulate(self.checks, phase=1),
             RestartMzAction(),
@@ -78,8 +78,8 @@ class DropCreateDefaultReplica(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks),
             AlterSystem("max_tables", "1000"),
+            Initialize(self.checks),
             Manipulate(self.checks, phase=1),
             DropCreateDefaultReplicaAction(),
             Manipulate(self.checks, phase=2),
@@ -93,10 +93,10 @@ class RestartComputed(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            AlterSystem("max_tables", "1000"),
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
-            AlterSystem("max_tables", "1000"),
             KillComputed(),
             StartComputed(),
             Manipulate(self.checks, phase=1),
@@ -115,10 +115,10 @@ class RestartEnvironmentdStoraged(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            AlterSystem("max_tables", "1000"),
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
-            AlterSystem("max_tables", "1000"),
             RestartMzAction(),
             Manipulate(self.checks, phase=1),
             RestartMzAction(),
@@ -134,8 +134,8 @@ class KillStoraged(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks),
             AlterSystem("max_tables", "1000"),
+            Initialize(self.checks),
             KillStoragedAction(),
             Manipulate(self.checks, phase=1),
             KillStoragedAction(),
