@@ -179,6 +179,14 @@ def workflow_test_upsert(c: Composition) -> None:
         )
 
         c.run("testdrive", "upsert/01-create-sources.td")
+        # Sleep to make sure the errors have made it to persist.
+        # This isn't necessary for correctness,
+        # as we should be able to crash at any point and re-start.
+        # But if we don't sleep here, then we might be ingesting the errored
+        # records in the new process, and so we won't actually be testing
+        # the ability to retract error values that make it to persist.
+        print("Sleeping for ten seconds")
+        time.sleep(10)
         c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged`")
         c.run("testdrive", "upsert/02-after-storaged-restart.td")
 
