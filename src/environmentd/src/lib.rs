@@ -195,8 +195,10 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize network listeners.
     let sql_listener = TcpListener::bind(&config.sql_listen_addr).await?;
     let http_listener = TcpListener::bind(&config.http_listen_addr).await?;
+    let internal_sql_listener = TcpListener::bind(&config.internal_sql_listen_addr).await?;
     let sql_local_addr = sql_listener.local_addr()?;
     let http_local_addr = http_listener.local_addr()?;
+    let internal_sql_local_addr = internal_sql_listener.local_addr()?;
 
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
@@ -298,8 +300,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Listen on the internal SQL port.
     let (internal_sql_drain_trigger, internal_sql_local_addr) = {
         let (internal_sql_drain_trigger, internal_sql_drain_tripwire) = oneshot::channel();
-        let internal_sql_listener = TcpListener::bind(&config.internal_sql_listen_addr).await?;
-        let internal_sql_local_addr = internal_sql_listener.local_addr()?;
         task::spawn(|| "internal_pgwire_server", {
             let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 tls: None,
