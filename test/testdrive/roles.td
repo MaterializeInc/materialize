@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-regex match=u\d{1,2} replacement=<RID>
+$ set-regex match=u\d{1,3} replacement=<RID>
 
 # Verify initial roles.
 > SELECT id, name FROM mz_roles
