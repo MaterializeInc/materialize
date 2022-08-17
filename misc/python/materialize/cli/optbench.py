@@ -16,6 +16,8 @@ import click
 import numpy as np
 import pandas as pd  # type: ignore
 
+import re
+
 from ..optbench import Scenario, scenarios, sql, util
 
 # import logging
@@ -80,6 +82,8 @@ class Opt:
 
     print_results = dict(default=False, help="Print the experiment results.")
 
+    no_indexes = dict(default=False, help="Skip CREATE [DEFAULT]/DROP INDEX DDL.")
+
     db_port = dict(default=6875, help="DB connection port.")
 
     db_host = dict(default="localhost", help="DB connection host.")
@@ -89,11 +93,13 @@ class Opt:
 
 @app.command()
 @click.argument("scenario", **Arg.scenario)
+@click.option("--no-indexes", **Opt.no_indexes)
 @click.option("--db-port", **Opt.db_port)
 @click.option("--db-host", **Opt.db_host)
 @click.option("--db-user", **Opt.db_user)
 def init(
     scenario: Scenario,
+    no_indexes: bool,
     db_port: int,
     db_host: str,
     db_user: str,
@@ -109,7 +115,16 @@ def init(
         db.create_database(scenario)
 
         db.set_database(scenario)
-        db.execute_all(statements=sql.parse_from_file(scenario.schema_path()))
+
+        statements = sql.parse_from_file(scenario.schema_path())
+        if no_indexes:
+            idx_re = re.compile("(create|create\s+default|drop)\s+index\s+")
+            statements = [ 
+                statement
+                for statement in statements 
+                if not idx_re.match(statement.lower())
+            ]
+        db.execute_all(statements)
     except Exception as e:
         raise click.ClickException(f"init command failed: {e}")
 
