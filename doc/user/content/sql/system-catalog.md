@@ -339,8 +339,8 @@ Field          | Type       | Meaning
 
 ### `mz_objects`
 
-The `mz_objects` view contains a row for each table, source, view, sink, and
-index in the system.
+The `mz_objects` view contains a row for each table, source, view, materialized view, sink,
+index, connection, secret, type, and function in the system.
 
 Field       | Type       | Meaning
 ------------|------------|--------
@@ -348,7 +348,7 @@ Field       | Type       | Meaning
 `oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the object.
 `schema_id` | [`bigint`] | The ID of the schema to which the object belongs.
 `name`      | [`text`]   | The name of the object.
-`type`      | [`text`]   | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
+`type`      | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
 
 ### `mz_peek_active`
 
@@ -434,7 +434,7 @@ Field       | Type       | Meaning
 `oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the relation.
 `schema_id` | [`bigint`] | The ID of the schema to which the relation belongs.
 `name`      | [`text`]   | The name of the relation.
-`type`      | [`text`]   | The type of the relation: either `table`, `source`, or `view`.
+`type`      | [`text`]   | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
 
 ### `mz_roles`
 

@@ -1269,7 +1269,15 @@ UNION
 UNION
     SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
     FROM mz_catalog.mz_indexes
-    JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id",
+    JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
+UNION
+    SELECT id, oid, schema_id, name, 'connection' FROM mz_catalog.mz_connections
+UNION
+    SELECT id, oid, schema_id, name, 'type' FROM mz_catalog.mz_types
+UNION
+    SELECT id, oid, schema_id, name, 'function' FROM mz_catalog.mz_functions
+UNION
+    SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret' FROM mz_catalog.mz_secrets",
 };
 
 // For historical reasons, this view does not properly escape identifiers. For
