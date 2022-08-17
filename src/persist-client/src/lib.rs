@@ -186,6 +186,9 @@ pub struct PersistConfig {
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
     pub consensus_connection_pool_max_size: usize,
+    /// Length of time after a writer's last operation after which the writer
+    /// may be expired.
+    pub writer_lease_duration: Duration,
 }
 
 // Tuning inputs:
@@ -245,6 +248,7 @@ impl PersistConfig {
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 50,
+            writer_lease_duration: Duration::from_secs(60 * 15),
         }
     }
 }
@@ -415,7 +419,9 @@ impl PersistClient {
                 writer_id.clone(),
             )
         });
-        let (shard_upper, _) = machine.register_writer(&writer_id, (self.cfg.now)()).await;
+        let (shard_upper, _) = machine
+            .register_writer(&writer_id, self.cfg.writer_lease_duration, (self.cfg.now)())
+            .await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
@@ -426,6 +432,7 @@ impl PersistClient {
             blob: Arc::clone(&self.blob),
             cpu_heavy_runtime: Arc::clone(&self.cpu_heavy_runtime),
             upper: shard_upper.0,
+            last_heartbeat: (self.cfg.now)(),
             explicitly_expired: false,
         };
         Ok(writer)
@@ -458,12 +465,15 @@ impl PersistClient {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::panic::AssertUnwindSafe;
     use std::pin::Pin;
     use std::str::FromStr;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::task::Context;
 
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
+    use futures_util::FutureExt;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_proto::protobuf_roundtrip;
@@ -477,11 +487,12 @@ mod tests {
     use crate::read::ListenEvent;
 
     use crate::r#impl::paths::BlobKey;
+    use mz_ore::cast::CastFrom;
     use proptest::prelude::*;
 
     use super::*;
 
-    pub async fn new_test_client() -> PersistClient {
+    pub fn new_test_client_cache() -> PersistClientCache {
         // Configure an aggressively small blob_target_size so we get some
         // amount of coverage of that in tests. Similarly, for max_outstanding.
         let mut cache = PersistClientCache::new_no_metrics();
@@ -490,7 +501,11 @@ mod tests {
 
         // Enable compaction in tests to ensure we get coverage.
         cache.cfg.compaction_enabled = true;
+        cache
+    }
 
+    pub async fn new_test_client() -> PersistClient {
+        let mut cache = new_test_client_cache();
         cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
@@ -1252,6 +1267,99 @@ mod tests {
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
 
         assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
+    }
+
+    #[tokio::test]
+    async fn writer_heartbeat() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let shard_id = ShardId::new();
+        let now = Arc::new(AtomicU64::new(0));
+        let now_clone = Arc::clone(&now);
+        let mut cache = new_test_client_cache();
+        cache.cfg.now = NowFn::from(move || now_clone.load(Ordering::SeqCst));
+        let (mut write, _) = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let lease_duration_ms =
+            u64::cast_from(write.cfg.writer_lease_duration.as_millis() as usize);
+
+        // we won't heartbeat if enough time hasn't passed
+        let heartbeat = write.last_heartbeat;
+        now.fetch_add(1, Ordering::SeqCst);
+        write.maybe_heartbeat_writer().await;
+        assert_eq!(write.last_heartbeat, heartbeat);
+
+        // but we will heartbeat if we're past half our lease duration
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
+        write.maybe_heartbeat_writer().await;
+        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
+
+        // performing a compare_and_append should also heartbeat the writer
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
+        write.expect_compare_and_append(&data[0..1], 0, 2).await;
+        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
+
+        // preparing a batch should heartbeat if it fills up a full batch part
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
+        write.expect_batch(&data[1..3], 1, 4).await;
+        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
+
+        // but a batch operation that doesn't fill up a full batch part should NOT heartbeat.
+        // presumably it didn't take long to prepare <1 full batch part, and it'll be heartbeated
+        // as part of a subsequent compare_and_append
+        let heartbeat = write.last_heartbeat;
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
+        write.expect_batch(&[], 0, 1).await;
+        assert_eq!(write.last_heartbeat, heartbeat);
+
+        // one more check: failed calls to append should heartbeat
+        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
+        let _failed_append = write
+            .append(
+                &data[3..],
+                Antichain::from_elem(99),
+                Antichain::from_elem(100),
+            )
+            .await;
+        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
+
+        // and verify that other handles can expire our writer as routine maintenance
+        now.fetch_add(lease_duration_ms * 2, Ordering::SeqCst);
+        let (_, mut read) = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let (_, maintenance) = read
+            .machine
+            .heartbeat_reader(&read.reader_id, now.load(Ordering::SeqCst))
+            .await;
+        maintenance
+            .perform_awaitable(&read.machine.clone(), &read.gc.clone())
+            .await;
+        let expired_writer_heartbeat = AssertUnwindSafe(write.maybe_heartbeat_writer())
+            .catch_unwind()
+            .await;
+        assert!(matches!(expired_writer_heartbeat, Err(_)));
     }
 
     #[test]
