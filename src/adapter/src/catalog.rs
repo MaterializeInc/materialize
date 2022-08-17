@@ -3680,6 +3680,7 @@ impl<S: Append> Catalog<S> {
                 Op::UpdateItem { id, name, to_item } => {
                     let ser = self.serialize_item(&to_item);
                     tx.update_item(id, &name.item, &ser)?;
+                    builtin_table_updates.extend(self.state.pack_item_update(id, -1));
                     vec![Action::UpdateItem {
                         id,
                         to_name: name,

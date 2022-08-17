@@ -3120,7 +3120,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
             let entry = self.catalog.get_entry(&plan.id);
             let source = match entry.item() {
-                CatalogItem::Source(source) => source,
+                CatalogItem::Source(source) => Source {
+                    host_config: host_config.clone(),
+                    ..source.clone()
+                },
                 other => coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ()),
             };
 
@@ -3135,8 +3138,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.controller
                 .storage_mut()
                 .alter_collections(vec![(plan.id, host_config)])
-                .await
-                .unwrap();
+                .await?;
         }
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
     }
