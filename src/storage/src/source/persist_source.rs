@@ -51,7 +51,7 @@ pub fn persist_source<G, YFn>(
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
-    as_of: Antichain<Timestamp>,
+    as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
@@ -92,7 +92,7 @@ pub fn persist_source_core<G, YFn>(
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
-    as_of: Antichain<Timestamp>,
+    as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
@@ -164,6 +164,8 @@ where
             .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
             .await
             .expect("could not open persist shard");
+
+        let as_of_stream = as_of_stream.unwrap_or_else(|| read.since().clone());
 
         let mut subscription = read
             .subscribe(as_of_stream.clone())

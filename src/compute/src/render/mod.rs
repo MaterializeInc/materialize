@@ -176,7 +176,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     *source_id,
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
-                    dataflow.as_of.clone().unwrap(),
+                    dataflow.as_of.clone(),
                     dataflow.until.clone(),
                     mfp.as_mut(),
                     // Copy the logic in DeltaJoin/Get/Join to start.
