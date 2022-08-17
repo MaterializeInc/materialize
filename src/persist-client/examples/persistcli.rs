@@ -67,6 +67,14 @@ fn main() {
     let root_span = info_span!("persistcli");
     let res = match args.command {
         Command::Maelstrom(args) => runtime.block_on(async move {
+            // Persist internally has a bunch of sanity check assertions. If
+            // maelstrom tickles one of these, we very much want to bubble this
+            // up into a process exit with non-0 status. It's surprisingly
+            // tricky to be confident that we're not accidentally swallowing
+            // panics in async tasks (in fact there was a bug that did exactly
+            // this at one point), so abort on any panics to be extra sure.
+            mz_ore::panic::set_abort_on_panic();
+
             // Run the maelstrom stuff in a spawn_blocking because it internally
             // spawns tasks, so the runtime needs to be in the TLC.
             Handle::current()

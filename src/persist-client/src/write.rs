@@ -12,11 +12,12 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, Indeterminate};
 use mz_persist::retry::Retry;
@@ -27,14 +28,13 @@ use tokio::runtime::Handle;
 use tracing::{debug, debug_span, info, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::async_runtime::CpuHeavyRuntime;
-use crate::batch::{validate_truncate_batch, Batch, BatchBuilder};
+use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::{HollowBatch, Upper};
-use crate::{parse_id, GarbageCollector, PersistConfig};
+use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -99,7 +99,7 @@ where
     pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
     pub(crate) explicitly_expired: bool,
-
+    pub(crate) last_heartbeat: EpochMillis,
     pub(crate) upper: Antichain<T>,
 }
 
@@ -335,6 +335,12 @@ where
                 Ok(Err(current_upper)) => {
                     let Upper(current_upper) = current_upper;
 
+                    // it's possible a client using `append_batch` continually fails if
+                    // it's racing with another writer. that's perfectly fine, but we should
+                    // be sure to heartbeat our writer explicitly if it's not getting a
+                    // chance to renew its lease through `[Self::compare_and_append]`
+                    self.maybe_heartbeat_writer().await;
+
                     // We tried to to a non-contiguous append, that won't work.
                     if PartialOrder::less_than(&current_upper, &lower) {
                         self.upper = current_upper.clone();
@@ -435,6 +441,7 @@ where
             num_updates += batch.num_updates;
         }
 
+        let heartbeat_timestamp = (self.cfg.now)();
         let res = self
             .machine
             .compare_and_append(
@@ -444,12 +451,14 @@ where
                     len: num_updates,
                 },
                 &self.writer_id,
+                heartbeat_timestamp,
             )
             .await?;
 
         let maintenance = match res {
             Ok(Ok((_seqno, maintenance))) => {
                 self.upper = desc.upper().clone();
+                self.last_heartbeat = heartbeat_timestamp;
                 for batch in batches.iter_mut() {
                     batch.mark_consumed();
                 }
@@ -522,12 +531,39 @@ where
             let ((k, v), t, d) = update.borrow();
             let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
             match builder.add(k, v, t, d).await {
-                Ok(_) => (),
+                Ok(Added::Record) => (),
+                // We need to maintain this writer's lease in case the batch is taking an
+                // exceptionally long time to write, so that our staged blobs don't get GC'd
+                // while we're still processing the batch.
+                //
+                // Here, we check if we need to heartbeat the writer each time we completed
+                // and began uploading a batch part.
+                Ok(Added::RecordAndParts) => self.maybe_heartbeat_writer().await,
                 Err(invalid_usage) => return Err(invalid_usage),
             }
         }
 
         builder.finish(upper.clone()).await
+    }
+
+    /// Heartbeats the writer lease if necessary.
+    ///
+    /// This is an internally rate limited helper, designed to allow users to
+    /// call it as frequently as they like. Call this on some interval that is
+    /// "frequent" compared to PersistConfig::writer_lease_duration
+    pub async fn maybe_heartbeat_writer(&mut self) {
+        let min_elapsed = self.cfg.writer_lease_duration / 4;
+        let elapsed_since_last_heartbeat =
+            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
+        if elapsed_since_last_heartbeat >= min_elapsed {
+            let heartbeat_timestamp = (self.cfg.now)();
+            let (_, maintenance) = self
+                .machine
+                .heartbeat_writer(&self.writer_id, heartbeat_timestamp)
+                .await;
+            self.last_heartbeat = heartbeat_timestamp;
+            maintenance.perform(&self.machine, &self.gc);
+        }
     }
 
     /// Politely expires this writer, releasing its lease.

@@ -19,7 +19,7 @@ from materialize.zippy.view_capabilities import ViewExists
 
 
 class CreateSink(Action):
-    """Creates a view that is a join over one or more sources or tables"""
+    """Creates a sink over an existing view. Then creates a source over that sink and a view over that source."""
 
     @classmethod
     def requires(self) -> List[Set[Type[Capability]]]:

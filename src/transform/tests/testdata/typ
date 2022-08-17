@@ -204,3 +204,20 @@ build format=types
 | Filter (#0 = #2)
 | | types = (Int32, Int32?, Int32, Int32?)
 | | keys = ((#0, #1), (#0, #3), (#1, #2), (#2, #3))
+
+# Regression test for #14146. The keys at the end should be [#0]
+
+build format=types
+(filter (reduce (get x) [#0] [(count true false)])[(call_binary eq #0 #0)])
+----
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ()
+| Reduce group=(#0)
+| | agg count(true)
+| | types = (Int32?, Int64)
+| | keys = ((#0))
+| Filter (#0 = #0)
+| | types = (Int32, Int64)
+| | keys = ((#0))

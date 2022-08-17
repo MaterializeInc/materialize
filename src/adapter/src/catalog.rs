@@ -1167,6 +1167,12 @@ pub struct Role {
     pub oid: u32,
 }
 
+impl Role {
+    pub fn is_user(&self) -> bool {
+        self.id.is_user()
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeInstance {
     pub name: String,
@@ -1563,6 +1569,26 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is a table.
     pub fn is_table(&self) -> bool {
         matches!(self.item(), CatalogItem::Table(_))
+    }
+
+    /// Reports whether this catalog entry is a source.
+    pub fn is_source(&self) -> bool {
+        matches!(self.item(), CatalogItem::Source(_))
+    }
+
+    /// Reports whether this catalog entry is a sink.
+    pub fn is_sink(&self) -> bool {
+        matches!(self.item(), CatalogItem::Sink(_))
+    }
+
+    /// Reports whether this catalog entry is a materialized view.
+    pub fn is_materialized_view(&self) -> bool {
+        matches!(self.item(), CatalogItem::MaterializedView(_))
+    }
+
+    /// Reports whether this catalog entry is a secret.
+    pub fn is_secret(&self) -> bool {
+        matches!(self.item(), CatalogItem::Secret(_))
     }
 
     /// Reports whether this catalog entry is a storage collection.
@@ -3135,7 +3161,7 @@ impl<S: Append> Catalog<S> {
         session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
-    ) -> Result<(Vec<BuiltinTableUpdate>, T), AdapterError>
+    ) -> Result<(Vec<BuiltinTableUpdate>, Vec<mz_stash::Id>, T), AdapterError>
     where
         F: FnOnce(&CatalogState) -> Result<T, AdapterError>,
     {
@@ -3965,14 +3991,18 @@ impl<S: Append> Catalog<S> {
         let result = f(&state)?;
 
         // The user closure was successful, apply the updates.
-        tx.commit().await?;
+        let (_stash, collections) = tx.commit_without_consolidate().await?;
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
         self.state = state;
         self.transient_revision += 1;
 
-        Ok((builtin_table_updates, result))
+        Ok((builtin_table_updates, collections, result))
+    }
+
+    pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
+        Ok(self.storage().await.consolidate(collections).await?)
     }
 
     pub async fn confirm_leadership(&mut self) -> Result<(), AdapterError> {
@@ -4160,8 +4190,41 @@ impl<S: Append> Catalog<S> {
         self.state.entry_by_id.values()
     }
 
+    pub fn user_tables(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_table() && entry.id.is_user())
+    }
+
+    pub fn user_sources(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_source() && entry.id.is_user())
+    }
+
+    pub fn user_sinks(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_sink() && entry.id.is_user())
+    }
+
+    pub fn user_materialized_views(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_materialized_view() && entry.id.is_user())
+    }
+
+    pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_secret() && entry.id.is_user())
+    }
+
     pub fn compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
         self.state.compute_instances_by_id.values()
+    }
+
+    pub fn databases(&self) -> impl Iterator<Item = &Database> {
+        self.state.database_by_id.values()
+    }
+
+    pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
+        self.state.roles.values().filter(|role| role.is_user())
     }
 
     /// Allocate ids for legacy, active logs. Called once per compute instance creation

@@ -470,7 +470,9 @@ impl MirRelationExpr {
                         {
                             if let Some(c1) = expr1.as_column() {
                                 if let Some(c2) = expr2.as_column() {
-                                    return Some((c1, c2));
+                                    if c1 != c2 {
+                                        return Some((c1, c2));
+                                    }
                                 }
                             }
                         }

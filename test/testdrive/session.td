@@ -35,8 +35,11 @@ max_objects_per_schema      1000                   "The maximum number of object
 max_replicas_per_cluster    5                      "The maximum number of replicas of a single cluster (Materialize)."
 max_schemas_per_database    1000                   "The maximum number of schemas in a database (Materialize)."
 max_sinks                   25                     "The maximum number of sinks in the region, across all schemas (Materialize)."
+max_materialized_views      100                    "The maximum number of materialized views in the region, across all schemas (Materialize)."
 max_sources                 25                     "The maximum number of sources in the region, across all schemas (Materialize)."
 max_tables                  25                     "The maximum number of tables in the region, across all schemas (Materialize)."
+max_secrets                 100                    "The maximum number of secrets in the region, across all schemas (Materialize)."
+max_roles                   1000                   "The maximum number of roles in the region (Materialize)."
 
 > SET application_name = 'foo'
 

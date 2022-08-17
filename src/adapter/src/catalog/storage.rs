@@ -743,6 +743,10 @@ impl<S: Append> Connection<S> {
         Ok(self.stash.confirm_leadership().await?)
     }
 
+    pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), Error> {
+        Ok(self.stash.consolidate_batch(&collections).await?)
+    }
+
     pub fn cluster_id(&self) -> Uuid {
         self.cluster_id
     }
@@ -1234,6 +1238,13 @@ impl<'a, S: Append> Transaction<'a, S> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
+        let (stash, collections) = self.commit_without_consolidate().await?;
+        stash.consolidate_batch(&collections).await?;
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn commit_without_consolidate(self) -> Result<(&'a mut S, Vec<mz_stash::Id>), Error> {
         let mut batches = Vec::new();
         async fn add_batch<K, V, S, I>(
             stash: &mut S,
@@ -1364,10 +1375,18 @@ impl<'a, S: Append> Transaction<'a, S> {
             self.storage_usage_updates,
         )
         .await?;
-        if batches.is_empty() {
-            return Ok(());
+
+        let ids = batches
+            .iter()
+            .map(|batch| batch.collection_id)
+            .collect::<Vec<_>>();
+        if !batches.is_empty() {
+            self.stash
+                .append_batch(&batches)
+                .await
+                .map_err(StashError::from)?;
         }
-        self.stash.append(batches).await.map_err(|e| e.into())
+        Ok((self.stash, ids))
     }
 }
 
@@ -1424,7 +1443,7 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
     add_batch(stash, &mut batches, &COLLECTION_SYSTEM_CONFIGURATION).await?;
     add_batch(stash, &mut batches, &COLLECTION_AUDIT_LOG).await?;
     add_batch(stash, &mut batches, &COLLECTION_STORAGE_USAGE).await?;
-    stash.append(batches).await.map_err(|e| e.into())
+    stash.append(&batches).await.map_err(|e| e.into())
 }
 
 macro_rules! impl_codec {

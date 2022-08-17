@@ -214,6 +214,7 @@ where
                 .map(|(id, writer)| ProtoWriterState {
                     writer_id: id.into_proto(),
                     last_heartbeat_timestamp_ms: writer.last_heartbeat_timestamp_ms,
+                    lease_duration_ms: writer.lease_duration_ms,
                 })
                 .collect(),
             trace: Some(self.collections.trace.into_proto()),
@@ -284,6 +285,7 @@ where
                 writer_id,
                 WriterState {
                     last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
+                    lease_duration_ms: proto.lease_duration_ms,
                 },
             );
         }

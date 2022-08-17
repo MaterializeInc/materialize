@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
+
 # Without EXTENDED, SHOW TYPES shouldn't have anything to return.
 > SHOW TYPES
 
@@ -141,6 +143,9 @@ timestamp                   system
 timestamptz                 system
 uuid                        system
 varchar                     system
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_tables = 10000
 
 # Support creating tables with catalog types and their aliases
 > CREATE TABLE bool_t (a bool);
@@ -333,3 +338,6 @@ true
 # Ensure we don't allow unknown options
 ! CREATE TYPE whatever AS LIST (element_type=int4, gus=int4);
 contains:unexpected parameters for CREATE TYPE: gus
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET ALL

@@ -59,3 +59,26 @@ query T
 SELECT abc FROM (VALUES (1, 2, (3,4), ROW(5, 6, 7))) as abc;
 ----
 (1,2,"(3,4)","(5,6,7)")
+
+# MirScalarExpr::reduce() should transform
+# Literal([c1, c2]) = record_create(e1, e2)
+# into
+# c1 = e1 AND c2 = e2
+#
+# If this test fails in the future, one possible reason is the canonical ordering having been changed between
+# MirScalarExpr::Literal and MirScalarExpr::CallVariadic, because then the argument ordering of the `Eq` changes, so
+# reduce() doesn't recognize the pattern anymore.
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM t1 WHERE (t1.a, t1.b) IN ((1,2))
+----
+Source materialize.public.t1 (u1):
+| Filter (#0 = 1), (#1 = 2)
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1), (#1 = 2)
+
+EOF

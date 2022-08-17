@@ -14,7 +14,6 @@ use std::error::Error;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
-use std::iter::once;
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
@@ -353,26 +352,13 @@ pub trait Stash: std::fmt::Debug + Send {
     /// Intuitively, this method performs physical compaction. Existing
     /// key–value pairs whose time is less than the since frontier are
     /// consolidated together when possible.
-    async fn consolidate<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data;
+    async fn consolidate(&mut self, collection: Id) -> Result<(), StashError>;
 
     /// Performs multiple consolidations at once, potentially in a more performant way than
     /// performing the individual consolidations one by one.
     ///
     /// See [Stash::consolidate]
-    async fn consolidate_batch<K, V>(
-        &mut self,
-        collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
         for collection in collections {
             self.consolidate(*collection).await?;
         }
@@ -422,7 +408,7 @@ pub trait Stash: std::fmt::Debug + Send {
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
 pub struct StashCollection<K, V> {
-    id: Id,
+    pub id: Id,
     _kv: PhantomData<(K, V)>,
 }
 
@@ -529,17 +515,24 @@ impl From<&str> for StashError {
 /// Additional methods for Stash implementations that are able to provide atomic operations over multiple collections.
 #[async_trait]
 pub trait Append: Stash {
-    /// Atomically adds entries, seals, and compacts multiple collections.
+    /// Same as `append`, but does not consolidate batches.
+    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError>;
+
+    /// Atomically adds entries, seals, compacts, and consolidates multiple
+    /// collections.
     ///
     /// The `lower` of each `AppendBatch` is checked to be the existing `upper` of the collection.
     /// The `upper` of the `AppendBatch` will be the new `upper` of the collection.
     /// The `compact` of each `AppendBatch` will be the new `since` of the collection.
     ///
-    /// If this method returns `Ok`, the entries have been made durable and uppers advanced, otherwise no changes were committed.
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = AppendBatch> + Send + 'static,
-        I::IntoIter: Send;
+    /// If this method returns `Ok`, the entries have been made durable and uppers
+    /// advanced, otherwise no changes were committed.
+    async fn append(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        self.append_batch(batches).await?;
+        let ids: Vec<_> = batches.iter().map(|batch| batch.collection_id).collect();
+        self.consolidate_batch(&ids).await?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -666,7 +659,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(&[batch]).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_key_one(collection, key).await?
                 }
@@ -677,7 +670,7 @@ where
             Some(prev) => Ok(prev),
             None => {
                 collection.append_to_batch(&mut batch, &key, &value, 1);
-                stash.append(once(batch)).await?;
+                stash.append(&[batch]).await?;
                 Ok(value)
             }
         }
@@ -704,7 +697,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(&[batch]).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_key_one(collection, key).await?
                 }
@@ -715,7 +708,7 @@ where
             collection.append_to_batch(&mut batch, &key, &prev, -1);
         }
         collection.append_to_batch(&mut batch, &key, &value, 1);
-        stash.append(once(batch)).await?;
+        stash.append(&[batch]).await?;
         Ok(prev)
     }
 
@@ -735,7 +728,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(&[batch]).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_one(collection).await?
                 }
@@ -748,7 +741,7 @@ where
             }
             collection.append_to_batch(&mut batch, &k, &v, 1);
         }
-        stash.append(once(batch)).await?;
+        stash.append(&[batch]).await?;
         Ok(())
     }
 }
