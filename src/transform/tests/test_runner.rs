@@ -259,9 +259,11 @@ mod tests {
             "ReductionPushdown" => Ok(Box::new(
                 mz_transform::reduction_pushdown::ReductionPushdown,
             )),
+            "ReduceElision" => Ok(Box::new(mz_transform::reduce_elision::ReduceElision)),
             "RedundantJoin" => Ok(Box::new(
                 mz_transform::redundant_join::RedundantJoin::default(),
             )),
+            "RelationCSE" => Ok(Box::new(mz_transform::cse::relation_cse::RelationCSE)),
             "TopKFusion" => Ok(Box::new(mz_transform::fusion::top_k::TopK)),
             "ThresholdElision" => Ok(Box::new(mz_transform::threshold_elision::ThresholdElision)),
             "UnionBranchCancellation" => Ok(Box::new(
