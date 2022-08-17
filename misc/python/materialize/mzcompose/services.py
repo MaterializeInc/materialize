@@ -42,7 +42,7 @@ class Materialized(Service):
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/mzdata",
-        workers: Optional[int] = None,
+        workers: Optional[int] = 4,
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
@@ -70,6 +70,13 @@ class Materialized(Service):
                 "COMPUTED_LOG_FILTER",
                 "INTERNAL_SQL_LISTEN_ADDR=0.0.0.0:6877",
                 "INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
+            ]
+
+        if workers:
+            environment += [
+                f"MZ_WORKERS={workers}",
+                f"COMPUTED_WORKERS={workers}",
+                f"STORAGED_WORKERS={workers}",
             ]
 
         if forward_aws_credentials:
@@ -100,9 +107,6 @@ class Materialized(Service):
                 config_ports.pop()
 
         command_list = []
-
-        if workers:
-            command_list.append(f"--workers {workers}")
 
         if options:
             if isinstance(options, str):
@@ -147,7 +151,7 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
+        workers: Optional[int] = 4,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
@@ -214,7 +218,7 @@ class Storaged(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
+        workers: Optional[int] = 4,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:

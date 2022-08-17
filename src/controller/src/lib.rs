@@ -22,6 +22,7 @@
 //! about each of these interfaces.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::mem;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -349,10 +350,15 @@ where
                                         "--internal-http-listen-addr={}:{}",
                                         assigned.listen_host, assigned.ports["internal-http"]
                                     ),
-                                    format!("--workers={}", allocation.workers),
                                     format!("--opentelemetry-resource=instance_id={}", instance_id),
                                     format!("--opentelemetry-resource=replica_id={}", replica_id),
                                 ];
+
+                                // For testing purposes, give precedence to the COMPUTED_WORKERS env option
+                                if env::var("COMPUTED_WORKERS").is_err() {
+                                    compute_opts.push(format!("--workers={}", allocation.workers))
+                                }
+
                                 compute_opts.extend(
                                     assigned.peers.iter().map(|(host, ports)| {
                                         format!("{host}:{}", ports["compute"])

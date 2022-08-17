@@ -200,21 +200,19 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          # TODO(benesch): set --workers=1 again.
-          args: [--aws-region=us-east-2]
+          args: [--workers 1, --aws-region=us-east-2]
 
-  # TODO(benesch): reenable.
-  # - id: testdrive-workers-32
-  #   label: ":racing_car: testdrive with --workers 32"
-  #   depends_on: build-x86_64
-  #   timeout_in_minutes: 120
-  #   plugins:
-  #     - ./ci/plugins/scratch-aws-access: ~
-  #     - ./ci/plugins/mzcompose:
-  #         composition: testdrive
-  #         args: [--aws-region=us-east-2, --workers=32]
-  #   agents:
-  #     queue: linux-x86_64-large
+   - id: testdrive-workers-32
+     label: ":racing_car: testdrive with --workers 32"
+     depends_on: build-x86_64
+     timeout_in_minutes: 120
+     plugins:
+       - ./ci/plugins/scratch-aws-access: ~
+       - ./ci/plugins/mzcompose:
+           composition: testdrive
+           args: [--workers 32, --aws-region=us-east-2]
+     agents:
+       queue: linux-x86_64-large
 
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"

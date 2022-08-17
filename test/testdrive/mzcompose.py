@@ -39,6 +39,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         action="store_true",
         help="run against Redpanda instead of the Confluent Platform",
     )
+
+    parser.add_argument("--workers", help="Specify number of workers to use")
+
     parser.add_argument(
         "--aws-region",
         help="run against the specified AWS region instead of localstack",
@@ -73,7 +76,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_postgres_stash=True,
     )
 
-    with c.override(testdrive):
+    materialized = (
+        Materialized(workers=args.workers) if args.workers else Materialized()
+    )
+
+    with c.override(testdrive, materialized):
         c.start_and_wait_for_tcp(services=dependencies)
         c.wait_for_materialized("materialized")
         try:

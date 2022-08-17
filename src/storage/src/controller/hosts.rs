@@ -21,6 +21,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -235,8 +236,7 @@ where
                 ServiceConfig {
                     image: self.storaged_image.clone(),
                     args: &|assigned| {
-                        vec![
-                            format!("--workers={}", allocation.workers),
+                        let mut storage_opts = vec![
                             format!(
                                 "--controller-listen-addr={}:{}",
                                 assigned.listen_host, assigned.ports["controller"]
@@ -246,7 +246,14 @@ where
                                 assigned.listen_host, assigned.ports["internal-http"]
                             ),
                             format!("--opentelemetry-resource=storage_id={}", id),
-                        ]
+                        ];
+
+                        // For testing purposes, give precedence to the STORAGED_WORKERS env option
+                        if env::var("STORAGED_WORKERS").is_err() {
+                            storage_opts.push(format!("--workers={}", allocation.workers))
+                        }
+
+                        storage_opts
                     },
                     ports: vec![
                         ServicePort {
