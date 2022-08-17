@@ -21,7 +21,7 @@ mode cockroach
 query T rowsort
 SELECT (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name NOT LIKE '%_1') - (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name LIKE '%_1');
 ----
-1
+0
 
 # This test checks if the views in mz_catalog are also present in a postfixed
 # way. If this test fails and you added new view that uses introspection

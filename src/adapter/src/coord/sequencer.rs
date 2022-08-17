@@ -450,9 +450,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
 
-                let source_status_collection_id = self.catalog.resolve_builtin_storage_collection(
-                    &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                );
+                // This is disabled for the moment because it has unusual upper
+                // advancement behavior.
+                // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+                let status_collection_id = if false {
+                    Some(self.catalog.resolve_builtin_storage_collection(
+                        &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                    ))
+                } else {
+                    None
+                };
 
                 self.controller
                     .storage_mut()
@@ -462,7 +469,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc: source.desc.clone(),
                             ingestion: Some(ingestion),
                             since: None,
-                            status_collection_id: Some(source_status_collection_id),
+                            status_collection_id,
                             host_config: Some(source.host_config),
                         },
                     )])

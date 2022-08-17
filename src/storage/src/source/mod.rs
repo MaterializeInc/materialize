@@ -761,27 +761,31 @@ where
                 }
             };
 
-            let mut healthchecker = match Healthchecker::new(
-                name.clone(),
-                upstream_name,
-                id,
-                source_connection.name(),
-                worker_id,
-                worker_count,
-                active,
-                &persist_clients,
-                &storage_metadata,
-                now.clone(),
-            )
-            .await
-            {
-                Ok(h) => h,
-                Err(e) => {
-                    panic!(
-                        "Failed to create healthchecker for source {}: {:#}",
-                        &name, e
-                    );
+            let mut healthchecker = if storage_metadata.status_shard.is_some() {
+                match Healthchecker::new(
+                    name.clone(),
+                    upstream_name,
+                    id,
+                    source_connection.name(),
+                    worker_id,
+                    worker_count,
+                    active,
+                    &persist_clients,
+                    &storage_metadata,
+                    now.clone(),
+                )
+                .await
+                {
+                    Ok(h) => Some(h),
+                    Err(e) => {
+                        panic!(
+                            "Failed to create healthchecker for source {}: {:#}",
+                            &name, e
+                        );
+                    }
                 }
+            } else {
+                None
             };
 
             let mut source_upper = timestamper.source_upper_at(upper_ts.saturating_sub(1));
@@ -840,7 +844,9 @@ where
                                         untimestamped_messages.entry(pid).or_default().push((message, offset));
                                     }
                                     SourceMessageType::SourceStatus(update) => {
-                                        healthchecker.update_status(update).await;
+                                        if let Some(healthchecker) = &mut healthchecker {
+                                            healthchecker.update_status(update).await;
+                                        }
                                     }
                                 }
                             }
