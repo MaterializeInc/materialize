@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import csv
+import re
 import tempfile
 from pathlib import Path
 from typing import cast
@@ -15,8 +16,6 @@ from typing import cast
 import click
 import numpy as np
 import pandas as pd  # type: ignore
-
-import re
 
 from ..optbench import Scenario, scenarios, sql, util
 
@@ -118,10 +117,10 @@ def init(
 
         statements = sql.parse_from_file(scenario.schema_path())
         if no_indexes:
-            idx_re = re.compile("(create|create\s+default|drop)\s+index\s+")
-            statements = [ 
+            idx_re = re.compile(r"(create|create\s+default|drop)\s+index\s+")
+            statements = [
                 statement
-                for statement in statements 
+                for statement in statements
                 if not idx_re.match(statement.lower())
             ]
         db.execute_all(statements)
