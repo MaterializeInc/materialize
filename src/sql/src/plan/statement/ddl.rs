@@ -3671,6 +3671,7 @@ pub fn plan_alter_source(
     scx: &mut StatementContext,
     stmt: AlterSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER SOURCE")?;
     let AlterSourceStatement {
         source_name,
         if_exists,
