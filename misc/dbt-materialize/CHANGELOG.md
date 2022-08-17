@@ -1,5 +1,9 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Upgrade to `dbt-postgres` v1.2.0.
+
 ## 1.1.3 - 2022-08-17
 
 * Deprecate the `mz_generate_name` macro. The native Jinja function [`{
