@@ -97,6 +97,9 @@ pub struct Config {
     /// The pgwire connection parameters for the Materialize instance that
     /// testdrive will connect to.
     pub materialize_pgconfig: tokio_postgres::Config,
+    /// The internal pgwire connection parameters for the Materialize instance that
+    /// testdrive will connect to.
+    pub materialize_pgconfig_internal: tokio_postgres::Config,
     /// The port for the public endpoints of the materialize instance that
     /// testdrive will connect to via HTTP.
     pub materialize_http_port: u16,
@@ -154,6 +157,7 @@ pub struct State {
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
     materialize_sql_addr: String,
+    materialize_sql_addr_internal: String,
     materialize_http_addr: String,
     materialize_user: String,
     pgclient: tokio_postgres::Client,
@@ -493,6 +497,10 @@ pub(crate) async fn build(
         state.materialize_sql_addr.clone(),
     );
     vars.insert(
+        "testdrive.materialize-sql-addr-internal".into(),
+        state.materialize_sql_addr_internal.clone(),
+    );
+    vars.insert(
         "testdrive.materialize-user".into(),
         state.materialize_user.clone(),
     );
@@ -719,8 +727,17 @@ pub async fn create_state(
 
     let materialize_catalog_postgres_stash = config.materialize_catalog_postgres_stash.clone();
 
-    let (materialize_sql_addr, materialize_http_addr, materialize_user, pgclient, pgconn_task) = {
+    let (
+        materialize_sql_addr,
+        materialize_sql_addr_internal,
+        materialize_http_addr,
+        materialize_user,
+        pgclient,
+        pgconn_task,
+    ) = {
         let materialize_url = util::postgres::config_url(&config.materialize_pgconfig)?;
+        let materialize_url_internal =
+            util::postgres::config_url(&config.materialize_pgconfig_internal)?;
 
         let (pgclient, pgconn) = Retry::default()
             .max_duration(config.default_timeout)
@@ -754,6 +771,11 @@ pub async fn create_state(
             materialize_url.host_str().unwrap(),
             materialize_url.port().unwrap()
         );
+        let materialize_sql_addr_internal = format!(
+            "{}:{}",
+            materialize_url_internal.host_str().unwrap(),
+            materialize_url_internal.port().unwrap()
+        );
         let materialize_http_addr = format!(
             "{}:{}",
             materialize_url.host_str().unwrap(),
@@ -761,6 +783,7 @@ pub async fn create_state(
         );
         (
             materialize_sql_addr,
+            materialize_sql_addr_internal,
             materialize_http_addr,
             materialize_user,
             pgclient,
@@ -853,6 +876,7 @@ pub async fn create_state(
         // === Materialize state. ===
         materialize_catalog_postgres_stash,
         materialize_sql_addr,
+        materialize_sql_addr_internal,
         materialize_http_addr,
         materialize_user,
         pgclient,

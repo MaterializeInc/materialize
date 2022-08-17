@@ -47,6 +47,7 @@ message ProtoReaderState {
 message ProtoWriterState {
     string writer_id = 1;
     uint64 last_heartbeat_timestamp_ms = 2;
+    uint64 lease_duration_ms = 3;
 }
 
 message ProtoStateRollup {

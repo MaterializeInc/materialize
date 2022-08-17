@@ -141,3 +141,16 @@ class Testdrive(Action):
 
     def execute(self, c: Composition) -> None:
         c.testdrive(input=self.td_str)
+
+
+class AlterSystem(Action):
+    def __init__(self, config_param: str, value: str) -> None:
+        self.config_param = config_param
+        self.value = value
+
+    def execute(self, c: Composition) -> None:
+        c.sql(
+            f"ALTER SYSTEM SET {self.config_param} TO {self.value}",
+            user="mz_system",
+            port=6877,
+        )

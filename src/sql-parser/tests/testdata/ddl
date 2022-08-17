@@ -596,7 +596,7 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) NOT EN
 CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY TOPIC 'consistency' CONSISTENCY FORMAT BYTES FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
 =>

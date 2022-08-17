@@ -191,6 +191,13 @@ const MAX_SINKS: ServerVar<i32> = ServerVar {
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
 };
 
+const MAX_MATERIALIZED_VIEWS: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_materialized_views"),
+    value: &100,
+    description:
+        "The maximum number of materialized views in the region, across all schemas (Materialize).",
+};
+
 const MAX_CLUSTERS: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("max_clusters"),
     value: &10,
@@ -219,6 +226,18 @@ const MAX_OBJECTS_PER_SCHEMA: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("max_objects_per_schema"),
     value: &1000,
     description: "The maximum number of objects in a schema (Materialize).",
+};
+
+const MAX_SECRETS: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_secrets"),
+    value: &100,
+    description: "The maximum number of secrets in the region, across all schemas (Materialize).",
+};
+
+const MAX_ROLES: ServerVar<i32> = ServerVar {
+    name: UncasedStr::new("max_roles"),
+    value: &1000,
+    description: "The maximum number of roles in the region (Materialize).",
 };
 
 /// Session variables.
@@ -731,11 +750,14 @@ pub struct SystemVars {
     max_tables: SystemVar<i32>,
     max_sources: SystemVar<i32>,
     max_sinks: SystemVar<i32>,
+    max_materialized_views: SystemVar<i32>,
     max_clusters: SystemVar<i32>,
     max_replicas_per_cluster: SystemVar<i32>,
     max_databases: SystemVar<i32>,
     max_schemas_per_database: SystemVar<i32>,
     max_objects_per_schema: SystemVar<i32>,
+    max_secrets: SystemVar<i32>,
+    max_roles: SystemVar<i32>,
 }
 
 impl Default for SystemVars {
@@ -744,11 +766,14 @@ impl Default for SystemVars {
             max_tables: SystemVar::new(&MAX_TABLES),
             max_sources: SystemVar::new(&MAX_SOURCES),
             max_sinks: SystemVar::new(&MAX_SINKS),
+            max_materialized_views: SystemVar::new(&MAX_MATERIALIZED_VIEWS),
             max_clusters: SystemVar::new(&MAX_CLUSTERS),
             max_replicas_per_cluster: SystemVar::new(&MAX_REPLICAS_PER_CLUSTER),
             max_databases: SystemVar::new(&MAX_DATABASES),
             max_schemas_per_database: SystemVar::new(&MAX_SCHEMAS_PER_DATABASE),
             max_objects_per_schema: SystemVar::new(&MAX_OBJECTS_PER_SCHEMA),
+            max_secrets: SystemVar::new(&MAX_SECRETS),
+            max_roles: SystemVar::new(&MAX_ROLES),
         }
     }
 }
@@ -761,11 +786,14 @@ impl SystemVars {
             &self.max_tables as &dyn Var,
             &self.max_sources,
             &self.max_sinks,
+            &self.max_materialized_views,
             &self.max_clusters,
             &self.max_replicas_per_cluster,
             &self.max_databases,
             &self.max_schemas_per_database,
             &self.max_objects_per_schema,
+            &self.max_secrets,
+            &self.max_roles,
         ]
         .into_iter()
     }
@@ -787,6 +815,8 @@ impl SystemVars {
             Ok(&self.max_sources)
         } else if name == MAX_SINKS.name {
             Ok(&self.max_sinks)
+        } else if name == MAX_MATERIALIZED_VIEWS.name {
+            Ok(&self.max_materialized_views)
         } else if name == MAX_CLUSTERS.name {
             Ok(&self.max_clusters)
         } else if name == MAX_REPLICAS_PER_CLUSTER.name {
@@ -797,6 +827,10 @@ impl SystemVars {
             Ok(&self.max_schemas_per_database)
         } else if name == MAX_OBJECTS_PER_SCHEMA.name {
             Ok(&self.max_objects_per_schema)
+        } else if name == MAX_SECRETS.name {
+            Ok(&self.max_secrets)
+        } else if name == MAX_ROLES.name {
+            Ok(&self.max_roles)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -816,6 +850,8 @@ impl SystemVars {
             self.max_sources.set(value)
         } else if name == MAX_SINKS.name {
             self.max_sinks.set(value)
+        } else if name == MAX_MATERIALIZED_VIEWS.name {
+            self.max_materialized_views.set(value)
         } else if name == MAX_CLUSTERS.name {
             self.max_clusters.set(value)
         } else if name == MAX_REPLICAS_PER_CLUSTER.name {
@@ -826,6 +862,10 @@ impl SystemVars {
             self.max_schemas_per_database.set(value)
         } else if name == MAX_OBJECTS_PER_SCHEMA.name {
             self.max_objects_per_schema.set(value)
+        } else if name == MAX_SECRETS.name {
+            self.max_secrets.set(value)
+        } else if name == MAX_ROLES.name {
+            self.max_roles.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -843,6 +883,8 @@ impl SystemVars {
             self.max_sources.reset()
         } else if name == MAX_SINKS.name {
             self.max_sinks.reset()
+        } else if name == MAX_MATERIALIZED_VIEWS.name {
+            self.max_materialized_views.reset()
         } else if name == MAX_CLUSTERS.name {
             self.max_clusters.reset()
         } else if name == MAX_REPLICAS_PER_CLUSTER.name {
@@ -853,6 +895,10 @@ impl SystemVars {
             self.max_schemas_per_database.reset()
         } else if name == MAX_OBJECTS_PER_SCHEMA.name {
             self.max_objects_per_schema.reset()
+        } else if name == MAX_SECRETS.name {
+            self.max_secrets.reset()
+        } else if name == MAX_ROLES.name {
+            self.max_roles.reset()
         } else {
             return Err(AdapterError::UnknownParameter(name.into()));
         }
@@ -860,43 +906,58 @@ impl SystemVars {
     }
 
     /// Returns the value of the `max_tables` configuration parameter.
-    pub fn _max_tables(&self) -> i32 {
+    pub fn max_tables(&self) -> i32 {
         *self.max_tables.value()
     }
 
     /// Returns the value of the `max_sources` configuration parameter.
-    pub fn _max_source(&self) -> i32 {
+    pub fn max_sources(&self) -> i32 {
         *self.max_sources.value()
     }
 
     /// Returns the value of the `max_sinks` configuration parameter.
-    pub fn _max_sinks(&self) -> i32 {
+    pub fn max_sinks(&self) -> i32 {
         *self.max_sinks.value()
     }
 
+    /// Returns the value of the `max_materialized_views` configuration parameter.
+    pub fn max_materialized_views(&self) -> i32 {
+        *self.max_materialized_views.value()
+    }
+
     /// Returns the value of the `max_clusters` configuration parameter.
-    pub fn _max_clusters(&self) -> i32 {
+    pub fn max_clusters(&self) -> i32 {
         *self.max_clusters.value()
     }
 
     /// Returns the value of the `max_replicas_per_cluster` configuration parameter.
-    pub fn _max_replicas_per_cluster(&self) -> i32 {
+    pub fn max_replicas_per_cluster(&self) -> i32 {
         *self.max_replicas_per_cluster.value()
     }
 
     /// Returns the value of the `max_databases` configuration parameter.
-    pub fn _max_databases(&self) -> i32 {
+    pub fn max_databases(&self) -> i32 {
         *self.max_databases.value()
     }
 
     /// Returns the value of the `max_schemas_per_database` configuration parameter.
-    pub fn _max_schemas_per_database(&self) -> i32 {
+    pub fn max_schemas_per_database(&self) -> i32 {
         *self.max_schemas_per_database.value()
     }
 
     /// Returns the value of the `max_objects_per_schema` configuration parameter.
-    pub fn _max_objects_per_schema(&self) -> i32 {
+    pub fn max_objects_per_schema(&self) -> i32 {
         *self.max_objects_per_schema.value()
+    }
+
+    /// Returns the value of the `max_secrets` configuration parameter.
+    pub fn max_secrets(&self) -> i32 {
+        *self.max_secrets.value()
+    }
+
+    /// Returns the value of the `max_roles` configuration parameter.
+    pub fn max_roles(&self) -> i32 {
+        *self.max_roles.value()
     }
 }
 

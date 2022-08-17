@@ -742,6 +742,56 @@ impl MirScalarExpr {
                         {
                             // Canonically order elements so that deduplication works better.
                             mem::swap(expr1, expr2);
+                        } else if let (
+                            BinaryFunc::Eq,
+                            MirScalarExpr::Literal(
+                                Ok(lit_row),
+                                ColumnType {
+                                    scalar_type:
+                                        ScalarType::Record {
+                                            fields: field_types,
+                                            ..
+                                        },
+                                    ..
+                                },
+                            ),
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate { .. },
+                                exprs: rec_create_args,
+                            },
+                        ) = (func, (**expr1).clone(), (**expr2).clone())
+                        {
+                            // Literal([c1, c2]) = record_create(e1, e2)
+                            //  -->
+                            // c1 = e1 AND c2 = e2
+                            //
+                            // (Records are represented as lists.)
+                            //
+                            // `MapFilterProject::literal_constraints` relies on this transform,
+                            // because `(e1,e2) IN ((1,2))` is desugared using `record_create`.
+
+                            match lit_row.unpack_first() {
+                                Datum::List(datum_list) => {
+                                    *e = MirScalarExpr::CallVariadic {
+                                        func: VariadicFunc::And,
+                                        exprs: itertools::izip!(
+                                            datum_list.iter(),
+                                            field_types,
+                                            rec_create_args
+                                        )
+                                        .map(|(d, (_, typ), a)| MirScalarExpr::CallBinary {
+                                            func: BinaryFunc::Eq,
+                                            expr1: Box::new(MirScalarExpr::Literal(
+                                                Ok(Row::pack_slice(&[d])),
+                                                typ,
+                                            )),
+                                            expr2: Box::new(a),
+                                        })
+                                        .collect(),
+                                    };
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     MirScalarExpr::CallVariadic { func, exprs } => {

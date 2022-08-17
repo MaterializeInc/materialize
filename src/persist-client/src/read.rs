@@ -12,7 +12,7 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
@@ -24,12 +24,11 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, info, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::Blob;
-use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
@@ -812,33 +811,18 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     T: Timestamp + Lattice + Codec64,
     UpdateFn: FnMut(&[u8], &[u8], T, [u8; 8]),
 {
-    let mut retry = metrics
-        .retries
-        .fetch_batch_part
-        .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
     let get_span = debug_span!("fetch_batch::get");
-    let value = loop {
-        let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
-            blob.get(&key.complete(shard_id)).await
-        })
-        .instrument(get_span.clone())
-        .await;
-        match value {
-            Some(x) => break x,
-            // If the underlying impl of blob isn't linearizable, then we
-            // might get a key reference that that blob isn't returning yet.
-            // Keep trying, it'll show up.
-            None => {
-                // This is quite unexpected given that our initial blobs _are_
-                // linearizable, so always log at info.
-                info!(
-                    "unexpected missing blob, trying again in {:?}: {}",
-                    retry.next_sleep(),
-                    key
-                );
-                retry = retry.sleep().await;
-            }
-        };
+    let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        blob.get(&key.complete(shard_id)).await
+    })
+    .instrument(get_span.clone())
+    .await;
+
+    let value = match value {
+        Some(v) => v,
+        // All blob implementations are linearizable, so a missing
+        // blob here suggests something has gone very wrong.
+        None => panic!("unexpected missing blob: {}", key),
     };
     drop(get_span);
 

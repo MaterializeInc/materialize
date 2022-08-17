@@ -1407,6 +1407,93 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// Tests that you can have simultaneous connections on the internal and external ports without
+// crashing
+#[test]
+fn test_internal_ports() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    {
+        let mut external_client = server.connect(postgres::NoTls)?;
+        let mut internal_client = server
+            .pg_config_internal()
+            .user(SYSTEM_USER)
+            .connect(postgres::NoTls)?;
+
+        assert_eq!(
+            1,
+            external_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+        assert_eq!(
+            1,
+            internal_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+    }
+
+    {
+        let mut external_client = server.connect(postgres::NoTls)?;
+        let mut internal_client = server
+            .pg_config_internal()
+            .user(SYSTEM_USER)
+            .connect(postgres::NoTls)?;
+
+        assert_eq!(
+            1,
+            external_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+        assert_eq!(
+            1,
+            internal_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+    }
+
+    Ok(())
+}
+
+// Test that trying to alter an invalid system param returns an error.
+// This really belongs in the resource-limits.td testdrive, but testdrive
+// doesn't allow you to specify a connection and expect a failure which is
+// needed for this test.
+#[test]
+fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(SYSTEM_USER)
+        .connect(postgres::NoTls)?;
+
+    mz_client.batch_execute(&"ALTER SYSTEM SET max_tables TO 2")?;
+    let res = mz_client
+        .batch_execute(&"ALTER SYSTEM SET invalid_param TO 42")
+        .unwrap_err();
+    assert!(res
+        .to_string()
+        .contains("unrecognized configuration parameter \"invalid_param\""));
+    let res = mz_client
+        .batch_execute(&"ALTER SYSTEM RESET invalid_param")
+        .unwrap_err();
+    assert!(res
+        .to_string()
+        .contains("unrecognized configuration parameter \"invalid_param\""));
+
+    Ok(())
+}
+
 /// Group commit will block writes until the current time has advanced. This can make
 /// performing inserts while using deterministic time difficult. This is a helper
 /// method to perform writes and advance the current time.

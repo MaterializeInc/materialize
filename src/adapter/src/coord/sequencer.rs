@@ -62,7 +62,7 @@ use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection,
-    SerializedComputeInstanceReplicaLocation, StorageSinkConnectionState,
+    SerializedComputeInstanceReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -3156,6 +3156,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
         let op = match value {
             SetVariableValue::Literal(Value::String(value)) => {
@@ -3181,6 +3182,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.is_user_allowed_to_alter_system(session)?;
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
@@ -3192,10 +3194,21 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         _: AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.is_user_allowed_to_alter_system(session)?;
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
+    }
+
+    fn is_user_allowed_to_alter_system(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.user() == SYSTEM_USER {
+            Ok(())
+        } else {
+            Err(AdapterError::Unauthorized(format!(
+                "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
+            )))
+        }
     }
 
     // Returns the name of the portal to execute.

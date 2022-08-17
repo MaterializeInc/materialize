@@ -158,6 +158,16 @@ where
     }
 }
 
+/// Indicates what work was done in a call to [crate::batch::BatchBuilder::add]
+#[derive(Debug)]
+pub enum Added {
+    /// A record was inserted into a pending batch part
+    Record,
+    /// A record was inserted into a pending batch part
+    /// and the part was sent to blob storage
+    RecordAndParts,
+}
+
 /// A builder for [Batches](Batch) that allows adding updates piece by piece and
 /// then finishing it.
 #[derive(Debug)]
@@ -279,7 +289,13 @@ where
     ///
     /// The update timestamp must be greater or equal to `lower` that was given
     /// when creating this [BatchBuilder].
-    pub async fn add(&mut self, key: &K, val: &V, ts: &T, diff: &D) -> Result<(), InvalidUsage<T>> {
+    pub async fn add(
+        &mut self,
+        key: &K,
+        val: &V,
+        ts: &T,
+        diff: &D,
+    ) -> Result<Added, InvalidUsage<T>> {
         if !self.lower.less_equal(ts) {
             return Err(InvalidUsage::UpdateNotBeyondLower {
                 ts: ts.clone(),
@@ -315,6 +331,7 @@ where
 
         // If we've filled up a chunk of ColumnarRecords, flush it out now to
         // blob storage to keep our memory usage capped.
+        let mut part_written = false;
         for part in self.records.take_filled() {
             // TODO: This upper would ideally be `[self.max_ts+1]` but
             // there's nothing that lets us increment a timestamp. An empty
@@ -325,9 +342,14 @@ where
             let upper = Antichain::new();
             let since = Antichain::from_elem(T::minimum());
             self.parts.write(part, upper, since).await;
+            part_written = true;
         }
 
-        Ok(())
+        if part_written {
+            Ok(Added::RecordAndParts)
+        } else {
+            Ok(Added::Record)
+        }
     }
 }
 

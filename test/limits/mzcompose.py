@@ -42,6 +42,9 @@ class Generator:
         print(f"\n#\n# {cls}\n#\n")
         print("> DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"> CREATE SCHEMA public /* {cls} */;")
+        print(
+            "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}"
+        )
 
     @classmethod
     def body(cls) -> None:
@@ -88,6 +91,10 @@ class Tables(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {Tables.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {Tables.COUNT * 10};")
         for i in cls.all():
             print(f"> CREATE TABLE t{i} (f1 INTEGER);")
         for i in cls.all():
@@ -105,6 +112,8 @@ class Indexes(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {Indexes.COUNT * 10};")
         print(
             "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
         )
@@ -122,6 +131,10 @@ class KafkaTopics(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {KafkaTopics.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaTopics.COUNT * 10};")
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -152,6 +165,12 @@ class KafkaSourcesSameTopic(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {KafkaSourcesSameTopic.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSourcesSameTopic.COUNT * 10};"
+        )
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -180,6 +199,12 @@ class KafkaPartitions(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {KafkaPartitions.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaPartitions.COUNT * 10};"
+        )
         # gh#12193 : topic_metadata_refresh_interval_ms is not observed so a default refresh interval of 300s applies
         print("$ set-sql-timeout duration=600s")
         print('$ set key-schema={"type": "string"}')
@@ -224,6 +249,12 @@ class KafkaRecordsEnvelopeNone(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeNone.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeNone.COUNT * 10};"
+        )
         print(
             '$ set kafka-records-envelope-none={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
         )
@@ -249,6 +280,14 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeUpsertSameValue.COUNT * 10};"
+        )
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeUpsertSameValue.COUNT * 10};"
+        )
         print(
             '$ set kafka-records-envelope-upsert-same-key={"type": "record", "name": "Key", "fields": [ {"name": "key", "type": "string"} ] }'
         )
@@ -278,6 +317,14 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeUpsertDistinctValues.COUNT * 10};"
+        )
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeUpsertDistinctValues.COUNT * 10};"
+        )
         print(
             '$ set kafka-records-envelope-upsert-distinct-key={"type": "record", "name": "Key", "fields": [ {"name": "key", "type": "string"} ] }'
         )
@@ -319,6 +366,12 @@ class KafkaSinks(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_materialized_views = {KafkaSinks.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sinks = {KafkaSinks.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinks.COUNT * 10};")
         for i in cls.all():
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
         for i in cls.all():
@@ -340,6 +393,12 @@ class KafkaSinksSameSource(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sinks = {KafkaSinksSameSource.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinksSameSource.COUNT * 10};"
+        )
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         for i in cls.all():
             print(
@@ -552,6 +611,8 @@ class ViewsNested(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {ViewsNested.COUNT * 10};")
         print("> CREATE TABLE t (f1 INTEGER);")
         print("> INSERT INTO t VALUES (0);")
         print("> CREATE VIEW v0 (f1) AS SELECT f1 FROM t;")
@@ -570,6 +631,14 @@ class ViewsMaterializedNested(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_materialized_views = {ViewsMaterializedNested.COUNT * 10};"
+        )
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {ViewsMaterializedNested.COUNT * 10};"
+        )
         print("> CREATE TABLE t (f1 INTEGER);")
         print("> INSERT INTO t VALUES (0);")
         print("> CREATE MATERIALIZED VIEW v0 (f1) AS SELECT f1 FROM t;")
@@ -1191,6 +1260,20 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             for n in computeds:
                 c.up(n.name)
 
+            # Increase resource limits
+            c.testdrive(
+                dedent(
+                    """
+                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
+
+                    """
+                    f"""
+                    $ postgres-execute connection=mz_system
+                    ALTER SYSTEM SET max_clusters = {args.clusters * 10}
+                    ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
+                    """
+                )
+            )
             # Create some input data
             c.testdrive(
                 dedent(
