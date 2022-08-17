@@ -73,6 +73,16 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::StorageUsageUpdate(sizes) => {
                 self.storage_usage_update(sizes).await;
             }
+            Message::Consolidate(collections) => {
+                self.consolidate(&collections).await;
+            }
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn consolidate(&mut self, collections: &[mz_stash::Id]) {
+        if let Err(err) = self.catalog.consolidate(collections).await {
+            warn!("consolidation error: {:?}", err);
         }
     }
 

@@ -40,21 +40,18 @@ impl<S: Stash> Memory<S> {
         }
     }
 
-    async fn consolidate_collection<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let since = self.since(collection).await?;
-        self.consolidate_id(&collection.id, since);
-        Ok(())
-    }
-
-    fn consolidate_id(&mut self, collection_id: &Id, since: Antichain<Timestamp>) {
-        if let Some(entry) = self.entries.get_mut(collection_id) {
+    fn consolidate_id(&mut self, collection_id: Id) {
+        if let Some(entry) = self.entries.get_mut(&collection_id) {
+            let since = match self.sinces.get(&collection_id) {
+                Some(since) => since,
+                // If we don't know the since for this collection, remove the entries. We can't
+                // merely fetch the since because the API requires a full StashCollection, and
+                // we only have the Id here.
+                None => {
+                    self.entries.remove(&collection_id);
+                    return;
+                }
+            };
             match since.as_option() {
                 Some(since) => {
                     for ((_k, _v), ts, _diff) in entry.iter_mut() {
@@ -68,7 +65,7 @@ impl<S: Stash> Memory<S> {
                     // This will cause all calls to iter over this collection to always pass
                     // through to the underlying stash, making those calls not cached. This isn't
                     // currently a performance problem because the empty since is not used.
-                    self.entries.remove(collection_id);
+                    self.entries.remove(&collection_id);
                 }
             }
         }
@@ -170,7 +167,7 @@ impl<S: Stash> Stash for Memory<S> {
         // Only update the memory cache if it's already present.
         if let Some(entry) = self.entries.get_mut(&collection.id) {
             entry.extend(local_entries);
-            self.consolidate_collection(collection).await?;
+            self.consolidate_id(collection.id);
         }
         Ok(())
     }
@@ -226,33 +223,19 @@ impl<S: Stash> Stash for Memory<S> {
         self.stash.compact_batch(compactions).await?;
         for (collection, since) in compactions {
             self.sinces.insert(collection.id, since.clone());
-            self.consolidate_collection(*collection).await?;
+            self.consolidate_id(collection.id);
         }
         Ok(())
     }
 
-    async fn consolidate<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
         self.consolidate_batch(&[collection]).await
     }
 
-    async fn consolidate_batch<K, V>(
-        &mut self,
-        collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
         self.stash.consolidate_batch(collections).await?;
         for collection in collections {
-            self.consolidate_collection(*collection).await?;
+            self.consolidate_id(*collection);
         }
         Ok(())
     }
@@ -300,21 +283,15 @@ impl<S: Stash> Stash for Memory<S> {
 
 #[async_trait]
 impl<S: Append> Append for Memory<S> {
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = AppendBatch> + Send + 'static,
-        I::IntoIter: Send,
-    {
-        let batches: Vec<_> = batches.into_iter().collect();
-        self.stash.append(batches.clone()).await?;
+    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        self.stash.append(&batches).await?;
         for batch in batches {
-            self.uppers.insert(batch.collection_id, batch.upper);
+            self.uppers.insert(batch.collection_id, batch.upper.clone());
             self.sinces
                 .insert(batch.collection_id, batch.compact.clone());
             // Only update the memory cache if it's already present.
             if let Some(entry) = self.entries.get_mut(&batch.collection_id) {
-                entry.extend(batch.entries);
-                self.consolidate_id(&batch.collection_id, batch.compact);
+                entry.extend(batch.entries.clone());
             }
         }
         Ok(())

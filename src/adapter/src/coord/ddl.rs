@@ -169,7 +169,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap_or(SYSTEM_CONN_ID),
         )?;
 
-        let (builtin_table_updates, result) = self
+        let (builtin_table_updates, collections, result) = self
             .catalog
             .transact(session, ops, |catalog| {
                 f(CatalogTxn {
@@ -231,6 +231,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         .await;
 
+        self.consolidations_tx
+            .send(collections)
+            .expect("sending on consolidations_tx must succeed");
         Ok(result)
     }
 

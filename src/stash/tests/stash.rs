@@ -191,7 +191,7 @@ where
     other_batch.upper = Antichain::from_elem(Timestamp::MIN);
     assert_eq!(
           stash
-            .append(vec![orders_batch.clone(), other_batch.clone()]).await
+            .append(&[orders_batch.clone(), other_batch.clone()]).await
             .unwrap_err()
             .to_string(),
         "stash error: seal request {-9223372036854775808} is less than the current upper frontier {1}",
@@ -199,7 +199,7 @@ where
     // Test batches in the other direction too.
     assert_eq!(
         stash
-            .append(vec![other_batch.clone(),orders_batch.clone() ]).await
+            .append(&[other_batch.clone(),orders_batch.clone() ]).await
             .unwrap_err()
             .to_string(),
         "stash error: seal request {-9223372036854775808} is less than the current upper frontier {1}",
@@ -207,7 +207,7 @@ where
 
     // Fix the upper, append should work now.
     other_batch.upper = other_upper;
-    stash.append(vec![other_batch, orders_batch]).await?;
+    stash.append(&[other_batch, orders_batch]).await?;
     assert_eq!(
         stash.iter(orders).await?,
         &[(("k1".into(), "v1".into()), -9223372036854775808, 1),]
@@ -234,7 +234,7 @@ where
     // must also compact and consolidate.
     for _ in 0..5 {
         let orders_batch = orders.make_batch(&mut stash).await?;
-        stash.append(vec![orders_batch]).await?;
+        stash.append(&[orders_batch]).await?;
         assert_eq!(
             stash.since(orders).await?.into_option().unwrap(),
             stash.upper(orders).await?.into_option().unwrap() - 1
@@ -270,7 +270,7 @@ where
     let mut stash = f().await;
     let mut orders_batch = orders.make_batch(&mut stash).await?;
     orders.append_to_batch(&mut orders_batch, &"k4".to_string(), &"v4".to_string(), 1);
-    stash.append(vec![orders_batch]).await?;
+    stash.append(&[orders_batch]).await?;
     assert_eq!(
         stash.peek_one(orders).await?,
         BTreeMap::from([
@@ -399,7 +399,7 @@ where
     );
 
     // Check that physical compaction does not change the collection's contents.
-    stash.consolidate(orders).await?;
+    stash.consolidate(orders.id).await?;
     assert_eq!(
         stash.iter(orders).await?,
         &[
@@ -459,7 +459,7 @@ where
         },
         "stash error: cannot iterate collection with empty since frontier",
     );
-    stash.consolidate(orders).await?;
+    stash.consolidate(orders.id).await?;
 
     // Double check that the other collection is still untouched.
     assert_eq!(
@@ -505,7 +505,7 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         for (k, v, diff) in pending {
             collection.append_to_batch(&mut batch, &k, &v, diff);
         }
-        stash.append(vec![batch]).await?;
+        stash.append(&[batch]).await?;
         Ok(())
     }
 
