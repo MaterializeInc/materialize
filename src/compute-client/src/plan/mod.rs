@@ -962,8 +962,25 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     .cloned()
                     .unwrap_or_else(AvailableCollections::new_raw);
 
+                // Seek out an arrangement key that might be constrained to a literal.
+                // TODO: Improve key selection heuristic.
+                // Note that most (actually all, as far as I know) of the cases that used to be
+                // handled by this code are instead handled by `CanonicalizeMfp`.
+                let key_val = in_keys
+                    .arranged
+                    .iter()
+                    .filter_map(|key| {
+                        mfp.literal_constraints(&key.0)
+                            .map(|val| (key.clone(), val))
+                    })
+                    .max_by_key(|(key, _val)| key.0.len());
+
                 // Determine the plan of action for the `Get` stage.
-                let plan = if !mfp.is_identity() {
+                let plan = if let Some(((key, permutation, thinning), val)) = &key_val {
+                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
+                    GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp)
+                } else if !mfp.is_identity() {
                     // We need to ensure a collection exists, which means we must form it.
                     if let Some((key, permutation, thinning)) =
                         in_keys.arbitrary_arrangement().cloned()

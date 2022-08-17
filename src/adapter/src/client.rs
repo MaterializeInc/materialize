@@ -68,15 +68,6 @@ impl Handle {
     }
 }
 
-/// Distinguishes between external and internal clients.
-#[derive(Debug, Clone)]
-pub enum ClientType {
-    /// Client that has connected over an external port.
-    External,
-    /// Client that has connected over an internal port.
-    Internal,
-}
-
 /// A coordinator client.
 ///
 /// A coordinator client is a simple handle to a communication channel with the
@@ -88,15 +79,13 @@ pub enum ClientType {
 pub struct Client {
     cmd_tx: mpsc::UnboundedSender<Command>,
     id_alloc: Arc<IdAllocator<ConnectionId>>,
-    client_type: ClientType,
 }
 
 impl Client {
-    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>, client_type: ClientType) -> Client {
+    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
         Client {
             cmd_tx,
             id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
-            client_type,
         }
     }
 
@@ -130,11 +119,6 @@ impl Client {
         let response = self.system_execute(stmt).await?;
         Ok(response.results.into_element())
     }
-
-    /// Returns the `ClientType` associated with this client.
-    pub fn client_type(&self) -> &ClientType {
-        &self.client_type
-    }
 }
 
 /// A coordinator client that is bound to a connection.
@@ -153,11 +137,6 @@ impl ConnClient {
     /// Returns the ID of the connection associated with this client.
     pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
-    }
-
-    /// Returns the `ClientType` associated with this client.
-    pub fn client_type(&self) -> &ClientType {
-        self.inner.client_type()
     }
 
     /// Upgrades this connection client to a session client.

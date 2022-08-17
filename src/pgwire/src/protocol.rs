@@ -78,7 +78,11 @@ pub struct RunParams<'a, A> {
     pub version: i32,
     /// The parameters that the client provided in the startup message.
     pub params: HashMap<String, String>,
+    /// Frontegg authentication.
     pub frontegg: Option<&'a FronteggAuthentication>,
+    /// Whether this is an internal server that permits access to restricted
+    /// system resources.
+    pub internal: bool,
 }
 
 /// Runs a pgwire connection to completion.
@@ -99,6 +103,7 @@ pub async fn run<'a, A>(
         version,
         mut params,
         frontegg,
+        internal,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -115,17 +120,13 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
 
-    // Validate that mz_system only logs in via an internal port.
-    match (adapter_client.client_type(), user.as_str()) {
-        (mz_adapter::client::ClientType::External, mz_adapter::catalog::SYSTEM_USER) => {
-            let msg = format!("unauthorized login to user '{user}'");
-            return conn
-                .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
-                .await;
-        }
-        (mz_adapter::client::ClientType::Internal, _)
-        | (mz_adapter::client::ClientType::External, _) => {}
-    };
+    // Validate that builtin roles only log in via an internal port.
+    if !internal && mz_adapter::catalog::is_reserved_name(user.as_str()) {
+        let msg = format!("unauthorized login to user '{user}'");
+        return conn
+            .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
+            .await;
+    }
 
     // Validate that the connection is compatible with the TLS mode.
     //

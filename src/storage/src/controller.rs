@@ -1376,7 +1376,7 @@ impl<T: Timestamp> ExportState<T> {
 
 mod persist_read_handles {
 
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
@@ -1435,8 +1435,10 @@ mod persist_read_handles {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
             mz_ore::task::spawn(|| "PersistReadHandles", async move {
-                let mut read_handles: BTreeMap<GlobalId, ReadHandle<SourceData, (), T, Diff>> =
-                    BTreeMap::new();
+                let mut read_handles: BTreeMap<
+                    GlobalId,
+                    Option<ReadHandle<SourceData, (), T, Diff>>,
+                > = BTreeMap::new();
 
                 let mut shutdown = false;
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -1445,7 +1447,9 @@ mod persist_read_handles {
                         _ = interval.tick() => {
                             let futs = FuturesUnordered::new();
                             for (_id, read) in read_handles.iter_mut() {
-                                futs.push(read.maybe_heartbeat_reader());
+                                if let Some(read) = read.as_mut() {
+                                    futs.push(read.maybe_heartbeat_reader());
+                                }
                             }
                             futs.collect::<Vec<_>>().await;
                         },
@@ -1463,7 +1467,7 @@ mod persist_read_handles {
                                 for (span, command) in commands {
                                     match command {
                                         PersistWorkerCmd::Register(id, read_handle) => {
-                                            let previous = read_handles.insert(id, read_handle);
+                                            let previous = read_handles.insert(id, Some(read_handle));
                                             if previous.is_some() {
                                                 panic!(
                                                     "already registered a ReadHandle for collection {:?}",
@@ -1496,16 +1500,19 @@ mod persist_read_handles {
                                                 Ok(contents)
                                             }
 
-                                            if let Some(read_handle) = read_handles.get_mut(&id) {
-                                                let result = snapshot(read_handle, id, as_of)
+                                            let result = match read_handles.get_mut(&id) {
+                                                Some(Some(read_handle)) => {
+                                                    snapshot(read_handle, id, as_of)
                                                     .instrument(span.clone())
-                                                    .await;
-                                                oneshot.send(result).expect("Oneshot should not fail");
-                                            } else {
-                                                oneshot
-                                                    .send(Err(StorageError::IdentifierMissing(id)))
-                                                    .expect("Oneshot should not fail");
-                                            }
+                                                    .await
+                                                },
+                                                Some(None) | None => {
+                                                    // A Some(None) means we downgraded since
+                                                    // to empty antichain (aka we dropped it).
+                                                    Err(StorageError::IdentifierMissing(id))
+                                                }
+                                            };
+                                            oneshot.send(result).expect("Oneshot should not fail");
                                         }
                                         PersistWorkerCmd::Shutdown => {
                                             shutdown = true;
@@ -1513,26 +1520,44 @@ mod persist_read_handles {
                                     }
                                 }
 
-
+                                let mut drops = HashSet::new();
                                 if !downgrades.is_empty() {
                                     let futs = FuturesUnordered::new();
 
                                     for (id, read) in read_handles.iter_mut() {
                                         if let Some((span, since)) = downgrades.remove(id) {
-                                            let fut = async move {
-                                                // Use maybe_downgrade_since here so that we opt
-                                                // into rate-limiting. It's okay for the since to
-                                                // lag behind a bit and this _greatly_ reduces the
-                                                // persist traffic.
-                                                read.maybe_downgrade_since(&since).instrument(span).await;
-                                            };
+                                        // A None read handle is one that had a successful
+                                        // downgrade_since to the empty antichain, so we treat it as
+                                        // a no-op for any later downgrade_since calls.
+                                        if let Some(read) = read.as_mut() {
+                                                // If we downgrade_since to the empty antichain,
+                                                // then expire and drop the ReadHandle afterward.
+                                                if since.is_empty() {
+                                                    drops.insert(*id);
+                                                }
 
-                                            futs.push(fut);
+                                                let fut = async move {
+                                                    // Use maybe_downgrade_since here so that we opt
+                                                    // into rate-limiting. It's okay for the since to
+                                                    // lag behind a bit and this _greatly_ reduces the
+                                                    // persist traffic.
+                                                    read.maybe_downgrade_since(&since).instrument(span).await;
+                                                };
+
+                                                futs.push(fut);
+                                            }
                                         }
                                     }
 
                                     assert!(downgrades.is_empty());
                                     futs.collect::<Vec<_>>().await;
+                                }
+
+                                // This should be pretty rare, so don't bother doing them all in a
+                                // FuturesUnordered.
+                                for id in drops {
+                                    let read = read_handles.remove(&id).unwrap().unwrap();
+                                    read.expire().await;
                                 }
                             } else {
                                 shutdown = true;

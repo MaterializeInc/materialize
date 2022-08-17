@@ -12,7 +12,9 @@
 > SELECT COUNT(*) FROM sink_table
 3
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ kafka-verify format=avro sink=materialize.public.sink_sink sort-messages=true
-{"before":null,"after":{"row":{"f1":{"int":1}}}}
-{"before":null,"after":{"row":{"f1":{"int":2}}}}
-{"before":null,"after":{"row":{"f1":{"int":3}}}}
+{"before":null, "after":{"row":{"f1":{"int":1}}}, "transaction":{"id":"<TIMESTAMP>"}}
+{"before":null, "after":{"row":{"f1":{"int":2}}}, "transaction":{"id":"<TIMESTAMP>"}}
+{"before":null, "after":{"row":{"f1":{"int":3}}}, "transaction":{"id":"<TIMESTAMP>"}}
