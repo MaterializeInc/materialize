@@ -2285,7 +2285,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_AUTHID),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
-        Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
+        // This is disabled for the moment because it has unusual upper
+        // advancement behavior.
+        // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+        // Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
     ]);
 
     builtins
