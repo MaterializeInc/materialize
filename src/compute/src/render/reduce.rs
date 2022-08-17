@@ -1208,7 +1208,7 @@ where
 
     // now concatenate, if necessary, multiple aggregations
     let collection = if to_aggregate.len() == 1 {
-        to_aggregate[0].clone()
+        to_aggregate.remove(0)
     } else {
         differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate)
     };
