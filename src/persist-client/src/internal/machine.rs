@@ -115,6 +115,12 @@ where
         self.state.seqno()
     }
 
+    #[cfg(test)]
+    #[track_caller]
+    pub(crate) fn seqno_since(&self) -> SeqNo {
+        self.state.seqno_since_super()
+    }
+
     pub async fn register_reader(
         &mut self,
         reader_id: &ReaderId,

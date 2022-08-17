@@ -309,7 +309,7 @@ pub struct SubscribeBatchReceiver<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    consumed_batch_rx: mpsc::Receiver<Vec<LeasedBatch<T>>>,
+    consumed_batch_rx: mpsc::UnboundedReceiver<Vec<LeasedBatch<T>>>,
     reader_id_tx: oneshot::Sender<ReaderId>,
 }
 
@@ -327,7 +327,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     reader_id: BatchReturnReaderId,
-    consumed_batch_tx: mpsc::Sender<Vec<LeasedBatch<T>>>,
+    consumed_batch_tx: mpsc::UnboundedSender<Vec<LeasedBatch<T>>>,
 }
 
 impl<T> SubscribeBatchReturner<T>
@@ -356,7 +356,7 @@ where
             .map(LeasedBatch::<T>::from)
             .collect::<Vec<_>>();
 
-        if let Err(mpsc::error::SendError(batches)) = self.consumed_batch_tx.send(batches).await {
+        if let Err(mpsc::error::SendError(batches)) = self.consumed_batch_tx.send(batches) {
             // Subscribe loop dropped, which drops its ReadHandle, which
             // in turn drops all leases, so doing anything else here is
             // both moot and impossible.
@@ -385,7 +385,7 @@ where
 {
     snapshot_batches: VecDeque<LeasedBatch<T>>,
     listen: Listen<K, V, T, D>,
-    consumed_batch_rx: mpsc::Receiver<Vec<LeasedBatch<T>>>,
+    consumed_batch_rx: mpsc::UnboundedReceiver<Vec<LeasedBatch<T>>>,
 }
 
 impl<K, V, T, D> Subscribe<K, V, T, D>
@@ -399,9 +399,9 @@ where
     /// issuer after processing. This is necessary to handle the batch's leases.
     pub fn new_batch_return_channels() -> (SubscribeBatchReturner<T>, SubscribeBatchReceiver<T>) {
         let (consumed_batch_tx, consumed_batch_rx): (
-            mpsc::Sender<Vec<LeasedBatch<T>>>,
-            mpsc::Receiver<Vec<LeasedBatch<T>>>,
-        ) = mpsc::channel(1);
+            mpsc::UnboundedSender<Vec<LeasedBatch<T>>>,
+            mpsc::UnboundedReceiver<Vec<LeasedBatch<T>>>,
+        ) = mpsc::unbounded_channel();
         let (reader_id_tx, reader_id_rx) = oneshot::channel::<ReaderId>();
         (
             SubscribeBatchReturner {
@@ -1074,6 +1074,173 @@ where
             }
             .instrument(expire_span),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist::location::Consensus;
+    use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+    use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
+
+    use crate::async_runtime::CpuHeavyRuntime;
+    use crate::r#impl::metrics::Metrics;
+    use crate::{PersistClient, PersistConfig};
+
+    use super::*;
+
+    // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatch` semantics.
+    #[tokio::test]
+    async fn seqno_leases() {
+        mz_ore::test::init_logging();
+        let mut data = vec![];
+        for i in 0..10 {
+            data.push(((i.to_string(), i.to_string()), i, 1))
+        }
+
+        let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let consensus = Arc::new(MemConsensus::default());
+        let unreliable = UnreliableHandle::default();
+        unreliable.totally_available();
+        let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
+            as Arc<dyn Consensus + Send + Sync>;
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+
+        let (mut write, read) = PersistClient::new(
+            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+            blob,
+            consensus,
+            metrics,
+            cpu_heavy_runtime,
+        )
+        .await
+        .expect("client construction failed")
+        .expect_open::<String, String, u64, i64>(ShardId::new())
+        .await;
+
+        // Seed with some values
+        let mut offset = 0;
+        let mut width = 2;
+
+        for i in offset..offset + width {
+            write
+                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .await;
+        }
+        offset += width;
+
+        // Create machinery for subscribe + fetch
+
+        let fetcher = read.clone().await.batch_fetcher().await;
+
+        let (mut consumed_batch_tx, consumed_batch_rx) =
+            Subscribe::<String, String, u64, i64>::new_batch_return_channels();
+
+        let mut subscribe = read
+            .subscribe(Antichain::from_elem(1), consumed_batch_rx)
+            .await
+            .expect("cannot serve requested as_of");
+
+        // Determine sequence number at outset.
+        let original_seqno_since = subscribe.listen.handle.machine.seqno_since();
+
+        let mut batches = vec![];
+
+        width = 4;
+        // Collect batches while continuing to write values
+        for i in offset..offset + width {
+            batches.push(subscribe.next().await);
+            // Here and elsewhere we "cheat" and immediately downgrade the since
+            // to demonstate the effects of SeqNo leases immediately.
+            subscribe
+                .listen
+                .handle
+                .downgrade_since(&subscribe.listen.since)
+                .await;
+
+            write
+                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .await;
+
+            // SeqNo is not downgraded
+            assert_eq!(
+                subscribe.listen.handle.machine.seqno_since(),
+                original_seqno_since
+            );
+        }
+
+        offset += width;
+
+        let mut seqno_since = subscribe.listen.handle.machine.seqno_since();
+
+        // We're starting out with the original, non-downgraded SeqNo
+        assert_eq!(seqno_since, original_seqno_since);
+
+        // We have to handle the batches we generate during the next loop to
+        // ensure they don't panic.
+        let mut subsequent_batches = vec![];
+
+        // Ensure monotonicity of seqnos we're processing, otherwise the
+        // invariant we're testing (returning the last batch of a seqno will
+        // downgrade its since) will not hold.
+        let mut this_seqno = None;
+
+        // Repeat the same process as above, more or less, while fetching + returning batches
+        for (mut i, batch) in batches.into_iter().enumerate() {
+            let batch_seqno = batch.leased_seqno.seqno().unwrap();
+            let last_seqno = this_seqno.replace(batch_seqno);
+            assert!(last_seqno.is_none() || this_seqno >= last_seqno);
+
+            let (batch, _) = fetcher.fetch_batch(batch).await;
+
+            // Emulating drop
+            let b = SerdeLeasedBatch::from(batch).clone();
+            consumed_batch_tx.return_batches(vec![b]).await;
+
+            // Simulates an exchange
+            subsequent_batches.push(SerdeLeasedBatch::from(subscribe.next().await));
+
+            subscribe
+                .listen
+                .handle
+                .downgrade_since(&subscribe.listen.since)
+                .await;
+
+            // Write more new values
+            i += offset;
+            write
+                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .await;
+
+            // We should expect the SeqNo to be downgraded if this batch's SeqNo
+            // is no longer leased to any other batches, either.
+            let expect_downgrade = subscribe
+                .listen
+                .handle
+                .leased_seqnos
+                .get(&batch_seqno)
+                .is_none();
+
+            let new_seqno_since = subscribe.listen.handle.machine.seqno_since();
+            if expect_downgrade {
+                assert!(new_seqno_since > seqno_since);
+            } else {
+                assert_eq!(new_seqno_since, seqno_since);
+            }
+            seqno_since = new_seqno_since;
+        }
+
+        // SeqNo since was downgraded
+        assert!(seqno_since > original_seqno_since);
+
+        drop(subscribe);
+
+        // Handles returning batches to a dropped subscribe w/o panicking.
+        consumed_batch_tx.return_batches(subsequent_batches).await;
     }
 }
 

@@ -375,6 +375,13 @@ where
         self.collections.trace.num_updates()
     }
 
+    #[cfg(test)]
+    #[track_caller]
+    /// Helper function to reveal this value in tests.
+    pub(super) fn seqno_since_super(&self) -> SeqNo {
+        self.seqno_since()
+    }
+
     fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
         for cap in self.collections.readers.values() {
