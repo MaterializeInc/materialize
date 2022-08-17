@@ -99,206 +99,17 @@ where
         .map(Ok)
         .concat(&err_stream.as_collection().map(Err));
 
-    if sink_id.is_user() {
-        Some(Rc::new((
-            new_install_desired_into_persist(
-                sink_id,
-                target,
-                desired_collection,
-                persist_collection,
-                as_of,
-                compute_state,
-            ),
-            token,
-        )))
-    } else {
-        Some(Rc::new((
-            install_desired_into_persist(
-                sink_id,
-                target,
-                desired_collection,
-                persist_collection,
-                as_of,
-                compute_state,
-            ),
-            token,
-        )))
-    }
-}
-
-fn install_desired_into_persist<G>(
-    sink_id: GlobalId,
-    target: &CollectionMetadata,
-    desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
-    persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
-    as_of: Antichain<Timestamp>,
-    compute_state: &mut crate::compute_state::ComputeState,
-) -> Option<Rc<dyn Any>>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    let scope = desired_collection.scope();
-
-    let persist_clients = Arc::clone(&compute_state.persist_clients);
-    let persist_location = target.persist_location.clone();
-    let shard_id = target.data_shard;
-
-    let operator_name = format!("persist_sink({})", shard_id);
-    let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
-
-    // Only attempt to write from this frontier onward, as our data are not necessarily
-    // correct for times not greater or equal to this frontier.
-    let mut write_lower_bound = as_of;
-
-    // TODO(mcsherry): this is shardable, eventually. But for now use a single writer.
-    let hashed_id = sink_id.hashed();
-    let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
-    let mut desired_input =
-        persist_op.new_input(&desired_collection.inner, Exchange::new(move |_| hashed_id));
-    let mut persist_input =
-        persist_op.new_input(&persist_collection.inner, Exchange::new(move |_| hashed_id));
-
-    // Dropping this token signals that the operator should shut down cleanly.
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
-
-    // Only the active_write_worker will ever produce data so all other workers have
-    // an empty frontier. It's necessary to insert all of these into `compute_state.
-    // sink_write_frontier` below so we properly clear out default frontiers of
-    // non-active workers.
-    let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
-        Antichain::from_elem(TimelyTimestamp::minimum())
-    } else {
-        Antichain::new()
-    }));
-
-    compute_state
-        .sink_write_frontiers
-        .insert(sink_id, Rc::clone(&shared_frontier));
-
-    // This operator accepts the current and desired update streams for a `persist` shard.
-    // It attempts to write out updates, starting from the current's upper frontier, that
-    // will cause the changes of desired to be committed to persist.
-
-    persist_op.build_async(
-        scope,
-        move |_capabilities, frontiers, scheduler| async move {
-            let mut buffer = Vec::new();
-
-            // Contains `desired - persist`, reflecting the updates we would like to commit
-            // to `persist` in order to "correct" it to track `desired`. This collection is
-            // only modified by updates received from either the `desired` or `persist` inputs.
-            let mut correction = Vec::new();
-
-            // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-            let persist_client = persist_clients
-                .lock()
-                .await
-                .open(persist_location)
-                .await
-                .expect("could not open persist client");
-
-            let (mut write, read) = persist_client
-                .open::<SourceData, (), Timestamp, Diff>(shard_id)
-                .await
-                .expect("could not open persist shard");
-
-            // Our write lower bound must be at least the persist shard's since, otherwise we
-            // wouldn't be able to read back the data we have written.
-            write_lower_bound = write_lower_bound.join(read.since());
-            read.expire().await;
-
-            // Advance the persist shard's upper to at least our write lower bound.
-            let current_upper = write.upper().clone();
-            if PartialOrder::less_than(&current_upper, &write_lower_bound) {
-                let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
-                write
-                    .append(empty_updates, current_upper, write_lower_bound.clone())
-                    .await
-                    .expect("invalid usage")
-                    .expect("unexpected upper");
-            }
-
-            while scheduler.notified().await {
-
-                if !active_write_worker
-                    || token_weak.upgrade().is_none()
-                    // FRANK: I don't understand this case.
-                    || shared_frontier.borrow().is_empty()
-                {
-                    return;
-                }
-
-                // Extract desired rows as positive contributions to `correction`.
-                desired_input.for_each(|_cap, data| {
-                    data.swap(&mut buffer);
-                    correction.append(&mut buffer);
-                });
-
-                // Extract persist rows as negative contributions to `correction`.
-                persist_input.for_each(|_cap, data| {
-                    data.swap(&mut buffer);
-                    correction.extend(buffer.drain(..).map(|(d,t,r)| (d,t,-r)));
-                });
-
-                // Capture current frontiers.
-                let frontiers = frontiers.borrow().clone();
-                let desired_frontier = &frontiers[0];
-                let persist_frontier = &frontiers[1];
-
-                // We should only attempt a commit to an interval at least our lower bound.
-                if PartialOrder::less_equal(&write_lower_bound, persist_frontier) {
-
-                    // We may have the opportunity to commit updates.
-                    if PartialOrder::less_than(persist_frontier, desired_frontier) {
-
-                        // Advance all updates to `persist`'s frontier.
-                        for (_, time, _) in correction.iter_mut() {
-                            time.advance_by(persist_frontier.borrow());
-                        }
-                        // Consolidate updates within.
-                        consolidate_updates(&mut correction);
-
-                        let to_append =
-                        correction
-                            .iter()
-                            .filter(|(_, time, _)| persist_frontier.less_equal(time) && !desired_frontier.less_equal(time))
-                            .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff));
-
-                        let result =
-                        write
-                            .compare_and_append(to_append, persist_frontier.clone(), desired_frontier.clone())
-                            .await
-                            .expect("Indeterminate")    // TODO: What does this error mean?
-                            .expect("Invalid usage")    // TODO: What does this error mean?
-                            ;
-
-                        // If the result is `Ok`, we will eventually see the appended data return through `persist_input`,
-                        // which will remove the results from `correction`; we should not do this directly ourselves.
-                        // In either case, we have new information about the next frontier we should attempt to commit from.
-                        match result {
-                            Ok(()) => {
-                                write_lower_bound.clone_from(desired_frontier);
-                            }
-                            Err(mz_persist_client::Upper(frontier)) => {
-                                write_lower_bound.clone_from(&frontier);
-                            }
-                        }
-                    } else {
-                        write_lower_bound.clone_from(&persist_frontier);
-                    }
-                }
-
-                // Share that we have finished processing all times less than the persist frontier.
-                // Advancing the sink upper communicates to the storage controller that it is
-                // permitted to compact our target storage collection up to the new upper. So we
-                // must be careful to not advance the sink upper beyond our read frontier.
-                shared_frontier.borrow_mut().clone_from(&persist_frontier);
-            }
-        },
-    );
-
-    Some(token)
+    Some(Rc::new((
+        install_desired_into_persist(
+            sink_id,
+            target,
+            desired_collection,
+            persist_collection,
+            as_of,
+            compute_state,
+        ),
+        token,
+    )))
 }
 
 /// Continuously writes the difference between `persist_stream` and
@@ -322,7 +133,7 @@ where
 ///    batches. Whenever the frontiers sufficiently advance, we take a batch
 ///    description and all the batches that belong to it and append it to the
 ///    persist shard.
-fn new_install_desired_into_persist<G>(
+fn install_desired_into_persist<G>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
