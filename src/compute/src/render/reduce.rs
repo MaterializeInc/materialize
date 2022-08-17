@@ -279,6 +279,13 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
+    // we must have more than one arrangement to collate
+    soft_assert_or_log!(
+        arrangements.len() > 1,
+        "Building a collation of {} arrangements, but expected more than one",
+        arrangements.len()
+    );
+
     let mut to_concat = vec![];
 
     // First, lets collect all results into a single collection.
@@ -979,6 +986,13 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
+    // we must have called this function with something to reduce
+    soft_assert_or_log!(
+        full_aggrs.len() > 0 && (simple_aggrs.len() + distinct_aggrs.len() == full_aggrs.len()),
+        "Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {})",
+        full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len()
+    );
+
     // Some of the aggregations may have the `distinct` bit set, which means that they'll
     // need to be extracted from `collection` and be subjected to `distinct` with `key`.
     // Other aggregations can be directly moved in to the `diff` field.
@@ -1144,29 +1158,31 @@ where
     };
 
     let mut to_aggregate = Vec::new();
-    // First, collect all non-distinct aggregations in one pass.
-    let easy_cases = collection.explode_one({
-        let zero_diffs = zero_diffs.clone();
-        move |(key, row)| {
-            let mut diffs = zero_diffs.clone();
-            // Try to unpack only the datums we need. Unfortunately, since we
-            // can't random access into a Row, we have to iterate through one by one.
-            // TODO: Even though we don't have random access, we could still avoid unpacking
-            // everything that we don't care about, and it might be worth it to extend the
-            // Row API to do that.
-            let mut row_iter = row.iter().enumerate();
-            for (accumulable_index, datum_index, aggr) in simple_aggrs.iter() {
-                let mut datum = row_iter.next().unwrap();
-                while datum_index != &datum.0 {
-                    datum = row_iter.next().unwrap();
+    if simple_aggrs.len() > 0 {
+        // First, collect all non-distinct aggregations in one pass.
+        let easy_cases = collection.explode_one({
+            let zero_diffs = zero_diffs.clone();
+            move |(key, row)| {
+                let mut diffs = zero_diffs.clone();
+                // Try to unpack only the datums we need. Unfortunately, since we
+                // can't random access into a Row, we have to iterate through one by one.
+                // TODO: Even though we don't have random access, we could still avoid unpacking
+                // everything that we don't care about, and it might be worth it to extend the
+                // Row API to do that.
+                let mut row_iter = row.iter().enumerate();
+                for (accumulable_index, datum_index, aggr) in simple_aggrs.iter() {
+                    let mut datum = row_iter.next().unwrap();
+                    while datum_index != &datum.0 {
+                        datum = row_iter.next().unwrap();
+                    }
+                    let datum = datum.1;
+                    diffs[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
                 }
-                let datum = datum.1;
-                diffs[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
+                ((key, ()), diffs)
             }
-            ((key, ()), diffs)
-        }
-    });
-    to_aggregate.push(easy_cases);
+        });
+        to_aggregate.push(easy_cases);
+    }
 
     // Next, collect all aggregations that require distinctness.
     for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
@@ -1189,8 +1205,13 @@ where
             });
         to_aggregate.push(collection);
     }
-    let collection =
-        differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate);
+
+    // now concatenate, if necessary, multiple aggregations
+    let collection = if to_aggregate.len() == 1 {
+        to_aggregate.remove(0)
+    } else {
+        differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate)
+    };
 
     collection
         .arrange_named::<RowKeySpine<_, _, Vec<Accum>>>("ArrangeAccumulable")
