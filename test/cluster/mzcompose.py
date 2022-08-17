@@ -275,7 +275,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         Materialized(
             image="materialize/materialized:devel-9efd269199b1510b3e8f90196cb4fa3072a548a1",
         ),
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True)
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
@@ -298,7 +298,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
     with c.override(
         # This will stop working if we introduce a breaking change.
         Materialized(),
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True)
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
