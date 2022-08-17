@@ -27,7 +27,7 @@ use tracing::trace;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::{LeasedBatch, Subscribe};
+use mz_persist_client::read::Subscribe;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -102,7 +102,7 @@ where
     //    original worker that collects workers' `LeasedBatch`es. Internally,
     //    this drops the batch's `consumed_batch` lease, allowing compaction to
     //    occur.
-    let worker_index = dbg!(scope.index());
+    let worker_index = scope.index();
     let peers = scope.peers();
     let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
 
@@ -218,8 +218,10 @@ where
         scope.clone(),
     );
 
-    let fetcher_dist = |&(i, _): &(usize, LeasedBatch<Timestamp>)| u64::cast_from(i);
-    let mut fetcher_input = fetcher_builder.new_input(&inner, Exchange::new(fetcher_dist));
+    let mut fetcher_input = fetcher_builder.new_input(
+        &inner,
+        Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
+    );
     let (mut update_output, update_output_stream) = fetcher_builder.new_output();
     let (mut consumed_batch_output, consumed_batch_output_stream) = fetcher_builder.new_output();
 
@@ -282,10 +284,9 @@ where
     );
 
     // Exchange all `consumed_batch`s back to the chosen worker/leasor.
-    let consumed_batch_dist = move |&_: &LeasedBatch<Timestamp>| u64::cast_from(chosen_worker);
     let mut consumed_batch_input = consumed_batch_builder.new_input(
         &consumed_batch_output_stream,
-        Exchange::new(consumed_batch_dist),
+        Exchange::new(move |_| u64::cast_from(chosen_worker)),
     );
 
     let last_token = Rc::new(token);

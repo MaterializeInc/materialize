@@ -449,15 +449,14 @@ impl RustType<ProtoLeaseLifeCycle> for LeaseLifeCycle {
         use proto_lease_life_cycle::*;
         ProtoLeaseLifeCycle {
             kind: Some(match self {
-                LeaseLifeCycle::Issued {
-                    seqno,
-                    local_drop: _,
-                } => Kind::Issued(ProtoLeaseLifeCycleIssued {
+                LeaseLifeCycle::Issued { seqno, .. } => Kind::Issued(ProtoLeaseLifeCycleIssued {
                     seqno: seqno.into_proto(),
                 }),
-                LeaseLifeCycle::Consumed(seqno) => Kind::Consumed(ProtoLeaseLifeCycleConsumed {
-                    seqno: seqno.into_proto(),
-                }),
+                LeaseLifeCycle::Consumed { seqno, .. } => {
+                    Kind::Consumed(ProtoLeaseLifeCycleConsumed {
+                        seqno: seqno.into_proto(),
+                    })
+                }
                 LeaseLifeCycle::Completed => Kind::Completed(ProtoLeaseLifeCycleCompleted {}),
             }),
         }
@@ -468,9 +467,12 @@ impl RustType<ProtoLeaseLifeCycle> for LeaseLifeCycle {
         Ok(match proto.kind {
             Some(Issued(issued)) => LeaseLifeCycle::Issued {
                 seqno: issued.seqno.into_rust()?,
-                local_drop: None,
+                droppable: false,
             },
-            Some(Consumed(issued)) => LeaseLifeCycle::Consumed(issued.seqno.into_rust()?),
+            Some(Consumed(issued)) => LeaseLifeCycle::Consumed {
+                seqno: issued.seqno.into_rust()?,
+                droppable: false,
+            },
             Some(Completed(_)) => LeaseLifeCycle::Completed,
             None => {
                 return Err(TryFromProtoError::missing_field(
@@ -481,11 +483,31 @@ impl RustType<ProtoLeaseLifeCycle> for LeaseLifeCycle {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// This represents the serde encoding for [`LeasedBatch`]. We expose the struct
+/// itself (unlike other encodable structs) to attempt to provide stricter drop
+/// semantics on `LeasedBatch`.
+///
+/// Exchanging a `LeasedBatch` directly will panic because it will be dropped
+/// without being marked as droppable.
+///
+/// However, exchanging a `SerdeLeasedBatch` is fine because it can be dropped.
+///
+/// Recipeints of this, then, have to take the `SerdeLeasedBatch` into a
+/// `LeasedBatch`, which forcibly reconstitutes the desired drop semantics.
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SerdeLeasedBatch(Vec<u8>);
 
 impl<T: Timestamp + Codec64> From<LeasedBatch<T>> for SerdeLeasedBatch {
-    fn from(x: LeasedBatch<T>) -> Self {
+    fn from(mut x: LeasedBatch<T>) -> Self {
+        // Making `LeasedBatch`es with outstanding leases droppable should only
+        // occur here; this should not be a generally accessible function
+        match &mut x.leased_seqno {
+            // Leases can only be marked completed on their issuer, and they
+            // should not be exchanged afterward.
+            LeaseLifeCycle::Completed => {}
+            LeaseLifeCycle::Issued { droppable, .. }
+            | LeaseLifeCycle::Consumed { droppable, .. } => *droppable = true,
+        }
         SerdeLeasedBatch(x.into_proto().encode_to_vec())
     }
 }

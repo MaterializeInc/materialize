@@ -28,6 +28,7 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
+use crate::internal::encoding::SerdeLeasedBatch;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::PartialBlobKey;
@@ -76,31 +77,29 @@ where
 
     /// Trade in an exchange-able [`LeasedBatch`] for the data it represents.
     /// Additionally, handles updating the [`LeasedBatch`]'s metadata and giving
-    /// it to `session`, which should handle returning consumed batches to their
-    /// issuers.
+    /// it to `session`, which should handle returning consumed batches to its
+    /// issuer.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn fetch_and_return_batch(
         &self,
         session: &mut Session<
             '_,
             T,
-            Vec<LeasedBatch<T>>,
-            CounterCore<T, Vec<LeasedBatch<T>>, TeeCore<T, Vec<LeasedBatch<T>>>>,
+            Vec<SerdeLeasedBatch>,
+            CounterCore<T, Vec<SerdeLeasedBatch>, TeeCore<T, Vec<SerdeLeasedBatch>>>,
         >,
-        batch: LeasedBatch<T>,
+        batch: SerdeLeasedBatch,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
+        let batch = LeasedBatch::<T>::from(batch);
         let (consumed_batch, res) = self.fetch_batch(batch).await;
         consumed_batch.give_to_batch_return_session(session).await;
         res
     }
 
-    /// Trade in an exchange-able [LeasedBatch] for the data it
-    /// represents.
+    /// Trade in an exchange-able [LeasedBatch] for the data it represents.
     ///
-    /// The [`LeasedBatch`] returned after fetching must be passed
-    /// back to issuer ([`ReadHandle::process_consumed_batch`],
-    /// [`Subscribe::process_consumed_batch`]), so that it can properly handle
-    /// internal bookkeeping.
+    /// Note to check the `LeasedBatch` documentation for how to handle the
+    /// returned value.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub(crate) async fn fetch_batch(
         &self,

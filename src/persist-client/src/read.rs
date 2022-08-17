@@ -82,11 +82,8 @@ pub(crate) enum LeasedBatchMetadata<T> {
 
 #[derive(Debug)]
 pub(crate) enum LeaseLifeCycle {
-    Issued {
-        seqno: SeqNo,
-        local_drop: Option<mpsc::UnboundedSender<SeqNo>>,
-    },
-    Consumed(SeqNo),
+    Issued { seqno: SeqNo, droppable: bool },
+    Consumed { seqno: SeqNo, droppable: bool },
     Completed,
 }
 
@@ -95,15 +92,15 @@ impl Clone for LeaseLifeCycle {
         match self {
             Self::Issued {
                 seqno,
-                local_drop: _,
+                droppable: _,
             } => Self::Issued {
                 seqno: *seqno,
-                // Cloned version of `self` should not be able to drop their
-                // lease, i.e. at most one instance of each lease should ever
-                // make it back to the issuing `ReadHandle`.
-                local_drop: None,
+                droppable: true,
             },
-            Self::Consumed(seqno) => Self::Consumed(*seqno),
+            Self::Consumed { seqno, .. } => Self::Consumed {
+                seqno: *seqno,
+                droppable: true,
+            },
             Self::Completed => Self::Completed,
         }
     }
@@ -113,7 +110,7 @@ impl LeaseLifeCycle {
     fn seqno(&self) -> Option<SeqNo> {
         use LeaseLifeCycle::*;
         match self {
-            Issued { seqno, .. } | Consumed(seqno) => Some(*seqno),
+            Issued { seqno, .. } | Consumed { seqno, .. } => Some(*seqno),
             Completed => None,
         }
     }
@@ -122,24 +119,17 @@ impl LeaseLifeCycle {
 /// A token representing one read batch.
 ///
 /// This may be exchanged (including over the network). It is tradeable via
-/// [BatchFetcher::fetch_batch] for the resulting data stored in the batch.
+/// `BatchFetcher::fetch_batch` for the resulting data stored in the batch.
 ///
 /// # Panics
 /// `LeasedBatch` panics when dropped unless a very strict set of invariants are
 /// held:
 ///
 /// `LeasedBatch` may only be dropped if it:
-/// - Has only been used locally, determined by if it has been fetched without
-///   being exchanged.
-/// - Is being sent to a fetching worker, determined by if it has been fetched.
-///   To accomplish this, you must use
-///   [`Self::give_to_fetch_session_and_get_progress`].
+/// - Is being converted to `SerdeLeasedBatch`
+/// - Has been returned to its issuer via [`Self::return_lease`].
 ///
-///   n.b. This is the situation in which the batch's [`LeaseLifeCycle`] will
-///   register its lease with the issuing [`ReadHandle`].
-/// - Is being sent to a returning operator, determined by if the batch has
-///   already been fetched. To accomplish this, you must use
-///   [`Self::give_to_fetch_session_and_get_progress`].
+/// In any other circumstance, dropping `LeasedBatch` panics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "T: Timestamp + Codec64",
@@ -158,16 +148,6 @@ where
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
     pub(crate) leased_seqno: LeaseLifeCycle,
-    /// Expresses whether or not this `LeasedBatch` should panic on drop. This
-    /// should be called **only when the library is certain that the coming drop
-    /// is a result of `self` being exchanged**.
-    ///
-    /// In other cases (i.e. `self` is only being used locally), users can avoid
-    /// the panic by simply consuming the batch's lease.
-    ///
-    /// From a semantic perspective, this maybe more rightly belongs in
-    /// `LeaseLifeCycle`, but is annoying to type.
-    permit_drop: bool,
 }
 
 impl<T> LeasedBatch<T>
@@ -187,7 +167,6 @@ where
             metadata,
             batch,
             leased_seqno,
-            permit_drop: false,
         }
     }
 
@@ -198,29 +177,33 @@ where
     /// # Panics
     /// - If `self` has been fetched.
     pub fn give_to_fetch_session_and_get_progress(
-        mut self,
+        self,
         i: usize,
         session: &mut Session<
             '_,
             T,
-            Vec<(usize, LeasedBatch<T>)>,
-            CounterCore<T, Vec<(usize, LeasedBatch<T>)>, TeeCore<T, Vec<(usize, LeasedBatch<T>)>>>,
+            Vec<(usize, SerdeLeasedBatch)>,
+            CounterCore<
+                T,
+                Vec<(usize, SerdeLeasedBatch)>,
+                TeeCore<T, Vec<(usize, SerdeLeasedBatch)>>,
+            >,
         >,
     ) -> Option<Antichain<T>> {
         assert!(
             matches!(
                 &self.leased_seqno,
                 LeaseLifeCycle::Issued {
-                    local_drop: Some(..),
                     seqno: _,
+                    droppable: false,
                 }
             ),
             "cannot pass batches in non-Issued states to fetch sessions"
         );
 
-        self.permit_drop();
         let progress = self.generate_progress();
-        session.give((i, self));
+        let exchangeable = SerdeLeasedBatch::from(self);
+        session.give((i, exchangeable));
         progress
     }
 
@@ -232,23 +215,23 @@ where
     /// - If `self` has been _not_ fetched.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn give_to_batch_return_session(
-        mut self,
+        self,
         session: &mut Session<
             '_,
             T,
-            Vec<LeasedBatch<T>>,
-            CounterCore<T, Vec<LeasedBatch<T>>, TeeCore<T, Vec<LeasedBatch<T>>>>,
+            Vec<SerdeLeasedBatch>,
+            CounterCore<T, Vec<SerdeLeasedBatch>, TeeCore<T, Vec<SerdeLeasedBatch>>>,
         >,
     ) {
-        match self.leased_seqno {
-            LeaseLifeCycle::Consumed(..) => {
-                self.permit_drop();
-                session.give(self);
-            }
-            // Batches without outstanding leases do not need to be returned.
-            LeaseLifeCycle::Completed => {}
-            _ => unreachable!("cannot return batch without fetching"),
-        }
+        assert!(
+            matches!(
+                self.leased_seqno,
+                LeaseLifeCycle::Consumed { .. } | LeaseLifeCycle::Completed
+            ),
+            "cannot return batch without fetching"
+        );
+
+        session.give(SerdeLeasedBatch::from(self));
     }
 
     /// Signals whether or not `self` should downgrade the `Capability` its
@@ -260,26 +243,21 @@ where
         }
     }
 
-    // Prevent `self` from panicking when dropped. This
-    /// should be called **only when the library is certain that the coming drop
-    /// is a result of `self` being exchanged**.
-    fn permit_drop(&mut self) {
-        self.permit_drop = true;
-    }
-
     /// Identifies that the batch has been consumed. After calling this
     /// function, the batch must either be returned to its issuer, or promise a
     /// return.
+    ///
+    /// # Panics
+    /// - If lease has already been consumed
     fn consume_lease(&mut self) {
-        match &mut self.leased_seqno {
-            LeaseLifeCycle::Issued { seqno, local_drop } => {
-                self.leased_seqno = match local_drop {
-                    // If drop available, return lease
-                    Some(local_drop) => {
-                        let _ = local_drop.send(*seqno);
-                        LeaseLifeCycle::Completed
-                    }
-                    None => LeaseLifeCycle::Consumed(*seqno),
+        match &self.leased_seqno {
+            LeaseLifeCycle::Issued {
+                seqno,
+                droppable: false,
+            } => {
+                self.leased_seqno = LeaseLifeCycle::Consumed {
+                    seqno: *seqno,
+                    droppable: false,
                 }
             }
             _ => panic!("each lease may be consumed at most once"),
@@ -316,10 +294,10 @@ where
         assert!(
             match self.leased_seqno {
                 LeaseLifeCycle::Completed => true,
-                LeaseLifeCycle::Issued{..} | LeaseLifeCycle::Consumed(..) => self.permit_drop
+                LeaseLifeCycle::Issued { droppable, .. }
+                | LeaseLifeCycle::Consumed { droppable, .. } => droppable,
             },
-            "LeasedBatch must be explicitly permitted to drop or its lease life cycle must have completed:\n {:?}",
-            self,
+            "LeasedBatch must be explicitly permitted to drop or its lease must have been returned",
         );
     }
 }
@@ -357,7 +335,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     async fn set_reader_id(&mut self) {
-        if let BatchReturnReaderId::Awaiting(recv) = dbg!(&mut self.reader_id) {
+        if let BatchReturnReaderId::Awaiting(recv) = &mut self.reader_id {
             self.reader_id = BatchReturnReaderId::Ready(recv.await.unwrap());
         }
     }
@@ -370,8 +348,14 @@ where
     }
 
     /// Returns processed [`LeasedBatch]es to their issuer.
-    pub async fn return_batches(&mut self, batches: Vec<LeasedBatch<T>>) {
+    pub async fn return_batches(&mut self, batches: Vec<SerdeLeasedBatch>) {
         self.set_reader_id().await;
+
+        let batches = batches
+            .into_iter()
+            .map(LeasedBatch::<T>::from)
+            .collect::<Vec<_>>();
+
         if let Err(mpsc::error::SendError(batches)) = self.consumed_batch_tx.send(batches).await {
             // Subscribe loop dropped, which drops its ReadHandle, which
             // in turn drops all leases, so doing anything else here is
@@ -641,7 +625,6 @@ where
             },
             batch,
             leased_seqno: self.handle.lease_seqno(),
-            permit_drop: false,
         };
 
         // NB: Keep this after we use self.frontier to join_assign self.since.
@@ -664,9 +647,9 @@ where
         let batch = self.next_batch().await;
         let progress = batch.batch.desc.upper().clone();
 
-        let (_batch, updates) = self.fetcher.fetch_batch(batch).await;
+        let (batch, updates) = self.fetcher.fetch_batch(batch).await;
 
-        // self.handle.process_returned_leased_batch(consumed_batch);
+        self.handle.process_returned_leased_batch(batch);
 
         let updates = updates.expect("must accept self-generated batch");
         let mut ret = Vec::with_capacity(2);
@@ -758,8 +741,6 @@ where
     pub(crate) explicitly_expired: bool,
 
     pub(crate) leased_seqnos: BTreeMap<SeqNo, usize>,
-    pub(crate) local_lease_return_rx: mpsc::UnboundedReceiver<SeqNo>,
-    pub(crate) local_lease_return_tx: mpsc::UnboundedSender<SeqNo>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -793,8 +774,6 @@ where
     /// timestamp, making the call a no-op).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
-        self.check_local_lease_return();
-
         // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
         let outstanding_seqno = self.leased_seqnos.keys().next().cloned();
 
@@ -870,15 +849,14 @@ where
                 },
                 batch,
                 leased_seqno: self.lease_seqno(),
-                permit_drop: false,
             })
             .collect::<Vec<_>>();
 
         Ok(r)
     }
 
-    /// Generates a [shapshot](Self::snapshot), and
-    /// [fetches](BatchFetcher::fetch_batch) all of the batches it contains.
+    /// Generates a [shapshot](Self::snapshot), and fetches all of the batches
+    /// it contains.
     pub async fn snapshot_and_fetch(
         &mut self,
         as_of: Antichain<T>,
@@ -889,7 +867,8 @@ where
 
         let mut contents = Vec::new();
         for batch in snap {
-            let (_batch, r) = fetcher.fetch_batch(batch).await;
+            let (batch, r) = fetcher.fetch_batch(batch).await;
+            self.process_returned_leased_batch(batch);
             let mut r = r.expect("must accept self-generated snapshot");
             contents.append(&mut r);
         }
@@ -922,14 +901,7 @@ where
 
         LeaseLifeCycle::Issued {
             seqno,
-            local_drop: Some(self.local_lease_return_tx.clone()),
-        }
-    }
-
-    /// Checks for any leases dropped by local batches.
-    pub(crate) fn check_local_lease_return(&mut self) {
-        while let Ok(lease) = self.local_lease_return_rx.try_recv() {
-            self.drop_lease(lease);
+            droppable: false,
         }
     }
 
@@ -940,26 +912,21 @@ where
     /// - If `self` does not have record of issuing the [`LeasedBatch`], e.g.
     ///   it originated from from another `ReadHandle`.
     pub(crate) fn process_returned_leased_batch(&mut self, mut leased_batch: LeasedBatch<T>) {
-        self.check_local_lease_return();
         if let Some(lease) = leased_batch.return_lease(&self.reader_id) {
-            self.drop_lease(lease)
-        }
-    }
+            // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
+            // a `SeqNo` has no more outstanding leases, it can be removed, and
+            // `Self::downgrade_since` no longer needs to prevent it from being
+            // garbage collected.
+            let remaining_leases = self
+                .leased_seqnos
+                .get_mut(&lease)
+                .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
 
-    fn drop_lease(&mut self, lease: SeqNo) {
-        // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
-        // a `SeqNo` has no more outstanding leases, it can be removed, and
-        // `Self::downgrade_since` no longer needs to prevent it from being
-        // garbage collected.
-        let remaining_leases = self
-            .leased_seqnos
-            .get_mut(&lease)
-            .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
+            *remaining_leases -= 1;
 
-        *remaining_leases -= 1;
-
-        if remaining_leases == &0 {
-            self.leased_seqnos.remove(&lease);
+            if remaining_leases == &0 {
+                self.leased_seqnos.remove(&lease);
+            }
         }
     }
 
@@ -970,7 +937,6 @@ where
         let new_reader_id = ReaderId::new();
         let mut machine = self.machine.clone();
         let read_cap = machine.clone_reader(&new_reader_id, (self.cfg.now)()).await;
-        let (local_lease_return_tx, local_lease_return_rx) = mpsc::unbounded_channel();
         let new_reader = ReadHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
@@ -982,8 +948,6 @@ where
             last_heartbeat: Instant::now(),
             explicitly_expired: false,
             leased_seqnos: BTreeMap::new(),
-            local_lease_return_rx,
-            local_lease_return_tx,
         };
         new_reader
     }
