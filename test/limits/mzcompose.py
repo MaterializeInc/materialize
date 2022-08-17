@@ -631,6 +631,7 @@ class ViewsMaterializedNested(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
         print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_materialized_views = {ViewsMaterializedNested.COUNT * 10};"
