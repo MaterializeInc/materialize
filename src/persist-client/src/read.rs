@@ -254,7 +254,12 @@ where
         })
     }
 
-    /// Retreives the next batch and updates `self`s metadata.
+    /// An exclusive upper bound on the progress of this Listen.
+    pub fn frontier(&self) -> &Antichain<T> {
+        &self.frontier
+    }
+
+    /// Attempt to pull out the next values of this subscription.
     ///
     /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
     /// `ReadHandle::fetch_batch`.

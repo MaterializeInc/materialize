@@ -105,18 +105,45 @@ pub struct Transactor {
 
     since_ts: u64,
     read_ts: u64,
+
+    // Keep a long-lived listen, which is incrementally read as we go. Then
+    // assert that it has the same data as the short-lived snapshot+listen in
+    // `read`. This hopefully stresses slightly different parts of the system.
+    long_lived_updates: Vec<(
+        (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
+        u64,
+        i64,
+    )>,
+    long_lived_listen: Listen<MaelstromKey, MaelstromVal, u64, i64>,
 }
 
 impl Transactor {
     pub async fn new(client: &PersistClient, shard_id: ShardId) -> Result<Self, MaelstromError> {
-        let (mut write, read) = client.open(shard_id).await?;
+        let (mut write, mut read) = client.open(shard_id).await?;
         let since_ts = Self::extract_ts(read.since())?;
         let read_ts = Self::maybe_init_shard(&mut write).await?;
+
+        let mut long_lived_updates = Vec::new();
+        let as_of = Antichain::from_elem(since_ts);
+        let mut updates = read
+            .snapshot_and_fetch(as_of.clone())
+            .await
+            .expect("as_of unexpectedly unavailable");
+        long_lived_updates.append(&mut updates);
+        let long_lived_listen = read
+            .clone()
+            .await
+            .listen(as_of.clone())
+            .await
+            .expect("as_of unexpectedly unavailable");
+
         Ok(Transactor {
             read,
             write,
             since_ts,
             read_ts,
+            long_lived_updates,
+            long_lived_listen,
         })
     }
 
@@ -253,6 +280,9 @@ impl Transactor {
         }
         consolidate_updates(&mut updates);
 
+        let long_lived = self.read_long_lived(&as_of).await;
+        assert_eq!(&updates, &long_lived);
+
         Self::extract_state_map(self.read_ts, updates)
     }
 
@@ -287,6 +317,42 @@ impl Transactor {
                 }
             }
         }
+    }
+
+    async fn read_long_lived(
+        &mut self,
+        as_of: &Antichain<u64>,
+    ) -> Vec<(
+        (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
+        u64,
+        i64,
+    )> {
+        while PartialOrder::less_equal(self.long_lived_listen.frontier(), as_of) {
+            for event in self.long_lived_listen.next().await {
+                match event {
+                    ListenEvent::Updates(mut updates) => {
+                        self.long_lived_updates.append(&mut updates)
+                    }
+                    ListenEvent::Progress(_) => {} // No-op.
+                }
+            }
+        }
+        for (_, t, _) in self.long_lived_updates.iter_mut() {
+            t.advance_by(as_of.borrow());
+        }
+        consolidate_updates(&mut self.long_lived_updates);
+
+        // If as_of is less_than the frontier, we may have ended up with updates
+        // that we didn't want yet. We can't remove them from
+        // `self.long_lived_updates` because the long lived listener will only
+        // emit them once and we'll want them later. If performance was
+        // important, we could sort them to the end and return a subset, but
+        // it's not, so do the easy thing and copy the Vec.
+        self.long_lived_updates
+            .iter()
+            .filter(|(_, t, _)| !as_of.less_than(t))
+            .cloned()
+            .collect()
     }
 
     fn extract_state_map(
