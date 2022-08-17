@@ -9,7 +9,7 @@ weight: 1
 
 Materialize is a streaming database for real-time applications. It lets you ask complex questions about your data using SQL, and incrementally maintains the results of these SQL queries up-to-date as the underlying data changes.
 
-{{< callout primary_url="/docs/get-started/" primary_text="Get Started">}}
+{{< callout primary_url="https://materialize.com/docs/unstable/get-started/" primary_text="Get Started">}}
   # Get started with Materialize
 
   Follow this walkthrough to start creating live views on streaming data with Materialize.
