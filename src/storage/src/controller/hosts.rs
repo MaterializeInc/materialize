@@ -160,11 +160,14 @@ where
         };
 
         let host = self.hosts.entry(host_addr.clone()).or_insert_with(|| {
-            let client = RehydratingStorageClient::new(
+            let mut client = RehydratingStorageClient::new(
                 host_addr,
                 self.build_info,
                 Arc::clone(&self.persist),
             );
+            if self.initialized {
+                client.send(StorageCommand::InitializationComplete);
+            }
             StorageHost {
                 client,
                 objects: HashSet::with_capacity(1),
