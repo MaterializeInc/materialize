@@ -98,15 +98,15 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig,
-    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    Index, MaterializedView, Params, Plan, Secret, Sink, Source, StorageHostConfig, Table, Type,
-    View,
+    AlterNoopPlan, AlterSecretPlan, AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, ComputeInstanceIntrospectionConfig,
+    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
+    StorageHostConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -3696,25 +3696,39 @@ pub fn plan_alter_source(
     }
     let id = entry.id();
 
-    let config = match action {
+    let mut size = AlterSourceItem::Unchanged;
+    let mut remote = AlterSourceItem::Unchanged;
+    match action {
         AlterSourceAction::SetOptions(options) => {
-            let CreateSourceOptionExtracted { size, remote, .. } =
-                CreateSourceOptionExtracted::try_from(options)?;
+            let CreateSourceOptionExtracted {
+                size: size_opt,
+                remote: remote_opt,
+                ..
+            } = CreateSourceOptionExtracted::try_from(options)?;
 
-            match (remote, size) {
-                (None, None) => None,
-                (None, Some(size)) => Some(StorageHostConfig::Managed { size }),
-                (Some(addr), None) => Some(StorageHostConfig::Remote { addr }),
-                (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+            if let Some(value) = size_opt {
+                size = AlterSourceItem::Set(value);
+            }
+
+            if let Some(value) = remote_opt {
+                remote = AlterSourceItem::Set(value);
             }
         }
-        AlterSourceAction::ResetOptions(_) => {
-            // TODO: decide what do do about resetting eg. REMOTE when we're currently managed
-            Some(StorageHostConfig::Undefined)
+        AlterSourceAction::ResetOptions(reset) => {
+            for name in reset {
+                match name {
+                    CreateSourceOptionName::Size => {
+                        size = AlterSourceItem::Reset;
+                    }
+                    CreateSourceOptionName::Remote => {
+                        remote = AlterSourceItem::Reset;
+                    }
+                }
+            }
         }
     };
 
-    Ok(Plan::AlterSource(AlterSourcePlan { id, config }))
+    Ok(Plan::AlterSource(AlterSourcePlan { id, size, remote }))
 }
 
 pub fn describe_alter_system_set(

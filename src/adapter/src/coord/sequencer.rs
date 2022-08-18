@@ -40,13 +40,14 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Ti
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
+use mz_sql::plan;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
@@ -3117,44 +3118,57 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_alter_source(
         &mut self,
         session: &Session,
-        AlterSourcePlan { id, config }: AlterSourcePlan,
+        AlterSourcePlan { id, size, remote }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        use mz_sql::ast::Value;
+        use AlterSourceItem::*;
+        use CreateSourceOptionName::*;
+
         let entry = self.catalog.get_entry(&id);
         let old_source = match entry.item() {
             CatalogItem::Source(source) => source.clone(),
             other => coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ()),
         };
 
-        if let Some(config) = config {
-            use mz_sql::ast::Value;
+        // Since the catalog serializes the items using only their creation statement
+        // and context, we need to parse and rewrite the with options in that statement.
+        // (And then make any other changes to the source definition to match.)
+        let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
+            .unwrap()
+            .into_element();
 
+        let create_stmt = match &mut stmt {
+            Statement::CreateSource(s) => s,
+            _ => coord_bail!("source {id} was not created with a CREATE SOURCE statement"),
+        };
+
+        let new_config = match (&old_source.host_config, size, remote) {
+            (_, Set(_), Set(_)) => coord_bail!("Can't set both SIZE and REMOTE on source"),
+            (_, Set(size), _) => Some(plan::StorageHostConfig::Managed { size }),
+            (_, _, Set(addr)) => Some(plan::StorageHostConfig::Remote { addr }),
+            (StorageHostConfig::Remote { .. }, _, Reset)
+            | (StorageHostConfig::Managed { .. }, Reset, _) => {
+                Some(plan::StorageHostConfig::Undefined)
+            }
+            (_, _, _) => None,
+        };
+
+        if let Some(config) = new_config {
             let host_config = self.catalog.resolve_storage_host_config(config)?;
 
-            // Since the catalog serializes the items using only their creation statement
-            // and context, we need to parse and rewrite the with options in that statement.
-            // (And then make any other changes to the source definition to match.)
-            let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
-                .unwrap()
-                .into_element();
-
-            let create_stmt = match &mut stmt {
-                Statement::CreateSource(s) => s,
-                _ => coord_bail!("source {id} was not created with a CREATE SOURCE statement"),
+            const HOST_CONFIG_OPTIONS: &[CreateSourceOptionName] = &[Size, Remote];
+            let (name, value) = match &host_config {
+                StorageHostConfig::Managed { size, .. } => (Size, size.clone()),
+                StorageHostConfig::Remote { addr } => (Remote, addr.clone()),
             };
-            match &host_config {
-                StorageHostConfig::Remote { addr } => {
-                    create_stmt.with_options = vec![CreateSourceOption {
-                        name: CreateSourceOptionName::Remote,
-                        value: Some(WithOptionValue::Value(Value::String(addr.clone()))),
-                    }]
-                }
-                StorageHostConfig::Managed { size, .. } => {
-                    create_stmt.with_options = vec![CreateSourceOption {
-                        name: CreateSourceOptionName::Size,
-                        value: Some(WithOptionValue::Value(Value::String(size.clone()))),
-                    }]
-                }
-            }
+            create_stmt
+                .with_options
+                .retain(|x| !HOST_CONFIG_OPTIONS.contains(&x.name));
+            create_stmt.with_options.push(CreateSourceOption {
+                name,
+                value: Some(WithOptionValue::Value(Value::String(value))),
+            });
+
             let create_sql = stmt.to_ast_string_stable();
             let source = Source {
                 create_sql,
@@ -3174,7 +3188,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .storage_mut()
                 .alter_collections(vec![(id, host_config)])
                 .await?;
-        }
+        };
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
     }
