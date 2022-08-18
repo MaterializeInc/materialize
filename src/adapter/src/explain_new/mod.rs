@@ -19,9 +19,12 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use mz_expr::explain::Indices;
 use mz_expr::RowSetFinishing;
 use mz_ore::str::{Indent, IndentLike};
-use mz_repr::explain_new::{DisplayText, ExplainConfig, ExprHumanizer, RenderingContext};
+use mz_repr::explain_new::{
+    separated_text, DisplayText, ExplainConfig, ExprHumanizer, RenderingContext,
+};
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
@@ -70,15 +73,32 @@ pub(crate) struct ExplainContext<'a> {
     pub(crate) fast_path_plan: Option<peek::FastPathPlan>,
 }
 
-#[derive(Clone)]
-pub(crate) struct Attributes;
-
 /// A somewhat ad-hoc way to keep carry a plan with a set
 /// of attributes derived for each node in that plan.
 #[allow(dead_code)] // TODO (#13299)
 pub(crate) struct AnnotatedPlan<'a, T> {
     pub(crate) plan: &'a T,
     pub(crate) annotations: HashMap<&'a T, Attributes>,
+}
+
+/// A container for derived attributes.
+#[derive(Clone, Default, Debug)]
+pub struct Attributes {
+    non_negative: Option<bool>,
+    subtree_size: Option<usize>,
+}
+
+impl fmt::Display for Attributes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut builder = f.debug_struct("//");
+        if let Some(subtree_size) = &self.subtree_size {
+            builder.field("subtree_size", subtree_size);
+        }
+        if let Some(non_negative) = &self.non_negative {
+            builder.field("non_negative", non_negative);
+        }
+        builder.finish()
+    }
 }
 
 /// A set of indexes that are used in the physical plan
@@ -91,6 +111,10 @@ impl UsedIndexes {
     pub(crate) fn new(values: Vec<GlobalId>) -> UsedIndexes {
         UsedIndexes(values)
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl<'a, C> DisplayText<C> for UsedIndexes
@@ -98,14 +122,14 @@ where
     C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        write!(f, "{}used_indexes:", ctx.as_mut())?;
+        writeln!(f, "{}Used Indexes:", ctx.as_mut())?;
         *ctx.as_mut() += 1;
         for id in &self.0 {
             let index_name = ctx
                 .as_ref()
                 .humanize_id(*id)
                 .unwrap_or_else(|| id.to_string());
-            write!(f, "{}- {}", ctx.as_mut(), index_name)?;
+            writeln!(f, "{}- {}", ctx.as_mut(), index_name)?;
         }
         *ctx.as_mut() -= 1;
         Ok(())
@@ -157,7 +181,7 @@ where
             fmt_plan(&mut ctx, f, &self.context.fast_path_plan, self.plan.plan)?;
         }
 
-        if !self.context.used_indexes.0.is_empty() {
+        if !self.context.used_indexes.is_empty() {
             writeln!(f, "")?;
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
@@ -170,16 +194,15 @@ where
 /// [`mz_repr::explain_new::Explain`] implementations at points
 /// in the optimization pipeline identified with a
 /// `DataflowDescription` instance with plans of type `T`.
-#[allow(dead_code)] // TODO (#13299)
 pub(crate) struct ExplainMultiPlan<'a, T> {
-    pub(crate) context: ExplainContext<'a>,
+    pub(crate) context: &'a ExplainContext<'a>,
     // Maps the names of the sources to the linear operators that will be
     // on them.
     // TODO: implement DisplayText and DisplayJson for LinearOperator
     // there are plans to replace LinearOperator with MFP struct (#6657)
-    pub(crate) sources: Vec<(String, LinearOperator)>,
+    pub(crate) sources: Vec<(String, &'a LinearOperator)>,
     // elements of the vector are in topological order
-    pub(crate) plans: Vec<AnnotatedPlan<'a, T>>,
+    pub(crate) plans: Vec<(String, AnnotatedPlan<'a, T>)>,
 }
 
 impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
@@ -187,50 +210,48 @@ where
     Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        // TODO (#13472)
         let mut ctx = RenderingContext::new(Indent::default(), self.context.humanizer);
 
-        fn fmt_plan<'a, T>(
-            ctx: &mut RenderingContext<'a>,
-            f: &mut fmt::Formatter<'_>,
-            fast_path_plan: &Option<FastPathPlan>,
-            _plans: &Vec<AnnotatedPlan<'a, T>>,
-            _sources: &Vec<(String, LinearOperator)>,
-        ) -> fmt::Result
-        where
-            Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
-        {
-            if let Some(fast_path_plan) = fast_path_plan {
-                fast_path_plan.fmt_text(f, ctx)?;
-            } else {
-                // self.plans.fmt_text(..., f)?;
-                // writeln!(f, "")?;
-                // self.sources.fmt_text(..., f)?;
+        if let Some(fast_path_plan) = &self.context.fast_path_plan {
+            fast_path_plan.fmt_text(f, &mut ctx)?;
+        } else {
+            // render plans
+            for (no, (id, plan)) in self.plans.iter().enumerate() {
+                let mut ctx = PlanRenderingContext::new(
+                    ctx.indent.clone(),
+                    ctx.humanizer,
+                    plan.annotations.clone(),
+                    self.context.config,
+                );
+
+                writeln!(f, "{}{}", ctx.indent, id)?;
+                ctx.indented(|ctx| {
+                    match &self.context.finishing {
+                        // if present, a RowSetFinishing always applies to the first rendered plan
+                        Some(finishing) if no == 0 => {
+                            finishing.fmt_text(f, &mut ctx.indent)?;
+                            ctx.indented(|ctx| Displayable(plan.plan).fmt_text(f, ctx))?;
+                        }
+                        // all other plans are rendered without a RowSetFinishing
+                        _ => {
+                            Displayable(plan.plan).fmt_text(f, ctx)?;
+                        }
+                    }
+                    Ok(())
+                })?;
             }
-            Ok(())
+            if !self.sources.is_empty() {
+                // render one blank line between the plans and sources
+                writeln!(f, "")?;
+                // render sources
+                for (id, operator) in self.sources.iter() {
+                    writeln!(f, "{}Source {}", ctx.indent, id)?;
+                    ctx.indented(|ctx| Displayable(*operator).fmt_text(f, ctx))?;
+                }
+            }
         }
 
-        if let Some(finishing) = &self.context.finishing {
-            finishing.fmt_text(f, &mut ctx.indent)?;
-            ctx.indented(|ctx| {
-                fmt_plan(
-                    ctx,
-                    f,
-                    &self.context.fast_path_plan,
-                    &self.plans,
-                    &self.sources,
-                )
-            })?;
-        } else {
-            fmt_plan(
-                &mut ctx,
-                f,
-                &self.context.fast_path_plan,
-                &self.plans,
-                &self.sources,
-            )?;
-        }
-        if !self.context.used_indexes.0.is_empty() {
+        if !self.context.used_indexes.is_empty() {
             writeln!(f, "")?;
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
@@ -239,17 +260,34 @@ where
     }
 }
 
+impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, LinearOperator> {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut RenderingContext<'a>) -> fmt::Result {
+        let LinearOperator {
+            predicates,
+            projection,
+        } = self.0;
+        // handle projection
+        let outputs = Indices(projection);
+        writeln!(f, "{}Demand ({})", ctx.indent, outputs)?;
+        // handle predicates
+        if !predicates.is_empty() {
+            let predicates = separated_text(" AND ", predicates.iter().map(Displayable::from));
+            writeln!(f, "{}Filter {}", ctx.indent, predicates)?;
+        }
+        Ok(())
+    }
+}
+
 #[allow(dead_code)] // TODO (#13299)
 #[allow(missing_debug_implementations)]
 pub(crate) struct PlanRenderingContext<'a, T> {
-    pub(crate) indent: Indent,
+    pub(crate) indent: Indent, // TODO: can this be a ref?
     pub(crate) humanizer: &'a dyn ExprHumanizer,
-    pub(crate) annotations: HashMap<&'a T, Attributes>, // TODO: can this be a ref
+    pub(crate) annotations: HashMap<&'a T, Attributes>, // TODO: can this be a ref?
     pub(crate) config: &'a ExplainConfig,
 }
 
 impl<'a, T> PlanRenderingContext<'a, T> {
-    #[allow(dead_code)] // TODO (#13299)
     pub fn new(
         indent: Indent,
         humanizer: &'a dyn ExprHumanizer,

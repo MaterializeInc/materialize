@@ -2227,9 +2227,8 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             ExplainStageNew::DecorrelatedPlan => {
                 // run partial pipeline
-                let decorrelated_plan = decorrelate(raw_plan)?;
+                let mut decorrelated_plan = decorrelate(raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let mut dataflow = OptimizedMirRelationExpr::declare_optimized(decorrelated_plan);
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
@@ -2240,7 +2239,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     fast_path_plan: Default::default(),
                 };
                 // explain plan
-                Explainable::new(&mut dataflow).explain(&format, &config, &context)?
+                Explainable::new(&mut decorrelated_plan).explain(&format, &config, &context)?
             }
             ExplainStageNew::OptimizedPlan => {
                 // run partial pipeline
