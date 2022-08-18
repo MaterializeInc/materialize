@@ -65,7 +65,22 @@ Constant
 
 EOF
 
-# Test basic linear chains.
+# Test basic linear chains (fast path).
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
+----
+Project (#3, #2)
+  Filter (#0 > 0) AND (#1 < 0) AND (#2 > 0)
+    Map ((#0 + #1), 1)
+      ReadExistingIndex materialize.public.t_a_idx
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
+
+# Test basic linear chains (slow path).
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
 SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
