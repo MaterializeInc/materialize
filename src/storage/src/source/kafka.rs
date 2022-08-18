@@ -73,6 +73,11 @@ pub struct KafkaSourceReader {
     partition_metrics: KafkaPartitionMetrics,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
     include_headers: bool,
+    /// Partitions that we know about but are not consuming from ourselves. We
+    /// need these to compute a "global" source upper, when determining
+    /// completeness of a timestamp.
+    // WIP: This is a hack, for now!
+    unconsumed_partitions: Vec<PartitionId>,
 }
 
 impl SourceReader for KafkaSourceReader {
@@ -194,6 +199,7 @@ impl SourceReader for KafkaSourceReader {
             include_headers: kc.include_headers.is_some(),
             _metadata_thread_handle: metadata_thread_handle,
             partition_metrics: KafkaPartitionMetrics::new(metrics, partition_ids, topic, source_id),
+            unconsumed_partitions: Vec::new(),
         })
     }
 
@@ -256,6 +262,10 @@ impl SourceReader for KafkaSourceReader {
 
         Ok(next_message)
     }
+
+    fn unconsumed_partitions(&self) -> Vec<PartitionId> {
+        self.unconsumed_partitions.clone()
+    }
 }
 
 impl KafkaSourceReader {
@@ -264,8 +274,10 @@ impl KafkaSourceReader {
     /// creates partition queues for every p <= pid
     fn add_partition(&mut self, pid: PartitionId) {
         if !crate::source::responsible_for(&self.id, self.worker_id, self.worker_count, &pid) {
+            self.unconsumed_partitions.push(pid);
             return;
         }
+
         let pid = match pid {
             PartitionId::Kafka(p) => p,
             _ => unreachable!(),
