@@ -1,11 +1,11 @@
 ---
-title: "Get Started with Materialize"
+title: "Get started with Materialize"
 description: "Get started with Materialize"
 menu:
   main:
-    parent: 'overview'
+    parent: 'quickstarts'
     weight: 20
-    name: 'Get started'
+    name: 'Get started with Materialize'
 aliases:
   - /katacoda/
 ---

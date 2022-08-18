@@ -4,10 +4,11 @@ description: "Timelines describe sources' meaning of time."
 weight: 20
 aliases:
   - /sql/timelines/
-menu:
-  main:
-    parent: advanced
-    weight: 60
+draft: true
+#menu:
+  #main:
+    #parent: advanced
+    #weight: 60
 ---
 
 All data in Materialize has a timestamp.
