@@ -3803,7 +3803,9 @@ impl<'a> Parser<'a> {
 
                 // Number-like types
                 BIGINT => other("int8"),
+                BIGUINT => other("uint8"),
                 SMALLINT => other("int2"),
+                SMALLUINT => other("uint2"),
                 DEC | DECIMAL => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
@@ -3823,6 +3825,7 @@ impl<'a> Parser<'a> {
                     _ => other("float8"),
                 },
                 INT | INTEGER => other("int4"),
+                UINT | UINTEGER => other("uint4"),
                 REAL => other("float4"),
 
                 // Time-like types

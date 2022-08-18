@@ -432,6 +432,9 @@ pub enum CatalogType<T: TypeReference> {
     Int16,
     Int32,
     Int64,
+    UInt16,
+    UInt32,
+    UInt64,
     Interval,
     Jsonb,
     List {

@@ -106,5 +106,8 @@ message ProtoScalarType {
         google.protobuf.Empty RegType = 26;
         google.protobuf.Empty RegClass = 27;
         google.protobuf.Empty Int2Vector = 28;
+        google.protobuf.Empty UInt16 = 29;
+        google.protobuf.Empty UInt32 = 30;
+        google.protobuf.Empty UInt64 = 31;
     }
 }

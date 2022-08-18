@@ -124,12 +124,15 @@ impl ToJson for TypedDatum<'_> {
                 ScalarType::Int16 => json!(datum.unwrap_int16()),
                 ScalarType::Int32 => json!(datum.unwrap_int32()),
                 ScalarType::Int64 => json!(datum.unwrap_int64()),
-                ScalarType::Oid
+                ScalarType::UInt16 => json!(datum.unwrap_uint16()),
+                ScalarType::UInt32
+                | ScalarType::Oid
                 | ScalarType::RegClass
                 | ScalarType::RegProc
                 | ScalarType::RegType => {
                     json!(datum.unwrap_uint32())
                 }
+                ScalarType::UInt64 => json!(datum.unwrap_uint64()),
                 ScalarType::Float32 => json!(datum.unwrap_float32()),
                 ScalarType::Float64 => json!(datum.unwrap_float64()),
                 ScalarType::Numeric { .. } => {
@@ -237,12 +240,24 @@ fn build_row_schema_field<F: FnMut() -> String>(
             json!("int")
         }
         ScalarType::Int64 => json!("long"),
-        ScalarType::Oid | ScalarType::RegClass | ScalarType::RegProc | ScalarType::RegType => {
+        ScalarType::UInt16 => json!({
+            "type": "fixed",
+            "size": 2,
+        }),
+        ScalarType::UInt32
+        | ScalarType::Oid
+        | ScalarType::RegClass
+        | ScalarType::RegProc
+        | ScalarType::RegType => {
             json!({
                 "type": "fixed",
                 "size": 4,
             })
         }
+        ScalarType::UInt64 => json!({
+            "type": "fixed",
+            "size": 8,
+        }),
         ScalarType::Float32 => json!("float"),
         ScalarType::Float64 => json!("double"),
         ScalarType::Date => json!({

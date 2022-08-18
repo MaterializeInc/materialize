@@ -98,6 +98,27 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "text_to_smalluint"]
+    fn cast_string_to_uint16(a: &'a str) -> Result<u16, EvalError> {
+        strconv::parse_uint16(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "text_to_uinteger"]
+    fn cast_string_to_uint32(a: &'a str) -> Result<u32, EvalError> {
+        strconv::parse_uint32(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "text_to_biguint"]
+    fn cast_string_to_uint64(a: &'a str) -> Result<u64, EvalError> {
+        strconv::parse_uint64(a).err_into()
+    }
+);
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]

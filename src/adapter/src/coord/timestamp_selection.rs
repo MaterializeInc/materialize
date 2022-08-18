@@ -73,6 +73,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
                 ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
                 ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+                ScalarType::UInt16 => evaled.unwrap_uint16().into(),
+                ScalarType::UInt32 => evaled.unwrap_uint32().into(),
+                ScalarType::UInt64 => evaled.unwrap_uint64(),
                 ScalarType::TimestampTz => {
                     evaled.unwrap_timestamptz().timestamp_millis().try_into()?
                 }

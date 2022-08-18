@@ -2274,6 +2274,9 @@ impl<S: Append> Catalog<S> {
             CatalogType::Int16 => CatalogType::Int16,
             CatalogType::Int32 => CatalogType::Int32,
             CatalogType::Int64 => CatalogType::Int64,
+            CatalogType::UInt16 => CatalogType::UInt16,
+            CatalogType::UInt32 => CatalogType::UInt32,
+            CatalogType::UInt64 => CatalogType::UInt64,
             CatalogType::Interval => CatalogType::Interval,
             CatalogType::Jsonb => CatalogType::Jsonb,
             CatalogType::Numeric => CatalogType::Numeric,
@@ -4580,6 +4583,9 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .join(",")
             ),
             PgLegacyChar => "\"char\"".into(),
+            UInt16 => "smalluint".into(),
+            UInt32 => "uinteger".into(),
+            UInt64 => "biguint".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let pg_catalog_schema =

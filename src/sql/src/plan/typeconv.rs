@@ -145,6 +145,9 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         //INT16
         (Int16, Int32) => Implicit: CastInt16ToInt32(func::CastInt16ToInt32),
         (Int16, Int64) => Implicit: CastInt16ToInt64(func::CastInt16ToInt64),
+        (Int16, UInt16) => Assignment: CastInt16ToUint16(func::CastInt16ToUint16),
+        (Int16, UInt32) => Assignment: CastInt16ToUint32(func::CastInt16ToUint32),
+        (Int16, UInt64) => Assignment: CastInt16ToUint64(func::CastInt16ToUint64),
         (Int16, Float32) => Implicit: CastInt16ToFloat32(func::CastInt16ToFloat32),
         (Int16, Float64) => Implicit: CastInt16ToFloat64(func::CastInt16ToFloat64),
         (Int16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
@@ -190,6 +193,9 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (Int32, PgLegacyChar) => Explicit: CastInt32ToPgLegacyChar(func::CastInt32ToPgLegacyChar),
         (Int32, Int16) => Assignment: CastInt32ToInt16(func::CastInt32ToInt16),
         (Int32, Int64) => Implicit: CastInt32ToInt64(func::CastInt32ToInt64),
+        (Int32, UInt16) => Assignment: CastInt32ToUint16(func::CastInt32ToUint16),
+        (Int32, UInt32) => Assignment: CastInt32ToUint32(func::CastInt32ToUint32),
+        (Int32, UInt64) => Assignment: CastInt32ToUint64(func::CastInt32ToUint64),
         (Int32, Float32) => Implicit: CastInt32ToFloat32(func::CastInt32ToFloat32),
         (Int32, Float64) => Implicit: CastInt32ToFloat64(func::CastInt32ToFloat64),
         (Int32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
@@ -202,6 +208,9 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (Int64, Bool) => Explicit: CastInt64ToBool(func::CastInt64ToBool),
         (Int64, Int16) => Assignment: CastInt64ToInt16(func::CastInt64ToInt16),
         (Int64, Int32) => Assignment: CastInt64ToInt32(func::CastInt64ToInt32),
+        (Int64, UInt16) => Assignment: CastInt64ToUint16(func::CastInt64ToUint16),
+        (Int64, UInt32) => Assignment: CastInt64ToUint32(func::CastInt64ToUint32),
+        (Int64, UInt64) => Assignment: CastInt64ToUint64(func::CastInt64ToUint64),
         (Int64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
             let s = to_type.unwrap_numeric_max_scale();
             Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToNumeric(func::CastInt64ToNumeric(s))))
@@ -222,6 +231,46 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
             CastOidToRegType(func::CastOidToRegType),
         ],
         (Int64, String) => Assignment: CastInt64ToString(func::CastInt64ToString),
+
+        // UINT16
+        (UInt16, UInt32) => Implicit: CastUint16ToUint32(func::CastUint16ToUint32),
+        (UInt16, UInt64) => Implicit: CastUint16ToUint64(func::CastUint16ToUint64),
+        (UInt16, Int32) => Implicit: CastUint16ToInt32(func::CastUint16ToInt32),
+        (UInt16, Int64) => Implicit: CastUint16ToInt64(func::CastUint16ToInt64),
+        (UInt16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            let s = to_type.unwrap_numeric_max_scale();
+            Some(move |e: HirScalarExpr| e.call_unary(CastUint16ToNumeric(func::CastUint16ToNumeric(s))))
+        }),
+        (UInt16, Float32) => Implicit: CastUint16ToFloat32(func::CastUint16ToFloat32),
+        (UInt16, Float64) => Implicit: CastUint16ToFloat64(func::CastUint16ToFloat64),
+        (UInt16, String) => Assignment: CastUint16ToString(func::CastUint16ToString),
+
+        // UINT32
+        (UInt32, UInt16) => Assignment: CastUint32ToUint16(func::CastUint32ToUint16),
+        (UInt32, UInt64) => Implicit: CastUint32ToUint64(func::CastUint32ToUint64),
+        (UInt32, Int32) => Assignment: CastUint32ToInt32(func::CastUint32ToInt32),
+        (UInt32, Int64) => Implicit: CastUint32ToInt64(func::CastUint32ToInt64),
+        (UInt32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            let s = to_type.unwrap_numeric_max_scale();
+            Some(move |e: HirScalarExpr| e.call_unary(CastUint32ToNumeric(func::CastUint32ToNumeric(s))))
+        }),
+        (UInt32, Float32) => Implicit: CastUint32ToFloat32(func::CastUint32ToFloat32),
+        (UInt32, Float64) => Implicit: CastUint32ToFloat64(func::CastUint32ToFloat64),
+        (UInt32, String) => Assignment: CastUint32ToString(func::CastUint32ToString),
+
+        // UINT64
+        (UInt64, UInt16) => Assignment: CastUint64ToUint16(func::CastUint64ToUint16),
+        (UInt64, UInt32) => Assignment: CastUint64ToUint32(func::CastUint64ToUint32),
+        (UInt64, Int32) => Assignment: CastUint64ToInt32(func::CastUint64ToInt32),
+        (UInt64, Int64) => Assignment: CastUint64ToInt64(func::CastUint64ToInt64),
+        (UInt64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            let s = to_type.unwrap_numeric_max_scale();
+            Some(move |e: HirScalarExpr| e.call_unary(CastUint64ToNumeric(func::CastUint64ToNumeric(s))))
+        }),
+        (UInt64, Float32) => Implicit: CastUint64ToFloat32(func::CastUint64ToFloat32),
+        (UInt64, Float64) => Implicit: CastUint64ToFloat64(func::CastUint64ToFloat64),
+        (UInt64, String) => Assignment: CastUint64ToString(func::CastUint64ToString),
+
 
         // OID
         (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
@@ -265,6 +314,9 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (Float32, Int16) => Assignment: CastFloat32ToInt16(func::CastFloat32ToInt16),
         (Float32, Int32) => Assignment: CastFloat32ToInt32(func::CastFloat32ToInt32),
         (Float32, Int64) => Assignment: CastFloat32ToInt64(func::CastFloat32ToInt64),
+        (Float32, UInt16) => Assignment: CastFloat32ToUint16(func::CastFloat32ToUint16),
+        (Float32, UInt32) => Assignment: CastFloat32ToUint32(func::CastFloat32ToUint32),
+        (Float32, UInt64) => Assignment: CastFloat32ToUint64(func::CastFloat32ToUint64),
         (Float32, Float64) => Implicit: CastFloat32ToFloat64(func::CastFloat32ToFloat64),
         (Float32, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
             let s = to_type.unwrap_numeric_max_scale();
@@ -276,6 +328,9 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (Float64, Int16) => Assignment: CastFloat64ToInt16(func::CastFloat64ToInt16),
         (Float64, Int32) => Assignment: CastFloat64ToInt32(func::CastFloat64ToInt32),
         (Float64, Int64) => Assignment: CastFloat64ToInt64(func::CastFloat64ToInt64),
+        (Float64, UInt16) => Assignment: CastFloat64ToUint16(func::CastFloat64ToUint16),
+        (Float64, UInt32) => Assignment: CastFloat64ToUint32(func::CastFloat64ToUint32),
+        (Float64, UInt64) => Assignment: CastFloat64ToUint64(func::CastFloat64ToUint64),
         (Float64, Float32) => Assignment: CastFloat64ToFloat32(func::CastFloat64ToFloat32),
         (Float64, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
             let s = to_type.unwrap_numeric_max_scale();
@@ -316,6 +371,9 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (String, Int16) => Explicit: CastStringToInt16(func::CastStringToInt16),
         (String, Int32) => Explicit: CastStringToInt32(func::CastStringToInt32),
         (String, Int64) => Explicit: CastStringToInt64(func::CastStringToInt64),
+        (String, UInt16) => Explicit: CastStringToUint16(func::CastStringToUint16),
+        (String, UInt32) => Explicit: CastStringToUint32(func::CastStringToUint32),
+        (String, UInt64) => Explicit: CastStringToUint64(func::CastStringToUint64),
         (String, Oid) => Explicit: CastStringToOid(func::CastStringToOid),
 
         // STRING to REG*
@@ -555,6 +613,9 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (Numeric, Int16) => Assignment: CastNumericToInt16(func::CastNumericToInt16),
         (Numeric, Int32) => Assignment: CastNumericToInt32(func::CastNumericToInt32),
         (Numeric, Int64) => Assignment: CastNumericToInt64(func::CastNumericToInt64),
+        (Numeric, UInt16) => Assignment: CastNumericToUint16(func::CastNumericToUint16),
+        (Numeric, UInt32) => Assignment: CastNumericToUint32(func::CastNumericToUint32),
+        (Numeric, UInt64) => Assignment: CastNumericToUint64(func::CastNumericToUint64),
         (Numeric, String) => Assignment: CastNumericToString(func::CastNumericToString)
     }
 });
