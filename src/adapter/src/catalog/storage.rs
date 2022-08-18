@@ -12,9 +12,8 @@ use std::hash::Hash;
 use std::iter::once;
 use std::str::FromStr;
 
-use bytes::BufMut;
 use itertools::{max, Itertools};
-use prost::{self, Message};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use timely::progress::Timestamp;
 use uuid::Uuid;
@@ -25,9 +24,6 @@ use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::ConcreteComputeInstanceReplicaConfig;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_persist_types::Codec;
-use mz_proto::{IntoRustIfSome, RustType};
-use mz_repr::global_id::ProtoGlobalId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{
@@ -1446,258 +1442,149 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
     stash.append(&batches).await.map_err(|e| e.into())
 }
 
-macro_rules! impl_codec {
-    ($ty:ty) => {
-        impl Codec for $ty {
-            fn codec_name() -> String {
-                "protobuf[$ty]".into()
-            }
-
-            fn encode<B: BufMut>(&self, buf: &mut B) {
-                Message::encode(self, buf).expect("provided buffer had sufficient capacity")
-            }
-
-            fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-                Message::decode(buf).map_err(|err| err.to_string())
-            }
-        }
-    };
-}
-
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct SettingKey {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(SettingKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct SettingValue {
-    #[prost(string)]
     value: String,
 }
-impl_codec!(SettingValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct IdAllocKey {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(IdAllocKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct IdAllocValue {
-    #[prost(uint64)]
     next_id: u64,
 }
-impl_codec!(IdAllocValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct GidMappingKey {
-    #[prost(string)]
     schema_name: String,
-    #[prost(string)]
     object_name: String,
 }
-impl_codec!(GidMappingKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct GidMappingValue {
-    #[prost(uint64)]
     id: u64,
-    #[prost(uint64)]
     fingerprint: u64,
 }
-impl_codec!(GidMappingValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceKey {
-    #[prost(uint64)]
     id: u64,
 }
-impl_codec!(ComputeInstanceKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceValue {
-    #[prost(string)]
     name: String,
-    #[prost(string, optional)]
     config: Option<String>,
 }
-impl_codec!(ComputeInstanceValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeIntrospectionSourceIndexKey {
-    #[prost(uint64)]
     compute_id: ComputeInstanceId,
-    #[prost(string)]
     name: String,
 }
-impl_codec!(ComputeIntrospectionSourceIndexKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeIntrospectionSourceIndexValue {
-    #[prost(uint64)]
     index_id: u64,
 }
-impl_codec!(ComputeIntrospectionSourceIndexValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct DatabaseKey {
-    #[prost(uint64)]
     id: u64,
 }
-impl_codec!(DatabaseKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceReplicaKey {
-    #[prost(uint64)]
     id: ReplicaId,
 }
-impl_codec!(ComputeInstanceReplicaKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceReplicaValue {
-    #[prost(uint64)]
     compute_instance_id: ComputeInstanceId,
-    #[prost(string)]
     name: String,
-    #[prost(string)]
     config: String,
 }
-impl_codec!(ComputeInstanceReplicaValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct DatabaseValue {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(DatabaseValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct SchemaKey {
-    #[prost(uint64)]
     id: u64,
 }
-impl_codec!(SchemaKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct SchemaValue {
-    #[prost(uint64, optional)]
     database_id: Option<u64>,
-    #[prost(string)]
     name: String,
 }
-impl_codec!(SchemaValue);
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ItemKey {
     gid: GlobalId,
 }
 
-#[derive(Clone, Message)]
-struct ProtoItemKey {
-    #[prost(message)]
-    gid: Option<ProtoGlobalId>,
-}
-
-// To pleasantly support GlobalId, use a custom impl.
-// TODO: Is there a better way to do this?
-impl Codec for ItemKey {
-    fn codec_name() -> String {
-        "protobuf[ItemKey]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        let proto = ProtoItemKey {
-            gid: Some(self.gid.into_proto()),
-        };
-        Message::encode(&proto, buf).expect("provided buffer had sufficient capacity")
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let proto: ProtoItemKey = Message::decode(buf).map_err(|err| err.to_string())?;
-        let gid = proto
-            .gid
-            .into_rust_if_some("ProtoItemKey.gid")
-            .map_err(|e| e.to_string())?;
-        Ok(Self { gid })
-    }
-}
-
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ItemValue {
-    #[prost(uint64)]
     schema_id: u64,
-    #[prost(string)]
     name: String,
-    #[prost(bytes)]
     definition: Vec<u8>,
 }
-impl_codec!(ItemValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct RoleKey {
-    #[prost(string)]
     id: String,
 }
-impl_codec!(RoleKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct RoleValue {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(RoleValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ConfigValue {
-    #[prost(uint64)]
     value: u64,
 }
-impl_codec!(ConfigValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct AuditLogKey {
-    #[prost(bytes)]
     event: Vec<u8>,
 }
-impl_codec!(AuditLogKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct StorageUsageKey {
-    #[prost(bytes)]
     metric: Vec<u8>,
 }
-impl_codec!(StorageUsageKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct TimestampKey {
-    #[prost(string)]
     id: String,
 }
-impl_codec!(TimestampKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct TimestampValue {
-    #[prost(uint64)]
     ts: u64,
 }
-impl_codec!(TimestampValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ServerConfigurationKey {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(ServerConfigurationKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ServerConfigurationValue {
-    #[prost(bytes)]
     value: Vec<u8>,
 }
-impl_codec!(ServerConfigurationValue);
 
 static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
