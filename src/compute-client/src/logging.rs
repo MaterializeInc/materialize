@@ -285,7 +285,7 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
 
 /// Create a VIEW over the postfixed introspection sources. These views are created and torn down
 /// with replicas.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum LogView {
     MzArrangementSharing,
     MzArrangementSizes,
