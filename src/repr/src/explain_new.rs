@@ -363,6 +363,8 @@ pub struct ExplainConfig {
     pub join_impls: bool,
     /// Show the `non_negative` in the explanation if it is supported by the backing IR.
     pub non_negative: bool,
+    /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
+    pub no_fast_path: bool,
     /// Don't normalize plans before explaining them.
     pub raw_plans: bool,
     /// Disable virtual syntax in the explanation.
@@ -393,6 +395,7 @@ impl TryFrom<HashSet<String>> for ExplainConfig {
         let result = ExplainConfig {
             join_impls: config_flags.remove("join_impls"),
             non_negative: config_flags.remove("non_negative"),
+            no_fast_path: config_flags.remove("no_fast_path"),
             raw_plans: config_flags.remove("raw_plans"),
             raw_syntax: config_flags.remove("raw_syntax"),
             subtree_size: config_flags.remove("subtree_size"),
@@ -753,6 +756,7 @@ mod tests {
         let config = ExplainConfig {
             join_impls: false,
             non_negative: false,
+            no_fast_path: false,
             raw_plans: false,
             raw_syntax: false,
             subtree_size: false,
