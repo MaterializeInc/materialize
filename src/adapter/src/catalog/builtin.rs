@@ -1953,11 +1953,19 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     name: "pg_roles",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_roles AS SELECT
-    r.name AS rolname,
+    r.rolname,
+    r.rolsuper,
+    r.rolinherit,
+    r.rolcreaterole,
+    r.rolcreatedb,
+    r.rolcanlogin,
+    r.rolreplication,
+    r.rolconnlimit,
     '********'::pg_catalog.text AS rolpassword,
+    r.rolvaliduntil,
+    r.rolbypassrls,
     r.oid AS oid
-FROM mz_catalog.mz_roles r
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+FROM pg_catalog.pg_authid r",
 };
 
 pub const PG_VIEWS: BuiltinView = BuiltinView {
@@ -2103,7 +2111,8 @@ AS SELECT
     NULL::pg_catalog.text AS rolpassword,
     -- MZ doesn't have role passwords
     NULL::pg_catalog.timestamptz AS rolvaliduntil
-FROM mz_catalog.mz_roles r",
+FROM mz_catalog.mz_roles r
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: SYSTEM_USER };
@@ -2276,13 +2285,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_CONSTRAINT),
         Builtin::View(&PG_TABLES),
         Builtin::View(&PG_ACCESS_METHODS),
+        Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),
         Builtin::View(&PG_MATVIEWS),
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
-        Builtin::View(&PG_AUTHID),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         // This is disabled for the moment because it has unusual upper

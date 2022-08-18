@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import time
+from textwrap import dedent
 
 from pg8000.dbapi import ProgrammingError
 
@@ -74,6 +75,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-drop-default-cluster",
         "test-upsert",
         "test-resource-limits",
+        "test-builtin-migration",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -280,3 +282,60 @@ def workflow_test_resource_limits(c: Composition) -> None:
         c.wait_for_materialized()
 
         c.run("testdrive", "resources/resource-limits.td")
+
+
+# TODO: Would be nice to update this test to use a builtin table that can be materialized.
+#  pg_roles, and most postgres catalog views, cannot be materialized because they use
+#  pg_catalog.current_database(). So we can't test making indexes and materialized views.
+def workflow_test_builtin_migration(c: Composition) -> None:
+    """Exercise the builtin object migration code by upgrading between two versions
+    that will have a migration triggered between them. Create a materialized view
+    over the affected builtin object to confirm that the migration was successful
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        # Random commit before pg_roles was updated.
+        Materialized(
+            image="materialize/materialized:devel-9efd269199b1510b3e8f90196cb4fa3072a548a1",
+        ),
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        c.testdrive(
+            input=dedent(
+                """
+        > CREATE VIEW v1 AS SELECT COUNT(*) FROM pg_roles;
+        > SELECT * FROM v1;
+        2
+        ! SELECT DISTINCT rolconnlimit FROM pg_roles;
+        contains:column "rolconnlimit" does not exist
+    """
+            )
+        )
+
+        c.kill("materialized")
+
+    with c.override(
+        # This will stop working if we introduce a breaking change.
+        Materialized(),
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        c.testdrive(
+            input=dedent(
+                """
+       > SELECT * FROM v1;
+       2
+       # This column is new after the migration
+       > SELECT DISTINCT rolconnlimit FROM pg_roles;
+       -1
+    """
+            )
+        )
