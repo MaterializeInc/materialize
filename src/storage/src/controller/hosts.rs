@@ -135,10 +135,6 @@ where
     /// Returns a client to the provisioned host. The client may be
     /// retrieved in the future via the [`client`](StorageHosts::client)
     /// method.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `id` is already provisioned.
     pub async fn provision(
         &mut self,
         id: GlobalId,
@@ -206,10 +202,6 @@ where
 
     /// Deprovisions the storage host for the storage object with the specified
     /// ID.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the provided `id` has not been provisioned.
     pub async fn deprovision(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
         if let Some(host_addr) = self.objects.remove(&id) {
             if self.deprovision_host(id, host_addr).await? {
