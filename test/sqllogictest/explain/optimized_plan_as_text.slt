@@ -50,7 +50,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
 SELECT 1 / 0
 ----
-Error "division by zero"
+Explained Query (fast path)
+  Error "division by zero"
 
 EOF
 
@@ -59,9 +60,10 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
-Constant
-  - ((1, 2) x 2)
-  - (3, 4)
+Explained Query (fast path)
+  Constant
+    - ((1, 2) x 2)
+    - (3, 4)
 
 EOF
 
@@ -70,10 +72,11 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
 SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
 ----
-Project (#3, #2)
-  Filter (#0 > 0) AND (#1 < 0) AND (#2 > 0)
-    Map ((#0 + #1), 1)
-      ReadExistingIndex materialize.public.t_a_idx
+Explained Query (fast path)
+  Project (#3, #2)
+    Filter (#0 > 0) AND (#1 < 0) AND (#2 > 0)
+      Map ((#0 + #1), 1)
+        ReadExistingIndex materialize.public.t_a_idx
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -177,7 +180,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
-ReadExistingIndex materialize.public.t_a_idx
+Explained Query (fast path)
+  Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
+    ReadExistingIndex materialize.public.t_a_idx
 
 Used Indexes:
   - materialize.public.t_a_idx

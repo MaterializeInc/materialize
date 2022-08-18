@@ -213,7 +213,20 @@ where
         let mut ctx = RenderingContext::new(Indent::default(), self.context.humanizer);
 
         if let Some(fast_path_plan) = &self.context.fast_path_plan {
-            fast_path_plan.fmt_text(f, &mut ctx)?;
+            writeln!(f, "{}{} (fast path)", ctx.indent, GlobalId::Explain)?;
+            ctx.indented(|ctx| {
+                // if present, a RowSetFinishing is applied on top of the fast path plan
+                match &self.context.finishing {
+                    Some(finishing) => {
+                        finishing.fmt_text(f, &mut ctx.indent)?;
+                        ctx.indented(|ctx| fast_path_plan.fmt_text(f, ctx))?;
+                    }
+                    _ => {
+                        fast_path_plan.fmt_text(f, ctx)?;
+                    }
+                }
+                Ok(())
+            })?;
         } else {
             // render plans
             for (no, (id, plan)) in self.plans.iter().enumerate() {
