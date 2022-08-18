@@ -154,6 +154,7 @@ where
 pub struct Indent {
     unit: String,
     buff: String,
+    mark: Vec<usize>,
 }
 
 impl Indent {
@@ -163,6 +164,7 @@ impl Indent {
         Indent {
             unit: std::iter::repeat(unit).take(step).collect::<String>(),
             buff: String::with_capacity(unit.len_utf8()),
+            mark: vec![],
         }
     }
 
@@ -176,6 +178,21 @@ impl Indent {
         let tail = rhs.saturating_mul(self.unit.len());
         let head = self.buff.len().saturating_sub(tail);
         self.buff.truncate(head);
+    }
+
+    /// Remember the current state.
+    pub fn set(&mut self) {
+        self.mark.push(self.buff.len());
+    }
+
+    /// Reset `buff` to the last marked state.
+    pub fn reset(&mut self) {
+        if let Some(len) = self.mark.pop() {
+            while self.buff.len() < len {
+                self.buff += &self.unit;
+            }
+            self.buff.truncate(len);
+        }
     }
 }
 
