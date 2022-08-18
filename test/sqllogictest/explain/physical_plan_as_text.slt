@@ -1,0 +1,172 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+)
+
+statement ok
+CREATE TABLE u (
+  c int,
+  d int
+)
+
+statement ok
+CREATE INDEX t_a_idx ON T(a);
+
+statement ok
+CREATE INDEX t_b_idx ON T(b);
+
+statement ok
+CREATE VIEW ov AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS
+SELECT * FROM t WHERE a IS NOT NULL
+
+mode cockroach
+
+# Test constant error.
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
+SELECT 1 / 0
+----
+Explained Query
+  Error "division by zero"
+
+EOF
+
+# Test constant with two elements.
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
+(SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
+----
+Explained Query
+  Constant
+    - ((1, 2) x 2)
+    - (3, 4)
+
+EOF
+
+
+# Test basic linear chains.
+
+# PassArrangements plan (identity transform on an arranged input).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
+SELECT * FROM t
+----
+Explained Query
+  Get::PassArrangements materialize.public.t
+    raw=false
+    arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
+
+# PassArrangements plan (identity transform on a raw input).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
+SELECT * FROM u
+----
+Explained Query
+  Get::PassArrangements materialize.public.u
+    raw=true
+
+Source materialize.public.u
+  Demand (#0, #1)
+
+EOF
+
+# GetArrangement plan (linear transform of an arranged input).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
+SELECT a + b, 1 FROM t
+----
+Explained Query
+  Get::Arrangement materialize.public.t
+    project=(#2, #3)
+    map=((#0 + #1), 1)
+    key=#0
+    raw=false
+    arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
+
+# GetCollection plan (linear transform of a raw input).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
+SELECT c + d, 1 FROM u
+----
+Explained Query
+  Get::Collection materialize.public.u
+    project=(#2, #3)
+    map=((#0 + #1), 1)
+    raw=true
+
+Source materialize.public.u
+  Demand (#0, #1)
+
+EOF
+
+# TopKBasic plan.
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
+SELECT * FROM ov
+----
+Explained Query
+  TopK::Basic order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
+    ArrangeBy
+      input_key=[#0]
+      raw=true
+      Get::PassArrangements materialize.public.t
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
+
+# Test Threshold, Union, Distinct, Negate.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT a FROM t EXCEPT ALL SELECT b FROM mv
+----
+Explained Query
+  Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+    ArrangeBy
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Union
+        Get::Arrangement materialize.public.t
+          project=(#0)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        Negate
+          Get::Collection materialize.public.mv
+            project=(#1)
+            raw=true
+
+Source materialize.public.mv
+  Demand (#1)
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
