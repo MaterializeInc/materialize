@@ -9,8 +9,8 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
-use std::collections::BTreeMap;
-use std::convert::{self, TryInto};
+use std::collections::{BTreeMap, HashSet};
+use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 
 use rdkafka::client::ClientContext;
@@ -22,21 +22,110 @@ use tokio::time::Duration;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
-use mz_sql_parser::ast::Value;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName, Value};
 use mz_storage::types::connections::{
     CsrConnection, CsrConnectionHttpAuth, KafkaConnection, StringOrSecret, TlsIdentity,
 };
 
-use crate::normalize::SqlValueOrSecret;
+use crate::names::Aug;
+use crate::normalize::{generate_extracted_config, SqlValueOrSecret};
+use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError;
 
+generate_extracted_config!(
+    KafkaConfigOption,
+    (Acks, String),
+    (ClientId, String),
+    (EnableAutoCommit, bool),
+    (EnableIdempotence, bool),
+    (FetchMessageMaxBytes, i32),
+    (
+        IsolationLevel,
+        String,
+        Default(String::from("read_committed"))
+    ),
+    (StatisticsIntervalMs, i32, Default(1_000)),
+    (TopicMetadataRefreshIntervalMs, i32),
+    (TransactionTimeoutMs, i32)
+);
+
+impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
+    type Error = PlanError;
+    fn try_from(
+        KafkaConfigOptionExtracted {
+            acks,
+            client_id,
+            enable_auto_commit,
+            enable_idempotence,
+            fetch_message_max_bytes,
+            isolation_level,
+            statistics_interval_ms,
+            topic_metadata_refresh_interval_ms,
+            transaction_timeout_ms,
+            seen: _,
+        }: KafkaConfigOptionExtracted,
+    ) -> Result<BTreeMap<String, StringOrSecret>, Self::Error> {
+        let mut o = BTreeMap::new();
+
+        macro_rules! fill_options {
+            // Values that are not option can just be wrapped in some before being passed to the macro
+            ($v:expr, $s:expr) => {
+                if let Some(v) = $v {
+                    o.insert($s.to_string(), StringOrSecret::String(v.to_string()));
+                }
+            };
+            ($v:expr, $s:expr, $check:expr, $err:expr) => {
+                if let Some(v) = $v {
+                    if !$check(v) {
+                        sql_bail!($err);
+                    }
+                    o.insert($s.to_string(), StringOrSecret::String(v.to_string()));
+                }
+            };
+        }
+
+        fill_options!(acks, "acks");
+        fill_options!(client_id, "client.id");
+        fill_options!(
+            Some(statistics_interval_ms),
+            "statistics.interval.ms",
+            |i| { 0 <= i && i <= 86_400_000 },
+            "STATISTICS INTERVAL MS must be within [0, 86,400,000]"
+        );
+        fill_options!(
+            topic_metadata_refresh_interval_ms,
+            "topic.metadata.refresh.interval.ms",
+            |i| { 0 <= i && i <= 3_600_000 },
+            "TOPIC METADATA REFRESH INTERVAL MS must be within [0, 3,600,000]"
+        );
+        fill_options!(enable_auto_commit, "enable.auto.commit");
+        fill_options!(Some(isolation_level), "isolation.level");
+        fill_options!(
+            transaction_timeout_ms,
+            "transaction.timeout.ms",
+            |i| 0 <= i,
+            "TRANSACTION TIMEOUT MS must be greater than or equval to 0"
+        );
+        fill_options!(enable_idempotence, "enable.idempotence");
+        fill_options!(
+            fetch_message_max_bytes,
+            "fetch.message.max_bytes",
+            // The range of values comes from `fetch.message.max.bytes` in
+            // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+            |i| { 0 <= i && i <= 1_000_000_000 },
+            "FETCH MESSAGE MAX BYTES must be within [0, 1,000,000,000]"
+        );
+
+        Ok(o)
+    }
+}
+
+// todo: remove this type entirely when getting rid of string-keyed options for
+// CSR connections.
 enum ValType {
-    String { transform: fn(String) -> String },
     StringOrSecret,
     Secret,
-    // Number with range [lower, upper]
-    Number(i32, i32),
-    Boolean,
 }
 
 // Describes Kafka cluster configurations users can supply using `CREATE
@@ -55,22 +144,6 @@ impl Config {
             default: None,
         }
     }
-
-    /// Shorthand for simple string config options.
-    fn string(name: &'static str) -> Self {
-        Config::new(
-            name,
-            ValType::String {
-                transform: convert::identity,
-            },
-        )
-    }
-
-    /// Shorthand for a string config option with a transformation function.
-    fn string_transform(name: &'static str, transform: fn(String) -> String) -> Self {
-        Config::new(name, ValType::String { transform })
-    }
-
     /// Shorthand for a config option that can be either a string or a secret.
     fn string_or_secret(name: &'static str) -> Self {
         Config::new(name, ValType::StringOrSecret)
@@ -79,12 +152,6 @@ impl Config {
     /// Shorthand for secret config options.
     fn secret(name: &'static str) -> Self {
         Config::new(name, ValType::Secret)
-    }
-
-    /// Allows for returning a default value for this configuration option
-    fn set_default(mut self, d: Option<String>) -> Self {
-        self.default = d;
-        self
     }
 
     /// Get the appropriate String to use as the Kafka config key.
@@ -101,23 +168,6 @@ fn extract(
     for config in configs {
         // Look for config.name
         let value = match (input.remove(config.name), &config.val_type) {
-            (Some(SqlValueOrSecret::Value(Value::Boolean(b))), ValType::Boolean) => {
-                StringOrSecret::String(b.to_string())
-            }
-            (Some(SqlValueOrSecret::Value(Value::Number(n))), ValType::Number(lower, upper)) => {
-                match n.parse::<i32>() {
-                    Ok(parsed_n) if *lower <= parsed_n && parsed_n <= *upper => {
-                        StringOrSecret::String(n.to_string())
-                    }
-                    _ => sql_bail!("must be a number between {} and {}", lower, upper),
-                }
-            }
-            (Some(SqlValueOrSecret::Value(Value::String(s))), ValType::String { transform }) => {
-                StringOrSecret::String(transform(s.to_string()))
-            }
-            (Some(SqlValueOrSecret::Value(Value::String(s))), ValType::StringOrSecret) => {
-                StringOrSecret::String(s.to_string())
-            }
             (Some(SqlValueOrSecret::Secret(id)), ValType::Secret)
             | (Some(SqlValueOrSecret::Secret(id)), ValType::StringOrSecret) => {
                 StringOrSecret::Secret(id)
@@ -134,73 +184,10 @@ fn extract(
                     v
                 );
             }
-            (Some(SqlValueOrSecret::Secret(_)), _) => {
-                sql_bail!(
-                    "WITH option {} does not accept secret references",
-                    config.name
-                );
-            }
         };
         out.insert(config.get_kafka_config_key(), value);
     }
     Ok(out)
-}
-
-/// Parse the `with_options` from a `CREATE SOURCE` or `CREATE SINK`
-/// statement to determine user-supplied config options, e.g. security
-/// options.
-///
-/// # Errors
-///
-/// - Invalid values for known options, such as files that do not exist for
-/// expected file paths.
-/// - If any of the values in `with_options` are not
-///   `sql_parser::ast::Value::String`.
-pub fn extract_config(
-    with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-) -> Result<BTreeMap<String, StringOrSecret>, PlanError> {
-    extract(
-        with_options,
-        &[
-            Config::string("acks"),
-            Config::string("client_id"),
-            Config::new(
-                "statistics_interval_ms",
-                // The range of values comes from `statistics.interval.ms` in
-                // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                ValType::Number(0, 86_400_000),
-            )
-            .set_default(Some(
-                chrono::Duration::seconds(1).num_milliseconds().to_string(),
-            )),
-            Config::new(
-                "topic_metadata_refresh_interval_ms",
-                // The range of values comes from `topic.metadata.refresh.interval.ms` in
-                // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                ValType::Number(0, 3_600_000),
-            ),
-            Config::new("enable_auto_commit", ValType::Boolean),
-            Config::string("isolation_level").set_default(Some(String::from("read_committed"))),
-            Config::string("security_protocol"),
-            Config::string_or_secret("sasl_username"),
-            Config::secret("sasl_password"),
-            // For historical reasons, we allow `sasl_mechanisms` to be lowercase or
-            // mixed case, while librdkafka requires all uppercase (e.g., `PLAIN`,
-            // not `plain`).
-            Config::string_transform("sasl_mechanisms", |s| s.to_uppercase()),
-            Config::string_or_secret("ssl_ca_pem"),
-            Config::string_or_secret("ssl_certificate_pem"),
-            Config::secret("ssl_key_pem"),
-            Config::new("transaction_timeout_ms", ValType::Number(0, i32::MAX)),
-            Config::new("enable_idempotence", ValType::Boolean),
-            Config::new(
-                "fetch_message_max_bytes",
-                // The range of values comes from `fetch.message.max.bytes` in
-                // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                ValType::Number(0, 1_000_000_000),
-            ),
-        ],
-    )
 }
 
 /// Create a new `rdkafka::ClientConfig` with the provided

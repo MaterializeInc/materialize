@@ -2027,6 +2027,76 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_kafka_connection_reference(&mut self) -> Result<KafkaConnection<Raw>, ParserError> {
+        let connection = self.parse_raw_name()?;
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_kafka_config_options)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
+        Ok(KafkaConnection::Reference {
+            connection,
+            with_options,
+        })
+    }
+
+    fn parse_kafka_config_options(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[
+            ACKS,
+            CLIENT,
+            ENABLE,
+            FETCH,
+            ISOLATION,
+            STATISTICS,
+            TOPIC,
+            TRANSACTION,
+        ])? {
+            ACKS => KafkaConfigOptionName::Acks,
+            CLIENT => {
+                self.expect_keyword(ID)?;
+                KafkaConfigOptionName::ClientId
+            }
+            ENABLE => match self.expect_one_of_keywords(&[AUTO, IDEMPOTENCE])? {
+                AUTO => {
+                    self.expect_keyword(COMMIT)?;
+                    KafkaConfigOptionName::EnableAutoCommit
+                }
+                IDEMPOTENCE => KafkaConfigOptionName::EnableIdempotence,
+                _ => unreachable!(),
+            },
+            FETCH => {
+                self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
+                KafkaConfigOptionName::FetchMessageMaxBytes
+            }
+            ISOLATION => {
+                self.expect_keyword(LEVEL)?;
+                KafkaConfigOptionName::IsolationLevel
+            }
+            STATISTICS => {
+                self.expect_keywords(&[INTERVAL, MS])?;
+                KafkaConfigOptionName::StatisticsIntervalMs
+            }
+            TOPIC => {
+                self.expect_keywords(&[METADATA, REFRESH, INTERVAL, MS])?;
+                KafkaConfigOptionName::TopicMetadataRefreshIntervalMs
+            }
+            TRANSACTION => {
+                self.expect_keywords(&[TIMEOUT, MS])?;
+                KafkaConfigOptionName::TransactionTimeoutMs
+            }
+            _ => unreachable!(),
+        };
+        let _ = self.consume_token(&Token::Eq);
+        Ok(KafkaConfigOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
     fn parse_csr_connection_options(&mut self) -> Result<CsrConnectionOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[SSL, URL, USERNAME, PASSWORD])? {
             SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
@@ -2316,9 +2386,7 @@ impl<'a> Parser<'a> {
                     BROKER => KafkaConnection::Inline {
                         broker: self.parse_literal_string()?,
                     },
-                    CONNECTION => KafkaConnection::Reference {
-                        connection: self.parse_raw_name()?,
-                    },
+                    CONNECTION => self.parse_kafka_connection_reference()?,
                     _ => unreachable!(),
                 };
                 self.expect_keyword(TOPIC)?;
@@ -2434,9 +2502,8 @@ impl<'a> Parser<'a> {
     fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
         self.expect_keyword(KAFKA)?;
         self.expect_keyword(CONNECTION)?;
-        let connection = KafkaConnection::Reference {
-            connection: self.parse_raw_name()?,
-        };
+
+        let connection = self.parse_kafka_connection_reference()?;
 
         self.expect_keyword(TOPIC)?;
         let topic = self.parse_literal_string()?;

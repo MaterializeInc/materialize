@@ -603,6 +603,8 @@ macro_rules! generate_extracted_config {
     };
 }
 
+pub(crate) use generate_extracted_config;
+
 /// Ensures that the given set of options are empty, useful for validating that
 /// `WITH` options are all real, used options
 pub(crate) fn ensure_empty_options<V>(

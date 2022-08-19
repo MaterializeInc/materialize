@@ -533,6 +533,7 @@ impl_display_t!(CreateSourceStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
+    pub if_not_exists: bool,
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
     pub with_options: Vec<WithOption<T>>,
@@ -540,7 +541,6 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub envelope: Option<Envelope<T>>,
     pub with_snapshot: bool,
     pub as_of: Option<AsOf<T>>,
-    pub if_not_exists: bool,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
