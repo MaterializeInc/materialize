@@ -1130,3 +1130,23 @@ SELECT
    ~1 - 2  as def_sub, ~(1 - 2)  as l_prec_sub, (~1) - 2  as h_prec_sub
 ----
 -3 -3 -1 0 0 -4
+
+# overflow for negating minimum integers
+
+query error smallint out of range
+SELECT - '-32768'::int2
+
+query error smallint out of range
+SELECT  ABS('-32768'::int2)
+
+query error integer out of range
+SELECT - '-2147483648'::int4
+
+query error integer out of range
+SELECT  ABS('-2147483648'::int4)
+
+query error bigint out of range
+SELECT - '-9223372036854775808'::int8
+
+query error bigint out of range
+SELECT  ABS('-9223372036854775808'::int8)

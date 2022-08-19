@@ -21,8 +21,8 @@ use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "-"]
-    fn neg_int32(a: i32) -> i32 {
-        -a
+    fn neg_int32(a: i32) -> Result<i32, EvalError> {
+        a.checked_neg().ok_or(EvalError::Int32OutOfRange)
     }
 );
 
@@ -35,8 +35,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "abs"]
-    fn abs_int32(a: i32) -> i32 {
-        a.abs()
+    fn abs_int32(a: i32) -> Result<i32, EvalError> {
+        a.checked_abs().ok_or(EvalError::Int32OutOfRange)
     }
 );
 
