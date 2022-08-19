@@ -58,9 +58,8 @@ contains:replication factor for sink topics must be an integer
 contains:replication factor for sink topics must be a positive integer or -1 for broker default
 
 ! CREATE SINK invalid_acks FROM v1
-  INTO KAFKA CONNECTION kafka_conn
+  INTO KAFKA CONNECTION kafka_conn WITH (ACKS = foo)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH (acks = foo)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Invalid value for configuration property "request.required.acks" acks foo
 

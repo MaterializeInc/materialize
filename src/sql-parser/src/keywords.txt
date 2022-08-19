@@ -24,6 +24,7 @@
 # For details on the code that is generated, see keywords.rs.
 
 Access
+Acks
 All
 Alter
 And
@@ -36,6 +37,7 @@ Asc
 At
 Auction
 Authority
+Auto
 Availability
 Avro
 Aws
@@ -59,6 +61,7 @@ Char
 Character
 Characteristics
 Check
+Client
 Close
 Cluster
 Clusters
@@ -107,6 +110,7 @@ Dot
 Double
 Drop
 Else
+Enable
 End
 Enforced
 Envelope
@@ -146,6 +150,7 @@ Host
 Hour
 Hours
 Id
+Idempotence
 If
 Ilike
 In
@@ -190,6 +195,7 @@ Map
 Matching
 Materialize
 Materialized
+Max
 Mechanisms
 Message
 Metadata
@@ -198,6 +204,7 @@ Minutes
 Mode
 Month
 Months
+Ms
 Names
 Natural
 Next
@@ -248,6 +255,7 @@ Raw
 Read
 Real
 References
+Refresh
 Regex
 Registry
 Remote
@@ -293,6 +301,7 @@ Sqs
 Ssh
 Ssl
 Start
+Statistics
 Stdin
 Stdout
 Strategy

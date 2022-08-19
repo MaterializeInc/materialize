@@ -32,9 +32,13 @@ $ kafka-create-topic topic=partition-change partitions=5
 $ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE partition_change
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-partition-change-${testdrive.seed}'
-  WITH(topic_metadata_refresh_interval_ms=100)
+  FROM KAFKA CONNECTION kafka_conn
+    WITH (TOPIC METADATA REFRESH INTERVAL MS = 100)
+  TOPIC 'testdrive-partition-change-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 
