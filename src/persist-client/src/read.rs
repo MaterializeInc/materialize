@@ -866,9 +866,7 @@ mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
-    use mz_persist::location::Consensus;
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
-    use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
 
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::r#impl::metrics::Metrics;
@@ -887,10 +885,6 @@ mod tests {
 
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
-        let unreliable = UnreliableHandle::default();
-        unreliable.totally_available();
-        let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
-            as Arc<dyn Consensus + Send + Sync>;
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
 
