@@ -20,8 +20,8 @@ use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "-"]
-    fn neg_int16(a: i16) -> i16 {
-        -a
+    fn neg_int16(a: i16) -> Result<i16, EvalError> {
+        a.checked_neg().ok_or(EvalError::Int16OutOfRange)
     }
 );
 
@@ -34,8 +34,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "abs"]
-    fn abs_int16(a: i16) -> i16 {
-        a.abs()
+    fn abs_int16(a: i16) -> Result<i16, EvalError> {
+        a.checked_abs().ok_or(EvalError::Int16OutOfRange)
     }
 );
 
