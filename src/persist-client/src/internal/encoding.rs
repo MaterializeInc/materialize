@@ -499,6 +499,12 @@ pub struct SerdeLeasedBatch(Vec<u8>);
 
 impl<T: Timestamp + Codec64> From<LeasedBatch<T>> for SerdeLeasedBatch {
     fn from(mut x: LeasedBatch<T>) -> Self {
+        // Make sure to encode as proto first, to capture the current state of
+        // "droppable". Otherwise, all batches that went through
+        // SerdeLeasedBatch once get forever marked as droppable, which is
+        // incorrect.
+        let result = SerdeLeasedBatch(x.into_proto().encode_to_vec());
+
         // Making `LeasedBatch`es with outstanding leases droppable should only
         // occur here; this should not be a generally accessible function
         match &mut x.leased_seqno {
@@ -508,7 +514,8 @@ impl<T: Timestamp + Codec64> From<LeasedBatch<T>> for SerdeLeasedBatch {
             LeaseLifeCycle::Issued { droppable, .. }
             | LeaseLifeCycle::Consumed { droppable, .. } => *droppable = true,
         }
-        SerdeLeasedBatch(x.into_proto().encode_to_vec())
+
+        result
     }
 }
 
