@@ -15,13 +15,12 @@
 
 import pytest
 from dbt.tests.util import check_relations_equal, run_dbt
-from fixtures import (
+from fixtures import (  # test_sink, todo: re-enable once #14195 lands
     actual_indexes,
     expected_indexes,
     test_index,
     test_materialized_view,
     test_materialized_view_index,
-    test_sink,
     test_source,
     test_source_index,
     test_view_index,
@@ -48,7 +47,7 @@ class TestCustomMaterializations:
             "test_source.sql": test_source,
             "test_index.sql": test_index,
             "test_source_index.sql": test_source_index,
-            "test_sink.sql": test_sink,
+            # "test_sink.sql": test_sink, todo: re-enable once #14195 lands
             "actual_indexes.sql": actual_indexes,
         }
 
@@ -60,7 +59,8 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 8
+        # assert len(results) == 8 todo: re-enable once #14195 lands
+        assert len(results) == 7
 
         # relations_equal
         check_relations_equal(
