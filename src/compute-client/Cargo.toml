@@ -33,7 +33,7 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = "1.19.2"
 tokio-stream = "0.1.9"
 tonic = "0.7.2"
-tracing = "0.1.35"
+tracing = "0.1.36"
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [build-dependencies]
