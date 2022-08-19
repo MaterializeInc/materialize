@@ -248,7 +248,8 @@ contains:collection identifier is not present
 
 > CREATE SINK output14_custom_consistency_topic FROM input_kafka_cdcv2
   INTO KAFKA CONNECTION kafka_conn TOPIC 'output14-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output14-custom-consistency-${testdrive.seed}')
+  CONSISTENCY (TOPIC 'output14-custom-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # We need some data -- any data -- to start creating timestamp bindings
@@ -322,14 +323,6 @@ $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_s
 
 > CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
 
-# Can't provide CONSISTENCY FORMAT and consistency_topic WITH option
-! CREATE SINK double_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'double-avro'
-    CONSISTENCY (TOPIC 'topicname')
-    WITH (consistency_topic='willfail')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:Cannot specify consistency_topic and CONSISTENCY options simultaneously
-
 # Can't create sinks with JSON-encoded consistency topics
 ! CREATE SINK double_avro FROM simple_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'double-avro'
@@ -389,7 +382,7 @@ contains:For FORMAT JSON, you need to manually specify an Avro consistency topic
 # Default consistency format is Avro if consistency_topic is used
 > CREATE SINK default_avro_2 FROM simple_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'default-avro-2'
-    WITH (consistency_topic='default-consistency-avro')
+  CONSISTENCY (TOPIC 'default-consistency-avro')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=true
