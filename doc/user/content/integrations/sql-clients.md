@@ -12,18 +12,18 @@ menu:
     name: "SQL clients"
 ---
 
-You can connect to a running Materialize instance using a PostgreSQL-compatible client, like `psql`. For an overview of compatible SQL clients and their current level of support, check out [Tools and Integrations](/integrations/#sql-clients).
+You can connect to Materialize using a PostgreSQL-compatible client, like `psql`. For an overview of compatible SQL clients and their current level of support, check out [Tools and Integrations](/integrations/#sql-clients).
 
 ### Connection details
 
 Detail       | Info
 -------------|------
-**Database** | `materialize`
-**User**     | Any valid [role](/sql/create-role) (default: `materialize`)
+**Host**     | <host>
 **Port**     | `6875`
-**SSL/TLS**  | [If enabled](/cli/#tls-encryption)
+**User**     | <user>
+**Database** | `materialize`
 
-Materialize instances have a default user named `materialize` installed. You can manage users using the [`DROP USER`](/sql/drop-user) and [`CREATE USER`](/sql/create-user) statements.
+[//]: # "Add details about managing users once RBAC lands"
 
 ### Supported tools
 
@@ -42,25 +42,10 @@ If there's a tool that you'd like to use with Materialize but is not listed here
 Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands {{% gh 9721 %}}.
 {{< /warning >}}
 
-You can use any of the following connection string format to connect to `materialized` with `psql`:
+You can use any of the following connection string formats to connect to Materialize with `psql`:
 
 ```shell
-psql postgres://materialize@<host>:6875/materialize
-psql -U materialize -h <host> -p 6875 materialize
-psql -U materialize -h <host> -p 6875 -d materialize
-psql user=materialize host=<host> port=6875 dbname=materialize
-```
-
-#### Docker
-
-For Docker environments, we provide the [`materialize/cli` image](https://hub.docker.com/r/materialize/cli), which bundles `psql` and can be used to spin up a minimal `docker-compose` setup:
-
-```yaml
-services:
-  materialized:
-    image: materialize/materialized:{{< version >}}
-    ports:
-      - "6875:6875"
-  cli:
-    image: materialize/cli:{{< version >}}
+psql "postgres://<user>@<host>:6875/materialize"
+psql -U <user> -h <host> -p 6875 materialize
+psql -U <user> -h <host> -p 6875 -d materialize
 ```

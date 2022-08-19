@@ -131,11 +131,11 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     b. Click on **View client information**
 
-    c. Copy the url under **Private endpoint** and against **SASL/SCRAM**. This will be your `<broker-url>` going forward
+    c. Copy the url under **Private endpoint** and against **SASL/SCRAM**. This will be your `<broker-url>` going forward.
 
-    d. [Install](/install/) and [start](/get-started/) a Materialize instance locally
+    d. From a `psql` terminal, connect to Materialize.
 
-    e. From the _psql_ terminal, run the following command. Replace `<source-name>` with whatever you want to name your source. The broker url is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.
+    e. Create a source using the command below. Replace `<source-name>` with whatever you want to name your source. The broker url is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.
     ```
       CREATE SECRET msk_password AS '<your-password>';
 

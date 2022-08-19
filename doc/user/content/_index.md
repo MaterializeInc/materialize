@@ -36,6 +36,6 @@ Materialize is a streaming database for real-time applications. It lets you ask 
 
 ## Learn more
 
-- [**Install Materialize**](./install) to see it in action.
+- [**Sign up for Materialize**](https://materialize.com/register/) to see it in action.
 - Check out the [**Materialize blog**](https://www.materialize.com/blog/) for the latest updates and Materialize deep-dives.
 - Check out [**What is Materialize?**](./overview/what-is-materialize) to learn more about what Materialize does and how it works.
