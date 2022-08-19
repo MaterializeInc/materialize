@@ -21,7 +21,6 @@ use mz_ore::task::RuntimeExt;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, oneshot};
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
@@ -206,76 +205,10 @@ where
                 LeaseLifeCycle::Issued { droppable, .. }
                 | LeaseLifeCycle::Consumed { droppable, .. } => droppable,
             },
-            "LeasedBatch must be explicitly permitted to drop or its lease must have been returned",
+            "LeasedBatch must be explicitly permitted to drop or its \
+            lease must have been returned. This batch was not: {:?}",
+            self
         );
-    }
-}
-
-/// Provides the receiver end of the channel to return processed
-/// [`LeasedBatch`]es to their issuer.
-#[derive(Debug)]
-pub struct SubscribeBatchReceiver<T>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    consumed_batch_rx: mpsc::UnboundedReceiver<Vec<LeasedBatch<T>>>,
-    reader_id_tx: oneshot::Sender<ReaderId>,
-}
-
-#[derive(Debug)]
-enum BatchReturnReaderId {
-    Awaiting(oneshot::Receiver<ReaderId>),
-    Ready(ReaderId),
-}
-
-/// Provides the sender end of the channel to return processed [`LeasedBatch`]es
-/// to their issuer.
-#[derive(Debug)]
-pub struct SubscribeBatchReturner<T>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    reader_id: BatchReturnReaderId,
-    consumed_batch_tx: mpsc::UnboundedSender<Vec<LeasedBatch<T>>>,
-}
-
-impl<T> SubscribeBatchReturner<T>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    async fn set_reader_id(&mut self) {
-        if let BatchReturnReaderId::Awaiting(recv) = &mut self.reader_id {
-            self.reader_id = BatchReturnReaderId::Ready(recv.await.unwrap());
-        }
-    }
-
-    fn reader_id(&self) -> &ReaderId {
-        match &self.reader_id {
-            BatchReturnReaderId::Awaiting(_) => unreachable!(),
-            BatchReturnReaderId::Ready(reader_id) => reader_id,
-        }
-    }
-
-    /// Returns processed [`LeasedBatch]es to their issuer.
-    pub async fn return_batches(&mut self, batches: Vec<SerdeLeasedBatch>) {
-        self.set_reader_id().await;
-
-        let batches = batches
-            .into_iter()
-            .map(LeasedBatch::<T>::from)
-            .collect::<Vec<_>>();
-
-        if let Err(mpsc::error::SendError(batches)) = self.consumed_batch_tx.send(batches) {
-            // Subscribe loop dropped, which drops its ReadHandle, which
-            // in turn drops all leases, so doing anything else here is
-            // both moot and impossible.
-            //
-            // However, leased batches cannot be dropped with their
-            // leases intact, so we must drop their leases here.
-            for mut batch in batches {
-                let _ = batch.return_lease(&self.reader_id());
-            }
-        }
     }
 }
 
@@ -294,7 +227,6 @@ where
 {
     snapshot_batches: VecDeque<LeasedBatch<T>>,
     listen: Listen<K, V, T, D>,
-    consumed_batch_rx: mpsc::UnboundedReceiver<Vec<LeasedBatch<T>>>,
 }
 
 impl<K, V, T, D> Subscribe<K, V, T, D>
@@ -304,42 +236,10 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    /// Generates tx and rx structs for returning [`LeasedBatch`]es to their
-    /// issuer after processing. This is necessary to handle the batch's leases.
-    pub fn new_batch_return_channels() -> (SubscribeBatchReturner<T>, SubscribeBatchReceiver<T>) {
-        let (consumed_batch_tx, consumed_batch_rx): (
-            mpsc::UnboundedSender<Vec<LeasedBatch<T>>>,
-            mpsc::UnboundedReceiver<Vec<LeasedBatch<T>>>,
-        ) = mpsc::unbounded_channel();
-        let (reader_id_tx, reader_id_rx) = oneshot::channel::<ReaderId>();
-        (
-            SubscribeBatchReturner {
-                consumed_batch_tx,
-                reader_id: BatchReturnReaderId::Awaiting(reader_id_rx),
-            },
-            SubscribeBatchReceiver {
-                consumed_batch_rx,
-                reader_id_tx,
-            },
-        )
-    }
-
-    async fn new(
-        snapshot_batches: VecDeque<LeasedBatch<T>>,
-        listen: Listen<K, V, T, D>,
-        SubscribeBatchReceiver {
-            consumed_batch_rx,
-            reader_id_tx,
-        }: SubscribeBatchReceiver<T>,
-    ) -> Self {
-        reader_id_tx
-            .send(listen.handle.reader_id.clone())
-            .expect("one shot succeeds");
-
+    fn new(snapshot_batches: VecDeque<LeasedBatch<T>>, listen: Listen<K, V, T, D>) -> Self {
         Subscribe {
             snapshot_batches,
             listen,
-            consumed_batch_rx,
         }
     }
 
@@ -352,36 +252,17 @@ where
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
-        while let Ok(leased_batches) = self.consumed_batch_rx.try_recv() {
-            for lb in leased_batches {
-                self.listen.handle.process_returned_leased_batch(lb);
-            }
-        }
-
         match self.snapshot_batches.pop_front() {
             Some(batch) => batch,
             None => self.listen.next_batch().await,
         }
     }
-}
 
-impl<K, V, T, D> Drop for Subscribe<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
-    fn drop(&mut self) {
-        // Batches cannot be dropped without acknowledgment, so we need to
-        // ensure we handle any remaining batches.
-        self.consumed_batch_rx.close();
-
-        while let Ok(leased_batches) = self.consumed_batch_rx.try_recv() {
-            for lb in leased_batches {
-                self.listen.handle.process_returned_leased_batch(lb);
-            }
-        }
+    /// Returns the given [`LeasedBatch`], releasing its lease.
+    pub fn return_leased_batch(&mut self, leased_batch: LeasedBatch<T>) {
+        self.listen
+            .handle
+            .process_returned_leased_batch(leased_batch)
     }
 }
 
@@ -666,11 +547,6 @@ where
         &self.since
     }
 
-    /// This handle's `ReaderId`.
-    pub fn reader_id(&self) -> ReaderId {
-        self.reader_id.clone()
-    }
-
     /// Forwards the since frontier of this handle, giving up the ability to
     /// read at times not greater or equal to `new_since`.
     ///
@@ -793,11 +669,10 @@ where
     pub async fn subscribe(
         mut self,
         as_of: Antichain<T>,
-        batch_receiver: SubscribeBatchReceiver<T>,
     ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
         let snapshot_batches = self.snapshot(as_of.clone()).await?.into();
         let listen = self.listen(as_of).await?;
-        Ok(Subscribe::new(snapshot_batches, listen, batch_receiver).await)
+        Ok(Subscribe::new(snapshot_batches, listen))
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
@@ -1046,11 +921,8 @@ mod tests {
 
         let fetcher = read.clone().await.batch_fetcher().await;
 
-        let (mut consumed_batch_tx, consumed_batch_rx) =
-            Subscribe::<String, String, u64, i64>::new_batch_return_channels();
-
         let mut subscribe = read
-            .subscribe(Antichain::from_elem(1), consumed_batch_rx)
+            .subscribe(Antichain::from_elem(1))
             .await
             .expect("cannot serve requested as_of");
 
@@ -1108,10 +980,10 @@ mod tests {
 
             // Emulating drop
             let b = SerdeLeasedBatch::from(batch).clone();
-            consumed_batch_tx.return_batches(vec![b]).await;
+            subscribe.return_leased_batch(b.into());
 
             // Simulates an exchange
-            subsequent_batches.push(SerdeLeasedBatch::from(subscribe.next().await));
+            subsequent_batches.push(subscribe.next().await);
 
             subscribe
                 .listen
@@ -1146,10 +1018,12 @@ mod tests {
         // SeqNo since was downgraded
         assert!(seqno_since > original_seqno_since);
 
-        drop(subscribe);
+        // Return any outstanding batches, to prevent a panic!
+        for batch in subsequent_batches {
+            subscribe.return_leased_batch(batch);
+        }
 
-        // Handles returning batches to a dropped subscribe w/o panicking.
-        consumed_batch_tx.return_batches(subsequent_batches).await;
+        drop(subscribe);
     }
 }
 

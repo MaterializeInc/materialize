@@ -21,14 +21,13 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Map, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::trace;
 
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::SerdeLeasedBatch;
-use mz_persist_client::read::Subscribe;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -114,10 +113,12 @@ where
     let data_shard = metadata.data_shard.clone();
     let as_of_stream = as_of;
 
-    // Connects the Consumed batch collector operator with the batch-issuing
+    // Connects the consumed batch collector operator with the batch-issuing
     // Subscribe.
-    let (mut consumed_batch_tx, consumed_batch_rx) =
-        Subscribe::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>::new_batch_return_channels();
+    let (consumed_batch_tx, mut consumed_batch_rx): (
+        mpsc::UnboundedSender<SerdeLeasedBatch>,
+        mpsc::UnboundedReceiver<SerdeLeasedBatch>,
+    ) = mpsc::unbounded_channel();
 
     // This is a generator that sets up an async `Stream` that can be continously polled to get the
     // values that are `yield`-ed from it's body.
@@ -142,11 +143,15 @@ where
             .expect("could not open persist shard");
 
         let mut subscription = read
-            .subscribe(as_of_stream, consumed_batch_rx)
+            .subscribe(as_of_stream)
             .await
             .expect("cannot serve requested as_of");
 
         loop {
+            while let Ok(leased_batch) = consumed_batch_rx.try_recv() {
+                subscription.return_leased_batch(leased_batch.into());
+            }
+
             yield subscription.next().await;
         }
     });
@@ -271,7 +276,7 @@ where
                         .expect("shard_id generated for sources must match across all workers");
 
                     update_session.give_vec(&mut updates);
-                    consumed_batch_session.give(consumed_batch.into());
+                    consumed_batch_session.give(SerdeLeasedBatch::from(consumed_batch));
                 }
             }
             false
@@ -313,7 +318,16 @@ where
                 // panicking, so swap them to an owned version.
                 let mut leased_batches = Vec::with_capacity(data.len());
                 data.swap(&mut leased_batches);
-                consumed_batch_tx.return_batches(leased_batches).await;
+                for batch in leased_batches {
+                    if let Err(mpsc::error::SendError(_batch)) = consumed_batch_tx.send(batch) {
+                        // Subscribe loop dropped, which drops its ReadHandle,
+                        // which in turn drops all leases, so doing anything
+                        // else here is both moot and impossible.
+                        //
+                        // The batches we tried to send will just continue being
+                        // `SerdeLeasedBatch`'es.
+                    }
+                }
             }
 
             false
