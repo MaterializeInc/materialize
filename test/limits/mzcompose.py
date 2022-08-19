@@ -1218,7 +1218,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         "--clusters",
         type=int,
         metavar="N",
-        default=16,
+        default=8,
         help="set the number of clusters to create",
     )
     parser.add_argument(
