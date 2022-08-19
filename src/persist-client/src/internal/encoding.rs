@@ -22,14 +22,14 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::CodecMismatch;
-use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::state::proto_hollow_batch_reader_metadata;
-use crate::r#impl::state::{
+use crate::internal::paths::PartialBlobKey;
+use crate::internal::state::proto_hollow_batch_reader_metadata;
+use crate::internal::state::{
     HollowBatch, ProtoHollowBatch, ProtoHollowBatchReaderMetadata, ProtoReadEnrichedHollowBatch,
     ProtoReaderState, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
     ProtoWriterState, ReaderState, State, StateCollections, WriterState,
 };
-use crate::r#impl::trace::Trace;
+use crate::internal::trace::Trace;
 use crate::read::{HollowBatchReaderMetadata, ReaderEnrichedHollowBatch, ReaderId};
 use crate::{ShardId, WriterId};
 
@@ -499,7 +499,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoReadEnrichedHollowBatch>
 mod tests {
     use mz_persist_types::Codec;
 
-    use crate::r#impl::state::State;
+    use crate::internal::state::State;
     use crate::ShardId;
 
     #[test]

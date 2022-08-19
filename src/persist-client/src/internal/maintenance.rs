@@ -11,8 +11,8 @@
 //!
 //! Maintenance operations for persist, shared among active handles
 
-use crate::r#impl::compact::CompactReq;
-use crate::r#impl::gc::GcReq;
+use crate::internal::compact::CompactReq;
+use crate::internal::gc::GcReq;
 use crate::{Compactor, GarbageCollector, Machine, ReaderId, WriterId};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;

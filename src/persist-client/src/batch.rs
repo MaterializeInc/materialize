@@ -31,9 +31,9 @@ use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::retry_external;
-use crate::r#impl::metrics::{BatchWriteMetrics, Metrics};
-use crate::r#impl::paths::{PartId, PartialBlobKey};
+use crate::internal::machine::retry_external;
+use crate::internal::metrics::{BatchWriteMetrics, Metrics};
+use crate::internal::paths::{PartId, PartialBlobKey};
 use crate::{PersistConfig, ShardId, WriterId};
 
 /// A handle to a batch of updates that has been written to blob storage but
@@ -147,8 +147,8 @@ where
     }
 
     #[cfg(test)]
-    pub fn into_hollow_batch(mut self) -> crate::r#impl::state::HollowBatch<T> {
-        let ret = crate::r#impl::state::HollowBatch {
+    pub fn into_hollow_batch(mut self) -> crate::internal::state::HollowBatch<T> {
+        let ret = crate::internal::state::HollowBatch {
             desc: self.desc.clone(),
             keys: self.blob_keys.clone(),
             len: self.num_updates,
@@ -158,7 +158,7 @@ where
     }
 }
 
-/// Indicates what work was done in a call to [crate::batch::BatchBuilder::add]
+/// Indicates what work was done in a call to [BatchBuilder::add]
 #[derive(Debug)]
 pub enum Added {
     /// A record was inserted into a pending batch part
@@ -532,7 +532,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 #[cfg(test)]
 mod tests {
     use crate::cache::PersistClientCache;
-    use crate::r#impl::paths::BlobKey;
+    use crate::internal::paths::BlobKey;
     use crate::tests::all_ok;
     use crate::PersistLocation;
 

@@ -37,10 +37,10 @@ use uuid::Uuid;
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
-use crate::r#impl::compact::Compactor;
-use crate::r#impl::encoding::parse_id;
-use crate::r#impl::gc::GarbageCollector;
-use crate::r#impl::machine::{retry_external, Machine};
+use crate::internal::compact::Compactor;
+use crate::internal::encoding::parse_id;
+use crate::internal::gc::GarbageCollector;
+use crate::internal::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
 
@@ -53,10 +53,10 @@ pub mod read;
 pub mod usage;
 pub mod write;
 
-pub use crate::r#impl::state::{Since, Upper};
+pub use crate::internal::state::{Since, Upper};
 
 /// An implementation of the public crate interface.
-pub(crate) mod r#impl {
+pub(crate) mod internal {
     pub mod compact;
     pub mod encoding;
     pub mod gc;
@@ -70,7 +70,7 @@ pub(crate) mod r#impl {
 
 // TODO: Remove this in favor of making it possible for all PersistClients to be
 // created by the PersistCache.
-pub use crate::r#impl::metrics::Metrics;
+pub use crate::internal::metrics::Metrics;
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
@@ -474,21 +474,20 @@ mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
     use futures_util::FutureExt;
+    use mz_ore::cast::CastFrom;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_proto::protobuf_roundtrip;
+    use proptest::prelude::*;
     use timely::progress::Antichain;
     use timely::PartialOrder;
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
     use crate::error::CodecMismatch;
-    use crate::r#impl::state::Upper;
+    use crate::internal::paths::BlobKey;
+    use crate::internal::state::Upper;
     use crate::read::ListenEvent;
-
-    use crate::r#impl::paths::BlobKey;
-    use mz_ore::cast::CastFrom;
-    use proptest::prelude::*;
 
     use super::*;
 

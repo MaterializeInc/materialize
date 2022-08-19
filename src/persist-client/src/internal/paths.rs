@@ -11,7 +11,7 @@ use std::ops::Deref;
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::r#impl::encoding::parse_id;
+use crate::internal::encoding::parse_id;
 use crate::{ShardId, WriterId};
 
 /// An opaque identifier for an individual blob of a persist durable TVC (aka shard).
@@ -45,12 +45,12 @@ impl PartId {
 }
 
 /// Partially encoded path used in [mz_persist::location::Blob] storage.
-/// Composed of a [crate::write::WriterId] and [crate::impl::paths::PartId]. Can
-/// be completed with a [crate::ShardId] to form a full [crate::impl::paths::BlobKey].
+/// Composed of a [WriterId] and [PartId]. Can be completed with a [ShardId] to
+/// form a full [BlobKey].
 ///
-/// Used to reduce the bytes needed to refer to a blob key in memory and
-/// in persistent state, all access to blobs are always within the context
-/// of an individual shard.
+/// Used to reduce the bytes needed to refer to a blob key in memory and in
+/// persistent state, all access to blobs are always within the context of an
+/// individual shard.
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub struct PartialBlobKey(pub(crate) String);
 
@@ -63,11 +63,11 @@ impl PartialBlobKey {
         if self.starts_with('w') {
             BlobKey(format!("{}/{}", shard_id, self))
         } else {
-            // the legacy key format is a plain UUID (which cannot start with 'w')
-            // so it should not be prepended with the shard id.
+            // the legacy key format is a plain UUID (which cannot start with
+            // 'w') so it should not be prepended with the shard id.
             //
-            // TODO: this can be removed when there are no more legacy keys.
-            //       see [crate::impl::paths::BlobKey::parse_ids] for more details
+            // TODO: this can be removed when there are no more legacy keys. see
+            // [BlobKey::parse_ids] for more details
             BlobKey(self.0.to_owned())
         }
     }
@@ -87,13 +87,12 @@ impl Deref for PartialBlobKey {
     }
 }
 
-/// Fully encoded path used in [mz_persist::location::Blob] storage.
-/// Composed of a [crate::ShardId], [crate::write::WriterId] and
-/// [crate::impl::paths::PartId].
+/// Fully encoded path used in [mz_persist::location::Blob] storage. Composed of
+/// a [ShardId], [WriterId] and [PartId].
 ///
-/// Use when directly interacting with a [mz_persist::location::Blob],
-/// otherwise use [crate::impl::paths::PartialBlobKey] to refer to
-/// a blob without needing to copy the [crate::ShardId].
+/// Use when directly interacting with a [mz_persist::location::Blob], otherwise
+/// use [PartialBlobKey] to refer to a blob without needing to copy the
+/// [ShardId].
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlobKey(String);
 
@@ -155,8 +154,6 @@ impl std::fmt::Display for BlobKeyPrefix<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::r#impl::paths::BlobKey;
-
     use super::*;
 
     #[test]

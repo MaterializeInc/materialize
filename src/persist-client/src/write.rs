@@ -30,10 +30,10 @@ use uuid::Uuid;
 
 use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
-use crate::r#impl::compact::Compactor;
-use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
-use crate::r#impl::metrics::Metrics;
-use crate::r#impl::state::{HollowBatch, Upper};
+use crate::internal::compact::Compactor;
+use crate::internal::machine::{Machine, INFO_MIN_ATTEMPTS};
+use crate::internal::metrics::Metrics;
+use crate::internal::state::{HollowBatch, Upper};
 use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
