@@ -30,7 +30,7 @@ use uuid::Uuid;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
-use crate::internal::encoding::SerdeLeasedBatch;
+pub use crate::internal::encoding::SerdeLeasedBatch;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Since};
@@ -145,43 +145,6 @@ where
         }
     }
 
-    /// Equivalent to `session.give((i, self))`, but includes private internal
-    /// bookkeeping for the batch's lease; also returns the apporpriate value to
-    /// downgrade the capability that generated the session.
-    ///
-    /// # Panics
-    /// - If `self` has been fetched.
-    pub fn give_to_fetch_session_and_get_progress(
-        self,
-        i: usize,
-        session: &mut Session<
-            '_,
-            T,
-            Vec<(usize, SerdeLeasedBatch)>,
-            CounterCore<
-                T,
-                Vec<(usize, SerdeLeasedBatch)>,
-                TeeCore<T, Vec<(usize, SerdeLeasedBatch)>>,
-            >,
-        >,
-    ) -> Option<Antichain<T>> {
-        assert!(
-            matches!(
-                &self.leased_seqno,
-                LeaseLifeCycle::Issued {
-                    seqno: _,
-                    droppable: false,
-                }
-            ),
-            "cannot pass batches in non-Issued states to fetch sessions"
-        );
-
-        let progress = self.generate_progress();
-        let exchangeable = SerdeLeasedBatch::from(self);
-        session.give((i, exchangeable));
-        progress
-    }
-
     /// Equivalent to `session.give(self)`, but includes private internal
     /// bookkeeping for the batch's lease; also returns the apporpriate value
     /// to downgrade the capability that generated the session.
@@ -211,7 +174,7 @@ where
 
     /// Signals whether or not `self` should downgrade the `Capability` its
     /// presented alongside.
-    fn generate_progress(&self) -> Option<Antichain<T>> {
+    pub fn generate_progress(&self) -> Option<Antichain<T>> {
         match self.metadata {
             LeasedBatchMetadata::Listen { .. } => Some(self.batch.desc.upper().clone()),
             LeasedBatchMetadata::Snapshot { .. } => None,

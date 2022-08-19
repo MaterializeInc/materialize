@@ -27,6 +27,7 @@ use tracing::trace;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::read::SerdeLeasedBatch;
 use mz_persist_client::read::Subscribe;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
@@ -176,8 +177,8 @@ where
                             let session_cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&session_cap);
 
-                            let progress =
-                                batch.give_to_fetch_session_and_get_progress(i, &mut session);
+                            let progress = batch.generate_progress();
+                            session.give((i, SerdeLeasedBatch::from(batch)));
 
                             // Round robin
                             i = (i + 1) % peers;
