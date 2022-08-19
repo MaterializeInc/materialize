@@ -22,7 +22,7 @@ mz-http-util = { path = "../http-util" }
 pprof = "0.10.0"
 serde = { version = "1.0.140", features = ["derive"] }
 tempfile = "3.2.0"
-tracing = "0.1.35"
+tracing = "0.1.36"
 tokio = { version = "1.19.2", features = ["time"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]

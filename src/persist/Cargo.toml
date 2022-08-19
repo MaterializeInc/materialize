@@ -47,7 +47,7 @@ serde = { version = "1.0.140", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tracing = "0.1.35"
+tracing = "0.1.36"
 url = "2.2.2"
 uuid = { version = "1.1.2", features = ["v4"] }
 
