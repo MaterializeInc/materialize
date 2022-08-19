@@ -256,11 +256,12 @@ where
             let mut output_handle = update_output.activate();
             let mut consumed_batch_output_handle = consumed_batch_output.activate();
 
+            let mut buffer = Vec::new();
+
             while let Some((cap, data)) = fetcher_input.next() {
                 // `LeasedBatch`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
-                let mut leased_batches = Vec::with_capacity(data.len());
-                data.swap(&mut leased_batches);
+                data.swap(&mut buffer);
 
                 let update_cap = cap.delayed_for_output(cap.time(), update_output_port);
                 let mut update_session = output_handle.session(&update_cap);
@@ -269,7 +270,7 @@ where
                 let mut consumed_batch_session =
                     consumed_batch_output_handle.session(&consumed_batch_cap);
 
-                for (_idx, batch) in leased_batches {
+                for (_idx, batch) in buffer.drain(..) {
                     let (consumed_batch, updates) = fetcher.fetch_batch(batch.into()).await;
 
                     let mut updates = updates
@@ -313,12 +314,12 @@ where
                 return false;
             }
 
+            let mut buffer = Vec::new();
+
             while let Some((_cap, data)) = consumed_batch_input.next() {
-                // `LeasedBatch`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                let mut leased_batches = Vec::with_capacity(data.len());
-                data.swap(&mut leased_batches);
-                for batch in leased_batches {
+                data.swap(&mut buffer);
+
+                for batch in buffer.drain(..) {
                     if let Err(mpsc::error::SendError(_batch)) = consumed_batch_tx.send(batch) {
                         // Subscribe loop dropped, which drops its ReadHandle,
                         // which in turn drops all leases, so doing anything
