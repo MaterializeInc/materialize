@@ -69,7 +69,8 @@ pub async fn create_kafka_sink(
 
     let query = format!(
             "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA CONNECTION {sink}_kafka_conn TOPIC '{topic}' \
-             WITH (consistency_topic = '{topic}-consistency') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
+             CONSISTENCY (TOPIC '{topic}-consistency' )
+             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
              sink = sink_name,
              topic = sink_topic_name,
              schema_registry = schema_registry_url

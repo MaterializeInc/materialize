@@ -144,14 +144,16 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK input_sink FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
-  WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
+  CONSISTENCY (TOPIC 'input-sink-consistency')
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 # requesting to key by (a, b) is fine when (a) is a unique key
 
 > CREATE SINK input_sink_multiple_keys FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b, a)
-  WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
+  CONSISTENCY (TOPIC 'input-sink-consistency')
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 $ kafka-ingest format=avro topic=input schema=${schema}
@@ -185,14 +187,6 @@ $ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
 
 $ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
 {"a": 1} {"a": 1, "b": 7, "transaction": {"id": "3"}}
-
-$ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
-{"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "input-sink"}]}}
-{"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "input-sink"}]}}
-{"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "input-sink"}]}}
 
 # Again, compare split by transaction. See comment just above.
 
@@ -286,13 +280,13 @@ $ kafka-create-topic topic=non-keyed-input
 
 ! CREATE SINK invalid_key FROM input
   INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
-  WITH (consistency_topic = true) FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (a), there are no valid keys
 
 ! CREATE SINK another_invalid_key FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b)
-  WITH (consistency_topic = true) FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (b), valid keys are: (a)
 
@@ -300,13 +294,13 @@ contains:Invalid upsert key: (b), valid keys are: (a)
 
 ! CREATE SINK invalid_sub_key FROM input_keyed_ab
   INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
-  WITH (consistency_topic = true) FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (a), valid keys are: (a, b)
 
 ! CREATE SINK another_invalid_sub_key FROM input_keyed_ab
   INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b)
-  WITH (consistency_topic = true) FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 contains:Invalid upsert key: (b), valid keys are: (a, b)
 

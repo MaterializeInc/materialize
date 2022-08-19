@@ -67,7 +67,6 @@ Field                | Value type | Description
 `partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
 `replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
 `reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. The default is false. See [Enabling topic reuse after restart](/sql/create-sink/#exactly-once-sinks-with-topic-reuse-after-restart) for details.
-`consistency_topic`  | `text`     | This option is only available to support backwards-compatibility. Please use the new [`CONSISTENCY` syntax](/sql/create-sink/#sink_kafka_connector) to define a consistency topic for the sink.
 `security_protocol`  | `text`     | Use [`ssl`](#authentication) or, for [Kerberos](#authentication), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 `retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default.

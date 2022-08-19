@@ -57,13 +57,6 @@ contains:replication factor for sink topics must be an integer
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:replication factor for sink topics must be a positive integer or -1 for broker default
 
-! CREATE SINK invalid_consistency FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH (consistency_topic = -2)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:consistency_topic must be a string
-
 ! CREATE SINK invalid_acks FROM v1
   INTO KAFKA CONNECTION kafka_conn
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'

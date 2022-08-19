@@ -1876,16 +1876,6 @@ fn kafka_sink_builder(
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
     };
 
-    let consistency_topic = match with_options.remove("consistency_topic") {
-        None => None,
-        Some(SqlValueOrSecret::Value(Value::String(topic))) => Some(topic),
-        Some(_) => sql_bail!("consistency_topic must be a string"),
-    };
-    if consistency_topic.is_some() && consistency.is_some() {
-        // We're keeping consistency_topic around for backwards compatibility. Users
-        // should not be able to specify consistency_topic and the newer CONSISTENCY options.
-        sql_bail!("Cannot specify consistency_topic and CONSISTENCY options simultaneously");
-    }
     let reuse_topic = match with_options.remove("reuse_topic") {
         Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
         None => false,
@@ -1943,8 +1933,7 @@ fn kafka_sink_builder(
             )?;
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
-            let include_transaction =
-                reuse_topic || consistency_topic.is_some() || consistency.is_some();
+            let include_transaction = reuse_topic || consistency.is_some();
             let schema_generator = AvroSchemaGenerator::new(
                 avro_key_fullname.as_deref(),
                 avro_value_fullname.as_deref(),
@@ -1971,13 +1960,8 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let consistency_config = get_kafka_sink_consistency_config(
-        &topic_prefix,
-        &format,
-        reuse_topic,
-        consistency,
-        consistency_topic,
-    )?;
+    let consistency_config =
+        get_kafka_sink_consistency_config(&topic_prefix, &format, reuse_topic, consistency)?;
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -2057,15 +2041,12 @@ fn kafka_sink_builder(
 /// sink based on the given configuration items.
 ///
 /// This is slightly complicated because of a desire to maintain backwards compatibility with
-/// previous ways of specifying consistency configuration. [`KafkaConsistency`] is the new way of
-/// doing things, we support specifying just a topic name (via `consistency_topic`) for backwards
-/// compatibility.
+/// previous ways of specifying consistency configuration.
 fn get_kafka_sink_consistency_config(
     topic_prefix: &str,
     sink_format: &KafkaSinkFormat,
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
-    consistency_topic: Option<String>,
 ) -> Result<Option<(String, KafkaSinkFormat)>, PlanError> {
     let result = match consistency {
         Some(KafkaConsistency {
@@ -2117,28 +2098,19 @@ fn get_kafka_sink_consistency_config(
             Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
         },
         None => {
-            // Support use of `consistency_topic` with option if the sink is Avro-formatted
-            // for backwards compatibility.
-            if reuse_topic | consistency_topic.is_some() {
+            if reuse_topic {
                 match sink_format {
                     KafkaSinkFormat::Avro {
                         csr_connection,
                         ..
                     } => {
-                        let consistency_topic = match consistency_topic {
-                            Some(topic) => topic,
-                            None => {
-                                let default_consistency_topic =
-                                    format!("{}-consistency", topic_prefix);
-                                debug!(
-                                    "Using default consistency topic '{}' for topic '{}'",
-                                    default_consistency_topic, topic_prefix
-                                );
-                                default_consistency_topic
-                            }
-                        };
+                        let default_consistency_topic = format!("{}-consistency", topic_prefix);
+                        debug!(
+                            "Using default consistency topic '{}' for topic '{}'",
+                            default_consistency_topic, topic_prefix
+                        );
                         Some((
-                            consistency_topic,
+                            default_consistency_topic,
                             KafkaSinkFormat::Avro {
                                 key_schema: None,
                                 value_schema: avro::get_debezium_transaction_schema()
