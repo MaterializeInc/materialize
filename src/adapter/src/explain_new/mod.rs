@@ -167,10 +167,9 @@ where
         where
             Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
         {
-            if let Some(fast_path_plan) = fast_path_plan {
-                fast_path_plan.fmt_text(f, ctx)
-            } else {
-                Displayable::from(plan).fmt_text(f, ctx)
+            match fast_path_plan {
+                Some(fast_path_plan) if !ctx.config.no_fast_path => fast_path_plan.fmt_text(f, ctx),
+                _ => Displayable::from(plan).fmt_text(f, ctx),
             }
         }
 
@@ -212,41 +211,57 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = RenderingContext::new(Indent::default(), self.context.humanizer);
 
-        if let Some(fast_path_plan) = &self.context.fast_path_plan {
-            fast_path_plan.fmt_text(f, &mut ctx)?;
-        } else {
-            // render plans
-            for (no, (id, plan)) in self.plans.iter().enumerate() {
-                let mut ctx = PlanRenderingContext::new(
-                    ctx.indent.clone(),
-                    ctx.humanizer,
-                    plan.annotations.clone(),
-                    self.context.config,
-                );
-
-                writeln!(f, "{}{}", ctx.indent, id)?;
+        match &self.context.fast_path_plan {
+            Some(fast_path_plan) if !self.context.config.no_fast_path => {
+                writeln!(f, "{}{} (fast path)", ctx.indent, GlobalId::Explain)?;
                 ctx.indented(|ctx| {
+                    // if present, a RowSetFinishing is applied on top of the fast path plan
                     match &self.context.finishing {
-                        // if present, a RowSetFinishing always applies to the first rendered plan
-                        Some(finishing) if no == 0 => {
+                        Some(finishing) => {
                             finishing.fmt_text(f, &mut ctx.indent)?;
-                            ctx.indented(|ctx| Displayable(plan.plan).fmt_text(f, ctx))?;
+                            ctx.indented(|ctx| fast_path_plan.fmt_text(f, ctx))?;
                         }
-                        // all other plans are rendered without a RowSetFinishing
                         _ => {
-                            Displayable(plan.plan).fmt_text(f, ctx)?;
+                            fast_path_plan.fmt_text(f, ctx)?;
                         }
                     }
                     Ok(())
                 })?;
             }
-            if !self.sources.is_empty() {
-                // render one blank line between the plans and sources
-                writeln!(f, "")?;
-                // render sources
-                for (id, operator) in self.sources.iter() {
-                    writeln!(f, "{}Source {}", ctx.indent, id)?;
-                    ctx.indented(|ctx| Displayable(*operator).fmt_text(f, ctx))?;
+            _ => {
+                // render plans
+                for (no, (id, plan)) in self.plans.iter().enumerate() {
+                    let mut ctx = PlanRenderingContext::new(
+                        ctx.indent.clone(),
+                        ctx.humanizer,
+                        plan.annotations.clone(),
+                        self.context.config,
+                    );
+
+                    writeln!(f, "{}{}", ctx.indent, id)?;
+                    ctx.indented(|ctx| {
+                        match &self.context.finishing {
+                            // if present, a RowSetFinishing always applies to the first rendered plan
+                            Some(finishing) if no == 0 => {
+                                finishing.fmt_text(f, &mut ctx.indent)?;
+                                ctx.indented(|ctx| Displayable(plan.plan).fmt_text(f, ctx))?;
+                            }
+                            // all other plans are rendered without a RowSetFinishing
+                            _ => {
+                                Displayable(plan.plan).fmt_text(f, ctx)?;
+                            }
+                        }
+                        Ok(())
+                    })?;
+                }
+                if !self.sources.is_empty() {
+                    // render one blank line between the plans and sources
+                    writeln!(f, "")?;
+                    // render sources
+                    for (id, operator) in self.sources.iter() {
+                        writeln!(f, "{}Source {}", ctx.indent, id)?;
+                        ctx.indented(|ctx| Displayable(*operator).fmt_text(f, ctx))?;
+                    }
                 }
             }
         }

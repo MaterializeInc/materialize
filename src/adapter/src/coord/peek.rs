@@ -19,7 +19,7 @@ use std::{collections::HashMap, num::NonZeroUsize};
 use futures::{FutureExt, StreamExt};
 use mz_expr::explain::Indices;
 use mz_ore::str::{bracketed, separated, Indent};
-use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, ExprHumanizer};
+use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -34,6 +34,7 @@ use mz_repr::{Diff, GlobalId, RelationType, Row};
 use mz_stash::Append;
 
 use crate::client::ConnectionId;
+use crate::explain_new::Displayable;
 use crate::util::send_immediate_rows;
 use crate::AdapterError;
 
@@ -186,29 +187,24 @@ where
                 writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
             }
             FastPathPlan::PeekExisting(id, lookup, mfp) => {
-                let mut total_indents = 0;
+                ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
                 if project.len() != mfp.input_arity + map.len()
                     || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
                     let outputs = Indices(&project);
-                    writeln!(f, "{}Project {}", ctx.as_mut(), outputs)?;
+                    writeln!(f, "{}Project ({})", ctx.as_mut(), outputs)?;
                     *ctx.as_mut() += 1;
-                    total_indents += 1;
                 }
                 if !filter.is_empty() {
-                    // TODO (#13299) use separated_text
-                    //let predicates = separated_text(", ", filter.iter().map(Displayable::from));
-                    writeln!(f, "{}Filter {}", ctx.as_mut(), separated(" AND ", filter))?;
+                    let predicates = separated_text(" AND ", filter.iter().map(Displayable::from));
+                    writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
-                    total_indents += 1;
                 }
                 if !map.is_empty() {
-                    // TODO (#13299) use separated_text
-                    //let scalars = separated_text(", ", map.iter().map(Displayable::from));
-                    writeln!(f, "{}Map {}", ctx.as_mut(), separated(", ", map))?;
+                    let scalars = separated_text(", ", map.iter().map(Displayable::from));
+                    writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
-                    total_indents += 1;
                 }
                 let humanized_index = ctx
                     .as_ref()
@@ -225,7 +221,7 @@ where
                 } else {
                     writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
                 }
-                *ctx.as_mut() -= total_indents;
+                ctx.as_mut().reset();
                 Ok(())
             }
         }?;
@@ -672,7 +668,7 @@ mod tests {
         let ctx_gen = || RenderingContext::new(Indent::default(), &humanizer);
 
         let constant_err_exp = "Error \"division by zero\"\n";
-        let no_lookup_exp = "Project #1, #4\n  Map (#0 OR #2)\n    ReadExistingIndex u10\n";
+        let no_lookup_exp = "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadExistingIndex u10\n";
         let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup_value=(5)\n";
 
         assert_eq!(text_string_at(&constant_err, ctx_gen), constant_err_exp);
