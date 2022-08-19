@@ -18,7 +18,6 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::task::RuntimeExt;
-use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{CounterCore, TeeCore};
 use timely::progress::{Antichain, Timestamp};
@@ -87,25 +86,6 @@ pub(crate) enum LeaseLifeCycle {
     Completed,
 }
 
-impl Clone for LeaseLifeCycle {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Issued {
-                seqno,
-                droppable: _,
-            } => Self::Issued {
-                seqno: *seqno,
-                droppable: true,
-            },
-            Self::Consumed { seqno, .. } => Self::Consumed {
-                seqno: *seqno,
-                droppable: true,
-            },
-            Self::Completed => Self::Completed,
-        }
-    }
-}
-
 impl LeaseLifeCycle {
     fn seqno(&self) -> Option<SeqNo> {
         use LeaseLifeCycle::*;
@@ -130,12 +110,7 @@ impl LeaseLifeCycle {
 /// - Has been returned to its issuer via [`Self::return_lease`].
 ///
 /// In any other circumstance, dropping `LeasedBatch` panics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "T: Timestamp + Codec64",
-    deserialize = "T: Timestamp + Codec64"
-))]
-#[serde(into = "SerdeLeasedBatch", from = "SerdeLeasedBatch")]
+#[derive(Debug)]
 pub struct LeasedBatch<T>
 where
     T: Timestamp + Codec64,
