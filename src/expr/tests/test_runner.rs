@@ -14,7 +14,7 @@ mod test {
     use mz_lowertest::{deserialize, deserialize_optional, tokenize, MzReflect};
     use mz_ore::result::ResultExt;
     use mz_ore::str::separated;
-    use mz_repr::RelationType;
+    use mz_repr::ColumnType;
 
     use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ mod test {
         let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut scalar: MirScalarExpr = deserialize(&mut input_stream, "MirScalarExpr", &mut ctx)?;
-        let typ: RelationType = deserialize(&mut input_stream, "RelationType", &mut ctx)?;
+        let typ: Vec<ColumnType> = deserialize(&mut input_stream, "Vec<ColumnType> ", &mut ctx)?;
         let before = scalar.typ(&typ);
         scalar.reduce(&typ);
         let after = scalar.typ(&typ);
@@ -41,7 +41,7 @@ mod test {
         let mut ctx = MirScalarExprDeserializeContext::default();
         let input_predicates: Vec<MirScalarExpr> =
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
-        let typ: RelationType = deserialize(&mut input_stream, "RelationType", &mut ctx)?;
+        let typ: Vec<ColumnType> = deserialize(&mut input_stream, "Vec<ColumnType>", &mut ctx)?;
         // predicate canonicalization is meant to produce the same output regardless of the
         // order of the input predicates.
         let mut predicates1 = input_predicates.clone();
@@ -106,8 +106,9 @@ mod test {
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut equivalences: Vec<Vec<MirScalarExpr>> =
             deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &mut ctx)?;
-        let input_type: RelationType = deserialize(&mut input_stream, "RelationType", &mut ctx)?;
-        canonicalize_equivalences(&mut equivalences, &[input_type]);
+        let input_type: Vec<ColumnType> =
+            deserialize(&mut input_stream, "Vec<ColumnType>", &mut ctx)?;
+        canonicalize_equivalences(&mut equivalences, std::iter::once(&input_type));
         Ok(equivalences)
     }
 

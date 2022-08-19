@@ -372,7 +372,7 @@ impl MirRelationExpr {
 
                 let mut remappings = Vec::new();
                 for (column, scalar) in scalars.iter().enumerate() {
-                    typ.column_types.push(scalar.typ(&typ));
+                    typ.column_types.push(scalar.typ(&typ.column_types));
                     // assess whether the scalar preserves uniqueness,
                     // and could participate in a key!
 
@@ -590,10 +590,10 @@ impl MirRelationExpr {
                 let input_typ = &input_types[0];
                 let mut column_types = group_key
                     .iter()
-                    .map(|e| e.typ(input_typ))
+                    .map(|e| e.typ(&input_typ.column_types))
                     .collect::<Vec<_>>();
                 for agg in aggregates {
-                    column_types.push(agg.typ(input_typ));
+                    column_types.push(agg.typ(&input_typ.column_types));
                 }
                 let mut result = RelationType::new(column_types);
                 // The group key should form a key, but we might already have
@@ -1513,8 +1513,8 @@ impl RustType<ProtoAggregateExpr> for AggregateExpr {
 
 impl AggregateExpr {
     /// Computes the type of this `AggregateExpr`.
-    pub fn typ(&self, relation_type: &RelationType) -> ColumnType {
-        self.func.output_type(self.expr.typ(relation_type))
+    pub fn typ(&self, column_types: &[ColumnType]) -> ColumnType {
+        self.func.output_type(self.expr.typ(column_types))
     }
 
     /// Returns whether the expression has a constant result.
@@ -1549,7 +1549,7 @@ impl AggregateExpr {
     }
 
     /// Extracts unique input from aggregate type
-    pub fn on_unique(&self, input_type: &RelationType) -> MirScalarExpr {
+    pub fn on_unique(&self, input_type: &[ColumnType]) -> MirScalarExpr {
         match &self.func {
             // Count is one if non-null, and zero if null.
             AggregateFunc::Count => self

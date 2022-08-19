@@ -14,7 +14,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_repr::explain_new::ExprHumanizer;
-use mz_repr::{RelationType, RowArena, ScalarType, Timestamp};
+use mz_repr::{RowArena, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_stash::Append;
 
@@ -64,7 +64,7 @@ impl<S: Append + 'static> Coordinator<S> {
             if evaled.is_null() {
                 coord_bail!("can't use {} as a timestamp for AS OF", evaled);
             }
-            let ty = timestamp.typ(&RelationType::empty());
+            let ty = timestamp.typ(&[]);
             let ts = match ty.scalar_type {
                 ScalarType::Numeric { .. } => {
                     let n = evaled.unwrap_numeric().0;

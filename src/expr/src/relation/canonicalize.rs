@@ -13,14 +13,14 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use mz_repr::{Datum, RelationType, ScalarType};
+use mz_repr::{ColumnType, Datum, ScalarType};
 
 use crate::visit::Visit;
 use crate::{func, MirScalarExpr, UnaryFunc, VariadicFunc};
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
-/// `input_types` can be the `RelationType` of the join or the `RelationType` of
+/// `input_types` can be the [ColumnType]s of the join or the [ColumnType]s of
 /// the individual inputs of the join in order.
 ///
 /// This function:
@@ -33,20 +33,15 @@ use crate::{func, MirScalarExpr, UnaryFunc, VariadicFunc};
 ///   expression, and repeat indefinitely.
 /// * reduces all expressions contained in `equivalences`.
 /// * Does everything that [canonicalize_equivalence_classes] does.
-pub fn canonicalize_equivalences(
+pub fn canonicalize_equivalences<'a, I>(
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
-    input_types: &[RelationType],
-) {
-    // This only aggregates the column types of each input, not the
-    // keys of the inputs. It is unnecessary to aggregate the keys
-    // of the inputs since input keys are unnecessary for reducing
-    // `MirScalarExpr`s.
-    let input_typ = input_types
-        .iter()
-        .fold(RelationType::empty(), |mut typ, i| {
-            typ.column_types.extend_from_slice(&i.column_types[..]);
-            typ
-        });
+    input_column_types: I,
+) where
+    I: Iterator<Item = &'a Vec<ColumnType>>,
+{
+    let column_types = input_column_types
+        .flat_map(|f| f.clone())
+        .collect::<Vec<_>>();
     // Calculate the number of non-leaves for each expression.
     let mut to_reduce = equivalences
         .drain(..)
@@ -91,7 +86,7 @@ pub fn canonicalize_equivalences(
                         expressions_rewritten = true;
                     }
                 });
-                popped_expr.reduce(&input_typ);
+                popped_expr.reduce(&column_types);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
@@ -208,9 +203,9 @@ where
 ///
 /// Additionally, it also removes IS NOT NULL predicates if there is another
 /// null rejecting predicate for the same sub-expression.
-pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: &RelationType) {
+pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types: &[ColumnType]) {
     // 1) Reduce each individual predicate.
-    predicates.iter_mut().for_each(|p| p.reduce(&input_type));
+    predicates.iter_mut().for_each(|p| p.reduce(column_types));
 
     // 2) Split "A and B" into two predicates: "A" and "B"
     // Relies on the `reduce` above having flattened nested ANDs.
@@ -284,7 +279,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
                             other_predicate,
                             expr,
                             constant_bool,
-                            input_type,
+                            column_types,
                         );
                     }
                     for other_idx in (0..completed.len()).rev() {
@@ -292,7 +287,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
                             &mut completed[other_idx],
                             expr,
                             constant_bool,
-                            input_type,
+                            column_types,
                         ) {
                             // If a predicate in the `completed` list has
                             // been simplified, stick it back into the `todo` list.
@@ -378,7 +373,7 @@ fn replace_subexpr_and_reduce(
     predicate: &mut MirScalarExpr,
     replace_if_equal_to: &MirScalarExpr,
     replace_with: &MirScalarExpr,
-    input_type: &RelationType,
+    column_types: &[ColumnType],
 ) -> bool {
     let mut changed = false;
     #[allow(deprecated)]
@@ -422,7 +417,7 @@ fn replace_subexpr_and_reduce(
         },
     );
     if changed {
-        predicate.reduce(input_type);
+        predicate.reduce(column_types);
     }
     changed
 }

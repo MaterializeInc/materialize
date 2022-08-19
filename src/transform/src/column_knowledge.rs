@@ -111,8 +111,12 @@ impl ColumnKnowledge {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     let input_typ = input.typ();
                     for scalar in scalars.iter_mut() {
-                        let know =
-                            optimize(scalar, &input_typ, &input_knowledge[..], knowledge_stack)?;
+                        let know = optimize(
+                            scalar,
+                            &input_typ.column_types,
+                            &input_knowledge[..],
+                            knowledge_stack,
+                        )?;
                         input_knowledge.push(know);
                     }
                     Ok(input_knowledge)
@@ -121,7 +125,12 @@ impl ColumnKnowledge {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     let input_typ = input.typ();
                     for expr in exprs {
-                        optimize(expr, &input_typ, &input_knowledge[..], knowledge_stack)?;
+                        optimize(
+                            expr,
+                            &input_typ.column_types,
+                            &input_knowledge[..],
+                            knowledge_stack,
+                        )?;
                     }
                     let func_typ = func.output_type();
                     input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
@@ -131,7 +140,12 @@ impl ColumnKnowledge {
                     let mut input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     let input_typ = input.typ();
                     for predicate in predicates.iter_mut() {
-                        optimize(predicate, &input_typ, &input_knowledge[..], knowledge_stack)?;
+                        optimize(
+                            predicate,
+                            &input_typ.column_types,
+                            &input_knowledge[..],
+                            knowledge_stack,
+                        )?;
                     }
                     // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
                     for predicate in predicates.iter() {
@@ -212,7 +226,12 @@ impl ColumnKnowledge {
 
                         // We can produce composite knowledge for everything in the equivalence class.
                         for expr in equivalence.iter_mut() {
-                            optimize(expr, &folded_inputs_typ, &knowledges, knowledge_stack)?;
+                            optimize(
+                                expr,
+                                &folded_inputs_typ.column_types,
+                                &knowledges,
+                                knowledge_stack,
+                            )?;
                             if let MirScalarExpr::Column(c) = expr {
                                 knowledge.absorb(&knowledges[*c]);
                             }
@@ -238,13 +257,20 @@ impl ColumnKnowledge {
                     let input_typ = input.typ();
                     let mut output = group_key
                         .iter_mut()
-                        .map(|k| optimize(k, &input_typ, &input_knowledge[..], knowledge_stack))
+                        .map(|k| {
+                            optimize(
+                                k,
+                                &input_typ.column_types,
+                                &input_knowledge[..],
+                                knowledge_stack,
+                            )
+                        })
                         .collect::<Result<Vec<_>, _>>()?;
                     for aggregate in aggregates.iter_mut() {
                         use mz_expr::AggregateFunc;
                         let knowledge = optimize(
                             &mut aggregate.expr,
-                            &input_typ,
+                            &input_typ.column_types,
                             &input_knowledge[..],
                             knowledge_stack,
                         )?;
@@ -381,7 +407,7 @@ impl From<&ColumnType> for DatumKnowledge {
 /// `knowledge_stack` is a pre-allocated vector but is expected not to contain any elements.
 pub fn optimize(
     expr: &mut MirScalarExpr,
-    input_type: &RelationType,
+    column_types: &[ColumnType],
     column_knowledge: &[DatumKnowledge],
     knowledge_stack: &mut Vec<DatumKnowledge>,
 ) -> Result<DatumKnowledge, TransformError> {
@@ -419,7 +445,7 @@ pub fn optimize(
                 MirScalarExpr::CallUnary { func, expr: _ } => {
                     let knowledge = knowledge_stack.pop().unwrap();
                     if knowledge.value.is_some() {
-                        e.reduce(input_type);
+                        e.reduce(column_types);
                     } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable {
                         *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
                     };
@@ -433,13 +459,13 @@ pub fn optimize(
                     let knowledge2 = knowledge_stack.pop().unwrap();
                     let knowledge1 = knowledge_stack.pop().unwrap();
                     if knowledge1.value.is_some() && knowledge2.value.is_some() {
-                        e.reduce(input_type);
+                        e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }
                 MirScalarExpr::CallVariadic { func: _, exprs } => {
                     if (0..exprs.len()).all(|_| knowledge_stack.pop().unwrap().value.is_some()) {
-                        e.reduce(input_type);
+                        e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }
