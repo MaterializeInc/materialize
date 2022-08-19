@@ -1032,12 +1032,9 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Sink(catalog_sink.clone()),
         }];
 
-        let from_name = self
-            .catalog
-            .get_entry(&catalog_sink.from)
-            .name()
-            .item
-            .clone();
+        let from = self.catalog.get_entry(&catalog_sink.from);
+        let from_name = from.name().item.clone();
+        let from_type = from.item().typ().to_string();
         let result = self
             .catalog_transact(Some(&session), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
@@ -1046,7 +1043,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .collection(sink.from)
                     .map_err(|e| match e {
                         StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
-                            "{from_name} is not a persistent collection, and cannot be exported as a sink"
+                            "{from_name} is a {from_type}, which cannot be exported as a sink"
                         )),
                         e => AdapterError::Storage(e),
                     })?;
