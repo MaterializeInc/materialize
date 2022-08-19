@@ -265,12 +265,13 @@ where
                     consumed_batch_output_handle.session(&consumed_batch_cap);
 
                 for (_idx, batch) in leased_batches {
-                    let mut updates = fetcher
-                        .fetch_and_return_batch(&mut consumed_batch_session, batch)
-                        .await
+                    let (consumed_batch, updates) = fetcher.fetch_batch(batch.into()).await;
+
+                    let mut updates = updates
                         .expect("shard_id generated for sources must match across all workers");
 
                     update_session.give_vec(&mut updates);
+                    consumed_batch_session.give(consumed_batch.into());
                 }
             }
             false

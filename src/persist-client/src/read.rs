@@ -18,8 +18,6 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::task::RuntimeExt;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{CounterCore, TeeCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
@@ -143,33 +141,6 @@ where
             batch,
             leased_seqno,
         }
-    }
-
-    /// Equivalent to `session.give(self)`, but includes private internal
-    /// bookkeeping for the batch's lease; also returns the apporpriate value
-    /// to downgrade the capability that generated the session.
-    ///
-    /// # Panics
-    /// - If `self` has been _not_ fetched.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
-    pub async fn give_to_batch_return_session(
-        self,
-        session: &mut Session<
-            '_,
-            T,
-            Vec<SerdeLeasedBatch>,
-            CounterCore<T, Vec<SerdeLeasedBatch>, TeeCore<T, Vec<SerdeLeasedBatch>>>,
-        >,
-    ) {
-        assert!(
-            matches!(
-                self.leased_seqno,
-                LeaseLifeCycle::Consumed { .. } | LeaseLifeCycle::Completed
-            ),
-            "cannot return batch without fetching"
-        );
-
-        session.give(SerdeLeasedBatch::from(self));
     }
 
     /// Signals whether or not `self` should downgrade the `Capability` its

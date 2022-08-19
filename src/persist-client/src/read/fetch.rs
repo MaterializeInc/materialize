@@ -17,8 +17,6 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{CounterCore, TeeCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, instrument, trace_span, Instrument};
@@ -28,7 +26,6 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
-use crate::internal::encoding::SerdeLeasedBatch;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::PartialBlobKey;
@@ -75,33 +72,12 @@ where
         b
     }
 
-    /// Trade in an exchange-able [`LeasedBatch`] for the data it represents.
-    /// Additionally, handles updating the [`LeasedBatch`]'s metadata and giving
-    /// it to `session`, which should handle returning consumed batches to its
-    /// issuer.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
-    pub async fn fetch_and_return_batch(
-        &self,
-        session: &mut Session<
-            '_,
-            T,
-            Vec<SerdeLeasedBatch>,
-            CounterCore<T, Vec<SerdeLeasedBatch>, TeeCore<T, Vec<SerdeLeasedBatch>>>,
-        >,
-        batch: SerdeLeasedBatch,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
-        let batch = LeasedBatch::<T>::from(batch);
-        let (consumed_batch, res) = self.fetch_batch(batch).await;
-        consumed_batch.give_to_batch_return_session(session).await;
-        res
-    }
-
     /// Trade in an exchange-able [LeasedBatch] for the data it represents.
     ///
     /// Note to check the `LeasedBatch` documentation for how to handle the
     /// returned value.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
-    pub(crate) async fn fetch_batch(
+    pub async fn fetch_batch(
         &self,
         mut batch: LeasedBatch<T>,
     ) -> (
