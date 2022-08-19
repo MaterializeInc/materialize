@@ -106,8 +106,8 @@ impl LeaseLifeCycle {
 /// held:
 ///
 /// `LeasedBatch` may only be dropped if it:
-/// - Is being converted to `SerdeLeasedBatch`
-/// - Has been returned to its issuer via [`Self::return_lease`].
+/// - Is being converted to `SerdeLeasedBatch`.
+/// - Has been returned to its issuer via `Self::return_lease`.
 ///
 /// In any other circumstance, dropping `LeasedBatch` panics.
 #[derive(Debug)]
@@ -249,7 +249,7 @@ where
     /// # Panics
     /// - If `reader_id` is different than the [`ReaderId`] from the batch
     ///   issuer.
-    pub fn return_lease(&mut self, reader_id: &ReaderId) -> Option<SeqNo> {
+    fn return_lease(&mut self, reader_id: &ReaderId) -> Option<SeqNo> {
         assert!(
             &self.reader_id == reader_id,
             "only issuing reader can authorize lease expiration"
