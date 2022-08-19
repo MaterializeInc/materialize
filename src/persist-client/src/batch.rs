@@ -490,6 +490,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .await
             {
                 Ok(()) => (),
+                Err(err) if err.is_cancelled() => (),
                 Err(err) => panic!("part upload task failed: {}", err),
             };
             self.finished_parts.push(key);
@@ -502,6 +503,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         for (key, handle) in self.writing_parts {
             let () = match handle.await {
                 Ok(()) => (),
+                Err(err) if err.is_cancelled() => (),
                 Err(err) => panic!("part upload task failed: {}", err),
             };
             keys.push(key);
