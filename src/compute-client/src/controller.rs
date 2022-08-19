@@ -294,7 +294,9 @@ where
             .collect();
 
         // Add the replica
-        self.compute.replicas.add_replica(id, addrs, persisted_logs);
+        self.compute
+            .replicas
+            .add_replica(id, addrs, persisted_logs, None);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
