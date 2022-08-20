@@ -133,7 +133,7 @@ name
 > SHOW CREATE SOURCE data_schema_inline
 Source   "Create Source"
 ------------------------
-materialize.public.data_schema_inline "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM"
+materialize.public.data_schema_inline "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM"
 
 > SELECT a, b, json, c, d, e::text, f::text FROM data_schema_inline
 a  b  json                     c            d             e                   f
