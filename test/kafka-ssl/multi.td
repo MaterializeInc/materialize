@@ -31,16 +31,18 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
   SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
 
+> CREATE CONNECTION csr_ssl
+  FOR CONFLUENT SCHEMA REGISTRY
+    URL '${testdrive.schema-registry-url}',
+    SSL KEY = SECRET ssl_key_csr,
+    SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}',
+    USERNAME = 'materialize',
+    PASSWORD = SECRET password_csr;
+
 > CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_key_pem = SECRET ssl_key_csr,
-      ssl_certificate_pem = '${arg.materialized-schema-registry-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      username = "materialize",
-      password = SECRET password_csr
-  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
 
 > SELECT * FROM data
 a
@@ -56,53 +58,23 @@ a
 1
 2
 
-# Ensure that our test infra correctly sets up certs by failing when CSR is not
-# specifically configured
-! CREATE SOURCE data
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}'
-  )
-contains:sslv3 alert certificate unknown
-
-# Ensure that our test infra correctly sets up certs by failing when CSR is not
-# specifically configured, AND we are specifically setting certs
-! CREATE SOURCE data
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}'
-  )
-contains:sslv3 alert certificate unknown
-
 # test sinks with multiple things to
 > CREATE SINK snk FROM data
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_key_pem = SECRET ssl_key_csr,
-      ssl_certificate_pem = '${arg.materialized-schema-registry-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      username = "materialize",
-      password = SECRET password_csr
-  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
 
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 {"before": null, "after": {"row":{"a": 1}}}
 {"before": null, "after": {"row":{"a": 2}}}
 
-# and wrong cert for sink
-! CREATE SINK snk_bad FROM data
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}'
-  )
-contains:sslv3 alert certificate unknown
+# todo: re-enable this as part of #13453
+# Ensure that our test infra correctly sets up certs by failing when CSR is not
+# specifically configured, AND we are specifically setting certs
+# > CREATE CONNECTION unknown_cert
+#   FOR CONFLUENT SCHEMA REGISTRY
+#     URL '${testdrive.schema-registry-url}',
+#     SSL KEY = SECRET ssl_key_kafka,
+#     SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
+#     SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}',
+#     USERNAME = 'materialize',
+#     PASSWORD = SECRET password_csr;

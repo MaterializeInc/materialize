@@ -1913,7 +1913,7 @@ fn kafka_sink_builder(
         Some(Format::Avro(AvroSchema::Csr {
             csr_connection:
                 CsrConnectionAvro {
-                    connection: CsrConnection::Inline { url },
+                    connection,
                     seed,
                     key_strategy,
                     value_strategy,
@@ -1931,11 +1931,23 @@ fn kafka_sink_builder(
             }
 
             let mut normalized_with_options = normalize::options(&with_options)?;
-            let csr_connection = kafka_util::generate_ccsr_connection(
-                url.parse()
-                    .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
-                &mut normalized_with_options,
-            )?;
+            let csr_connection = match connection {
+                CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                    url.parse()
+                        .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
+                    &mut normalized_with_options,
+                )?,
+                CsrConnection::Reference { connection } => {
+                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    match item.connection()? {
+                        Connection::Csr(connection) => connection.clone(),
+                        _ => {
+                            sql_bail!("{} is not a schema registry connection", item.name())
+                        }
+                    }
+                }
+            };
+
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             let include_transaction = reuse_topic || consistency.is_some();

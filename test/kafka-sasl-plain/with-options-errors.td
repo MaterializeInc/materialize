@@ -33,18 +33,25 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 1}}}
 
-! CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password_env = 'SASL_PASSWORD',
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  ENVELOPE DEBEZIUM
-contains:missing SASL PASSWORD
+! CREATE CONNECTION kafka_sasl
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = 'PLAIN',
+    SASL USERNAME = 'materialize',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca}';
+contains:invalid CONNECTION: under-specified security configuration
+
+# ! CREATE SOURCE data
+#   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+#   WITH (
+#       security_protocol = 'SASL_SSL',
+#       sasl_mechanisms = 'PLAIN',
+#       sasl_username = 'materialize',
+#       sasl_password_env = 'SASL_PASSWORD',
+#       ssl_ca_location = '/share/secrets/ca.crt'
+#   )
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#   WITH (
+#       ssl_ca_location = '/share/secrets/ca.crt'
+#   )
+#   ENVELOPE DEBEZIUM
