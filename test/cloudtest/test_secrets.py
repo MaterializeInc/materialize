@@ -25,10 +25,10 @@ def test_secrets(mz: MaterializeApplication) -> None:
 
             ! CREATE CONNECTION secrets_conn
               FOR KAFKA
-              BROKER BROKER '${testdrive.kafka-addr}',
+              BROKER '${testdrive.kafka-addr}',
               SASL MECHANISMS 'PLAIN',
               SASL USERNAME = SECRET username,
-              SASL PASSWORD = SECRET passsword;
+              SASL PASSWORD = SECRET password;
 
             contains: SSL handshake failed
             """
