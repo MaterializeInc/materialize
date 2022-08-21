@@ -246,9 +246,10 @@ where
             .get_mut(id)
             // The only (tm) ways to hit this are (1) inventing a ReaderId
             // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) isn't implemented yet, so it feels
-            // okay to leave this for followup work.
-            .expect("TODO: Implement automatic lease renewals")
+            // (1) is a gross mis-use and (2) may happen if a reader did not
+            // get to heartbeat for a long time. Readers are expected to
+            // heartbeat/downgrade their since regularly.
+            .unwrap_or_else(|| panic!("ReaderId({}) was expired due to inactivity", id))
     }
 
     fn writer(&mut self, id: &WriterId) -> &mut WriterState {
@@ -260,7 +261,7 @@ where
             // not get to heartbeat for a long time. Writers are expected to
             // append updates regularly, even empty batches to maintain their
             // lease.
-            .expect("WriterId is not registered")
+            .unwrap_or_else(|| panic!("WriterId({}) was expired due to inactivity", id))
     }
 
     fn update_since(&mut self) {

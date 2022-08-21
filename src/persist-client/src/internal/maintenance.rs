@@ -20,6 +20,7 @@ use mz_persist_types::{Codec, Codec64};
 use std::fmt::Debug;
 use timely::progress::Timestamp;
 use tokio::task::JoinHandle;
+use tracing::info;
 
 #[derive(Debug)]
 pub struct LeaseExpiration {
@@ -99,6 +100,11 @@ impl RoutineMaintenance {
                 join_handles.push(mz_ore::task::spawn(
                     || "persist::automatic_read_expiration",
                     async move {
+                        info!(
+                            "Force expiring reader ({}) of shard ({}) due to inactivity",
+                            expired,
+                            machine.shard_id()
+                        );
                         let _ = machine.expire_reader(&expired).await;
                     },
                 ));
@@ -108,6 +114,11 @@ impl RoutineMaintenance {
                 join_handles.push(mz_ore::task::spawn(
                     || "persist::automatic_write_expiration",
                     async move {
+                        info!(
+                            "Force expiring writer ({}) of shard ({}) due to inactivity",
+                            expired,
+                            machine.shard_id()
+                        );
                         machine.expire_writer(&expired).await;
                     },
                 ));

@@ -42,6 +42,7 @@ use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
+use tracing::info;
 
 use mz_build_info::BuildInfo;
 use mz_orchestrator::NamespacedOrchestrator;
@@ -761,6 +762,13 @@ where
                 data_shard: durable_metadata.data_shard,
                 status_shard,
             };
+
+            // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
+            // but for now, it's helpful to have this mapping written down somewhere
+            info!(
+                "mapping GlobalId={} to remap shard ({}), data shard ({}), status shard ({:?})",
+                id, metadata.remap_shard, metadata.data_shard, status_shard
+            );
 
             let (write, mut read) = self
                 .persist
