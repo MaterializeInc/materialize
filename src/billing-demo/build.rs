@@ -12,6 +12,8 @@ use std::fs::File;
 use std::path::PathBuf;
 
 fn main() {
+    env::set_var("PROTOC", protobuf_src::protoc());
+
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     prost_build::Config::new()

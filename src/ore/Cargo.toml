@@ -47,15 +47,15 @@ ansi_term = { version = "0.12.1", optional = true }
 atty = { version = "0.2.14", optional = true }
 http = { version = "0.2.8", optional = true }
 tracing = { version = "0.1.36", optional = true }
-tracing-opentelemetry = { version = "0.17", optional = true }
-tonic = { version = "0.7.2", features = ["transport"], optional = true }
+tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing.git", branch = "v0.1.x", optional = true }
+tonic = { version = "0.8.0", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }
 native-tls = { version = "0.2.10", features = ["alpn"], optional = true }
 hyper = { version = "0.14.20", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
-opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"], optional = true }
-opentelemetry-otlp = { version = "0.10.0", optional = true }
-console-subscriber = { version = "0.1.6", optional = true }
+opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"], optional = true }
+opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", optional = true }
+console-subscriber = { version = "0.1.7", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.19.2", features = ["macros"] }

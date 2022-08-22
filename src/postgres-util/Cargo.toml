@@ -13,9 +13,10 @@ mz-proto = { path = "../proto" }
 openssl = { version = "0.10.41", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 serde = { version = "1.0.144", features = ["derive"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 
 [build-dependencies]
-tonic-build = "0.7"
+protobuf-src = "1.0.4"
+tonic-build = "0.8.0"
