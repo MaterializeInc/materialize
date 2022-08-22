@@ -27,14 +27,12 @@ use uuid::Uuid;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
+use crate::fetch::{fetch_batch, BatchFetcher};
 pub use crate::internal::encoding::SerdeLeasedBatch;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Since};
 use crate::{GarbageCollector, PersistConfig, ShardId};
-
-pub mod fetch;
-pub use fetch::*;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -96,7 +94,7 @@ impl LeaseLifeCycle {
 /// A token representing one read batch.
 ///
 /// This may be exchanged (including over the network). It is tradeable via
-/// `BatchFetcher::fetch_batch` for the resulting data stored in the batch.
+/// [`crate::fetch::fetch_batch`] for the resulting data stored in the batch.
 ///
 /// # Panics
 /// `LeasedBatch` panics when dropped unless a very strict set of invariants are
@@ -310,7 +308,6 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
-    fetcher: BatchFetcher<K, V, T, D>,
 
     as_of: Antichain<T>,
     since: Antichain<T>,
@@ -331,11 +328,8 @@ where
         // isn't). Be a good citizen and downgrade early.
         handle.downgrade_since(&since).await;
 
-        let fetcher = handle.clone().await.batch_fetcher().await;
-
         Listen {
             handle,
-            fetcher,
             since,
             frontier: as_of.clone(),
             as_of,
@@ -361,7 +355,7 @@ where
     /// Attempt to pull out the next values of this subscription.
     ///
     /// The returned [`LeasedBatch`] is appropriate to use with
-    /// `ReadHandle::fetch_batch`.
+    /// `crate::fetch::fetch_batch`.
     pub async fn next_batch(&mut self) -> LeasedBatch<T> {
         // We might also want to call maybe_heartbeat_reader in the
         // `next_listen_batch` loop so that we can heartbeat even when batches
@@ -458,11 +452,16 @@ where
         let batch = self.next_batch().await;
         let progress = batch.batch.desc.upper().clone();
 
-        let (batch, updates) = self.fetcher.fetch_batch(batch).await;
+        let (batch, updates) = fetch_batch(
+            batch,
+            self.handle.blob.as_ref(),
+            &self.handle.metrics,
+            Some(&self.handle.reader_id),
+        )
+        .await;
 
         self.handle.process_returned_leased_batch(batch);
 
-        let updates = updates.expect("must accept self-generated batch");
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
             ret.push(ListenEvent::Updates(updates));
@@ -629,7 +628,7 @@ where
 
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
     /// [`LeasedBatch`]es. These batches can be "turned in" via
-    /// `ReadHandle::fetch_batch` to receive the data they contain.
+    /// `crate::fetch::fetch_batch` to receive the data they contain.
     ///
     /// This command returns the contents of this shard as of `as_of` once they
     /// are known. This may "block" (in an async-friendly way) if `as_of` is
@@ -669,13 +668,16 @@ where
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
         let snap = self.snapshot(as_of).await?;
 
-        let fetcher = self.clone().await.batch_fetcher().await;
-
         let mut contents = Vec::new();
         for batch in snap {
-            let (batch, r) = fetcher.fetch_batch(batch).await;
+            let (batch, mut r) = fetch_batch(
+                batch,
+                self.blob.as_ref(),
+                &self.metrics,
+                Some(&self.reader_id),
+            )
+            .await;
             self.process_returned_leased_batch(batch);
-            let mut r = r.expect("must accept self-generated snapshot");
             contents.append(&mut r);
         }
         Ok(contents)

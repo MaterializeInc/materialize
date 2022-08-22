@@ -19,7 +19,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug_span, instrument, trace_span, Instrument};
+use tracing::{debug_span, trace_span, Instrument};
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::Blob;
@@ -29,13 +29,10 @@ use crate::error::InvalidUsage;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::PartialBlobKey;
-use crate::read::LeasedBatchMetadata;
+use crate::read::{LeasedBatch, LeasedBatchMetadata, ReadHandle, ReaderId};
 use crate::ShardId;
 
-use super::{LeasedBatch, ReadHandle};
-
-/// Capable of fetch batches, and appropriately handling the metadata on
-/// [`LeasedBatch`]es.
+/// Capable of fetching [`LeasedBatch`] while not holding any capabilities.
 #[derive(Debug)]
 pub struct BatchFetcher<K, V, T, D>
 where
@@ -61,7 +58,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(super) async fn new(handle: ReadHandle<K, V, T, D>) -> Self {
+    pub(crate) async fn new(handle: ReadHandle<K, V, T, D>) -> Self {
         let b = BatchFetcher {
             blob: Arc::clone(&handle.blob),
             metrics: Arc::clone(&handle.metrics),
@@ -76,87 +73,111 @@ where
     ///
     /// Note to check the `LeasedBatch` documentation for how to handle the
     /// returned value.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn fetch_batch(
         &self,
-        mut batch: LeasedBatch<T>,
+        batch: LeasedBatch<T>,
     ) -> (
         LeasedBatch<T>,
         Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>>,
     ) {
-        // We do this first to express that the batch has been handled in some
-        // way and must be returned.
-        batch.consume_lease();
-
-        if batch.shard_id != self.shard_id {
+        if &batch.shard_id != &self.shard_id {
             let batch_shard = batch.shard_id.clone();
             return (
                 batch,
                 Err(InvalidUsage::BatchNotFromThisShard {
                     batch_shard,
-                    handle_shard: self.shard_id,
+                    handle_shard: self.shard_id.clone(),
                 }),
             );
         }
 
-        let mut updates = Vec::new();
-        for key in batch.batch.keys.iter() {
-            fetch_batch_part(
-                &batch.shard_id,
-                self.blob.as_ref(),
-                &self.metrics,
-                &key,
-                &batch.batch.desc.clone(),
-                |k, v, mut t, d| {
-                    match &batch.metadata {
-                        LeasedBatchMetadata::Listen { as_of, until } => {
-                            // This time is covered by a snapshot
-                            if !as_of.less_than(&t) {
-                                return;
-                            }
+        let (batch, res) = fetch_batch(batch, self.blob.as_ref(), &self.metrics, None).await;
+        (batch, Ok(res))
+    }
+}
 
-                            // Because of compaction, the next batch we get might also
-                            // contain updates we've already emitted. For example, we
-                            // emitted `[1, 2)` and then compaction combined that batch
-                            // with a `[2, 3)` batch into a new `[1, 3)` batch. If this
-                            // happens, we just need to filter out anything < the
-                            // frontier. This frontier was the upper of the last batch
-                            // (and thus exclusive) so for the == case, we still emit.
-                            if !until.less_equal(&t) {
-                                return;
-                            }
+/// Trade in an exchange-able [LeasedBatch] for the data it represents.
+///
+/// Note to check the `LeasedBatch` documentation for how to handle the
+/// returned value.
+pub(crate) async fn fetch_batch<K, V, T, D>(
+    batch: LeasedBatch<T>,
+    blob: &(dyn Blob + Send + Sync),
+    metrics: &Metrics,
+    reader_id: Option<&ReaderId>,
+) -> (
+    LeasedBatch<T>,
+    Vec<((Result<K, String>, Result<V, String>), T, D)>,
+)
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    let mut updates = Vec::new();
+    for key in batch.batch.keys.iter() {
+        fetch_batch_part(
+            &batch.shard_id,
+            blob,
+            &metrics,
+            &key,
+            &batch.batch.desc.clone(),
+            |k, v, mut t, d| {
+                match &batch.metadata {
+                    LeasedBatchMetadata::Listen { as_of, until } => {
+                        // This time is covered by a snapshot
+                        if !as_of.less_than(&t) {
+                            return;
                         }
-                        LeasedBatchMetadata::Snapshot { as_of } => {
-                            // This time is covered by a listen
-                            if as_of.less_than(&t) {
-                                return;
-                            }
-                            t.advance_by(as_of.borrow())
+
+                        // Because of compaction, the next batch we get might also
+                        // contain updates we've already emitted. For example, we
+                        // emitted `[1, 2)` and then compaction combined that batch
+                        // with a `[2, 3)` batch into a new `[1, 3)` batch. If this
+                        // happens, we just need to filter out anything < the
+                        // frontier. This frontier was the upper of the last batch
+                        // (and thus exclusive) so for the == case, we still emit.
+                        if !until.less_equal(&t) {
+                            return;
                         }
                     }
+                    LeasedBatchMetadata::Snapshot { as_of } => {
+                        // This time is covered by a listen
+                        if as_of.less_than(&t) {
+                            return;
+                        }
+                        t.advance_by(as_of.borrow())
+                    }
+                }
 
-                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
-                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
-                    let d = D::decode(d);
-                    updates.push(((k, v), t, d));
-                },
+                let k = metrics.codecs.key.decode(|| K::decode(k));
+                let v = metrics.codecs.val.decode(|| V::decode(v));
+                let d = D::decode(d);
+                updates.push(((k, v), t, d));
+            },
+        )
+        .await
+        .unwrap_or_else(|err| {
+            // Ideally, readers should never encounter a missing blob. They place a seqno
+            // hold as they consume their snapshot/listen, preventing any blobs they need
+            // from being deleted by garbage collection, and all blob implementations are
+            // linearizable so there should be no possibility of stale reads.
+            //
+            // If we do have a bug and a reader does encounter a missing blob, the state
+            // cannot be recovered, and our best option is to panic and retry the whole
+            // process.
+            panic!(
+                "{} could not fetch batch part: {}",
+                reader_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "batch fetcher".to_string()),
+                err
             )
-            .await
-            .unwrap_or_else(|err| {
-                // Ideally, readers should never encounter a missing blob. They place a seqno
-                // hold as they consume their snapshot/listen, preventing any blobs they need
-                // from being deleted by garbage collection, and all blob implementations are
-                // linearizable so there should be no possibility of stale reads.
-                //
-                // If we do have a bug and a reader does encounter a missing blob, the state
-                // cannot be recovered, and our best option is to panic and retry the whole
-                // process.
-                panic!("batch fetcher could not fetch batch part: {}", err)
-            });
-        }
-
-        (batch, Ok(updates))
+        });
     }
+
+    (batch, updates)
 }
 
 pub(crate) async fn fetch_batch_part<T, UpdateFn>(

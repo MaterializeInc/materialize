@@ -49,6 +49,7 @@ pub mod async_runtime;
 pub mod batch;
 pub mod cache;
 pub mod error;
+pub mod fetch;
 pub mod inspect;
 pub mod read;
 pub mod usage;
