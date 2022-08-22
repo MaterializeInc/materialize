@@ -22,6 +22,7 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::CodecMismatch;
+use crate::fetch::{LeaseLifeCycle, LeasedBatch, LeasedBatchMetadata};
 use crate::internal::paths::PartialBlobKey;
 use crate::internal::state::{proto_lease_life_cycle, proto_leased_batch_metadata};
 use crate::internal::state::{
@@ -29,8 +30,9 @@ use crate::internal::state::{
     ProtoReaderState, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
     ProtoWriterState, ReaderState, State, StateCollections, WriterState,
 };
+
 use crate::internal::trace::Trace;
-use crate::read::{LeaseLifeCycle, LeasedBatch, LeasedBatchMetadata, ReaderId};
+use crate::read::ReaderId;
 use crate::{ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {

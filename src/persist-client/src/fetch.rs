@@ -22,14 +22,16 @@ use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::Blob;
+use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
+pub use crate::internal::encoding::SerdeLeasedBatch;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::PartialBlobKey;
-use crate::read::{LeasedBatch, LeasedBatchMetadata, ReadHandle, ReaderId};
+use crate::internal::state::HollowBatch;
+use crate::read::{ReadHandle, ReaderId};
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatch`] while not holding any capabilities.
@@ -314,4 +316,179 @@ fn decode_inline_desc<T: Timestamp + Codec64>(desc: &Description<u64>) -> Descri
         decode_antichain(desc.upper()),
         decode_antichain(desc.since()),
     )
+}
+
+/// Propagates metadata from readers alongside a `HollowBatch` to apply the
+/// desired semantics.
+#[derive(Debug, Clone)]
+pub(crate) enum LeasedBatchMetadata<T> {
+    /// Apply snapshot-style semantics to the fetched batch.
+    Snapshot {
+        /// Return all values with time leq `as_of`.
+        as_of: Antichain<T>,
+    },
+    /// Apply listen-style semantics to the fetched batch.
+    Listen {
+        /// Return all values with time in advance of `as_of`.
+        as_of: Antichain<T>,
+        /// Return all values with time leq `until`.
+        until: Antichain<T>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum LeaseLifeCycle {
+    Issued { seqno: SeqNo, droppable: bool },
+    Consumed { seqno: SeqNo, droppable: bool },
+    Completed,
+}
+
+impl LeaseLifeCycle {
+    fn seqno(&self) -> Option<SeqNo> {
+        use LeaseLifeCycle::*;
+        match self {
+            Issued { seqno, .. } | Consumed { seqno, .. } => Some(*seqno),
+            Completed => None,
+        }
+    }
+}
+
+/// A token representing one read batch.
+///
+/// This may be exchanged (including over the network). It is tradeable via
+/// [`crate::fetch::fetch_batch`] for the resulting data stored in the batch.
+///
+/// # Panics
+/// `LeasedBatch` panics when dropped unless a very strict set of invariants are
+/// held:
+///
+/// `LeasedBatch` may only be dropped if it:
+/// - Is being converted to `SerdeLeasedBatch`.
+/// - Has been returned to its issuer via `Self::return_lease`.
+///
+/// In any other circumstance, dropping `LeasedBatch` panics.
+#[derive(Debug)]
+pub struct LeasedBatch<T>
+where
+    T: Timestamp + Codec64,
+{
+    pub(crate) shard_id: ShardId,
+    pub(crate) reader_id: ReaderId,
+    pub(crate) metadata: LeasedBatchMetadata<T>,
+    pub(crate) batch: HollowBatch<T>,
+    /// The `SeqNo` from which this batch originated; we track this value as
+    /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
+    /// read still depends on it.
+    pub(crate) leased_seqno: LeaseLifeCycle,
+}
+
+impl<T> LeasedBatch<T>
+where
+    T: Timestamp + Codec64,
+{
+    pub(crate) fn new(
+        shard_id: ShardId,
+        reader_id: ReaderId,
+        metadata: LeasedBatchMetadata<T>,
+        batch: HollowBatch<T>,
+        leased_seqno: LeaseLifeCycle,
+    ) -> LeasedBatch<T> {
+        LeasedBatch {
+            shard_id,
+            reader_id,
+            metadata,
+            batch,
+            leased_seqno,
+        }
+    }
+
+    /// Takes `self` into a [`SerdeLeasedBatch`], allowing users to drop `self`.
+    ///
+    /// !!!WARNING!!!
+    ///
+    /// If `self` has a `leased_seqno`, failing to take the returned
+    /// `SerdeLeasedBatch` back into a `LeasedBatch` will leak `SeqNo`s and
+    /// prevent persist compaction.
+    pub fn get_droppable_batch(mut self) -> SerdeLeasedBatch {
+        // Making `LeasedBatch`es with outstanding leases droppable should only
+        // occur here; this should not be a generally accessible function
+        match &mut self.leased_seqno {
+            // Leases can only be marked completed on their issuer, and they
+            // should not be exchanged afterward.
+            LeaseLifeCycle::Completed => {}
+            LeaseLifeCycle::Issued { droppable, .. }
+            | LeaseLifeCycle::Consumed { droppable, .. } => *droppable = true,
+        }
+
+        SerdeLeasedBatch::from(self)
+    }
+
+    /// Signals whether or not `self` should downgrade the `Capability` its
+    /// presented alongside.
+    pub fn generate_progress(&self) -> Option<Antichain<T>> {
+        match self.metadata {
+            LeasedBatchMetadata::Listen { .. } => Some(self.batch.desc.upper().clone()),
+            LeasedBatchMetadata::Snapshot { .. } => None,
+        }
+    }
+
+    /// Identifies that the batch has been consumed. After calling this
+    /// function, the batch must either be returned to its issuer, or promise a
+    /// return.
+    ///
+    /// # Panics
+    /// - If lease has already been consumed
+    fn consume_lease(&mut self) {
+        match &self.leased_seqno {
+            LeaseLifeCycle::Issued {
+                seqno,
+                droppable: false,
+            } => {
+                self.leased_seqno = LeaseLifeCycle::Consumed {
+                    seqno: *seqno,
+                    droppable: false,
+                }
+            }
+            _ => panic!("each lease may be consumed at most once"),
+        }
+    }
+
+    /// Because sources get dropped without notice, we need to permit another
+    /// operator to safely expire leases.
+    ///
+    /// The batch's `reader_id` is intentionally inaccessible, and should be
+    /// obtained from the issuing [`ReadHandle`], or one of its derived
+    /// structures, e.g. [`crate::read::Subscribe`].
+    ///
+    /// # Panics
+    /// - If `reader_id` is different than the [`ReaderId`] from the batch
+    ///   issuer.
+    pub(crate) fn return_lease(&mut self, reader_id: &ReaderId) -> Option<SeqNo> {
+        assert!(
+            &self.reader_id == reader_id,
+            "only issuing reader can authorize lease expiration"
+        );
+        let seqno = self.leased_seqno.seqno();
+        self.leased_seqno = LeaseLifeCycle::Completed;
+        seqno
+    }
+}
+
+impl<T> Drop for LeasedBatch<T>
+where
+    T: Timestamp + Codec64,
+{
+    /// For details, see [`LeasedBatch`].
+    fn drop(&mut self) {
+        assert!(
+            match self.leased_seqno {
+                LeaseLifeCycle::Completed => true,
+                LeaseLifeCycle::Issued { droppable, .. }
+                | LeaseLifeCycle::Consumed { droppable, .. } => droppable,
+            },
+            "LeasedBatch must be explicitly permitted to drop or its \
+            lease must have been returned. This batch was not: {:?}",
+            self
+        );
+    }
 }

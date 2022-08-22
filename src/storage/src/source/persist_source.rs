@@ -27,7 +27,7 @@ use tracing::trace;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::SerdeLeasedBatch;
+use mz_persist_client::fetch::SerdeLeasedBatch;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
