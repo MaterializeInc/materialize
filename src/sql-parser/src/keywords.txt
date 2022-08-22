@@ -282,6 +282,7 @@ Row
 Rows
 S3
 Sasl
+Scale
 Scan
 Schema
 Schemas
@@ -336,6 +337,7 @@ Timestamp
 To
 Token
 Topic
+Tpch
 Trace
 Trailing
 Transaction

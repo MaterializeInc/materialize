@@ -214,6 +214,7 @@ message ProtoLoadGeneratorSourceConnection {
     oneof generator {
         google.protobuf.Empty counter = 1;
         google.protobuf.Empty auction = 3;
+        ProtoTpchLoadGenerator tpch = 4;
     }
     optional uint64 tick_micros = 2;
 }
@@ -222,6 +223,14 @@ message ProtoTestScriptSourceConnection {
     string desc_json = 1;
 }
 
+
+message ProtoTpchLoadGenerator {
+    int64 count_supplier = 1;
+    int64 count_part = 2;
+    int64 count_customer = 3;
+    int64 count_orders = 4;
+    int64 count_clerk = 5;
+}
 
 message ProtoS3SourceConnection {
     mz_repr.global_id.ProtoGlobalId connection_id = 5;

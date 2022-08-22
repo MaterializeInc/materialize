@@ -4223,6 +4223,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "csv-core",
+ "dec",
  "derivative",
  "differential-dataflow",
  "fail",

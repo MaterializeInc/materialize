@@ -91,13 +91,14 @@ create_source_kinesis ::=
   ('ENVELOPE NONE')?
 create_source_load_generator ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )*)?
-  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER')
+  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'TPCH')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
   ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FOR ALL TABLES'?
 load_generator_option ::=
     'TICK INTERVAL' interval
+    | 'SCALE FACTOR' scale_factor
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name

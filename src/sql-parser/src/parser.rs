@@ -2527,9 +2527,10 @@ impl<'a> Parser<'a> {
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
-                let generator = match self.expect_one_of_keywords(&[COUNTER, AUCTION])? {
+                let generator = match self.expect_one_of_keywords(&[COUNTER, AUCTION, TPCH])? {
                     COUNTER => LoadGenerator::Counter,
                     AUCTION => LoadGenerator::Auction,
+                    TPCH => LoadGenerator::Tpch,
                     _ => unreachable!(),
                 };
                 let options = if self.consume_token(&Token::LParen) {
@@ -2565,7 +2566,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[TICK])? {
+        let name = match self.expect_one_of_keywords(&[SCALE, TICK])? {
+            SCALE => {
+                self.expect_keyword(FACTOR)?;
+                LoadGeneratorOptionName::ScaleFactor
+            }
             TICK => {
                 self.expect_keyword(INTERVAL)?;
                 LoadGeneratorOptionName::TickInterval
