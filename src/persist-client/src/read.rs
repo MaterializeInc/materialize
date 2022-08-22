@@ -142,6 +142,27 @@ where
         }
     }
 
+    /// Takes `self` into a [`SerdeLeasedBatch`], allowing users to drop `self`.
+    ///
+    /// !!!WARNING!!!
+    ///
+    /// If `self` has a `leased_seqno`, failing to take the returned
+    /// `SerdeLeasedBatch` back into a `LeasedBatch` will leak `SeqNo`s and
+    /// prevent persist compaction.
+    pub fn get_droppable_batch(mut self) -> SerdeLeasedBatch {
+        // Making `LeasedBatch`es with outstanding leases droppable should only
+        // occur here; this should not be a generally accessible function
+        match &mut self.leased_seqno {
+            // Leases can only be marked completed on their issuer, and they
+            // should not be exchanged afterward.
+            LeaseLifeCycle::Completed => {}
+            LeaseLifeCycle::Issued { droppable, .. }
+            | LeaseLifeCycle::Consumed { droppable, .. } => *droppable = true,
+        }
+
+        SerdeLeasedBatch::from(self)
+    }
+
     /// Signals whether or not `self` should downgrade the `Capability` its
     /// presented alongside.
     pub fn generate_progress(&self) -> Option<Antichain<T>> {

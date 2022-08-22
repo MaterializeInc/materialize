@@ -183,7 +183,7 @@ where
                             let mut session = output.session(&session_cap);
 
                             let progress = batch.generate_progress();
-                            session.give((i, SerdeLeasedBatch::from(batch)));
+                            session.give((i, batch.get_droppable_batch()));
 
                             // Round robin
                             i = (i + 1) % peers;
@@ -277,7 +277,7 @@ where
                         .expect("shard_id generated for sources must match across all workers");
 
                     update_session.give_vec(&mut updates);
-                    consumed_batch_session.give(SerdeLeasedBatch::from(consumed_batch));
+                    consumed_batch_session.give(consumed_batch.get_droppable_batch());
                 }
             }
             false
