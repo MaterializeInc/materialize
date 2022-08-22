@@ -292,7 +292,7 @@ reduce
 ----
 (#0 OR #1 OR ((#2 < 3) AND (#2 > 2)))
 
-# undistribute_and_or with more than 2 args at the top level
+# undistribute_and_or -- more than 2 args at the top level.
 # (#0 OR #1 OR (#2 > 2)) AND (#0 OR (#2 < 3) OR #1) AND (#1 OR (#5 < 7) OR #0)
 reduce
 (call_variadic and [
@@ -303,6 +303,41 @@ reduce
 [bool bool int32 int32 int32 int32]
 ----
 (#0 OR #1 OR ((#2 < 3) AND (#5 < 7) AND (#2 > 2)))
+
+# undistribute_and_or -- only a subset of the top-level args have a non-empty intersection.
+# This test comes from TPC-H Q19, after distribute_and_over_or does 2 steps. Undistribute_and_or has to do many steps
+# to undo that.
+# In the output, `(#20 OR #45)` is `l_shipmode IN ('AIR', 'AIR REG')`, and the 4-arg ORs are the INs on p_container.
+reduce
+(call_variadic or [
+   (call_variadic and [#20 #21 #22 #23 #24 #25])
+   (call_variadic and [#20 #21 #26 #23 #24 #25])
+   (call_variadic and [#20 #21 #27 #23 #24 #25])
+   (call_variadic and [#20 #21 #28 #23 #24 #25])
+   (call_variadic and [#20 #29 #30 #31 #32 #33])
+   (call_variadic and [#20 #29 #34 #31 #32 #33])
+   (call_variadic and [#20 #29 #35 #31 #32 #33])
+   (call_variadic and [#20 #29 #36 #31 #32 #33])
+   (call_variadic and [#20 #37 #38 #39 #40 #41])
+   (call_variadic and [#20 #37 #42 #39 #40 #41])
+   (call_variadic and [#20 #37 #43 #39 #40 #41])
+   (call_variadic and [#20 #37 #44 #39 #40 #41])
+   (call_variadic and [#45 #21 #22 #23 #24 #25])
+   (call_variadic and [#45 #21 #26 #23 #24 #25])
+   (call_variadic and [#45 #21 #27 #23 #24 #25])
+   (call_variadic and [#45 #21 #28 #23 #24 #25])
+   (call_variadic and [#45 #29 #30 #31 #32 #33])
+   (call_variadic and [#45 #29 #34 #31 #32 #33])
+   (call_variadic and [#45 #29 #35 #31 #32 #33])
+   (call_variadic and [#45 #29 #36 #31 #32 #33])
+   (call_variadic and [#45 #37 #38 #39 #40 #41])
+   (call_variadic and [#45 #37 #42 #39 #40 #41])
+   (call_variadic and [#45 #37 #43 #39 #40 #41])
+   (call_variadic and [#45 #37 #44 #39 #40 #41])
+])
+[bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool bool]
+----
+((#20 OR #45) AND ((#21 AND #23 AND #24 AND #25 AND (#22 OR #26 OR #27 OR #28)) OR (#29 AND #31 AND #32 AND #33 AND (#30 OR #34 OR #35 OR #36)) OR (#37 AND #39 AND #40 AND #41 AND (#38 OR #42 OR #43 OR #44))))
 
 ## a | (a & b)
 

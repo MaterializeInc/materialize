@@ -667,7 +667,7 @@ Used Indexes:
 
 EOF
 
-# Test a predicate index join.
+# Test an IndexedFilter join.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
 SELECT a, max(b)
@@ -680,39 +680,38 @@ Explained Query
     Map (0) // { non_negative: false }
       Reduce aggregates=[max(#0)] // { non_negative: false }
         Project (#1) // { non_negative: false }
-          Filter (#0 = 0) // { non_negative: false }
-            Project (#0, #1) // { non_negative: false }
-              Join on=(#0 = #2) type=indexed_filter // { non_negative: false }
-                ArrangeBy keys=[[#0]] // { non_negative: true }
-                  Get materialize.public.t // { non_negative: true }
-                Constant // { non_negative: false }
-                  - (0)
+          Join on=(#0 = #2) type=indexed_filter // { non_negative: false }
+            ArrangeBy keys=[[#0]] // { non_negative: true }
+              Get materialize.public.t // { non_negative: true }
+            Constant // { non_negative: false }
+              - (0)
 
 Used Indexes:
   - materialize.public.t_a_idx
 
 EOF
 
-# Test a predicate index join WITH(join_impls).
+# Create index for IndexedFilter test
+
+statement ok
+CREATE INDEX t_a_b_idx ON T(a,b)
+
+# Test an IndexedFilter join WITH(join_impls).
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(join_impls, non_negative) AS TEXT FOR
 SELECT a, max(b)
 FROM t
-WHERE a = 0
+WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
 GROUP BY a
 ----
 Explained Query
-  Project (#1, #0) // { non_negative: false }
-    Map (0) // { non_negative: false }
-      Reduce aggregates=[max(#0)] // { non_negative: false }
-        Project (#1) // { non_negative: false }
-          Filter (#0 = 0) // { non_negative: false }
-            Project (#0, #1) // { non_negative: false }
-              Lookup #0 = 0
-                ArrangeBy keys=[[#0]] // { non_negative: true }
-                  Get materialize.public.t // { non_negative: true }
+  Reduce group_by=[#0] aggregates=[max(#1)] // { non_negative: false }
+    Project (#0, #1) // { non_negative: false }
+      Lookup (#0 = 0 AND #1 = 1) OR (#0 = 3 AND #1 = 4) OR (#0 = 7 AND #1 = 8)
+        ArrangeBy keys=[[#0, #1]] // { non_negative: true }
+          Get materialize.public.t // { non_negative: true }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_b_idx
 
 EOF
