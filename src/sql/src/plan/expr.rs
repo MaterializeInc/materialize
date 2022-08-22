@@ -2603,7 +2603,7 @@ impl HirScalarExpr {
 
     fn simplify_to_literal(self) -> Option<Row> {
         let mut expr = self.lower_uncorrelated().ok()?;
-        expr.reduce(&mz_repr::RelationType::empty());
+        expr.reduce(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
             _ => None,

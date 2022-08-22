@@ -28,7 +28,7 @@ use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::regex::Regex;
 use mz_repr::arb_datum;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
+use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 use self::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
@@ -414,7 +414,7 @@ impl MirScalarExpr {
     ///
     /// ```rust
     /// use mz_expr::MirScalarExpr;
-    /// use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
+    /// use mz_repr::{ColumnType, Datum, ScalarType};
     ///
     /// let expr_0 = MirScalarExpr::Column(0);
     /// let expr_t = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
@@ -426,14 +426,14 @@ impl MirScalarExpr {
     ///     .and(expr_f.clone())
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// let input_type = RelationType::new(vec![ScalarType::Int32.nullable(false)]);
+    /// let input_type = vec![ScalarType::Int32.nullable(false)];
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, relation_type: &RelationType) {
+    pub fn reduce(&mut self, column_types: &[ColumnType]) {
         let temp_storage = &RowArena::new();
         let eval = |e: &MirScalarExpr| {
-            MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(&relation_type).scalar_type)
+            MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type)
         };
 
         // Simplifications run in a loop until `self` no longer changes.
@@ -506,16 +506,16 @@ impl MirScalarExpr {
                         } else if (expr1.is_literal_null() || expr2.is_literal_null())
                             && func.propagates_nulls()
                         {
-                            *e = MirScalarExpr::literal_null(e.typ(relation_type).scalar_type);
+                            *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
                         } else if let Some(err) = expr1.as_literal_err() {
                             *e = MirScalarExpr::literal(
                                 Err(err.clone()),
-                                e.typ(&relation_type).scalar_type,
+                                e.typ(column_types).scalar_type,
                             );
                         } else if let Some(err) = expr2.as_literal_err() {
                             *e = MirScalarExpr::literal(
                                 Err(err.clone()),
-                                e.typ(&relation_type).scalar_type,
+                                e.typ(column_types).scalar_type,
                             );
                         } else if let BinaryFunc::IsLikeMatch { case_insensitive } = func {
                             if expr2.is_literal() {
@@ -527,7 +527,7 @@ impl MirScalarExpr {
                                     )),
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
-                                        e.typ(&relation_type).scalar_type,
+                                        e.typ(column_types).scalar_type,
                                     ),
                                 };
                             }
@@ -541,7 +541,7 @@ impl MirScalarExpr {
                                     )),
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
-                                        e.typ(&relation_type).scalar_type,
+                                        e.typ(column_types).scalar_type,
                                     ),
                                 };
                             }
@@ -554,7 +554,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::ExtractTime && expr1.is_literal() {
@@ -566,7 +566,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::ExtractTimestamp && expr1.is_literal() {
@@ -580,7 +580,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::ExtractTimestampTz && expr1.is_literal() {
@@ -594,7 +594,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::ExtractDate && expr1.is_literal() {
@@ -606,7 +606,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::DatePartInterval && expr1.is_literal() {
@@ -620,7 +620,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::DatePartTime && expr1.is_literal() {
@@ -632,7 +632,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::DatePartTimestamp && expr1.is_literal() {
@@ -646,7 +646,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::DatePartTimestampTz && expr1.is_literal() {
@@ -660,7 +660,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::DateTruncTimestamp && expr1.is_literal() {
@@ -674,7 +674,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::DateTruncTimestampTz && expr1.is_literal() {
@@ -688,7 +688,7 @@ impl MirScalarExpr {
                                 },
                                 Err(_) => MirScalarExpr::literal(
                                     Err(EvalError::UnknownUnits(units.to_owned())),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::TimezoneTimestamp && expr1.is_literal() {
@@ -703,7 +703,7 @@ impl MirScalarExpr {
                                 },
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if *func == BinaryFunc::TimezoneTimestampTz && expr1.is_literal() {
@@ -717,7 +717,7 @@ impl MirScalarExpr {
                                 },
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             }
                         } else if let BinaryFunc::TimezoneTime { wall_time } = func {
@@ -733,7 +733,7 @@ impl MirScalarExpr {
                                     },
                                     Err(err) => MirScalarExpr::literal(
                                         Err(err),
-                                        e.typ(&relation_type).scalar_type,
+                                        e.typ(column_types).scalar_type,
                                     ),
                                 }
                             }
@@ -800,7 +800,7 @@ impl MirScalarExpr {
                             // be done before `exprs.retain...` because `e.typ` requires
                             // > 0 `exprs` remain.
                             if exprs.iter().all(|expr| expr.is_literal_null()) {
-                                *e = MirScalarExpr::literal_null(e.typ(&relation_type).scalar_type);
+                                *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
                                 return;
                             }
 
@@ -813,7 +813,7 @@ impl MirScalarExpr {
                             // never happen.
                             if let Some(i) = exprs
                                 .iter()
-                                .position(|e| e.is_literal() || !e.typ(&relation_type).nullable)
+                                .position(|e| e.is_literal() || !e.typ(column_types).nullable)
                             {
                                 exprs.truncate(i + 1);
                             }
@@ -835,11 +835,11 @@ impl MirScalarExpr {
                         } else if func.propagates_nulls()
                             && exprs.iter().any(|e| e.is_literal_null())
                         {
-                            *e = MirScalarExpr::literal_null(e.typ(&relation_type).scalar_type);
+                            *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
                         } else if let Some(err) = exprs.iter().find_map(|e| e.as_literal_err()) {
                             *e = MirScalarExpr::literal(
                                 Err(err.clone()),
-                                e.typ(&relation_type).scalar_type,
+                                e.typ(column_types).scalar_type,
                             );
                         } else if *func == VariadicFunc::RegexpMatch
                             && exprs[1].is_literal()
@@ -856,7 +856,7 @@ impl MirScalarExpr {
                                 ),
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
-                                    e.typ(&relation_type).scalar_type,
+                                    e.typ(column_types).scalar_type,
                                 ),
                             };
                         } else if *func == VariadicFunc::ListIndex && is_list_create_call(&exprs[0])
@@ -880,8 +880,8 @@ impl MirScalarExpr {
                                 Err(err) => {
                                     *e = MirScalarExpr::Literal(
                                         Err(err.clone()),
-                                        then.typ(relation_type)
-                                            .union(&els.typ(relation_type))
+                                        then.typ(column_types)
+                                            .union(&els.typ(column_types))
                                             .unwrap(),
                                     )
                                 }
@@ -1322,21 +1322,21 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn typ(&self, relation_type: &RelationType) -> ColumnType {
+    pub fn typ(&self, column_types: &[ColumnType]) -> ColumnType {
         match self {
-            MirScalarExpr::Column(i) => relation_type.column_types[*i].clone(),
+            MirScalarExpr::Column(i) => column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
             MirScalarExpr::CallUnmaterializable(func) => func.output_type(),
-            MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(relation_type)),
+            MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(column_types)),
             MirScalarExpr::CallBinary { expr1, expr2, func } => {
-                func.output_type(expr1.typ(relation_type), expr2.typ(relation_type))
+                func.output_type(expr1.typ(column_types), expr2.typ(column_types))
             }
             MirScalarExpr::CallVariadic { exprs, func } => {
-                func.output_type(exprs.iter().map(|e| e.typ(relation_type)).collect())
+                func.output_type(exprs.iter().map(|e| e.typ(column_types)).collect())
             }
             MirScalarExpr::If { cond: _, then, els } => {
-                let then_type = then.typ(relation_type);
-                let else_type = els.typ(relation_type);
+                let then_type = then.typ(column_types);
+                let else_type = els.typ(column_types);
                 then_type.union(&else_type).unwrap()
             }
         }
@@ -2101,11 +2101,11 @@ mod tests {
 
     #[test]
     fn test_reduce() {
-        let relation_type = RelationType::new(vec![
+        let relation_type = vec![
             ScalarType::Int64.nullable(true),
             ScalarType::Int64.nullable(true),
             ScalarType::Int64.nullable(false),
-        ]);
+        ];
         let col = MirScalarExpr::Column;
         let err = |e| MirScalarExpr::literal(Err(e), ScalarType::Int64);
         let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), ScalarType::Int64);
