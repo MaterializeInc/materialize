@@ -191,6 +191,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ),
     };
 
+    // Initialize fail crate for failpoint support
+    let _failpoint_scenario = fail::FailScenario::setup();
+
     let (_server, client) = mz_storage::serve(config)?;
     GrpcServer::serve(
         args.controller_listen_addr,

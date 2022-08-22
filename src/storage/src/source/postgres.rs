@@ -497,7 +497,7 @@ impl PostgresTaskInfo {
             mz_postgres_util::connect_replication(self.connection_config.clone()).await
         );
 
-        // We're initialising this source so any previously existing slot must be removed and
+        // We're initializing this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
         let _ = client
             .simple_query(&format!("DROP_REPLICATION_SLOT {:?}", &self.slot))
@@ -581,6 +581,13 @@ impl PostgresTaskInfo {
                 }));
 
                 self.row_sender.insert(mz_row.clone(), self.lsn).await;
+                // Failure scenario after we have produced at least one row, but before a
+                // successful `COMMIT`
+                fail::fail_point!("pg_snapshot_failure", |_| {
+                    Err(ReplicationError::Recoverable(anyhow::anyhow!(
+                        "recoverable errors should crash the process"
+                    )))
+                });
             }
 
             self.metrics.tables.inc();
@@ -588,8 +595,8 @@ impl PostgresTaskInfo {
         self.metrics.lsn.set(self.lsn.into());
         client.simple_query("COMMIT;").await?;
 
-        // close the current `row_sender` context after we are sure we are not erroring out.
-        // Otherwise, `revert_snapshot` will close it
+        // close the current `row_sender` context after we are sure we have not errored
+        // out (in the commit).
         self.row_sender.close_lsn(self.lsn).await;
         Ok(())
     }
@@ -848,7 +855,8 @@ impl PostgresTaskInfo {
                                     }
                                     // The enum is marked as non_exhaustive. Better to be conservative here in
                                     // case a new message is relevant to the semantics of our source
-                                    _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
+                                    _ => return Err(Fatal(anyhow!("unexpected logical replication message"))
+                                                    ),
                                 }
                             }
                             // Handled above
