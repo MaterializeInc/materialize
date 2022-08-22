@@ -27,7 +27,7 @@ use uuid::Uuid;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
-use crate::fetch::{fetch_batch, BatchFetcher, LeaseLifeCycle, LeasedBatch};
+use crate::fetch::{fetch_batch, BatchFetcher, LeasedBatch};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::Since;
@@ -253,7 +253,7 @@ where
                 until: self.frontier.clone(),
             },
             batch,
-            leased_seqno: self.handle.lease_seqno(),
+            leased_seqno: Some(self.handle.lease_seqno()),
         };
 
         // NB: Keep this after we use self.frontier to join_assign self.since.
@@ -477,7 +477,7 @@ where
                     as_of: as_of.clone(),
                 },
                 batch,
-                leased_seqno: self.lease_seqno(),
+                leased_seqno: Some(self.lease_seqno()),
             })
             .collect::<Vec<_>>();
 
@@ -525,15 +525,12 @@ where
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
     /// "leased out" to a `ReaderEncirchedHollowBatch`, and cannot be garbage
     /// collected until its lease has been returned.
-    fn lease_seqno(&mut self) -> LeaseLifeCycle {
+    fn lease_seqno(&mut self) -> SeqNo {
         let seqno = self.machine.seqno();
 
         *self.leased_seqnos.entry(seqno).or_insert(0) += 1;
 
-        LeaseLifeCycle::Issued {
-            seqno,
-            droppable: false,
-        }
+        seqno
     }
 
     /// Processes that a batch issued from `self` has been consumed, and `self`

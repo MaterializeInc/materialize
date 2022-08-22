@@ -22,13 +22,13 @@ use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use crate::error::CodecMismatch;
-use crate::fetch::{LeaseLifeCycle, LeasedBatch, LeasedBatchMetadata};
+use crate::fetch::{LeasedBatch, LeasedBatchMetadata};
 use crate::internal::paths::PartialBlobKey;
-use crate::internal::state::{proto_lease_life_cycle, proto_leased_batch_metadata};
+use crate::internal::state::proto_leased_batch_metadata;
 use crate::internal::state::{
-    HollowBatch, ProtoHollowBatch, ProtoLeaseLifeCycle, ProtoLeasedBatchMetadata, ProtoReaderState,
-    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
-    ReaderState, State, StateCollections, WriterState,
+    HollowBatch, ProtoHollowBatch, ProtoLeasedBatchMetadata, ProtoReaderState, ProtoStateRollup,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, ReaderState, State,
+    StateCollections, WriterState,
 };
 
 // This has to be exposed to [`crate::fetch::SerdeLeasedBatch`], which we in
@@ -450,45 +450,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatchMetadata> for LeasedBatchM
     }
 }
 
-impl RustType<ProtoLeaseLifeCycle> for LeaseLifeCycle {
-    fn into_proto(&self) -> ProtoLeaseLifeCycle {
-        use proto_lease_life_cycle::*;
-        ProtoLeaseLifeCycle {
-            kind: Some(match self {
-                LeaseLifeCycle::Issued { seqno, .. } => Kind::Issued(ProtoLeaseLifeCycleIssued {
-                    seqno: seqno.into_proto(),
-                }),
-                LeaseLifeCycle::Consumed { seqno, .. } => {
-                    Kind::Consumed(ProtoLeaseLifeCycleConsumed {
-                        seqno: seqno.into_proto(),
-                    })
-                }
-                LeaseLifeCycle::Completed => Kind::Completed(ProtoLeaseLifeCycleCompleted {}),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoLeaseLifeCycle) -> Result<Self, TryFromProtoError> {
-        use proto_lease_life_cycle::Kind::*;
-        Ok(match proto.kind {
-            Some(Issued(issued)) => LeaseLifeCycle::Issued {
-                seqno: issued.seqno.into_rust()?,
-                droppable: false,
-            },
-            Some(Consumed(issued)) => LeaseLifeCycle::Consumed {
-                seqno: issued.seqno.into_rust()?,
-                droppable: false,
-            },
-            Some(Completed(_)) => LeaseLifeCycle::Completed,
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoLeaseLifeCycle::Kind",
-                ))
-            }
-        })
-    }
-}
-
 impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatch> for LeasedBatch<T> {
     /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
     fn into_proto(&self) -> ProtoLeasedBatch {
@@ -497,23 +458,21 @@ impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatch> for LeasedBatch<T> {
             reader_id: self.reader_id.into_proto(),
             reader_metadata: Some(self.metadata.into_proto()),
             batch: Some(self.batch.into_proto()),
-            leased_seqno: Some(self.leased_seqno.into_proto()),
+            leased_seqno: self.leased_seqno.into_proto(),
         }
     }
 
     /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
     fn from_proto(proto: ProtoLeasedBatch) -> Result<Self, TryFromProtoError> {
-        Ok(LeasedBatch::new(
-            proto.shard_id.into_rust()?,
-            proto.reader_id.into_rust()?,
-            proto
+        Ok(LeasedBatch {
+            shard_id: proto.shard_id.into_rust()?,
+            reader_id: proto.reader_id.into_rust()?,
+            metadata: proto
                 .reader_metadata
                 .into_rust_if_some("ProtoLeasedBatch::reader_metadata")?,
-            proto.batch.into_rust_if_some("ProtoLeasedBatch::batch")?,
-            proto
-                .leased_seqno
-                .into_rust_if_some("ProtoLeasedBatch::leased_seqno")?,
-        ))
+            batch: proto.batch.into_rust_if_some("ProtoLeasedBatch::batch")?,
+            leased_seqno: proto.leased_seqno.into_rust()?,
+        })
     }
 }
 
