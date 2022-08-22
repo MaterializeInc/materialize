@@ -34,7 +34,7 @@ use crate::plan::query;
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
 use crate::{normalize, DEFAULT_SCHEMA};
 
-mod ddl;
+pub(crate) mod ddl;
 mod dml;
 mod raise;
 mod scl;
