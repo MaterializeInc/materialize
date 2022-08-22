@@ -1517,8 +1517,8 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_class AS SELECT
-    mz_objects.oid,
-    mz_objects.name AS relname,
+    class_objects.oid,
+    class_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
     -- MZ doesn't support typed tables so reloftype is filled with 0
     0::pg_catalog.oid AS reloftype,
@@ -1528,17 +1528,17 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     0::pg_catalog.oid AS reltablespace,
     -- MZ doesn't use TOAST tables so reltoastrelid is filled with 0
     0::pg_catalog.oid AS reltoastrelid,
-    EXISTS (SELECT * FROM mz_catalog.mz_indexes where mz_indexes.on_id = mz_objects.id) AS relhasindex,
+    EXISTS (SELECT * FROM mz_catalog.mz_indexes where mz_indexes.on_id = class_objects.id) AS relhasindex,
     -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
     -- temporary objects don't show up here, so relpersistence is filled with 'p' for permanent.
     -- TODO(jkosh44): update this column when issue is resolved.
     'p'::pg_catalog.\"char\" AS relpersistence,
     CASE
-        WHEN mz_objects.type = 'table' THEN 'r'
-        WHEN mz_objects.type = 'source' THEN 'r'
-        WHEN mz_objects.type = 'index' THEN 'i'
-        WHEN mz_objects.type = 'view' THEN 'v'
-        WHEN mz_objects.type = 'materialized view' THEN 'm'
+        WHEN class_objects.type = 'table' THEN 'r'
+        WHEN class_objects.type = 'source' THEN 'r'
+        WHEN class_objects.type = 'index' THEN 'i'
+        WHEN class_objects.type = 'view' THEN 'v'
+        WHEN class_objects.type = 'materialized view' THEN 'm'
     END relkind,
     -- MZ doesn't support CHECK constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
@@ -1557,10 +1557,16 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     false AS relhasoids,
     -- MZ doesn't support options for relations
     NULL::pg_catalog.text[] as reloptions
-FROM mz_catalog.mz_objects
-JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
-WHERE mz_objects.type in (SELECT type from mz_catalog.mz_relations UNION SELECT 'index')",
+FROM (
+    -- pg_class catalogs relations and indexes
+    SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
+    UNION
+        SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
+        FROM mz_catalog.mz_indexes
+        JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
+) AS class_objects
+JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
 pub const PG_DATABASE: BuiltinView = BuiltinView {
@@ -1582,7 +1588,7 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_index AS SELECT
     mz_indexes.oid AS indexrelid,
-    mz_objects.oid AS indrelid,
+    mz_relations.oid AS indrelid,
     false::pg_catalog.bool AS indisprimary,
     -- MZ doesn't support creating unique indexes so indisunique is filled with false
     false::pg_catalog.bool AS indisunique,
@@ -1604,10 +1610,10 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     -- MZ doesn't support indexes with predicates
     NULL::pg_catalog.text AS indpred
 FROM mz_catalog.mz_indexes
-JOIN mz_catalog.mz_objects ON mz_indexes.on_id = mz_objects.id
+JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
-GROUP BY mz_indexes.oid, mz_objects.oid",
+GROUP BY mz_indexes.oid, mz_relations.oid",
 };
 
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
@@ -1693,7 +1699,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_attribute AS SELECT
-    mz_objects.oid as attrelid,
+    class_objects.oid as attrelid,
     mz_columns.name as attname,
     mz_columns.type_oid AS atttypid,
     pg_type.typlen AS attlen,
@@ -1707,8 +1713,15 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     FALSE as attisdropped,
     -- MZ doesn't support COLLATE so attcollation is filled with 0
     0::pg_catalog.oid as attcollation
-FROM mz_catalog.mz_objects
-JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
+FROM (
+    -- pg_attribute catalogs columns on relations and indexes
+    SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
+    UNION
+        SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
+        FROM mz_catalog.mz_indexes
+        JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
+) AS class_objects
+JOIN mz_catalog.mz_columns ON class_objects.id = mz_columns.id
 JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
     // Since this depends on pg_type, its id must be higher due to initialization

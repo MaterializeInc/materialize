@@ -240,6 +240,8 @@ contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or MATERIALI
 > SHOW FULL OBJECTS
 name            type
 --------------------------
+bool            user
+int_list        user
 v1              user
 v2              user
 
