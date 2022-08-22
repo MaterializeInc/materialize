@@ -57,7 +57,7 @@ use mz_sql::plan::{
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{CreateSourceOption, CreateSourceOptionName, Statement, WithOptionValue};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ReadPolicy};
+use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
 use mz_storage::types::hosts::StorageHostConfig;
 use mz_storage::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
@@ -455,9 +455,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
 
-                let source_status_collection_id = self.catalog.resolve_builtin_storage_collection(
-                    &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                );
+                // This is disabled for the moment because it has unusual upper
+                // advancement behavior.
+                // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+                let status_collection_id = if false {
+                    Some(self.catalog.resolve_builtin_storage_collection(
+                        &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                    ))
+                } else {
+                    None
+                };
 
                 self.controller
                     .storage_mut()
@@ -467,7 +474,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc: source.desc.clone(),
                             ingestion: Some(ingestion),
                             since: None,
-                            status_collection_id: Some(source_status_collection_id),
+                            status_collection_id,
                             host_config: Some(source.host_config),
                         },
                     )])
@@ -1030,10 +1037,21 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Sink(catalog_sink.clone()),
         }];
 
+        let from = self.catalog.get_entry(&catalog_sink.from);
+        let from_name = from.name().item.clone();
+        let from_type = from.item().typ().to_string();
         let result = self
             .catalog_transact(Some(&session), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
-                txn.dataflow_client.storage().collection(sink.from)?;
+                txn.dataflow_client
+                    .storage()
+                    .collection(sink.from)
+                    .map_err(|e| match e {
+                        StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
+                            "{from_name} is a {from_type}, which cannot be exported as a sink"
+                        )),
+                        e => AdapterError::Storage(e),
+                    })?;
                 Ok(())
             })
             .await;
@@ -2225,9 +2243,8 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             ExplainStageNew::DecorrelatedPlan => {
                 // run partial pipeline
-                let decorrelated_plan = decorrelate(raw_plan)?;
+                let mut decorrelated_plan = decorrelate(raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let mut dataflow = OptimizedMirRelationExpr::declare_optimized(decorrelated_plan);
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
@@ -2238,7 +2255,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     fast_path_plan: Default::default(),
                 };
                 // explain plan
-                Explainable::new(&mut dataflow).explain(&format, &config, &context)?
+                Explainable::new(&mut decorrelated_plan).explain(&format, &config, &context)?
             }
             ExplainStageNew::OptimizedPlan => {
                 // run partial pipeline

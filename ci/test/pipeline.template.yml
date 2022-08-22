@@ -531,6 +531,14 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres]
 
+  - id: cloudtest
+    label: "Cloudtest"
+    depends_on: build-x86_64
+    artifact_paths: junit_cloudtest_*.xml
+    plugins:
+      - ./ci/plugins/cloudtest:
+          args: ["test/cloudtest/"]
+
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build-x86_64

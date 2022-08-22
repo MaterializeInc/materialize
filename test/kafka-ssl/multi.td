@@ -24,14 +24,15 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
 > CREATE SECRET password_csr AS 'sekurity'
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA
+  BROKER 'kafka:9092',
+  SSL KEY = SECRET ssl_key_kafka,
+  SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
+  SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SSL',
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}'
-  )
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
       ssl_key_pem = SECRET ssl_key_csr,
@@ -58,15 +59,7 @@ a
 # Ensure that our test infra correctly sets up certs by failing when CSR is not
 # specifically configured
 ! CREATE SOURCE data
-  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SSL',
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      username = "materialize",
-      password = SECRET password_csr
-  )
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
       ssl_key_pem = SECRET ssl_key_kafka,
@@ -78,15 +71,7 @@ contains:sslv3 alert certificate unknown
 # Ensure that our test infra correctly sets up certs by failing when CSR is not
 # specifically configured, AND we are specifically setting certs
 ! CREATE SOURCE data
-  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SSL',
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      username = "materialize",
-      password = SECRET password_csr
-  )
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
       ssl_key_pem = SECRET ssl_key_kafka,
@@ -95,16 +80,9 @@ contains:sslv3 alert certificate unknown
   )
 contains:sslv3 alert certificate unknown
 
-
 # test sinks with multiple things to
 > CREATE SINK snk FROM data
-  INTO KAFKA BROKER 'kafka' TOPIC 'snk'
-  WITH (
-      security_protocol = 'SSL',
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}'
-  )
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
       ssl_key_pem = SECRET ssl_key_csr,
@@ -120,13 +98,7 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 
 # and wrong cert for sink
 ! CREATE SINK snk_bad FROM data
-  INTO KAFKA BROKER 'kafka' TOPIC 'snk'
-  WITH (
-      security_protocol = 'SSL',
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}'
-  )
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
       ssl_key_pem = SECRET ssl_key_kafka,

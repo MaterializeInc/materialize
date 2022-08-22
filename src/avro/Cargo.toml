@@ -26,7 +26,7 @@ serde = { version = "1.0.140", features = ["derive"] }
 serde_json = "1.0.82"
 sha2 = "0.10.2"
 snap = { version = "1.0.5", optional = true }
-tracing = "0.1.35"
+tracing = "0.1.36"
 uuid = "1.1.2"
 
 [dev-dependencies]

@@ -14,7 +14,7 @@ mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-storage = { path = "../storage" }
-tracing = "0.1.34"
+tracing = "0.1.36"
 
 [dev-dependencies]
 anyhow = "1.0.58"

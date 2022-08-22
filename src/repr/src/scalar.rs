@@ -912,6 +912,65 @@ impl fmt::Display for Datum<'_> {
     }
 }
 
+impl From<&Datum<'_>> for serde_json::Value {
+    fn from(datum: &Datum) -> serde_json::Value {
+        // Convert most floats to a JSON Number. JSON Numbers don't support NaN or
+        // Infinity, so those will still be rendered as strings.
+        fn float_to_json(f: f64) -> serde_json::Value {
+            match serde_json::Number::from_f64(f) {
+                Some(n) => serde_json::Value::Number(n),
+                None => serde_json::Value::String(f.to_string()),
+            }
+        }
+        match datum {
+            Datum::Null | Datum::JsonNull => serde_json::Value::Null,
+            Datum::False => serde_json::Value::Bool(false),
+            Datum::True => serde_json::Value::Bool(true),
+            Datum::Int16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::UInt8(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::UInt32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::Float32(n) => float_to_json(n.into_inner() as f64),
+            Datum::Float64(n) => float_to_json(n.into_inner()),
+            Datum::Numeric(d) => {
+                // serde_json requires floats to be finite
+                if d.0.is_infinite() {
+                    serde_json::Value::String(d.0.to_string())
+                } else {
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(f64::try_from(d.0).unwrap()).unwrap(),
+                    )
+                }
+            }
+            Datum::String(s) => serde_json::Value::String(s.to_string()),
+            Datum::List(list) => {
+                serde_json::Value::Array(list.iter().map(|datum| Self::from(&datum)).collect())
+            }
+            Datum::Array(array) => serde_json::Value::Array(
+                array
+                    .elements()
+                    .iter()
+                    .map(|datum| Self::from(&datum))
+                    .collect(),
+            ),
+            Datum::Map(map) => serde_json::Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.to_owned(), Self::from(&v)))
+                    .collect(),
+            ),
+            Datum::Dummy => unreachable!(),
+            Datum::Bytes(_)
+            | Datum::Date(_)
+            | Datum::Interval(_)
+            | Datum::Time(_)
+            | Datum::Timestamp(_)
+            | Datum::TimestampTz(_)
+            | Datum::Uuid(_) => serde_json::Value::String(datum.to_string()),
+        }
+    }
+}
+
 /// The type of a [`Datum`].
 ///
 /// There is a direct correspondence between `Datum` variants and `ScalarType`

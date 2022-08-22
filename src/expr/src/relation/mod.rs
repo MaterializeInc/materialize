@@ -233,7 +233,8 @@ pub enum MirRelationExpr {
         inputs: Vec<MirRelationExpr>,
     },
     /// Technically a no-op. Used to render an index. Will be used to optimize queries
-    /// on finer grain
+    /// on finer grain. Each `keys` item represents a different index that should be
+    /// produced from the `keys`.
     ///
     /// The runtime memory footprint of this operator is proportional to its input.
     ArrangeBy {
@@ -1376,6 +1377,19 @@ impl MirRelationExpr {
             .chain(second)
             .chain(rest.into_iter().flatten())
     }
+
+    /// Return a vector of references to the subtrees of this expression
+    /// in post-visit order (the last element is `&self`).
+    pub fn post_order_vec(&self) -> Vec<&Self> {
+        let mut stack = vec![self];
+        let mut result = vec![];
+        while let Some(expr) = stack.pop() {
+            result.push(expr);
+            stack.extend(expr.children());
+        }
+        result.reverse();
+        result
+    }
 }
 
 impl VisitChildren<Self> for MirRelationExpr {
@@ -1920,6 +1934,26 @@ pub enum JoinImplementation {
 impl Default for JoinImplementation {
     fn default() -> Self {
         JoinImplementation::Unimplemented
+    }
+}
+
+impl JoinImplementation {
+    /// Returns `true` iff the value is not [`JoinImplementation::Unimplemented`].
+    pub fn is_implemented(&self) -> bool {
+        match self {
+            Self::Unimplemented => false,
+            _ => true,
+        }
+    }
+
+    /// Returns an optional implementation name if the value is not [`JoinImplementation::Unimplemented`].
+    pub fn name(&self) -> Option<&'static str> {
+        match self {
+            Self::Differential(..) => Some("differential"),
+            Self::DeltaQuery(..) => Some("delta"),
+            Self::PredicateIndex(..) => Some("predicate_index"),
+            Self::Unimplemented => None,
+        }
     }
 }
 

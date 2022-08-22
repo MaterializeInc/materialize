@@ -24,15 +24,15 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
-use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
+use crate::internal::paths::PartialBlobKey;
+use crate::internal::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_persist_client.r#impl.state.rs"
+    "/mz_persist_client.internal.state.rs"
 ));
 
 #[derive(Clone, Debug, PartialEq)]

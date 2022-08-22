@@ -9,7 +9,7 @@
 
 //! CLI introspection tools for persist
 
-use crate::r#impl::state::ProtoStateRollup;
+use crate::internal::state::ProtoStateRollup;
 use crate::{Metrics, ShardId};
 use anyhow::anyhow;
 use mz_ore::metrics::MetricsRegistry;

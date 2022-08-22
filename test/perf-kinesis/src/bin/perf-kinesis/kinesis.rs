@@ -69,7 +69,7 @@ pub async fn create_stream(
 /// This function will log if it's falling behind the expected put rate and once
 /// at the end to indicate total amount of time spent generating and putting records.
 pub async fn generate_and_put_records(
-    kinesis_client: &aws_sdk_kinesis::Client,
+    kinesis_client: aws_sdk_kinesis::Client,
     stream_name: &str,
     total_records: u64,
     records_per_second: u64,
@@ -94,7 +94,7 @@ pub async fn generate_and_put_records(
 
         let target_shard = shard_starting_hash_keys.pop_front().unwrap();
         put_record_count += put_records_one_second(
-            kinesis_client,
+            &kinesis_client,
             stream_name,
             &target_shard,
             records_per_second,

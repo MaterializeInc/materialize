@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use mz_persist::location::{Determinate, ExternalError, Indeterminate};
 use timely::progress::Antichain;
 
-use crate::r#impl::paths::PartialBlobKey;
+use crate::internal::paths::PartialBlobKey;
 use crate::{ShardId, WriterId};
 
 /// An indication of whether the given error type indicates an operation

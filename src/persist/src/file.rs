@@ -156,11 +156,18 @@ impl Blob for FileBlob {
                     )))
                 });
 
+                // fsync the file, so its contents are visible
                 file.sync_all().await?;
+
+                let parent_dir = File::open(&self.base_dir).await?;
+                // fsync the directory so it can guaranteed see the tmp file
+                parent_dir.sync_all().await?;
+
+                // atomically rename our file
                 fs::rename(tmp_name, &file_path).await?;
-                // TODO: We also need to fsync the directory to be truly
-                // confidant that this is permanently there. It doesn't seem
-                // like this is available in the stdlib, find a crate for it?
+
+                // fsync the directory once again to guarantee it can see the renamed file
+                parent_dir.sync_all().await?;
             }
             Atomicity::AllowNonAtomic => {
                 let mut file = OpenOptions::new()

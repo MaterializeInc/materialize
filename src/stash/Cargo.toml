@@ -26,7 +26,7 @@ rusqlite = { version = "0.28.0", features = ["bundled"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 tokio = "1.19.2"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tracing = "0.1.35"
+tracing = "0.1.36"
 
 [dev-dependencies]
 anyhow = "1.0.58"
