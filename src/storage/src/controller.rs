@@ -1448,6 +1448,7 @@ mod persist_read_handles {
                     Option<ReadHandle<SourceData, (), T, Diff>>,
                 > = BTreeMap::new();
 
+                let antichain_minimum_element = Antichain::from_elem(T::minimum());
                 let mut shutdown = false;
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
                 while !shutdown {
@@ -1456,7 +1457,14 @@ mod persist_read_handles {
                             let futs = FuturesUnordered::new();
                             for (_id, read) in read_handles.iter_mut() {
                                 if let Some(read) = read.as_mut() {
-                                    futs.push(read.maybe_heartbeat_reader());
+                                    // downgrade_since is idempotent, so downgrading to the minimum
+                                    // element is a no-op and can be used as a lease liveness
+                                    // heartbeat.
+                                    //
+                                    // TODO: This behavior might be too subtle. Consider
+                                    // reintroducing a public maybe_heartbeat_reader that internally
+                                    // does this.
+                                    futs.push(read.maybe_downgrade_since(&antichain_minimum_element));
                                 }
                             }
                             futs.collect::<Vec<_>>().await;
