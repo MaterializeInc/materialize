@@ -35,10 +35,11 @@ pub fn as_generator(g: &LoadGenerator) -> Box<dyn Generator> {
 }
 
 pub struct LoadGeneratorSourceReader {
-    rows: Box<dyn Iterator<Item = Row>>,
+    rows: Box<dyn Iterator<Item = Vec<Row>>>,
     last: Instant,
     tick: Duration,
     offset: MzOffset,
+    pending: Vec<Row>,
 }
 
 impl SourceReader for LoadGeneratorSourceReader {
@@ -86,34 +87,53 @@ impl SourceReader for LoadGeneratorSourceReader {
         }
 
         Ok(Self {
-            rows,
+            rows: Box::new(rows),
             last: Instant::now(),
             tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
             offset,
+            pending: Vec::new(),
         })
     }
 
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
-        if self.last.elapsed() < self.tick {
-            return Ok(NextMessage::Pending);
+        if self.pending.is_empty() {
+            // The batch is empty, but we need to wait for the next tick to refill.
+            if self.last.elapsed() < self.tick {
+                return Ok(NextMessage::Pending);
+            }
+
+            // Tick has passed, so we can refill.
+            self.last += self.tick;
+            match self.rows.next() {
+                Some(value) => {
+                    self.offset += 1;
+                    self.pending = value;
+                }
+                None => return Ok(NextMessage::Finished),
+            };
         }
-        self.last += self.tick;
-        self.offset += 1;
-        match self.rows.next() {
-            Some(value) => Ok(NextMessage::Ready(SourceMessageType::Finalized(
-                SourceMessage {
-                    partition: PartitionId::None,
-                    offset: self.offset,
-                    upstream_time_millis: None,
-                    key: (),
-                    value,
-                    headers: None,
-                    specific_diff: 1,
-                },
-            ))),
-            None => Ok(NextMessage::Finished),
+        // There should be data, but possibly not if a source returned an empty Vec.
+        if let Some(value) = self.pending.pop() {
+            let message = SourceMessage {
+                partition: PartitionId::None,
+                offset: self.offset,
+                upstream_time_millis: None,
+                key: (),
+                value,
+                headers: None,
+                specific_diff: 1,
+            };
+            let message = if self.pending.is_empty() {
+                SourceMessageType::Finalized(message)
+            } else {
+                SourceMessageType::InProgress(message)
+            };
+            Ok(NextMessage::Ready(message))
+        } else {
+            // Vec returned from source was empty.
+            Ok(NextMessage::Pending)
         }
     }
 }
