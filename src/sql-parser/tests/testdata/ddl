@@ -1485,6 +1485,13 @@ CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT 
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }, CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }] })
 
 parse-statement
+CREATE SOURCE gus FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' WITH (REMOTE 'johto:42');
+----
+error: Expected equals sign, found string literal "johto:42"
+CREATE SOURCE gus FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' WITH (REMOTE 'johto:42');
+                                                                                 ^
+
+parse-statement
 ALTER SYSTEM SET wal_level TO logical
 ----
 ALTER SYSTEM SET wal_level = logical

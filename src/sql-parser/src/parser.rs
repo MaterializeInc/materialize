@@ -2133,7 +2133,41 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connection = self.parse_create_source_connection()?;
-        let legacy_with_options = self.parse_opt_with_options()?;
+
+        // First attempt to parse NON-legacy WITH options. If we
+        // succeed, we ensure we are at the END of the statement,
+        // otherwise we reset and try to parse legacy WITH options.
+        //
+        // We are required to do this in this weird order, because
+        // we must attempt to parse non-legacy options before
+        // we progress too far into the token stream to distinguish
+        // between the 2 kinds and reset.
+        //
+        // This is a HACK, and should go away when we don't have any
+        // legacy WITH options.
+        let index = self.index;
+        let (with_options, legacy_with_options) =
+            match self.maybe_parse(Parser::parse_source_with_options) {
+                Some(Some(o)) => {
+                    if matches!(self.peek_token(), None | Some(Token::Semicolon)) {
+                        // We successfully parsed non-legacy source options, but we are
+                        // NOT at the end of the statement, so we backtrack and just
+                        // attempt the normal parse flow of legacy with options before
+                        // all the following options...
+                        self.index = index;
+                        (None, self.parse_opt_with_options()?)
+                    } else {
+                        // ...otherwise we accept these options are correct, and expect to
+                        // fall-through the following parse blocks for other options.
+                        (Some(o), vec![])
+                    }
+                }
+                None | Some(None) => {
+                    // We didn't find a WITH or failed to parse
+                    (None, self.parse_opt_with_options()?)
+                }
+            };
+
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
                 self.expect_keyword(FORMAT)?;
@@ -2154,14 +2188,12 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // New WITH block
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_source_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
+        let with_options = match with_options {
+            Some(wo) => wo,
+            None => {
+                // New WITH block
+                self.parse_source_with_options()?.unwrap_or_else(Vec::new)
+            }
         };
 
         Ok(Statement::CreateSource(CreateSourceStatement {
@@ -2176,6 +2208,25 @@ impl<'a> Parser<'a> {
             key_constraint,
             with_options,
         }))
+    }
+
+    // Parse non-legacy WITH options for `CREATE SOURCE`.
+    //
+    // We could probably just document that the vector is non-empty, but
+    // choose to return a `None` in the case we find no WITH for
+    // clarity
+    fn parse_source_with_options(
+        &mut self,
+    ) -> Result<Option<Vec<CreateSourceOption<Raw>>>, ParserError> {
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_source_option)?;
+            self.expect_token(&Token::RParen)?;
+            Some(options)
+        } else {
+            None
+        };
+        Ok(with_options)
     }
 
     /// Parses the column section of a CREATE SOURCE statement which can be
