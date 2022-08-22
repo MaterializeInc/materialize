@@ -956,6 +956,7 @@ mod tests {
                                     },
                                 )
                                 .await
+                                .expect("invalid batch part");
                             }
                             if s.is_empty() {
                                 s.push_str("<empty>\n");
