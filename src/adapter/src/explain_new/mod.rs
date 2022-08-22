@@ -86,6 +86,8 @@ pub(crate) struct AnnotatedPlan<'a, T> {
 pub struct Attributes {
     non_negative: Option<bool>,
     subtree_size: Option<usize>,
+    arity: Option<usize>,
+    column_types: Option<Vec<String>>,
 }
 
 impl fmt::Display for Attributes {
@@ -96,6 +98,12 @@ impl fmt::Display for Attributes {
         }
         if let Some(non_negative) = &self.non_negative {
             builder.field("non_negative", non_negative);
+        }
+        if let Some(arity) = &self.arity {
+            builder.field("arity", arity);
+        }
+        if let Some(column_types) = &self.column_types {
+            builder.field("column_types", column_types);
         }
         builder.finish()
     }

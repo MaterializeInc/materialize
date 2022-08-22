@@ -13,6 +13,8 @@ use std::collections::HashMap;
 
 use mz_expr::{LocalId, MirRelationExpr};
 
+pub mod arity;
+pub mod column_types;
 pub mod non_negative;
 pub mod subtree_size;
 
