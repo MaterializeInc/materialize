@@ -305,20 +305,25 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                     }
                 }
                 mz_expr::MirRelationExpr::Join { implementation, .. } => {
-                    if let mz_expr::JoinImplementation::IndexedFilter(id, key, val) = implementation
+                    if let mz_expr::JoinImplementation::IndexedFilter(id, key, vals) =
+                        implementation
                     {
-                        // We should only get excited if we can track down an index for `id`.
-                        // If `keys` is non-empty, that means we think one exists.
-                        for (index_id, (desc, _typ, _monotonic)) in
-                            dataflow_plan.index_imports.iter()
-                        {
-                            if desc.on_id == *id && &desc.key == key {
-                                // Indicate an early exit with a specific index and key_val.
-                                return Ok(Some(FastPathPlan::PeekExisting(
-                                    *index_id,
-                                    Some(val.clone()),
-                                    permute_oneshot_mfp_around_index(mfp, key)?,
-                                )));
+                        // For now, PeekExisting handles only 1 lookup.
+                        if vals.len() == 1 {
+                            let val = vals.get(0).unwrap();
+                            // We should only get excited if we can track down an index for `id`.
+                            // If `keys` is non-empty, that means we think one exists.
+                            for (index_id, (desc, _typ, _monotonic)) in
+                                dataflow_plan.index_imports.iter()
+                            {
+                                if desc.on_id == *id && &desc.key == key {
+                                    // Indicate an early exit with a specific index and key value.
+                                    return Ok(Some(FastPathPlan::PeekExisting(
+                                        *index_id,
+                                        Some(val.clone()),
+                                        permute_oneshot_mfp_around_index(mfp, key)?,
+                                    )));
+                                }
                             }
                         }
                     }

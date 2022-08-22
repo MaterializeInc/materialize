@@ -14,7 +14,7 @@ use std::fmt;
 use mz_expr::{
     explain::Indices, AggregateExpr, Id, JoinImplementation, MirRelationExpr, MirScalarExpr,
 };
-use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
+use mz_ore::str::{bracketed, closure_to_display, separated, IndentLike, StrExt};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
 
 use crate::explain_new::{Displayable, PlanRenderingContext};
@@ -192,18 +192,32 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             }
                             ctx.indent -= 1;
                         }
-                        JoinImplementation::IndexedFilter(_, key, row) => {
-                            write!(f, "{}Lookup ", ctx.indent)?;
-
-                            for (i, (expr, lit)) in std::iter::zip(key, row.unpack()).enumerate() {
-                                Displayable::from(expr).fmt_text(f, &mut ())?;
-                                write!(f, " = ")?;
-                                write!(f, "{}", lit)?;
-                                if i < key.len() - 1 {
-                                    write!(f, " AND ")?;
-                                }
-                            }
-                            writeln!(f, "")?;
+                        JoinImplementation::IndexedFilter(_, key, rows) => {
+                            debug_assert_eq!(inputs.len(), 2);
+                            writeln!(
+                                f,
+                                "{}Lookup {}",
+                                ctx.indent,
+                                separated(
+                                    " OR ",
+                                    rows.iter().map(|row| {
+                                        bracketed(
+                                            "(",
+                                            ")",
+                                            separated(
+                                                " AND ",
+                                                std::iter::zip(key, row.unpack()).map(
+                                                    |(expr, lit)| {
+                                                        closure_to_display(move |fmt| {
+                                                            write!(fmt, "{} = {}", expr, lit)
+                                                        })
+                                                    },
+                                                ),
+                                            ),
+                                        )
+                                    })
+                                )
+                            )?;
                             ctx.indented(|ctx| Displayable::from(&inputs[0]).fmt_text(f, ctx))?;
                         }
                         JoinImplementation::Unimplemented => {

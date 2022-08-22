@@ -362,7 +362,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
         *predicates = completed;
     }
 
-    // 4) Sort and dedup predicates.
+    // 6) Sort and dedup predicates.
     predicates.sort_by(compare_predicates);
     predicates.dedup();
 }
