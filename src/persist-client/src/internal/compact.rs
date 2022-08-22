@@ -218,7 +218,7 @@ impl Compactor {
                             updates.push(((k.to_vec(), v.to_vec()), t, d));
                         },
                     )
-                    .await;
+                    .await?;
                 }
             }
             consolidate_updates(&mut updates);

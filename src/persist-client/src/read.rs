@@ -636,7 +636,21 @@ where
                     updates.push(((k, v), t, d));
                 },
             )
-            .await;
+            .await
+            .unwrap_or_else(|err| {
+                // Ideally, readers should never encounter a missing blob. They place a seqno
+                // hold as they consume their snapshot/listen, preventing any blobs they need
+                // from being deleted by garbage collection, and all blob implementations are
+                // linearizable so there should be no possibility of stale reads.
+                //
+                // If we do have a bug and a reader does encounter a missing blob, the state
+                // cannot be recovered, and our best option is to panic and retry the whole
+                // process.
+                panic!(
+                    "reader {} could not fetch batch part: {}",
+                    self.reader_id, err
+                )
+            });
         }
 
         // TODO: This is potentially suprising for the `ReadHandle` to manage.
@@ -812,7 +826,8 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     key: &PartialBlobKey,
     registered_desc: &Description<T>,
     mut update_fn: UpdateFn,
-) where
+) -> Result<(), anyhow::Error>
+where
     T: Timestamp + Lattice + Codec64,
     UpdateFn: FnMut(&[u8], &[u8], T, [u8; 8]),
 {
@@ -825,9 +840,13 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
 
     let value = match value {
         Some(v) => v,
-        // All blob implementations are linearizable, so a missing
-        // blob here suggests something has gone very wrong.
-        None => panic!("unexpected missing blob: {}", key),
+        None => {
+            return Err(anyhow!(
+                "unexpected missing blob: {} for shard: {}",
+                key,
+                shard_id
+            ))
+        }
     };
     drop(get_span);
 
@@ -913,7 +932,9 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
                 update_fn(k, v, t, d);
             }
         }
-    })
+    });
+
+    Ok(())
 }
 
 // TODO: This goes away the desc on BlobTraceBatchPart becomes a Description<T>,
