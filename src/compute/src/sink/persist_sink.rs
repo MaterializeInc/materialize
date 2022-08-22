@@ -21,7 +21,9 @@ use mz_persist_client::batch::Batch;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
+use timely::dataflow::operators::{
+    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
+};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -157,12 +159,21 @@ where
         );
     }
 
+    let mut scope = desired_collection.inner.scope();
+
+    // The append operator keeps capabilities that it downgrades to match the
+    // current upper frontier of the persist shard. This frontier can be
+    // observed on the persist_feedback_stream. This is used by the minter
+    // operator to learn about the current persist frontier, driving it's
+    // decisions on when to mint new batches.
+    let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
+
     let (batch_descriptions, mint_token) = mint_batch_descriptions(
         sink_id.clone(),
         operator_name.clone(),
         target,
         &desired_collection.inner,
-        &persist_collection.inner,
+        &persist_feedback_stream,
         as_of,
         Arc::clone(&persist_clients),
         compute_state,
@@ -178,7 +189,7 @@ where
         Arc::clone(&persist_clients),
     );
 
-    let append_token = append_batches(
+    let (append_frontier_stream, append_token) = append_batches(
         sink_id.clone(),
         operator_name,
         target,
@@ -186,6 +197,8 @@ where
         &written_batches,
         persist_clients,
     );
+
+    append_frontier_stream.connect_loop(persist_feedback_handle);
 
     let token = Rc::new((mint_token, write_token, append_token));
 
@@ -208,7 +221,7 @@ fn mint_batch_descriptions<G>(
     operator_name: String,
     target: &CollectionMetadata,
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
-    _persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    persist_feedback_stream: &Stream<G, ()>,
     as_of: Antichain<Timestamp>,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     compute_state: &mut crate::compute_state::ComputeState,
@@ -256,6 +269,8 @@ where
     let (mut output, output_stream) = mint_op.new_output();
 
     let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
+    let mut persist_feedback_input =
+        mint_op.new_input_connection(persist_feedback_stream, Pipeline, vec![Antichain::new()]);
 
     // Dropping this token signals that the operator should shut down cleanly.
     let token = Rc::new(());
@@ -342,6 +357,10 @@ where
                     // Just read away data.
                     // WIP: Is this idiomatic timely?
                 });
+                persist_feedback_input.for_each(|_cap, _data| {
+                    // Just read away data.
+                    // WIP: Is this idiomatic timely?
+                });
 
                 if !active_worker {
                     // SUBTLE: We must not simply return, because this will
@@ -355,7 +374,7 @@ where
                 // Capture current frontiers.
                 let frontiers = frontiers.borrow().clone();
                 let desired_frontier = &frontiers[0];
-                let persist_frontier = write.fetch_recent_upper().await;
+                let persist_frontier = &frontiers[1];
 
                 if PartialOrder::less_than(&*shared_frontier.borrow(), &persist_frontier) {
                     if sink_id.is_user() {
@@ -789,7 +808,7 @@ fn append_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
     persist_clients: Arc<Mutex<PersistClientCache>>,
-) -> Option<Rc<dyn Any>>
+) -> (Stream<G, ()>, Option<Rc<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -801,12 +820,29 @@ where
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = OperatorBuilder::new(operator_name, scope.clone());
 
+    // We never output anything, but we update our capabilities based on the
+    // persist frontier we know about. So someone can listen on our output
+    // frontier and learn about the persist frontier advancing.
+    let (mut _output, output_stream) = append_op.new_output();
+
     let hashed_id = sink_id.hashed();
     let active_worker = (hashed_id as usize) % scope.peers() == scope.index();
 
-    let mut descriptions_input =
-        append_op.new_input(batch_descriptions, Exchange::new(move |_| hashed_id));
-    let mut batches_input = append_op.new_input(batches, Exchange::new(move |_| hashed_id));
+    // This operator wants to completely control the frontier on it's output
+    // because it's used to track the latest persist frontier. We update this
+    // when we either append to persist successfully or when we learn about a
+    // new current frontier because a `compare_and_append` failed. That's why
+    // input capability tracking is not connected to the output.
+    let mut descriptions_input = append_op.new_input_connection(
+        batch_descriptions,
+        Exchange::new(move |_| hashed_id),
+        vec![Antichain::new()],
+    );
+    let mut batches_input = append_op.new_input_connection(
+        batches,
+        Exchange::new(move |_| hashed_id),
+        vec![Antichain::new()],
+    );
 
     // Dropping this token signals that the operator should shut down cleanly.
     let token = Rc::new(());
@@ -818,7 +854,15 @@ where
 
     append_op.build_async(
         scope,
-        move |_capabilities, frontiers, scheduler| async move {
+        move |mut capabilities, frontiers, scheduler| async move {
+            let mut cap_set = if active_worker {
+                CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
+            } else {
+                // Pop away, because we don't need it.
+                capabilities.pop().expect("missing capability");
+                CapabilitySet::new()
+            };
+
             let mut description_buffer = Vec::new();
             let mut batch_buffer = Vec::new();
 
@@ -941,6 +985,7 @@ where
 
                 for done_batch_metadata in done_batches.into_iter() {
                     in_flight_descriptions.remove(&done_batch_metadata);
+
                     let mut batches = in_flight_batches
                         .remove(&done_batch_metadata)
                         .unwrap_or_else(Vec::new);
@@ -951,13 +996,15 @@ where
                         done_batch_metadata, batches
                     );
 
+                    let (batch_lower, batch_upper) = done_batch_metadata;
+
                     let mut to_append = batches.iter_mut().collect::<Vec<_>>();
 
                     let result = write
                         .compare_and_append_batch(
                             &mut to_append[..],
-                            done_batch_metadata.0.clone(),
-                            done_batch_metadata.1.clone(),
+                            batch_lower.clone(),
+                            batch_upper.clone(),
                         )
                         .await
                         .expect("Indeterminate")
@@ -966,31 +1013,40 @@ where
                     if sink_id.is_user() {
                         info!(
                             "persist_sink {sink_id}/{shard_id}: \
-                            append result for {:?}: {:?}",
-                            done_batch_metadata, result
+                            append result for batch ({:?} -> {:?}): {:?}",
+                            batch_lower, batch_upper, result
                         );
                     }
 
-                    if let Err(upper) = &result {
-                        // Clean up in case we didn't manage to append the
-                        // batches to persist.
-                        for batch in batches {
-                            batch.delete().await;
+                    match result {
+                        Ok(()) => {
+                            cap_set.downgrade(batch_upper);
                         }
-                        trace!(
-                            "persist_sink({}): invalid upper! \
-                            Tried to append {:?} but upper is {:?}. \
-                            This is not a problem, it just means someone else \
-                            was faster than us. We will try again with a new batch description.",
-                            sink_id,
-                            done_batch_metadata,
-                            upper
-                        );
+                        Err(current_upper) => {
+                            cap_set.downgrade(current_upper.0.iter());
+
+                            // Clean up in case we didn't manage to append the
+                            // batches to persist.
+                            for batch in batches {
+                                batch.delete().await;
+                            }
+                            trace!(
+                                "persist_sink({}): invalid upper! \
+                                Tried to append batch ({:?} -> {:?}) but upper \
+                                is {:?}. This is not a problem, it just means \
+                                someone else was faster than us. We will try \
+                                again with a new batch description.",
+                                sink_id,
+                                batch_lower,
+                                batch_upper,
+                                current_upper
+                            );
+                        }
                     }
                 }
             }
         },
     );
 
-    Some(token)
+    (output_stream, Some(token))
 }
