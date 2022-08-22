@@ -471,7 +471,8 @@ where
     /// promising that no more data will ever be read by this handle.
     ///
     /// This also acts as a heartbeat for the reader lease (including if called
-    /// with `new_since` equal to `self.since()`, making the call a no-op).
+    /// with `new_since` equal to something like `self.since()` or the minimum
+    /// timestamp, making the call a no-op).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         let (_seqno, current_reader_since, maintenance) = self
@@ -690,11 +691,11 @@ where
     ///
     /// This is an internally rate limited helper, designed to allow users to
     /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or [Self::maybe_heartbeat_reader] on some interval that is "frequent"
+    /// or Self::maybe_heartbeat_reader on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     ///
     /// This is communicating actual progress information, so is given
-    /// preferential treatment compared to [Self::maybe_heartbeat_reader].
+    /// preferential treatment compared to Self::maybe_heartbeat_reader.
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
@@ -712,7 +713,7 @@ where
     /// call it as frequently as they like. Call this [Self::downgrade_since],
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    pub async fn maybe_heartbeat_reader(&mut self) {
+    async fn maybe_heartbeat_reader(&mut self) {
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 2;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
