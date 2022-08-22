@@ -36,7 +36,7 @@ num = "0.4.0"
 num_enum = "0.5.7"
 ordered-float = { version = "3.0.0", features = ["serde"] }
 paste = "1.0.8"
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 regex = "1.6.0"
 regex-syntax = "0.6.27"
 serde = { version = "1.0.144", features = ["derive"] }
@@ -57,4 +57,5 @@ mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.43"
 
 [build-dependencies]
-prost-build = { version = "0.10.3", features = ["vendored"] }
+prost-build = "0.11.1"
+protobuf-src = "1.0.4"

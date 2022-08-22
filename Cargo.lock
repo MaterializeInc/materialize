@@ -1067,9 +1067,9 @@ dependencies = [
 
 [[package]]
 name = "console-api"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06c5fd425783d81668ed68ec98408a80498fb4ae2fd607797539e1a9dfa3618f"
+checksum = "e57ff02e8ad8e06ab9731d5dc72dc23bef9200778eae1a89d555d8c42e5d4a86"
 dependencies = [
  "prost",
  "prost-types",
@@ -1079,9 +1079,9 @@ dependencies = [
 
 [[package]]
 name = "console-subscriber"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31432bc31ff8883bf6a693a79371862f73087822470c82d6a1ec778781ee3978"
+checksum = "e933c43a5db3779b3600cdab18856af2411ca2237e33ba8ab476d5d5b1a6c1e7"
 dependencies = [
  "console-api",
  "crossbeam-channel",
@@ -1366,6 +1366,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "dashmap"
+version = "5.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
+dependencies = [
+ "cfg-if",
+ "num_cpus",
+ "parking_lot",
 ]
 
 [[package]]
@@ -3047,6 +3058,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
+ "protobuf-src",
  "rand",
  "rand_distr",
  "tokio",
@@ -3075,6 +3087,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "prost-build",
+ "protobuf-src",
  "reqwest",
  "serde",
  "serde_json",
@@ -3141,6 +3154,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
+ "protobuf-src",
  "serde",
  "serde_json",
  "timely",
@@ -3301,6 +3315,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
+ "protobuf-src",
  "regex",
  "regex-syntax",
  "serde",
@@ -3378,6 +3393,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-reflect",
+ "protobuf-src",
  "serde_json",
  "timely",
  "tokio",
@@ -3402,6 +3418,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
+ "protobuf-src",
  "rand",
  "rdkafka",
  "serde",
@@ -3634,6 +3651,7 @@ dependencies = [
  "postgres-openssl",
  "prost",
  "prost-build",
+ "protobuf-src",
  "rand",
  "serde_json",
  "tempfile",
@@ -3675,6 +3693,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
+ "protobuf-src",
  "semver",
  "serde",
  "serde_json",
@@ -3778,6 +3797,7 @@ dependencies = [
  "postgres-openssl",
  "proptest",
  "prost",
+ "protobuf-src",
  "serde",
  "tokio-postgres",
  "tonic-build",
@@ -3819,6 +3839,7 @@ dependencies = [
  "proptest",
  "prost",
  "prost-build",
+ "protobuf-src",
  "regex",
  "serde_json",
  "tokio-postgres",
@@ -3852,6 +3873,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
+ "protobuf-src",
  "rand",
  "regex",
  "ryu",
@@ -4103,6 +4125,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
+ "protobuf-src",
  "rand",
  "rdkafka",
  "regex",
@@ -4541,38 +4564,77 @@ dependencies = [
 [[package]]
 name = "opentelemetry"
 version = "0.17.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#b9bf6b3795ec8c6c181db34dbb1ca6d4889101f6"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
 dependencies = [
- "async-trait",
- "crossbeam-channel",
+ "opentelemetry-api",
+ "opentelemetry-sdk",
+]
+
+[[package]]
+name = "opentelemetry-api"
+version = "0.1.0"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
+dependencies = [
+ "fnv",
  "futures-channel",
- "futures-executor",
  "futures-util",
+ "indexmap",
  "js-sys",
- "lazy_static",
- "percent-encoding",
- "pin-project",
- "rand",
+ "once_cell",
+ "pin-project-lite",
  "thiserror",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
 name = "opentelemetry-otlp"
 version = "0.10.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#b9bf6b3795ec8c6c181db34dbb1ca6d4889101f6"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
 dependencies = [
  "async-trait",
  "futures",
  "futures-util",
  "http",
  "opentelemetry",
+ "opentelemetry-proto",
  "prost",
  "thiserror",
  "tokio",
  "tonic",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.1.0"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
+dependencies = [
+ "futures",
+ "futures-util",
+ "opentelemetry",
+ "prost",
+ "protobuf-src",
+ "tonic",
  "tonic-build",
+]
+
+[[package]]
+name = "opentelemetry-sdk"
+version = "0.1.0"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
+dependencies = [
+ "async-trait",
+ "crossbeam-channel",
+ "dashmap",
+ "fnv",
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "once_cell",
+ "opentelemetry-api",
+ "percent-encoding",
+ "rand",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -5081,8 +5143,9 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.10.3"
-source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "399c3c31cdec40583bb68f0b18403400d01ec4289c383aa047560439952c4dd7"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -5090,11 +5153,11 @@ dependencies = [
 
 [[package]]
 name = "prost-build"
-version = "0.10.3"
-source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f835c582e6bd972ba8347313300219fed5bfa52caf175298d860b61ff6069bb"
 dependencies = [
  "bytes",
- "cfg-if",
  "heck",
  "itertools",
  "lazy_static",
@@ -5103,7 +5166,6 @@ dependencies = [
  "petgraph",
  "prost",
  "prost-types",
- "protobuf-src",
  "regex",
  "tempfile",
  "which",
@@ -5111,8 +5173,9 @@ dependencies = [
 
 [[package]]
 name = "prost-derive"
-version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7345d5f0e08c0536d7ac7229952590239e77abf0a0100a1b1d890add6ea96364"
 dependencies = [
  "anyhow",
  "itertools",
@@ -5123,22 +5186,22 @@ dependencies = [
 
 [[package]]
 name = "prost-reflect"
-version = "0.8.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9b5885b76f107151487927cb630854e7fd95ffa394a693116feaa84df1e0274"
+checksum = "d378290cd658b119ce87621931ef448017ef1a0044d7b681159d779e7e07b8f6"
 dependencies = [
  "base64",
  "prost",
  "prost-types",
  "serde",
  "serde-value",
- "time",
 ]
 
 [[package]]
 name = "prost-types"
-version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dfaa718ad76a44b3415e6c4d53b17c8f99160dcb3a99b10470fce8ad43f6e3e"
 dependencies = [
  "bytes",
  "prost",
@@ -6332,9 +6395,9 @@ dependencies = [
 
 [[package]]
 name = "tonic"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be9d60db39854b30b835107500cf0aca0b0d14d6e1c3de124217c23a29c2ddb"
+checksum = "498f271adc46acce75d66f639e4d35b31b2394c295c82496727dafa16d465dd2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -6364,9 +6427,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-build"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9263bf4c9bfaae7317c1c2faf7f18491d2fe476f70c414b73bf5d445b00ffa1"
+checksum = "2fbcd2800e34e743b9ae795867d5f77b535d3a3be69fd731e39145719752df8c"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -6474,9 +6537,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-log"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6923477a48e41c1951f1999ef8bb5a3023eb723ceadafe78ffb65dc366761e3"
+checksum = "78ddad33d2d10b1ed7eb9d1f518a5674713876e97e5bb9b7345a7984fbb4f922"
 dependencies = [
  "lazy_static",
  "log",
@@ -6486,8 +6549,7 @@ dependencies = [
 [[package]]
 name = "tracing-opentelemetry"
 version = "0.17.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbbe89715c1dbbb790059e2565353978564924ee85017b5fff365c872ff6721f"
+source = "git+https://github.com/MaterializeInc/tracing.git?branch=v0.1.x#fa05cdc3a9757027b8cc93ed7989f8ee42d37f8d"
 dependencies = [
  "once_cell",
  "opentelemetry",

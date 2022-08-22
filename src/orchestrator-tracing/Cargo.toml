@@ -16,7 +16,7 @@ mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-repr = { path = "../repr", optional = true }
 tracing-subscriber = { version = "0.3.15", default-features = false }
-opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"] }
+opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"] }
 
 [features]
 tokio-console = ["mz-ore/tokio-console", "mz-repr"]

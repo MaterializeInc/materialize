@@ -56,7 +56,7 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.1", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.6.0" }
@@ -67,7 +67,7 @@ tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.9"
 tokio-util = { version = "0.7.3", features = ["io"] }
-tonic = "0.7.2"
+tonic = "0.8.0"
 tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
 thiserror = { version = "1.0.32" }
@@ -75,7 +75,8 @@ url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [build-dependencies]
-tonic-build = "0.7"
+protobuf-src = "1.0.4"
+tonic-build = "0.8.0"
 
 [dev-dependencies]
 itertools = "0.10.3"

@@ -25,8 +25,8 @@ mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 ordered-float = { version = "3.0.0", features = ["serde"] }
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
-prost-reflect = "0.8.1"
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
+prost-reflect = "0.9.2"
 serde_json = "1.0.82"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tracing = "0.1.36"
@@ -37,4 +37,5 @@ criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", featur
 tokio = { version = "1.19.2", features = ["macros"] }
 
 [build-dependencies]
-prost-build = { version = "0.10.3", features = ["vendored"] }
+prost-build = "0.11.1"
+protobuf-src = "1.0.4"

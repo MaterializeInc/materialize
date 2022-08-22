@@ -22,7 +22,7 @@ mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-storage = { path = "../storage" }
 once_cell = "1.13.1"
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 regex = "1.6.0"
 serde = { version = "1.0.144", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

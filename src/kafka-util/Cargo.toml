@@ -18,7 +18,7 @@ mz-proto = { path = "../proto" }
 num_cpus = "1.13.1"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde = { version = "1.0.144", features = ["derive"] }
@@ -29,4 +29,5 @@ tracing = "0.1.36"
 url = "2.2.2"
 
 [build-dependencies]
-prost-build = { version = "0.10.3", features = ["vendored"] }
+prost-build = "0.11.1"
+protobuf-src = "1.0.4"

@@ -99,12 +99,6 @@ debug = 1
 [patch.crates-io]
 csv = { git = "https://github.com/BurntSushi/rust-csv.git" }
 csv-core = { git = "https://github.com/BurntSushi/rust-csv.git" }
-opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
-opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
-prost = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
-prost-build = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
-prost-derive = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
-prost-types = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
