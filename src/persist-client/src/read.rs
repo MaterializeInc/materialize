@@ -707,16 +707,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use mz_build_info::DUMMY_BUILD_INFO;
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::now::SYSTEM_TIME;
-    use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
-
-    use crate::async_runtime::CpuHeavyRuntime;
-    use crate::r#impl::metrics::Metrics;
-    use crate::{PersistClient, PersistConfig};
-
-    use super::*;
+    use crate::tests::new_test_client;
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatch` semantics.
     #[tokio::test]
@@ -727,22 +718,10 @@ mod tests {
             data.push(((i.to_string(), i.to_string()), i, 1))
         }
 
-        let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
-        let consensus = Arc::new(MemConsensus::default());
-        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-        let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-
-        let (mut write, read) = PersistClient::new(
-            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
-            blob,
-            consensus,
-            metrics,
-            cpu_heavy_runtime,
-        )
-        .await
-        .expect("client construction failed")
-        .expect_open::<String, String, u64, i64>(ShardId::new())
-        .await;
+        let (mut write, read) = new_test_client()
+            .await
+            .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+            .await;
 
         // Seed with some values
         let mut offset = 0;
@@ -760,7 +739,7 @@ mod tests {
         let fetcher = read.clone().await.batch_fetcher().await;
 
         let mut subscribe = read
-            .subscribe(Antichain::from_elem(1))
+            .subscribe(timely::progress::Antichain::from_elem(1))
             .await
             .expect("cannot serve requested as_of");
 
@@ -810,18 +789,17 @@ mod tests {
 
         // Repeat the same process as above, more or less, while fetching + returning batches
         for (mut i, batch) in batches.into_iter().enumerate() {
-            let batch_seqno = batch.leased_seqno.seqno().unwrap();
+            let batch_seqno = batch.leased_seqno.unwrap();
             let last_seqno = this_seqno.replace(batch_seqno);
             assert!(last_seqno.is_none() || this_seqno >= last_seqno);
 
             let (batch, _) = fetcher.fetch_batch(batch).await;
 
             // Emulating drop
-            let b = crate::fetch::SerdeLeasedBatch::from(batch).clone();
-            subscribe.return_leased_batch(b.into());
+            subscribe.return_leased_batch(batch);
 
             // Simulates an exchange
-            subsequent_batches.push(subscribe.next().await);
+            subsequent_batches.push(subscribe.next().await.get_droppable_batch());
 
             subscribe
                 .listen
@@ -858,7 +836,7 @@ mod tests {
 
         // Return any outstanding batches, to prevent a panic!
         for batch in subsequent_batches {
-            subscribe.return_leased_batch(batch);
+            subscribe.return_leased_batch(crate::fetch::LeasedBatch::from(batch));
         }
 
         drop(subscribe);
@@ -936,15 +914,5 @@ mod tests {
             listen.read_until(&3).await,
             (all_ok(&data[1..], 1), Antichain::from_elem(3))
         );
-    }
-
-    #[test]
-    fn client_exchange_data() {
-        // The whole point of LeasedBatch is that it can be exchanged between
-        // timely workers, including over the network. Enforce then that it
-        // implements ExchangeData.
-        fn is_exchange_data<T: ExchangeData>() {}
-        is_exchange_data::<LeasedBatch<u64>>();
-        is_exchange_data::<LeasedBatch<i64>>();
     }
 }

@@ -116,9 +116,8 @@ where
     }
 
     #[cfg(test)]
-    #[track_caller]
-    pub(crate) fn seqno_since(&self) -> SeqNo {
-        self.state.seqno_since_super()
+    pub fn seqno_since(&self) -> SeqNo {
+        self.state.seqno_since()
     }
 
     pub async fn register_reader(
@@ -791,10 +790,11 @@ mod tests {
 
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
+    use crate::fetch::fetch_batch_part;
     use crate::internal::compact::{CompactReq, Compactor};
     use crate::internal::paths::PartialBlobKey;
     use crate::internal::state::ProtoStateRollup;
-    use crate::read::{fetch_batch_part, Listen, ListenEvent};
+    use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistConfig, ShardId};
 

@@ -486,3 +486,13 @@ impl<T: Timestamp + Codec64> From<SerdeLeasedBatch> for LeasedBatch<T> {
             .expect("internal error: invalid ProtoLeasedBatch")
     }
 }
+
+#[test]
+fn client_exchange_data() {
+    // The whole point of LeasedBatch is that it can be exchanged between
+    // timely workers, including over the network. Enforce then that it
+    // implements ExchangeData.
+    fn is_exchange_data<T: timely::ExchangeData>() {}
+    is_exchange_data::<crate::fetch::SerdeLeasedBatch>();
+    is_exchange_data::<crate::fetch::SerdeLeasedBatch>();
+}
