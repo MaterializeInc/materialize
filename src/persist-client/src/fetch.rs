@@ -361,8 +361,8 @@ pub(crate) enum LeasedBatchMetadata<T> {
 /// held:
 ///
 /// `LeasedBatch` may only be dropped if it:
-/// - Is being converted to `SerdeLeasedBatch`.
-/// - Has been returned to its issuer via `Self::return_lease`.
+/// - Does not have a leased `SeqNo (i.e. `self.leased_seqno.is_none()`)
+/// - Is consumed through `self.get_droppable_batch()`
 ///
 /// In any other circumstance, dropping `LeasedBatch` panics.
 #[derive(Debug)]
@@ -443,7 +443,8 @@ where
 
 /// This represents the serde encoding for [`LeasedBatch`]. We expose the struct
 /// itself (unlike other encodable structs) to attempt to provide stricter drop
-/// semantics on `LeasedBatch`.
+/// semantics on `LeasedBatch`, i.e. `SerdeLeasedBatch` is exchangeable
+/// (including over the network), where `LeasedBatch` is not.
 ///
 /// For more details see documentation and comments on:
 /// - [`LeasedBatch`]
