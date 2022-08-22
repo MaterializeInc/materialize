@@ -820,7 +820,7 @@ mod tests {
             let (batch, _) = fetcher.fetch_batch(batch).await;
 
             // Emulating drop
-            let b = SerdeLeasedBatch::from(batch).clone();
+            let b = crate::fetch::SerdeLeasedBatch::from(batch).clone();
             subscribe.return_leased_batch(b.into());
 
             // Simulates an exchange
