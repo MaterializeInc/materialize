@@ -170,3 +170,103 @@ Used Indexes:
   - materialize.public.t_a_idx
 
 EOF
+
+# Test CTEs.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
+(SELECT x + 1 FROM cte UNION ALL SELECT x - 1 FROM cte)
+----
+Explained Query
+  Let
+    Union
+      Get::Arrangement l0
+        project=(#1)
+        map=((#0 + 1))
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Get::Arrangement l0
+        project=(#1)
+        map=((#0 - 1))
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+    Where
+      l0 =
+        Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+          ArrangeBy
+            raw=false
+            arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            Union
+              Get::Arrangement materialize.public.t
+                project=(#0)
+                key=#0
+                raw=false
+                arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+              Negate
+                Get::Collection materialize.public.mv
+                  project=(#1)
+                  raw=true
+
+Source materialize.public.mv
+  Demand (#1)
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
+
+# Test Mfp.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
+SELECT x * 5 FROM cte WHERE x = 5
+----
+Explained Query
+  Mfp
+    project=(#1)
+    filter=((#0 = 5))
+    map=(25)
+    input_key=#0
+    input_val=(5)
+    Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+      ArrangeBy
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        Union
+          Get::Arrangement materialize.public.t
+            project=(#0)
+            key=#0
+            raw=false
+            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          Negate
+            Get::Collection materialize.public.mv
+              project=(#1)
+              raw=true
+
+Source materialize.public.mv
+  Demand (#1)
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
+
+# Test FlatMap.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT generate_series(a, b) from t
+----
+Explained Query
+  FlatMap generate_series(#0, #1, 1)
+    project=(#2)
+    input_key=#0
+    Get::PassArrangements materialize.public.t
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF

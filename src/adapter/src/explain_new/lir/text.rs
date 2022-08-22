@@ -81,28 +81,70 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
 
                 ctx.indent.reset(); // reset the original indent level
             }
-            Let {
-                id: _,
-                value: _,
-                body: _,
-            } => {
-                // todo
+            Let { id, value, body } => {
+                let mut bindings = vec![(id, value.as_ref())];
+                let mut head = body.as_ref();
+
+                // Render Let-blocks nested in the body an outer Let-block in one step
+                // with a flattened list of bindings
+                while let Let { id, value, body } = head {
+                    bindings.push((id, value.as_ref()));
+                    head = body.as_ref();
+                }
+
+                // The body comes first in the text output format in order to
+                // align with the format convention the dataflow is rendered
+                // top to bottom
+                writeln!(f, "{}Let", ctx.indent)?;
+                ctx.indented(|ctx| {
+                    Displayable::from(head).fmt_text(f, ctx)?;
+                    writeln!(f, "{}Where", ctx.indent)?;
+                    ctx.indented(|ctx| {
+                        for (id, value) in bindings.iter().rev() {
+                            writeln!(f, "{}{} =", ctx.indent, *id)?;
+                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                        }
+                        Ok(())
+                    })
+                })?;
             }
             Mfp {
-                input: _,
-                mfp: _,
-                input_key_val: _,
+                input,
+                mfp,
+                input_key_val,
             } => {
-                // todo
+                writeln!(f, "{}Mfp", ctx.indent)?;
+                ctx.indented(|ctx| {
+                    Displayable::from(mfp).fmt_text(f, ctx)?;
+                    if let Some((key, val)) = input_key_val {
+                        {
+                            let key = separated_text(", ", key.iter().map(Displayable::from));
+                            writeln!(f, "{}input_key={}", ctx.indent, key)?;
+                        }
+                        if let Some(val) = val {
+                            writeln!(f, "{}input_val={}", ctx.indent, val)?;
+                        }
+                    }
+                    Displayable::from(input.as_ref()).fmt_text(f, ctx)
+                })?;
             }
             FlatMap {
-                input: _,
-                func: _,
-                exprs: _,
-                mfp: _,
-                input_key: _,
+                input,
+                func,
+                exprs,
+                mfp,
+                input_key,
             } => {
-                // todo
+                let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                writeln!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
+                ctx.indented(|ctx| {
+                    Displayable::from(mfp).fmt_text(f, ctx)?;
+                    if let Some(key) = input_key {
+                        let key = separated_text(", ", key.iter().map(Displayable::from));
+                        writeln!(f, "{}input_key={}", ctx.indent, key)?;
+                    }
+                    Displayable::from(input.as_ref()).fmt_text(f, ctx)
+                })?;
             }
             Join { inputs: _, plan: _ } => {
                 // todo
