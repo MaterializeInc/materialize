@@ -207,12 +207,11 @@ New York,NY,10004
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-# TODO(14221): Better error message!
 ! CREATE SINK output5 FROM input_kafka_dbz_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'output5-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:collection identifier is not present
+contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output5_view FROM input_kafka_dbz_view_mview
   INTO KAFKA CONNECTION kafka_conn TOPIC 'output5b-view-${testdrive.seed}'
@@ -224,12 +223,11 @@ contains:collection identifier is not present
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-# TODO(14221): Better error message!
 ! CREATE SINK output7 FROM input_values_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'output7-view-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:collection identifier is not present
+contains:input_values_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output8 FROM input_values_mview
   INTO KAFKA CONNECTION kafka_conn TOPIC 'output8-view-${testdrive.seed}'
