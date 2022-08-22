@@ -124,9 +124,10 @@ where
 
     /// Provisions a storage host for the storage object with the specified ID.
     /// If the storage host is managed, this will ensure that the backing orchestrator
-    /// allocates resources; if not, it will ensure that the orchestrator will
-    /// release any resources. (For 'remote' storaged instances, the user is required
-    /// to independently make sure that any resources exist.)
+    /// allocates resources, either by creating or updating the existing service.
+    /// (For 'remote' storaged instances, the user is required to independently make
+    /// sure that any resources exist -- if the orchestrator had provisioned a service
+    /// for this host in the past, it will be dropped.)
     ///
     /// At present, the policy for storage host assignment creates a new storage
     /// host for each storage object. This policy is subject to change.
@@ -273,7 +274,7 @@ where
         Ok(storage_service.addresses("controller").into_element())
     }
 
-    /// Stops an orchestrated storage host for the specified ID.
+    /// Drops an orchestrated storage host for the specified ID.
     async fn drop_storage_host(&self, id: GlobalId) -> Result<(), anyhow::Error> {
         self.orchestrator.drop_service(&id.to_string()).await
     }

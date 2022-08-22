@@ -3710,7 +3710,7 @@ pub fn describe_alter_source(
 }
 
 pub fn plan_alter_source(
-    scx: &mut StatementContext,
+    scx: &StatementContext,
     stmt: AlterSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     scx.require_unsafe_mode("ALTER SOURCE")?;
