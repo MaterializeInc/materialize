@@ -39,6 +39,9 @@ pub struct LoadGeneratorSourceReader {
     last: Instant,
     tick: Duration,
     offset: MzOffset,
+    // Load-generator sources support single-threaded ingestion only, so only
+    // one of the `LoadGeneratorSourceReader`s will actually produce data.
+    active_read_worker: bool,
 }
 
 impl SourceReader for LoadGeneratorSourceReader {
@@ -49,9 +52,9 @@ impl SourceReader for LoadGeneratorSourceReader {
 
     fn new(
         _source_name: String,
-        _source_id: GlobalId,
-        _worker_id: usize,
-        _worker_count: usize,
+        source_id: GlobalId,
+        worker_id: usize,
+        worker_count: usize,
         _consumer_activator: SyncActivator,
         connection: SourceConnection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
@@ -65,6 +68,9 @@ impl SourceReader for LoadGeneratorSourceReader {
                 panic!("LoadGenerator is the only legitimate SourceConnection for LoadGeneratorSourceReader")
             }
         };
+
+        let active_read_worker =
+            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
         let offset = start_offsets
             .into_iter()
@@ -90,12 +96,17 @@ impl SourceReader for LoadGeneratorSourceReader {
             last: Instant::now(),
             tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
             offset,
+            active_read_worker,
         })
     }
 
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+        if !self.active_read_worker {
+            return Ok(NextMessage::Finished);
+        }
+
         if self.last.elapsed() < self.tick {
             return Ok(NextMessage::Pending);
         }
@@ -114,6 +125,16 @@ impl SourceReader for LoadGeneratorSourceReader {
                 },
             ))),
             None => Ok(NextMessage::Finished),
+        }
+    }
+
+    fn unconsumed_partitions(&self) -> Vec<PartitionId> {
+        // Only the active reader is consuming from the one "partition". All
+        // others are aware of it but are not doing anything.
+        if !self.active_read_worker {
+            vec![PartitionId::None]
+        } else {
+            vec![]
         }
     }
 }

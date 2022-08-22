@@ -245,6 +245,10 @@ where
             NextMessage::Finished => Ok(NextMessage::Finished),
         }
     }
+
+    fn unconsumed_partitions(&self) -> Vec<PartitionId> {
+        self.0.unconsumed_partitions()
+    }
 }
 
 /// The output of the decoding operator
@@ -446,10 +450,8 @@ pub trait SourceReader {
     /// Partitions that this reader knows about but is not consuming from. We
     /// need these to compute a "global" source upper, when determining
     /// completeness of a timestamp.
-    // WIP: A hack, for now!
-    fn unconsumed_partitions(&self) -> Vec<PartitionId> {
-        vec![]
-    }
+    // WIP: Maybe find a better name?
+    fn unconsumed_partitions(&self) -> Vec<PartitionId>;
 
     /// Returns the next message available from the source.
     ///
@@ -770,18 +772,6 @@ where
         persist_clients,
     } = config;
 
-    // All workers are responsible for reading in Kafka sources. Other sources
-    // support single-threaded ingestion only. Note that in all cases we want all
-    // readers of the same source or same partition to reside on the same worker,
-    // and only load-balance responsibility across distinct sources.
-    let active_read_worker = if matches!(source_connection, SourceConnection::Kafka(_)) {
-        true
-    } else {
-        // TODO: This feels icky, but getting rid of hardcoding this difference between
-        // Kafka and all other sources seems harder.
-        crate::source::responsible_for(&id, scope.index(), scope.peers(), &PartitionId::None)
-    };
-
     let (stream, capability) = source(scope, name.clone(), move |info| {
         let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
         let waker = futures::task::waker(waker_activator);
@@ -844,7 +834,7 @@ where
             // about the current frontier. Otherwise, if there are no new
             // messages after a restart, the reclock operator would be stuck and
             // not advance its downstream frontier.
-            yield (HashMap::new(), Vec::new(), source_upper.clone());
+            yield Some((HashMap::new(), Vec::new(), source_upper.clone()));
 
             info!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
             source_upper.retain(|pid, _offset| {
@@ -917,7 +907,17 @@ where
                             Some(Err(e)) => {
                                 non_definite_errors.push(e);
                             }
-                            None => {},
+                            None => {
+                                // This source reader is done. Yield one final
+                                // update of the source_upper.
+                                let unconsumed_partitions = source_reader.unconsumed_partitions();
+                                yield Some((std::mem::take(&mut untimestamped_messages), unconsumed_partitions, source_upper.clone()));
+
+                                // Then, let the consumer know we're done.
+                                yield None;
+
+                                return;
+                            },
                         }
                     }
                     // It's time to emit a batch of messages
@@ -929,11 +929,17 @@ where
                             info!("source_reader({id}) {worker_id}/{worker_count}: \
                                   emitting new batch. \
                                   untimestamped_messages.len(): {} \
+                                  unconsumed_partitions: {:?} \
                                   source_upper: {:?}",
                                   untimestamped_messages.len(),
+                                  unconsumed_partitions,
                                   source_upper);
-                            yield (std::mem::take(&mut untimestamped_messages), unconsumed_partitions, source_upper.clone());
                         }
+
+                        // Emit empty batches as well. Just to keep downstream
+                        // operators informed about the unconsumed partitions
+                        // and the source upper.
+                        yield Some((std::mem::take(&mut untimestamped_messages), unconsumed_partitions, source_upper.clone()));
                     }
                 }
             }
@@ -954,9 +960,17 @@ where
             // about what this actually is, downstream.
             let mut batch_counter = 0;
 
-            while let Poll::Ready(Some((messages, unconsumed_partitions, source_upper))) =
-                source_reader.as_mut().poll_next(&mut context)
-            {
+            while let Poll::Ready(Some(update)) = source_reader.as_mut().poll_next(&mut context) {
+                let (messages, unconsumed_partitions, source_upper) = if let Some(update) = update {
+                    update
+                } else {
+                    info!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
+                    // We will never produce more data, clear our capabilities to
+                    // communicate this downstream.
+                    cap_set.downgrade(&[]);
+                    return;
+                };
+
                 info!(
                     "create_source_raw({id}) {worker_id}/{worker_count}: message_batch.len(): {:?}",
                     messages.len()
@@ -1034,12 +1048,7 @@ where
         }
     });
 
-    if active_read_worker {
-        ((batch_stream, summary_stream), Some(capability))
-    } else {
-        // Immediately drop the capability if worker is not an active reader for source
-        ((batch_stream, summary_stream), None)
-    }
+    ((batch_stream, summary_stream), Some(capability))
 }
 
 /// Mints new contents for the remap shard based on summaries about the source

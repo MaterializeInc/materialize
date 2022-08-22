@@ -136,6 +136,10 @@ enum InternalMessage {
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
     receiver_stream: Receiver<InternalMessage>,
+
+    // Postgres sources support single-threaded ingestion only, so only one of
+    // the `PostgresSourceReader`s will actually produce data.
+    active_read_worker: bool,
 }
 
 /// An internal struct held by the spawned tokio task
@@ -161,8 +165,8 @@ impl SourceReader for PostgresSourceReader {
     fn new(
         _source_name: String,
         source_id: GlobalId,
-        _worker_id: usize,
-        _worker_count: usize,
+        worker_id: usize,
+        worker_count: usize,
         consumer_activator: SyncActivator,
         connection: SourceConnection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
@@ -176,6 +180,9 @@ impl SourceReader for PostgresSourceReader {
                 panic!("Postgres is the only legitimate SourceConnection for PostgresSourceReader")
             }
         };
+
+        let active_read_worker =
+            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
         // TODO: figure out the best default here; currently this is optimized
         // for the speed to pass pg-cdc-resumption tests on a local machine.
@@ -203,27 +210,31 @@ impl SourceReader for PostgresSourceReader {
             )
             .expect("Postgres connection unexpectedly missing secrets");
 
-        let task_info = PostgresTaskInfo {
-            source_id: source_id.clone(),
-            connection_config,
-            publication: connection.publication,
-            slot: connection.details.slot,
-            /// Our cursor into the WAL
-            lsn: start_offset.offset.into(),
-            metrics: PgSourceMetrics::new(&metrics, source_id),
-            source_tables: HashMap::from_iter(
-                connection.details.tables.iter().map(|t| (t.oid, t.clone())),
-            ),
-            row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
-            sender: dataflow_tx,
-        };
+        if active_read_worker {
+            let task_info = PostgresTaskInfo {
+                source_id: source_id.clone(),
+                connection_config,
+                publication: connection.publication,
+                slot: connection.details.slot,
+                /// Our cursor into the WAL
+                lsn: start_offset.offset.into(),
+                metrics: PgSourceMetrics::new(&metrics, source_id),
+                source_tables: HashMap::from_iter(
+                    connection.details.tables.iter().map(|t| (t.oid, t.clone())),
+                ),
+                row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
+                sender: dataflow_tx,
+            };
 
-        task::spawn(
-            || format!("postgres_source:{}", source_id),
-            postgres_replication_loop(task_info),
-        );
+            task::spawn(
+                || format!("postgres_source:{}", source_id),
+                postgres_replication_loop(task_info),
+            );
+        }
+
         Ok(Self {
             receiver_stream: dataflow_rx,
+            active_read_worker,
         })
     }
 
@@ -231,6 +242,10 @@ impl SourceReader for PostgresSourceReader {
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+        if !self.active_read_worker {
+            return Ok(NextMessage::Finished);
+        }
+
         // TODO(guswynn): consider if `try_recv` is better or the same as `now_or_never`
         let ret = match self.receiver_stream.recv().now_or_never() {
             Some(Some(InternalMessage::Value {
@@ -271,6 +286,16 @@ impl SourceReader for PostgresSourceReader {
         };
 
         ret
+    }
+
+    fn unconsumed_partitions(&self) -> Vec<PartitionId> {
+        // Only the active reader is consuming from the one "partition". All
+        // others are aware of it but are not doing anything.
+        if !self.active_read_worker {
+            vec![PartitionId::None]
+        } else {
+            vec![]
+        }
     }
 }
 

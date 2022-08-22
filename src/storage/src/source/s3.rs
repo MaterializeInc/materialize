@@ -86,6 +86,10 @@ pub struct S3SourceReader {
     dataflow_status: tokio::sync::watch::Sender<DataflowStatus>,
     /// Total number of records that this source has read
     offset: S3Offset,
+
+    // S3 sources support single-threaded ingestion only, so only one of the
+    // `S3SourceReader`s will actually produce data.
+    active_read_worker: bool,
 }
 
 /// Current dataflow status
@@ -789,7 +793,7 @@ impl SourceReader for S3SourceReader {
         source_name: String,
         source_id: GlobalId,
         worker_id: usize,
-        _worker_count: usize,
+        worker_count: usize,
         consumer_activator: SyncActivator,
         connection: SourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
@@ -804,8 +808,11 @@ impl SourceReader for S3SourceReader {
             }
         };
 
+        let active_read_worker =
+            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+
         // a single arbitrary worker is responsible for scanning the bucket
-        let (receiver, shutdowner) = {
+        let (receiver, shutdowner) = if active_read_worker {
             let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(10_000);
             let (keys_tx, keys_rx) = tokio::sync::mpsc::channel(10_000);
             let (shutdowner, shutdown_rx) = tokio::sync::watch::channel(DataflowStatus::Running);
@@ -869,6 +876,11 @@ impl SourceReader for S3SourceReader {
                 }
             }
             (dataflow_rx, shutdowner)
+        } else {
+            let (_dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(1);
+            let (shutdowner, _shutdown_rx) = tokio::sync::watch::channel(DataflowStatus::Stopped);
+
+            (dataflow_rx, shutdowner)
         };
 
         Ok(S3SourceReader {
@@ -877,12 +889,17 @@ impl SourceReader for S3SourceReader {
             receiver_stream: receiver,
             dataflow_status: shutdowner,
             offset: S3Offset(0),
+            active_read_worker,
         })
     }
 
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+        if !self.active_read_worker {
+            return Ok(NextMessage::Finished);
+        }
+
         match self.receiver_stream.recv().now_or_never() {
             Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
@@ -912,6 +929,16 @@ impl SourceReader for S3SourceReader {
             },
             None => Ok(NextMessage::Pending),
             Some(None) => Ok(NextMessage::Finished),
+        }
+    }
+
+    fn unconsumed_partitions(&self) -> Vec<PartitionId> {
+        // Only the active reader is consuming from the one "partition". All
+        // others are aware of it but are not doing anything.
+        if !self.active_read_worker {
+            vec![PartitionId::None]
+        } else {
+            vec![]
         }
     }
 }

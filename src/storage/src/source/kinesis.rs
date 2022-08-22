@@ -63,6 +63,9 @@ pub struct KinesisSourceReader {
     processed_message_count: u64,
     /// Metrics from which per-shard metrics get created.
     base_metrics: KinesisMetrics,
+    // Kinesis sources support single-threaded ingestion only, so only one of
+    // the `KinesisSourceReader`s will actually produce data.
+    active_read_worker: bool,
 }
 
 struct ShardMetrics {
@@ -128,8 +131,8 @@ impl SourceReader for KinesisSourceReader {
     fn new(
         _source_name: String,
         source_id: GlobalId,
-        _worker_id: usize,
-        _worker_count: usize,
+        worker_id: usize,
+        worker_count: usize,
         _consumer_activator: SyncActivator,
         connection: SourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
@@ -142,6 +145,11 @@ impl SourceReader for KinesisSourceReader {
             _ => unreachable!(),
         };
 
+        let active_read_worker =
+            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+
+        // WIP: This creates all the machinery, even for the non-active workers.
+        // We could change that to only spin up Kinesis when needed.
         let state = TokioHandle::current().block_on(create_state(
             &metrics.kinesis,
             kc,
@@ -159,13 +167,19 @@ impl SourceReader for KinesisSourceReader {
                 stream_name,
                 processed_message_count: 0,
                 base_metrics: metrics.kinesis,
+                active_read_worker,
             }),
             Err(e) => Err(anyhow!("{}", e)),
         }
     }
+
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+        if !self.active_read_worker {
+            return Ok(NextMessage::Finished);
+        }
+
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
@@ -270,6 +284,16 @@ impl SourceReader for KinesisSourceReader {
                 Some(message) => NextMessage::Ready(SourceMessageType::Finalized(message)),
                 None => NextMessage::Pending,
             })
+        }
+    }
+
+    fn unconsumed_partitions(&self) -> Vec<PartitionId> {
+        // Only the active reader is consuming from the one "partition". All
+        // others are aware of it but are not doing anything.
+        if !self.active_read_worker {
+            vec![PartitionId::None]
+        } else {
+            vec![]
         }
     }
 }
