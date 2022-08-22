@@ -3171,21 +3171,24 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         if let Some(config) = new_config {
-            let host_config = self.catalog.resolve_storage_host_config(config)?;
-
-            const HOST_CONFIG_OPTIONS: &[CreateSourceOptionName] = &[Size, Remote];
-            let (name, value) = match &host_config {
-                StorageHostConfig::Managed { size, .. } => (Size, size.clone()),
-                StorageHostConfig::Remote { addr } => (Remote, addr.clone()),
-            };
             create_stmt
                 .with_options
-                .retain(|x| !HOST_CONFIG_OPTIONS.contains(&x.name));
-            create_stmt.with_options.push(CreateSourceOption {
-                name,
-                value: Some(WithOptionValue::Value(Value::String(value))),
-            });
+                .retain(|x| ![Size, Remote].contains(&x.name));
 
+            let new_host_option = match &config {
+                plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
+                plan::StorageHostConfig::Undefined => None,
+            };
+
+            if let Some((name, value)) = new_host_option {
+                create_stmt.with_options.push(CreateSourceOption {
+                    name,
+                    value: Some(WithOptionValue::Value(Value::String(value))),
+                });
+            }
+
+            let host_config = self.catalog.resolve_storage_host_config(config)?;
             let create_sql = stmt.to_ast_string_stable();
             let source = Source {
                 create_sql,
