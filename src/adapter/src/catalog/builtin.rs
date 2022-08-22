@@ -1559,7 +1559,8 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     NULL::pg_catalog.text[] as reloptions
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_objects.schema_id
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
+WHERE mz_objects.type in (SELECT type from mz_catalog.mz_relations UNION SELECT 'index')",
 };
 
 pub const PG_DATABASE: BuiltinView = BuiltinView {
