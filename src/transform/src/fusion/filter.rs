@@ -76,7 +76,7 @@ impl Filter {
                 *input = Box::new(inner.take_dangerous());
             }
 
-            mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ());
+            mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ().column_types);
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {

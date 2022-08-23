@@ -14,18 +14,23 @@
 > CREATE VIEWS FROM SOURCE demo
 
 > SHOW VIEWS
-auctions
-bids
+ accounts
+ auctions
+ bids
+ organizations
+ users
 
 > SHOW COLUMNS FROM auctions
 end_time true "timestamp with time zone"
 id true bigint
 item true text
+seller true bigint
 
 > SHOW COLUMNS FROM bids
 amount true integer
 auction_id true bigint
 bid_time true "timestamp with time zone"
+buyer true bigint
 id true bigint
 
 > CREATE VIEW on_time_bids AS
@@ -50,10 +55,10 @@ id true bigint
   GROUP BY auction_id
   ORDER BY auction_id LIMIT 5
 1 97
-2 72
-3 97
-4 69
-5 63
+2 44
+3 67
+4 96
+5 95
 
 > CREATE VIEW highest_bid_per_auction AS
   SELECT grp.auction_id, bid_id, item, amount, end_time FROM
@@ -69,11 +74,11 @@ id true bigint
   SELECT * FROM highest_bid_per_auction WHERE extract(epoch FROM end_time) * 1000 < mz_logical_timestamp()
 
 > SELECT auction_id, bid_id, item, amount FROM winning_bids ORDER BY auction_id LIMIT 5
-1 15 "Best Pizza in Town" 97
-2 20 "City Bar Crawl" 72
-3 31 "Custom Art" 97
-4 42 "Signed Memorabilia" 69
-5 50 "Gift Basket" 63
+1 12 "Best Pizza in Town" 97
+2 20 "Custom Art" 44
+3 31 "City Bar Crawl" 67
+4 44 "Best Pizza in Town" 96
+5 54 "Signed Memorabilia" 95
 
 # Shut down the source so it doesn't keep running until next testdrive reset.
 > DROP SOURCE demo CASCADE

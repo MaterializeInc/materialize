@@ -540,6 +540,8 @@ where
                         self.shard_metrics.set_upper(&self.state.upper());
                         self.shard_metrics.set_encoded_state_size(payload_len);
                         self.shard_metrics.set_batch_count(self.state.batch_count());
+                        self.shard_metrics
+                            .set_update_count(self.state.num_updates());
                         self.shard_metrics.set_seqnos_held(self.state.seqnos_held());
 
                         let (expired_readers, expired_writers) =

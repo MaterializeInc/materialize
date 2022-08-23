@@ -21,6 +21,7 @@ use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
+use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LocalId,
     MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
@@ -1072,110 +1073,106 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 equivalences,
                 implementation,
             } => {
-                if let mz_expr::JoinImplementation::PredicateIndex(id, key, val) = implementation {
-                    let mut in_keys = arrangements
-                        .get(&Id::Global(*id))
-                        .cloned()
-                        .unwrap_or_else(AvailableCollections::new_raw);
+                let input_mapper = JoinInputMapper::new(inputs);
 
-                    let (_, permutation, thinning) =
-                        in_keys.arranged.iter().find(|(k, _, _)| k == key).unwrap();
-
-                    mfp.permute(permutation.clone(), thinning.len() + key.len());
-                    in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
-                    (
-                        Plan::Get {
-                            id: mz_expr::Id::Global(*id),
-                            keys: in_keys,
-                            plan: GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp.take()),
-                        },
-                        AvailableCollections::new_raw(),
-                    )
-                } else {
-                    let input_mapper = JoinInputMapper::new(inputs);
-
-                    // Plan each of the join inputs independently.
-                    // The `plans` get surfaced upwards, and the `input_keys` should
-                    // be used as part of join planning / to validate the existing
-                    // plans / to aid in indexed seeding of update streams.
-                    let mut plans = Vec::new();
-                    let mut input_keys = Vec::new();
-                    let mut input_arities = Vec::new();
-                    for input in inputs.iter() {
-                        let (plan, keys) = Plan::from_mir_inner(input, arrangements, debug_info)?;
-                        input_arities.push(input.arity());
-                        plans.push(plan);
-                        input_keys.push(keys);
-                    }
-
-                    // Extract temporal predicates as joins cannot currently absorb them.
-                    let (plan, missing) = match implementation {
-                        mz_expr::JoinImplementation::Differential((start, _start_arr), order) => {
-                            let source_arrangement = input_keys[*start].arbitrary_arrangement();
-                            let (ljp, missing) = LinearJoinPlan::create_from(
-                                *start,
-                                source_arrangement,
-                                equivalences,
-                                order,
-                                input_mapper,
-                                &mut mfp,
-                                &input_keys,
-                            );
-                            (JoinPlan::Linear(ljp), missing)
-                        }
-                        mz_expr::JoinImplementation::DeltaQuery(orders) => {
-                            let (djp, missing) = DeltaJoinPlan::create_from(
-                                equivalences,
-                                &orders[..],
-                                input_mapper,
-                                &mut mfp,
-                                &input_keys,
-                            );
-                            (JoinPlan::Delta(djp), missing)
-                        }
-                        // Other plans are errors, and should be reported as such.
-                        _ => return Err(()),
-                    };
-                    // The renderer will expect certain arrangements to exist; if any of those are not available, the join planning functions above should have returned them in
-                    // `missing`. We thus need to plan them here so they'll exist.
-                    let is_delta = matches!(plan, JoinPlan::Delta(_));
-                    for (((input_plan, input_keys), missing), arity) in plans
-                        .iter_mut()
-                        .zip(input_keys.iter())
-                        .zip(missing.into_iter())
-                        .zip(input_arities.iter().cloned())
-                    {
-                        if missing != Default::default() {
-                            if is_delta {
-                                // join_implementation.rs produced a sub-optimal plan here;
-                                // we shouldn't plan delta joins at all if not all of the required arrangements
-                                // are available. Print an error message, to increase the chances that
-                                // the user will tell us about this.
-                                soft_panic_or_log!("Arrangements depended on by delta join alarmingly absent: {:?}
-    Dataflow info: {}
-    This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
-                            } else {
-                                // It's fine and expected that linear joins don't have all their arrangements available up front,
-                                // so no need to print an error here.
-                            }
-                            let raw_plan = std::mem::replace(
-                                input_plan,
-                                Plan::Constant {
-                                    rows: Ok(Vec::new()),
-                                },
-                            );
-                            *input_plan = raw_plan.arrange_by(missing, input_keys, arity);
-                        }
-                    }
-                    // Return the plan, and no arrangements.
-                    (
-                        Plan::Join {
-                            inputs: plans,
-                            plan,
-                        },
-                        AvailableCollections::new_raw(),
-                    )
+                // Plan each of the join inputs independently.
+                // The `plans` get surfaced upwards, and the `input_keys` should
+                // be used as part of join planning / to validate the existing
+                // plans / to aid in indexed seeding of update streams.
+                let mut plans = Vec::new();
+                let mut input_keys = Vec::new();
+                let mut input_arities = Vec::new();
+                for input in inputs.iter() {
+                    let (plan, keys) = Plan::from_mir_inner(input, arrangements, debug_info)?;
+                    input_arities.push(input.arity());
+                    plans.push(plan);
+                    input_keys.push(keys);
                 }
+
+                // Extract temporal predicates as joins cannot currently absorb them.
+                let (plan, missing) = match implementation {
+                    IndexedFilter(_id, key, _val) => {
+                        // Start with the constant input. This is important at least until #14059
+                        // is fixed.
+                        let start: usize = 1;
+                        let order = vec![(0usize, key.clone())];
+                        let source_arrangement = input_keys[start].arbitrary_arrangement();
+                        let (ljp, missing) = LinearJoinPlan::create_from(
+                            start,
+                            source_arrangement,
+                            equivalences,
+                            &order,
+                            input_mapper,
+                            &mut mfp,
+                            &input_keys,
+                        );
+                        (JoinPlan::Linear(ljp), missing)
+                    }
+                    Differential((start, _start_arr), order) => {
+                        let source_arrangement = input_keys[*start].arbitrary_arrangement();
+                        let (ljp, missing) = LinearJoinPlan::create_from(
+                            *start,
+                            source_arrangement,
+                            equivalences,
+                            order,
+                            input_mapper,
+                            &mut mfp,
+                            &input_keys,
+                        );
+                        (JoinPlan::Linear(ljp), missing)
+                    }
+                    DeltaQuery(orders) => {
+                        let (djp, missing) = DeltaJoinPlan::create_from(
+                            equivalences,
+                            &orders[..],
+                            input_mapper,
+                            &mut mfp,
+                            &input_keys,
+                        );
+                        (JoinPlan::Delta(djp), missing)
+                    }
+                    // Other plans are errors, and should be reported as such.
+                    _ => return Err(()),
+                };
+                // The renderer will expect certain arrangements to exist; if any of those are not available, the join planning functions above should have returned them in
+                // `missing`. We thus need to plan them here so they'll exist.
+                let is_delta = matches!(plan, JoinPlan::Delta(_));
+                for (((input_plan, input_keys), missing), arity) in plans
+                    .iter_mut()
+                    .zip(input_keys.iter())
+                    .zip(missing.into_iter())
+                    .zip(input_arities.iter().cloned())
+                {
+                    if missing != Default::default() {
+                        if is_delta {
+                            // join_implementation.rs produced a sub-optimal plan here;
+                            // we shouldn't plan delta joins at all if not all of the required arrangements
+                            // are available. Print an error message, to increase the chances that
+                            // the user will tell us about this.
+                            soft_panic_or_log!("Arrangements depended on by delta join alarmingly absent: {:?}
+Dataflow info: {}
+This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
+                        } else {
+                            // It's fine and expected that linear joins don't have all their arrangements available up front,
+                            // so no need to print an error here.
+                        }
+                        let raw_plan = std::mem::replace(
+                            input_plan,
+                            Plan::Constant {
+                                rows: Ok(Vec::new()),
+                            },
+                        );
+                        *input_plan = raw_plan.arrange_by(missing, input_keys, arity);
+                    }
+                }
+                // Return the plan, and no arrangements.
+                (
+                    Plan::Join {
+                        inputs: plans,
+                        plan,
+                    },
+                    AvailableCollections::new_raw(),
+                )
             }
             MirRelationExpr::Reduce {
                 input,

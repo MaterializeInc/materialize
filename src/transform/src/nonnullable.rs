@@ -47,7 +47,7 @@ impl NonNullable {
                     let mut metadata = input.typ();
                     for scalar in scalars.iter_mut() {
                         scalar_nonnullable(scalar, &metadata)?;
-                        let typ = scalar.typ(&metadata);
+                        let typ = scalar.typ(&metadata.column_types);
                         metadata.column_types.push(typ);
                     }
                 }

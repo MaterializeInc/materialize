@@ -808,9 +808,64 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
 impl_display_t!(CreateConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KafkaConfigOptionName {
+    Acks,
+    ClientId,
+    EnableAutoCommit,
+    EnableIdempotence,
+    FetchMessageMaxBytes,
+    IsolationLevel,
+    StatisticsIntervalMs,
+    TopicMetadataRefreshIntervalMs,
+    TransactionTimeoutMs,
+}
+
+impl AstDisplay for KafkaConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            KafkaConfigOptionName::Acks => "ACKS",
+            KafkaConfigOptionName::ClientId => "CLIENT ID",
+            KafkaConfigOptionName::EnableAutoCommit => "ENABLE AUTO COMMIT",
+            KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
+            KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
+            KafkaConfigOptionName::IsolationLevel => "ISOLATION LEVEL",
+            KafkaConfigOptionName::StatisticsIntervalMs => "STATISTICS INTERVAL MS",
+            KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
+                "TOPIC METADATA REFRESH INTERVAL MS"
+            }
+            KafkaConfigOptionName::TransactionTimeoutMs => "TRANSACTION TIMEOUT MS",
+        })
+    }
+}
+impl_display!(KafkaConfigOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct KafkaConfigOption<T: AstInfo> {
+    pub name: KafkaConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaConfigOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(KafkaConfigOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnection<T: AstInfo> {
-    Inline { broker: String },
-    Reference { connection: T::ObjectName },
+    Inline {
+        broker: String,
+    },
+    Reference {
+        connection: T::ObjectName,
+        with_options: Vec<KafkaConfigOption<T>>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
@@ -821,9 +876,17 @@ impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
             }
-            KafkaConnection::Reference { connection, .. } => {
+            KafkaConnection::Reference {
+                connection,
+                with_options,
+            } => {
                 f.write_str("CONNECTION ");
                 f.write_node(connection);
+                if !with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
+                }
             }
         }
     }

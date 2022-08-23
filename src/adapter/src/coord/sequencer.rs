@@ -3157,6 +3157,23 @@ impl<S: Append + 'static> Coordinator<S> {
             coord_bail!("secrets can not be bigger than 512KiB")
         }
 
+        // Enforce that all secrets are valid UTF-8 for now. We expect to lift
+        // this restriction in the future, when we discover a connection type
+        // that requires binary secrets, but for now it is convenient to ensure
+        // here that `SecretsReader::read_string` can never fail due to invalid
+        // UTF-8.
+        //
+        // If you want to remove this line, verify that no caller of
+        // `SecretsReader::read_string` will panic if the secret contains
+        // invalid UTF-8.
+        if std::str::from_utf8(&payload).is_err() {
+            // Intentionally produce a vague error message (rather than
+            // including the invalid bytes, for example), to avoid including
+            // secret material in the error message, which might end up in a log
+            // file somewhere.
+            coord_bail!("secret value must be valid UTF-8");
+        }
+
         return Ok(Vec::from(payload));
     }
 

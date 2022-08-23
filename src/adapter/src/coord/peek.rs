@@ -305,8 +305,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                     }
                 }
                 mz_expr::MirRelationExpr::Join { implementation, .. } => {
-                    if let mz_expr::JoinImplementation::PredicateIndex(id, key, val) =
-                        implementation
+                    if let mz_expr::JoinImplementation::IndexedFilter(id, key, val) = implementation
                     {
                         // We should only get excited if we can track down an index for `id`.
                         // If `keys` is non-empty, that means we think one exists.

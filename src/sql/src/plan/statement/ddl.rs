@@ -87,13 +87,12 @@ use crate::ast::{
     Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
-use crate::kafka_util;
+use crate::kafka_util::{self, KafkaConfigOptionExtracted};
 use crate::names::{
     Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
     ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
-use crate::normalize::ident;
-use crate::normalize::{self, SqlValueOrSecret};
+use crate::normalize::{self, ident, SqlValueOrSecret};
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -372,10 +371,10 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
-            let mut options = kafka_util::extract_config(&mut legacy_with_options)?;
-            let kafka_connection = match &kafka.connection {
+            let (kafka_connection, options) = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
                     scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
+                    let mut options = BTreeMap::new();
                     options.insert(
                         "bootstrap.servers".into(),
                         KafkaAddrs::from_str(broker)
@@ -383,28 +382,28 @@ pub fn plan_create_source(
                             .to_string()
                             .into(),
                     );
-                    KafkaConnection::try_from(&mut options)?
+                    let connection = KafkaConnection::try_from(&mut options)?;
+                    (connection, options)
                 }
-                mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
+                mz_sql_parser::ast::KafkaConnection::Reference {
+                    connection,
+                    with_options,
+                } => {
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     let connection = match item.connection()? {
                         Connection::Kafka(connection) => connection.clone(),
                         _ => sql_bail!("{} is not a kafka connection", item.name()),
                     };
 
-                    // TODO: Once we remove use of `String`-keyed options, we
-                    // can remove this check because permitted values here will
-                    // simply be a disjoint set of what `CONNECTION`s support.
-                    for k in BTreeMap::<String, StringOrSecret>::from(connection.clone()).keys() {
-                        if options.contains_key(k) {
-                            sql_bail!(
-                                "cannot set option {} for SOURCE using CONNECTION {}",
-                                k,
-                                scx.catalog.resolve_full_name(item.name())
-                            );
-                        }
+                    let with_options: KafkaConfigOptionExtracted =
+                        with_options.clone().try_into()?;
+                    let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
+
+                    if !with_options.is_empty() {
+                        scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
                     }
-                    connection
+
+                    (connection, with_options)
                 }
             };
 
@@ -1691,16 +1690,27 @@ pub fn plan_create_views(
                     let data_type = scx.resolve_type(ty)?;
                     projection.push(SelectItem::Expr {
                         expr: Expr::Cast {
-                            expr: Box::new(Expr::Subscript {
-                                expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
-                                positions: vec![SubscriptPosition {
-                                    start: Some(Expr::Value(Value::Number(
-                                        // LIST is one based
-                                        (i + 1).to_string(),
-                                    ))),
-                                    end: None,
-                                    explicit_slice: false,
+                            expr: Box::new(Expr::Case {
+                                operand: None,
+                                conditions: vec![Expr::Op {
+                                    op: Op::bare("="),
+                                    expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
+                                    expr2: Some(Box::new(Expr::Value(Value::Number(
+                                        table_desc.oid.to_string(),
+                                    )))),
                                 }],
+                                results: vec![Expr::Subscript {
+                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
+                                    positions: vec![SubscriptPosition {
+                                        start: Some(Expr::Value(Value::Number(
+                                            // LIST is one based
+                                            (i + 1).to_string(),
+                                        ))),
+                                        end: None,
+                                        explicit_slice: false,
+                                    }],
+                                }],
+                                else_result: Some(Box::new(Expr::null())),
                             }),
                             data_type,
                         },
@@ -1849,29 +1859,24 @@ fn kafka_sink_builder(
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
-    let config_options = kafka_util::extract_config(with_options)?;
-
-    let connection = match connection {
-        mz_sql_parser::ast::KafkaConnection::Reference { connection } => {
+    let (connection, config_options) = match connection {
+        mz_sql_parser::ast::KafkaConnection::Reference {
+            connection,
+            with_options,
+        } => {
             let item = scx.get_item_by_resolved_name(&connection)?;
             // Get Kafka connection
             let connection = match item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a kafka connection", item.name()),
             };
-            // TODO: Once we remove use of `String`-keyed options, we
-            // can remove this check because permitted values here will
-            // simply be a disjoint set of what `CONNECTION`s support.
-            for k in BTreeMap::<String, StringOrSecret>::from(connection.clone()).keys() {
-                if config_options.contains_key(k) {
-                    sql_bail!(
-                        "cannot set option {} for SINK using CONNECTION {}",
-                        k,
-                        scx.catalog.resolve_full_name(item.name())
-                    );
-                }
+
+            let with_options: KafkaConfigOptionExtracted = with_options.try_into()?;
+            let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
+            if !with_options.is_empty() {
+                scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
             }
-            connection
+            (connection, with_options)
         }
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
     };
@@ -1908,7 +1913,7 @@ fn kafka_sink_builder(
         Some(Format::Avro(AvroSchema::Csr {
             csr_connection:
                 CsrConnectionAvro {
-                    connection: CsrConnection::Inline { url },
+                    connection,
                     seed,
                     key_strategy,
                     value_strategy,
@@ -1926,11 +1931,23 @@ fn kafka_sink_builder(
             }
 
             let mut normalized_with_options = normalize::options(&with_options)?;
-            let csr_connection = kafka_util::generate_ccsr_connection(
-                url.parse()
-                    .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
-                &mut normalized_with_options,
-            )?;
+            let csr_connection = match connection {
+                CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                    url.parse()
+                        .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
+                    &mut normalized_with_options,
+                )?,
+                CsrConnection::Reference { connection } => {
+                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    match item.connection()? {
+                        Connection::Csr(connection) => connection.clone(),
+                        _ => {
+                            sql_bail!("{} is not a schema registry connection", item.name())
+                        }
+                    }
+                }
+            };
+
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             let include_transaction = reuse_topic || consistency.is_some();

@@ -165,6 +165,11 @@ pub struct ActiveReplicationState<T> {
     /// This is introduced to produce peek cancelation responses eagerly, without awaiting a replica
     /// responding with the response itself, which allows us to compact away the peek in `self.history`.
     pending_response: VecDeque<ActiveReplicationResponse<T>>,
+    /// Per-replica uppers for introspection collections.
+    ///
+    /// For each collection, both the previously reported, and current updates.
+    introspection_uppers:
+        BTreeMap<ReplicaId, BTreeMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>>,
 }
 
 impl<T> ActiveReplicationState<T>
@@ -277,8 +282,25 @@ where
                         }
                         changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
                         changes.compact();
+                    } else if let Some((frontier, updates)) = self
+                        .introspection_uppers
+                        .get_mut(&replica_id)
+                        .unwrap()
+                        .get_mut(id)
+                    {
+                        updates.update_iter(changes.drain());
+                        changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
+                        frontier.clear();
+                        for (time1, _neg_one) in changes.iter() {
+                            for time2 in updates.frontier().iter() {
+                                frontier.insert(time1.join(time2));
+                            }
+                        }
+                        changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
+                        changes.compact();
                     }
                 }
+                list.retain(|(_, changes)| !changes.unstable_internal_updates().is_empty());
                 if !list.is_empty() {
                     Some(ActiveReplicationResponse::ComputeResponse(
                         ComputeResponse::FrontierUppers(list),
@@ -364,6 +386,7 @@ impl<T> ActiveReplication<T> {
                 uppers: Default::default(),
                 history: Default::default(),
                 pending_response: Default::default(),
+                introspection_uppers: Default::default(),
             },
         }
     }
@@ -434,6 +457,7 @@ where
         id: ReplicaId,
         addrs: Vec<String>,
         persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+        introspection_uppers: Option<BTreeMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>>,
     ) {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -454,6 +478,25 @@ where
         // Take this opportunity to clean up the history we should present.
         self.state.history.retain_peeks(&self.state.peeks);
         self.state.history.reduce();
+
+        // Introduce new tracked uppers for each replica.
+        self.state
+            .introspection_uppers
+            .insert(id, Default::default());
+        for (gid, _) in persisted_logs.values() {
+            let mut frontier = Antichain::from_elem(T::minimum());
+            if let Some(i_uppers) = &introspection_uppers {
+                if let Some((f, _)) = i_uppers.get(gid) {
+                    frontier.clone_from(f);
+                }
+            }
+            let updates = MutableAntichain::new_bottom(T::minimum());
+            self.state
+                .introspection_uppers
+                .get_mut(&id)
+                .unwrap()
+                .insert(*gid, (frontier, updates));
+        }
 
         let replica_state = ReplicaState {
             command_tx,
@@ -491,13 +534,15 @@ where
         for (_frontier, frontiers) in self.state.uppers.iter_mut() {
             frontiers.1.remove(&id);
         }
+        self.state.introspection_uppers.remove(&id);
     }
 
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let addrs = self.replicas[&id].addrs.clone();
         let persisted_logs = self.replicas[&id].persisted_logs.clone();
+        let introspection_uppers = self.state.introspection_uppers.remove(&id);
         self.remove_replica(id);
-        self.add_replica(id, addrs, persisted_logs);
+        self.add_replica(id, addrs, persisted_logs, introspection_uppers);
     }
 
     // We avoid implementing `GenericClient` here, because the protocol between
