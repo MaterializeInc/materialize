@@ -78,6 +78,9 @@ where
     /// imported traces, both because it improves performance, and because
     /// potentially incorrect results are visible in sinks.
     pub as_of_frontier: Antichain<T>,
+    /// Frontier after which updates should not be emitted.
+    /// Used to limit the amount of work done when appropriate.
+    pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
 }
@@ -100,6 +103,7 @@ where
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             as_of_frontier,
+            until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
         }
     }

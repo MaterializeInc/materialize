@@ -207,6 +207,7 @@ where
                             index_exports: dataflow.index_exports.clone(),
                             sink_exports: dataflow.sink_exports.clone(),
                             as_of: dataflow.as_of.clone(),
+                            until: dataflow.until.clone(),
                             debug_name: dataflow.debug_name.clone(),
                             id: dataflow.id,
                         });

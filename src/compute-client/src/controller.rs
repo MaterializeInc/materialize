@@ -459,6 +459,7 @@ where
                 objects_to_build: d.objects_to_build,
                 index_exports: d.index_exports,
                 as_of: d.as_of,
+                until: d.until,
                 debug_name: d.debug_name,
                 id: d.id,
             });
