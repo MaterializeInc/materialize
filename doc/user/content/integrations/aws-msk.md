@@ -125,8 +125,11 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     Otherwise, you can install Kafka on your client machine from the previous step and create a topic. You can find more information about how to do that [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-topic.html).
 
+5. #### Create ACLs
+    As `allow.everyone.if.no.acl.found` is set to `false`, you must create ACLs for the cluster and topics configured in the previous step to set appropriate access permissions. For more information, see the [Amazon MSK](https://docs.aws.amazon.com/msk/latest/developerguide/msk-acls.html) documentation.
 
-5. #### Create a source in Materialize
+
+6. #### Create a source in Materialize
     a. Open the [Amazon MSK console](https://console.aws.amazon.com/msk/) and select your cluster
 
     b. Click on **View client information**
