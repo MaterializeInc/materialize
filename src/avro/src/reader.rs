@@ -858,7 +858,7 @@ impl<'a> SchemaResolver<'a> {
                         &writer.root.lookup(w_index).name,
                         &reader.root.lookup(r_index).name,
                     );
-                    return Err(SchemaResolutionError::new(format!("Attempted to resolve writer schema node named {} against reader schema node named {}", w_name, r_name)).into());
+                    return Err(SchemaResolutionError::new(format!("Attempted to resolve writer schema node named {:?} against reader schema node named {:?}", w_name, r_name)).into());
                 }
                 // Check if we have already resolved the name previously, and if so, return a reference to
                 // it (in the new schema's namespace).
