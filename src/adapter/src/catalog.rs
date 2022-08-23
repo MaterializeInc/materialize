@@ -2319,6 +2319,7 @@ impl<S: Append> Catalog<S> {
 
         let mut object_queue: VecDeque<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
         let mut visited_set: HashSet<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
+        let mut create_ops = Vec::new();
         let mut ancestor_ids = HashMap::new();
 
         let id_fingerprint_map: HashMap<GlobalId, u64> = migrated_ids.into_iter().collect();
@@ -2399,9 +2400,44 @@ impl<S: Append> Catalog<S> {
             }
             migration_metadata.all_drop_ops.push(id);
 
-            // Push create commands.
+            // Defer adding the create ops until we know more about the dependency graph.
+            create_ops.push((entry, new_id));
+
+            ancestor_ids.insert(id, new_id);
+
+            // Add children to queue.
+            for dependant in &entry.used_by {
+                if !visited_set.contains(&dependant) {
+                    object_queue.push_back(*dependant);
+                    visited_set.insert(*dependant);
+                } else {
+                    // If dependant is a child of the current node, then we need to make sure that
+                    // it appears later in the list of create ops.
+                    if let Some(idx) = create_ops.iter().position(|(_, id)| id == dependant) {
+                        let create_op = create_ops.remove(idx);
+                        create_ops.push(create_op);
+                    }
+                }
+            }
+        }
+
+        // The dependency graph of builtin objects may have changed in between restarts, so we need
+        // to reorder the builtin objects for their new topological sorting.
+        let mut create_ops_builtin = Vec::new();
+        for builtin in BUILTINS::iter() {
+            if let Some(idx) = create_ops
+                .iter()
+                .position(|(entry, _)| entry.name.item == builtin.name())
+            {
+                let create_op = create_ops.remove(idx);
+                create_ops_builtin.push(create_op);
+            }
+        }
+        let create_ops = create_ops_builtin.into_iter().chain(create_ops.into_iter());
+
+        for (entry, new_id) in create_ops {
             let name = entry.name.clone();
-            if id.is_user() {
+            if new_id.is_user() {
                 let schema_id = name.qualifiers.schema_spec.clone().into();
                 migration_metadata
                     .user_create_ops
@@ -2411,16 +2447,6 @@ impl<S: Append> Catalog<S> {
             migration_metadata
                 .all_create_ops
                 .push((new_id, entry.oid, name, item_rebuilder));
-
-            ancestor_ids.insert(id, new_id);
-
-            // Add children to queue.
-            for dependant in &entry.used_by {
-                if !visited_set.contains(&dependant) {
-                    object_queue.push_back(*dependant);
-                    visited_set.insert(*dependant);
-                }
-            }
         }
 
         // Reverse drop commands.

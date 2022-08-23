@@ -2117,6 +2117,7 @@ JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_d
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: SYSTEM_USER };
 
+/// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
         Builtin::Type(&TYPE_ANY),
