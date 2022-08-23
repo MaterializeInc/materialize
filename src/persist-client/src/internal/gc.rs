@@ -7,14 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_persist::location::{Blob, Consensus, SeqNo, VersionedData};
-use prost::Message;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::task::JoinHandle;
-use tracing::{debug, debug_span, Instrument, Span};
+
+use mz_persist::location::{Blob, Consensus, SeqNo, VersionedData};
+use prost::Message;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use crate::internal::machine::retry_external;
 use crate::internal::paths::PartialBlobKey;
@@ -30,9 +32,7 @@ pub struct GcReq {
 
 #[derive(Debug, Clone)]
 pub struct GarbageCollector {
-    consensus: Arc<dyn Consensus + Send + Sync>,
-    blob: Arc<dyn Blob + Send + Sync>,
-    metrics: Arc<Metrics>,
+    sender: UnboundedSender<(GcReq, oneshot::Sender<()>)>,
 }
 
 /// Cleanup for no longer necessary blobs and consensus versions.
@@ -85,38 +85,99 @@ pub struct GarbageCollector {
 ///   fine; it'll be caught and fixed by the same mechanism.)
 impl GarbageCollector {
     pub fn new(
+        shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
     ) -> Self {
+        let (gc_req_sender, mut gc_req_recv) =
+            mpsc::unbounded_channel::<(GcReq, oneshot::Sender<()>)>();
+
+        let consensus = Arc::clone(&consensus);
+        let blob = Arc::clone(&blob);
+        let metrics = Arc::clone(&metrics);
+
+        // spin off a single task responsible for executing GC requests.
+        // work is enqueued into the task through a channel
+        let _worker_handle = mz_ore::task::spawn(|| "PersistGcWorker", async move {
+            while let Some((req, completer)) = gc_req_recv.recv().await {
+                let mut gc_completed_senders = vec![completer];
+
+                let mut oldest_seqno_since = req.old_seqno_since;
+                let mut newest_seqno_since = req.new_seqno_since;
+                debug_assert_eq!(shard_id, req.shard_id);
+
+                // check if any further gc requests have built up. we'll merge their requests
+                // together and run a single GC pass to satisfy all of them
+                while let Ok((req, completer)) = gc_req_recv.try_recv() {
+                    gc_completed_senders.push(completer);
+                    oldest_seqno_since = std::cmp::min(req.old_seqno_since, oldest_seqno_since);
+                    newest_seqno_since = std::cmp::max(req.new_seqno_since, newest_seqno_since);
+                    debug_assert_eq!(shard_id, req.shard_id);
+                }
+
+                let merged_requests = gc_completed_senders.len() - 1;
+                if merged_requests > 0 {
+                    debug!(
+                        "Merged {} gc requests together for shard {}",
+                        merged_requests, shard_id
+                    );
+                }
+
+                let consolidated_gc_req = GcReq {
+                    shard_id,
+                    old_seqno_since: oldest_seqno_since,
+                    new_seqno_since: newest_seqno_since,
+                };
+
+                let consensus = Arc::clone(&consensus);
+                let blob = Arc::clone(&blob);
+                let metrics = Arc::clone(&metrics);
+
+                let gc_span = debug_span!(parent: None, "gc_and_truncate", shard_id=%req.shard_id);
+                gc_span.follows_from(&Span::current());
+
+                let start = Instant::now();
+                metrics.gc.started.inc();
+                Self::gc_and_truncate(consensus, blob, &metrics, consolidated_gc_req)
+                    .instrument(gc_span)
+                    .await;
+                metrics.gc.finished.inc();
+                metrics.gc.seconds.inc_by(start.elapsed().as_secs_f64());
+
+                // inform all callers who enqueued GC reqs that their work is complete
+                for sender in gc_completed_senders {
+                    // we can safely ignore errors here, it's possible the caller
+                    // wasn't interested in waiting and dropped their receiver
+                    let _ = sender.send(());
+                }
+            }
+        });
+
         GarbageCollector {
-            consensus,
-            blob,
-            metrics,
+            sender: gc_req_sender,
         }
     }
 
-    pub fn gc_and_truncate_background(&self, req: GcReq) -> JoinHandle<()> {
-        // Spawn GC in a background task, so the state change that triggered it
-        // isn't blocked on it. Note that unlike compaction, GC maintenance
-        // intentionally has no "skipped" heuristic.
-        let gc_span = debug_span!(parent: None, "gc_and_truncate", shard_id=%req.shard_id);
-        gc_span.follows_from(&Span::current());
+    /// Enqueues a [GcReq] to be consumed by the GC background task when available.
+    ///
+    /// Returns a future that indicates when GC has cleaned up to at least [GcReq::new_seqno_since]
+    pub fn gc_and_truncate_background(&self, req: GcReq) -> Option<oneshot::Receiver<()>> {
+        let (gc_completed_sender, gc_completed_receiver) = oneshot::channel();
+        let new_gc_sender = self.sender.clone();
+        let send = new_gc_sender.send((req, gc_completed_sender));
 
-        let consensus = Arc::clone(&self.consensus);
-        let blob = Arc::clone(&self.blob);
-        let metrics = Arc::clone(&self.metrics);
-        mz_ore::task::spawn(
-            || "persist::gc_and_truncate",
-            async move {
-                let start = Instant::now();
-                metrics.gc.started.inc();
-                Self::gc_and_truncate(consensus, blob, &metrics, req).await;
-                metrics.gc.finished.inc();
-                metrics.gc.seconds.inc_by(start.elapsed().as_secs_f64());
-            }
-            .instrument(gc_span),
-        )
+        if let Err(e) = send {
+            // In the steady state we expect this to always succeed, but during
+            // shutdown it is possible the destination task has already spun down
+            warn!(
+                "gc_and_truncate_background failed to send gc request: {}",
+                e
+            );
+            return None;
+        }
+
+        Some(gc_completed_receiver)
     }
 
     pub async fn gc_and_truncate(

@@ -353,6 +353,7 @@ impl PersistClient {
         D: Semigroup + Codec64 + Send + Sync,
     {
         let gc = GarbageCollector::new(
+            shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
@@ -398,6 +399,7 @@ impl PersistClient {
         D: Semigroup + Codec64 + Send + Sync,
     {
         let gc = GarbageCollector::new(
+            shard_id,
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
@@ -1353,7 +1355,7 @@ mod tests {
             .heartbeat_reader(&read.reader_id, now.load(Ordering::SeqCst))
             .await;
         maintenance
-            .perform_awaitable(&read.machine.clone(), &read.gc.clone())
+            .perform(&read.machine.clone(), &read.gc.clone())
             .await;
         let expired_writer_heartbeat = AssertUnwindSafe(write.maybe_heartbeat_writer())
             .catch_unwind()

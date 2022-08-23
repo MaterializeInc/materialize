@@ -483,7 +483,7 @@ where
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
         self.last_heartbeat = Instant::now();
-        maintenance.perform(&self.machine, &self.gc);
+        maintenance.start_performing(&self.machine, &self.gc);
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -722,7 +722,7 @@ where
                 .heartbeat_reader(&self.reader_id, (self.cfg.now)())
                 .await;
             self.last_heartbeat = Instant::now();
-            maintenance.perform(&self.machine, &self.gc);
+            maintenance.start_performing(&self.machine, &self.gc);
         }
     }
 
