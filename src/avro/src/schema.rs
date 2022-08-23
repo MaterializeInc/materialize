@@ -2861,7 +2861,6 @@ mod tests {
 
     #[test]
     fn test_schema_fingerprint() {
-        use md5::Md5;
         use sha2::Sha256;
 
         let raw_schema = r#"
@@ -2877,13 +2876,8 @@ mod tests {
 
         let schema = Schema::from_str(raw_schema).unwrap();
         assert_eq!(
-            "5ecb2d1f0eaa647d409e6adbd5d70cd274d85802aa9167f5fe3b73ba70b32c76",
+            "c4d97949770866dec733ae7afa3046757e901d0cfea32eb92a8faeadcc4de153",
             format!("{}", schema.fingerprint::<Sha256>())
-        );
-
-        assert_eq!(
-            "a2c99a3f40ea2eea32593d63b483e962",
-            format!("{}", schema.fingerprint::<Md5>())
         );
     }
 }
