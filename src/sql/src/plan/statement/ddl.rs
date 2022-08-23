@@ -1691,16 +1691,27 @@ pub fn plan_create_views(
                     let data_type = scx.resolve_type(ty)?;
                     projection.push(SelectItem::Expr {
                         expr: Expr::Cast {
-                            expr: Box::new(Expr::Subscript {
-                                expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
-                                positions: vec![SubscriptPosition {
-                                    start: Some(Expr::Value(Value::Number(
-                                        // LIST is one based
-                                        (i + 1).to_string(),
-                                    ))),
-                                    end: None,
-                                    explicit_slice: false,
+                            expr: Box::new(Expr::Case {
+                                operand: None,
+                                conditions: vec![Expr::Op {
+                                    op: Op::bare("="),
+                                    expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
+                                    expr2: Some(Box::new(Expr::Value(Value::Number(
+                                        table_desc.oid.to_string(),
+                                    )))),
                                 }],
+                                results: vec![Expr::Subscript {
+                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
+                                    positions: vec![SubscriptPosition {
+                                        start: Some(Expr::Value(Value::Number(
+                                            // LIST is one based
+                                            (i + 1).to_string(),
+                                        ))),
+                                        end: None,
+                                        explicit_slice: false,
+                                    }],
+                                }],
+                                else_result: Some(Box::new(Expr::null())),
                             }),
                             data_type,
                         },
