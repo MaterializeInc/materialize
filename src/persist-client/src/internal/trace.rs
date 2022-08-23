@@ -203,7 +203,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
         ret
     }
 
-    #[cfg(test)]
     pub fn num_updates(&self) -> usize {
         let mut ret = 0;
         self.map_batches(|b| ret += b.len);

@@ -355,6 +355,10 @@ where
         self.collections.trace.num_hollow_batches()
     }
 
+    pub fn num_updates(&self) -> usize {
+        self.collections.trace.num_updates()
+    }
+
     fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
         for cap in self.collections.readers.values() {
