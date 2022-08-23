@@ -89,7 +89,7 @@ impl CanonicalizeMfp {
                 let filter_list = MirRelationExpr::Constant {
                     rows: Ok(vec![(val.clone(), 1)]),
                     typ: mz_repr::RelationType {
-                        column_types: key.iter().map(|e| e.typ(&inp_typ)).collect(),
+                        column_types: key.iter().map(|e| e.typ(&inp_typ.column_types)).collect(),
                         keys: vec![],
                     },
                 };

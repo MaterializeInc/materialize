@@ -1954,7 +1954,7 @@ impl JoinImplementation {
         match self {
             Self::Differential(..) => Some("differential"),
             Self::DeltaQuery(..) => Some("delta"),
-            Self::PredicateIndex(..) => Some("predicate_index"),
+            Self::IndexedFilter(..) => Some("indexed_filter"),
             Self::Unimplemented => None,
         }
     }
