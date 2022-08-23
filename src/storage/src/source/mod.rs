@@ -22,7 +22,7 @@
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
 
-use std::borrow::Borrow;
+use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
@@ -714,7 +714,7 @@ pub fn create_raw_source<G, S: 'static>(
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
-    Option<SourceToken>,
+    Option<Rc<dyn Any>>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -723,13 +723,15 @@ where
     let ((batches, source_upper_summaries), source_reader_token) =
         source_reader_operator::<G, S>(config.clone(), source_connection, connection_context);
 
-    let (remap_stream, _remap_token) =
+    let (remap_stream, remap_token) =
         remap_operator::<G, S>(config.clone(), source_upper_summaries);
 
     let ((reclocked_stream, err_stream), _reclock_token) =
         reclock_operator::<G, S>(config, batches, remap_stream);
 
-    ((reclocked_stream, err_stream), source_reader_token)
+    let token = Rc::new((source_reader_token, remap_token));
+
+    ((reclocked_stream, err_stream), Some(token))
 }
 
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
@@ -1047,7 +1049,7 @@ pub fn remap_operator<G, S: 'static>(
     source_upper_summaries: timely::dataflow::Stream<G, SourceUpperSummary>,
 ) -> (
     timely::dataflow::Stream<G, Vec<(PartitionId, Vec<(u64, MzOffset)>)>>,
-    Option<SourceToken>,
+    Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1087,9 +1089,12 @@ where
 
     let activator = scope.activator_for(&remap_op.operator_info().address[..]);
 
+    let token = Rc::new(());
+    let token_weak = Rc::downgrade(&token);
+
     remap_op.build_async(
         scope.clone(),
-        move |mut capabilities, _frontiers, scheduler| async move {
+        move |mut capabilities, frontiers, scheduler| async move {
             let mut buffer = Vec::new();
             let mut cap_set = if active_worker {
                 CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
@@ -1144,6 +1149,14 @@ where
             }
 
             while scheduler.notified().await {
+                if token_weak.upgrade().is_none() {
+                    // Make sure we don't accidentally mint new updates when this
+                    // source has been dropped. This way, we also make sure to not
+                    // react to spurious frontier advancements to `[]` that happen
+                    // when the input source operator is shutting down.
+                    return;
+                }
+
                 if !active_worker {
                     // We simply loop because we cannot return here. Otherwise
                     // the one active worker would not get frontier upgrades
@@ -1192,11 +1205,20 @@ where
                 );
 
                 cap_set.downgrade(new_ts_upper);
+
+                // Make sure we do this after writing any timestamp bindings to
+                // the remap shard that might be needed for the reported source
+                // uppers.
+                let input_frontier = &frontiers.borrow()[0];
+                if input_frontier.is_empty() {
+                    cap_set.downgrade(&[]);
+                    return;
+                }
             }
         },
     );
 
-    (remap_stream, None)
+    (remap_stream, token)
 }
 
 /// Receives un-timestamped batches from the source reader and updates to the
@@ -1294,7 +1316,7 @@ where
                 cap_set.insert(cap.retain());
             });
 
-            let remap_frontier = &frontiers.borrow()[1];
+            let remap_frontier = &frontiers[1];
             info!(
                 "reclock({id}) {worker_id}/{worker_count}: remap frontier: {:?}",
                 remap_frontier.frontier()
@@ -1340,7 +1362,7 @@ where
                     untimestamped_batches.remove(0);
                 } else {
                     info!(
-                        "reclock({id}) {worker_id}/{worker_count}: 
+                        "reclock({id}) {worker_id}/{worker_count}: \
                         cannot reclock batch with source frontier {:?} \
                         reclock.source_frontier: {:?}",
                         untimestamped_batch.source_upper, timestamper.source_upper
