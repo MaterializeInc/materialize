@@ -31,9 +31,9 @@ use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::retry_external;
-use crate::r#impl::metrics::{BatchWriteMetrics, Metrics};
-use crate::r#impl::paths::{PartId, PartialBlobKey};
+use crate::internal::machine::retry_external;
+use crate::internal::metrics::{BatchWriteMetrics, Metrics};
+use crate::internal::paths::{PartId, PartialBlobKey};
 use crate::{PersistConfig, ShardId, WriterId};
 
 /// A handle to a batch of updates that has been written to blob storage but
@@ -147,8 +147,8 @@ where
     }
 
     #[cfg(test)]
-    pub fn into_hollow_batch(mut self) -> crate::r#impl::state::HollowBatch<T> {
-        let ret = crate::r#impl::state::HollowBatch {
+    pub fn into_hollow_batch(mut self) -> crate::internal::state::HollowBatch<T> {
+        let ret = crate::internal::state::HollowBatch {
             desc: self.desc.clone(),
             keys: self.blob_keys.clone(),
             len: self.num_updates,
@@ -156,6 +156,16 @@ where
         self.mark_consumed();
         ret
     }
+}
+
+/// Indicates what work was done in a call to [BatchBuilder::add]
+#[derive(Debug)]
+pub enum Added {
+    /// A record was inserted into a pending batch part
+    Record,
+    /// A record was inserted into a pending batch part
+    /// and the part was sent to blob storage
+    RecordAndParts,
 }
 
 /// A builder for [Batches](Batch) that allows adding updates piece by piece and
@@ -279,7 +289,13 @@ where
     ///
     /// The update timestamp must be greater or equal to `lower` that was given
     /// when creating this [BatchBuilder].
-    pub async fn add(&mut self, key: &K, val: &V, ts: &T, diff: &D) -> Result<(), InvalidUsage<T>> {
+    pub async fn add(
+        &mut self,
+        key: &K,
+        val: &V,
+        ts: &T,
+        diff: &D,
+    ) -> Result<Added, InvalidUsage<T>> {
         if !self.lower.less_equal(ts) {
             return Err(InvalidUsage::UpdateNotBeyondLower {
                 ts: ts.clone(),
@@ -315,6 +331,7 @@ where
 
         // If we've filled up a chunk of ColumnarRecords, flush it out now to
         // blob storage to keep our memory usage capped.
+        let mut part_written = false;
         for part in self.records.take_filled() {
             // TODO: This upper would ideally be `[self.max_ts+1]` but
             // there's nothing that lets us increment a timestamp. An empty
@@ -325,9 +342,14 @@ where
             let upper = Antichain::new();
             let since = Antichain::from_elem(T::minimum());
             self.parts.write(part, upper, since).await;
+            part_written = true;
         }
 
-        Ok(())
+        if part_written {
+            Ok(Added::RecordAndParts)
+        } else {
+            Ok(Added::Record)
+        }
     }
 }
 
@@ -510,7 +532,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 #[cfg(test)]
 mod tests {
     use crate::cache::PersistClientCache;
-    use crate::r#impl::paths::BlobKey;
+    use crate::internal::paths::BlobKey;
     use crate::tests::all_ok;
     use crate::PersistLocation;
 

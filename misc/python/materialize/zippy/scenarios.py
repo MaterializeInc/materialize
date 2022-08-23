@@ -48,6 +48,7 @@ class UserTables(Scenario):
             KillComputed: 15,
             CreateTable: 10,
             CreateView: 10,
+            CreateSink: 10,
             ValidateTable: 20,
             ValidateView: 20,
             DML: 30,

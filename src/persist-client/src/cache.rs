@@ -19,8 +19,8 @@ use mz_persist::location::{Blob, Consensus, ExternalError};
 use tracing::instrument;
 
 use crate::async_runtime::CpuHeavyRuntime;
-use crate::r#impl::machine::retry_external;
-use crate::r#impl::metrics::{Metrics, MetricsBlob, MetricsConsensus};
+use crate::internal::machine::retry_external;
+use crate::internal::metrics::{Metrics, MetricsBlob, MetricsConsensus};
 use crate::{PersistClient, PersistConfig, PersistLocation};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.

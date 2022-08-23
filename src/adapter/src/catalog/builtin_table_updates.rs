@@ -316,6 +316,7 @@ impl CatalogState {
                         "confluent-schema-registry"
                     }
                     mz_storage::types::connections::Connection::Postgres { .. } => "postgres",
+                    mz_storage::types::connections::Connection::Aws(..) => "aws",
                     mz_storage::types::connections::Connection::Ssh { .. } => "ssh",
                 }),
             ]),
@@ -505,10 +506,11 @@ impl CatalogState {
             let on_entry = self.get_entry(&index.on);
             let nullable = key
                 .typ(
-                    on_entry
+                    &on_entry
                         .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
                         .unwrap()
-                        .typ(),
+                        .typ()
+                        .column_types,
                 )
                 .nullable;
             let seq_in_index = i64::try_from(i + 1).expect("invalid index sequence number");

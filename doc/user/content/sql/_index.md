@@ -17,7 +17,6 @@ This section is a reference that details the SQL commands and features we suppor
 - [Identifiers](./identifiers)
 - [Namespaces](./namespaces)
 - [System catalog](./system-catalog)
-- [Timelines](./timelines)
 
 ## Statements
 

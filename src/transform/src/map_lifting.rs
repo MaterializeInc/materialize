@@ -531,9 +531,7 @@ impl LiteralLifting {
                             eval,
                             // This type information should be available in the `a.expr` literal,
                             // but extracting it with pattern matching seems awkward.
-                            aggr.func
-                                .output_type(aggr.expr.typ(&mz_repr::RelationType::empty()))
-                                .scalar_type,
+                            aggr.func.output_type(aggr.expr.typ(&[])).scalar_type,
                         )
                     };
 

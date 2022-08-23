@@ -77,11 +77,11 @@ This is a beta notice.
 
 ### `cta` shortcode
 
-{{< cta href="/install" >}}
+{{< cta href="/get-started" >}}
 This is a CTA button
 {{</ cta >}}
 
-{{< cta href="/install" full_width="true" >}}
+{{< cta href="/get-started" full_width="true" >}}
 This is a "full_width" CTA button
 {{</ cta >}}
 

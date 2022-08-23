@@ -53,14 +53,19 @@ contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 $ s3-create-bucket bucket=test
 $ s3-put-object bucket=test key=static.csv
 
+> CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
+
+> CREATE CONNECTION s3_conn FOR AWS
+  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+  TOKEN = '${testdrive.aws-token}';
+
 ! CREATE SOURCE headers_src
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
   INCLUDE HEADERS

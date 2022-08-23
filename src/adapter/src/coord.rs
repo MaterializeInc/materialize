@@ -178,6 +178,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     LinearizeReads(Vec<PendingTxn>),
     StorageUsageFetch,
     StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
+    Consolidate(Vec<mz_stash::Id>),
 }
 
 #[derive(Derivative)]
@@ -291,6 +292,9 @@ pub struct Coordinator<S> {
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingTxn>,
+
+    /// Channel for catalog stash consolidations.
+    consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -451,9 +455,16 @@ impl<S: Append + 'static> Coordinator<S> {
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         let mut policies_to_set: CollectionIdBundle = Default::default();
 
-        let source_status_collection_id = self
-            .catalog
-            .resolve_builtin_storage_collection(&crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+        // This is disabled for the moment because it has unusual upper
+        // advancement behavior.
+        // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+        let status_collection_id = if false {
+            Some(self.catalog.resolve_builtin_storage_collection(
+                &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+            ))
+        } else {
+            None
+        };
 
         for entry in &entries {
             match entry.item() {
@@ -485,7 +496,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 ingestion: Some(ingestion),
                                 since: None,
-                                status_collection_id: Some(source_status_collection_id),
+                                status_collection_id,
                                 host_config: Some(source.host_config.clone()),
                             },
                         )])
@@ -722,6 +733,7 @@ impl<S: Append + 'static> Coordinator<S> {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
+        mut consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     ) {
         // For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
         // table's timestamps, but there are cases where timestamps are not bumped but
@@ -780,6 +792,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
                 _ = storage_usage_update_interval.tick() => Message::StorageUsageFetch,
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                Some(collections) = consolidations_rx.recv() => {
+                    let mut ids:HashSet<mz_stash::Id> = HashSet::from_iter(collections);
+                    while let Ok(collections) = consolidations_rx.try_recv() {
+                        ids.extend(collections);
+                    }
+                    Message::Consolidate(ids.into_iter().collect())
+                }
             };
 
             // All message processing functions trace. Start a parent span for them to make
@@ -819,6 +840,7 @@ pub async fn serve<S: Append + 'static>(
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
+    let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
@@ -899,6 +921,7 @@ pub async fn serve<S: Append + 'static>(
                 catalog,
                 internal_cmd_tx,
                 strict_serializable_reads_tx,
+                consolidations_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
@@ -921,7 +944,12 @@ pub async fn serve<S: Append + 'static>(
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
+                handle.block_on(coord.serve(
+                    internal_cmd_rx,
+                    strict_serializable_reads_rx,
+                    cmd_rx,
+                    consolidations_rx,
+                ));
             }
         })
         .unwrap();

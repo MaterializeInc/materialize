@@ -142,7 +142,7 @@ impl SchemaPieceOrNamed {
     pub fn get_human_name(&self, root: &Schema) -> String {
         match self {
             Self::Piece(piece) => format!("{:?}", piece),
-            Self::Named(idx) => format!("{}", root.lookup(*idx).name),
+            Self::Named(idx) => format!("{:?}", root.lookup(*idx).name),
         }
     }
     #[inline(always)]
@@ -518,13 +518,14 @@ pub struct Name {
     pub aliases: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct FullName {
     name: String,
     namespace: String,
 }
 
 impl FullName {
+    // [XXX] btv - what happens if `name` contains dots, _and_ `namespace` is `Some` ?
     pub fn from_parts(name: &str, namespace: Option<&str>, default_namespace: &str) -> FullName {
         if let Some(ns) = namespace {
             FullName {
@@ -551,9 +552,24 @@ impl FullName {
         }
         return format!("{}.{}", self.namespace, self.name);
     }
+    /// Get the shortest unambiguous synonym of this name
+    /// at a given point in the schema graph. If this name
+    /// is in the same namespace as the enclosing node, this
+    /// returns the short name; otherwise, it returns the fully qualified name.
+    pub fn short_name(&self, enclosing_ns: &str) -> Cow<'_, str> {
+        if enclosing_ns == &self.namespace {
+            Cow::Borrowed(&self.name)
+        } else {
+            Cow::Owned(format!("{}.{}", self.namespace, self.name))
+        }
+    }
+    /// Returns the namespace of the name
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
 }
 
-impl fmt::Display for FullName {
+impl fmt::Debug for FullName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}", self.namespace, self.name)
     }
@@ -827,7 +843,7 @@ impl SchemaParser {
             Entry::Vacant(ve) => *ve.insert(self.named.len()),
             Entry::Occupied(oe) => {
                 return Err(ParseSchemaError::new(format!(
-                    "Sub-schema with name {} encountered multiple times",
+                    "Sub-schema with name {:?} encountered multiple times",
                     oe.key()
                 ))
                 .into())
@@ -1372,7 +1388,7 @@ impl<'a> SchemaPieceRefOrNamed<'a> {
     pub fn get_human_name(&self, root: &Schema) -> String {
         match self {
             Self::Piece(piece) => format!("{:?}", piece),
-            Self::Named(idx) => format!("{}", root.lookup(*idx).name),
+            Self::Named(idx) => format!("{:?}", root.lookup(*idx).name),
         }
     }
 
@@ -1437,6 +1453,11 @@ impl<'a> SchemaNodeOrNamed<'a> {
             indices,
             top: piece,
         }
+    }
+
+    pub fn namespace(self) -> Option<&'a str> {
+        let SchemaNode { name, .. } = self.lookup();
+        name.map(|FullName { namespace, .. }| namespace.as_str())
     }
 }
 
@@ -1781,7 +1802,9 @@ struct SchemaSerContext<'a> {
     // it is only ever mutated in one stack frame at a time.
     // But AFAICT serde doesn't expose a way to
     // provide some mutable context to every node in the tree...
-    seen_named: Rc<RefCell<HashMap<usize, String>>>,
+    seen_named: Rc<RefCell<HashMap<usize, FullName>>>,
+    /// The namespace of this node's parent, or "" by default
+    enclosing_ns: &'a str,
 }
 
 #[derive(Clone)]
@@ -1792,9 +1815,11 @@ struct RecordFieldSerContext<'a> {
 
 impl<'a> SchemaSerContext<'a> {
     fn step(&'a self, next: SchemaPieceRefOrNamed<'a>) -> Self {
+        let ns = self.node.namespace().unwrap_or(self.enclosing_ns);
         Self {
             node: self.node.step_ref(next),
             seen_named: Rc::clone(&self.seen_named),
+            enclosing_ns: ns,
         }
     }
 }
@@ -1904,18 +1929,21 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                 let mut map = self.seen_named.borrow_mut();
                 let named_piece = match map.get(&index) {
                     Some(name) => {
-                        return serializer.serialize_str(name.as_str());
+                        return serializer.serialize_str(&*name.short_name(self.enclosing_ns));
                     }
                     None => self.node.root.lookup(index),
                 };
-                let name = named_piece.name.to_string();
+                let name = &named_piece.name;
                 map.insert(index, name.clone());
                 std::mem::drop(map);
                 match &named_piece.piece {
                     SchemaPiece::Record { doc, fields, .. } => {
                         let mut map = serializer.serialize_map(None)?;
                         map.serialize_entry("type", "record")?;
-                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("name", &name.name)?;
+                        if self.enclosing_ns != &name.namespace {
+                            map.serialize_entry("namespace", &name.namespace)?;
+                        }
                         if let Some(ref docstr) = doc {
                             map.serialize_entry("doc", docstr)?;
                         }
@@ -1939,7 +1967,10 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     } => {
                         let mut map = serializer.serialize_map(None)?;
                         map.serialize_entry("type", "enum")?;
-                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("name", &name.name)?;
+                        if self.enclosing_ns != &name.namespace {
+                            map.serialize_entry("namespace", &name.namespace)?;
+                        }
                         map.serialize_entry("symbols", symbols)?;
                         if let Some(default_idx) = *default_idx {
                             assert!(default_idx < symbols.len());
@@ -1950,7 +1981,10 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     SchemaPiece::Fixed { size } => {
                         let mut map = serializer.serialize_map(None)?;
                         map.serialize_entry("type", "fixed")?;
-                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("name", &name.name)?;
+                        if self.enclosing_ns != &name.namespace {
+                            map.serialize_entry("namespace", &name.namespace)?;
+                        }
                         map.serialize_entry("size", size)?;
                         map.end()
                     }
@@ -1962,7 +1996,10 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                         let mut map = serializer.serialize_map(Some(6))?;
                         map.serialize_entry("type", "fixed")?;
                         map.serialize_entry("logicalType", "decimal")?;
-                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("name", &name.name)?;
+                        if self.enclosing_ns != &name.namespace {
+                            map.serialize_entry("namespace", &name.namespace)?;
+                        }
                         map.serialize_entry("size", size)?;
                         map.serialize_entry("precision", precision)?;
                         map.serialize_entry("scale", scale)?;
@@ -2022,6 +2059,7 @@ impl Serialize for Schema {
                 inner: self.top.as_ref(),
             },
             seen_named: Rc::new(RefCell::new(Default::default())),
+            enclosing_ns: "",
         };
         ctx.serialize(serializer)
     }
@@ -2045,19 +2083,28 @@ impl<'a> Serialize for RecordFieldSerContext<'a> {
 /// Parses a **valid** avro schema into the Parsing Canonical Form.
 /// <https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas>
 fn parsing_canonical_form(schema: &serde_json::Value) -> String {
+    pcf(schema, "", false)
+}
+
+fn pcf(schema: &serde_json::Value, enclosing_ns: &str, in_fields: bool) -> String {
     match schema {
-        serde_json::Value::Object(map) => pcf_map(map),
+        serde_json::Value::Object(map) => pcf_map(map, enclosing_ns, in_fields),
         serde_json::Value::String(s) => pcf_string(s),
-        serde_json::Value::Array(v) => pcf_array(v),
+        serde_json::Value::Array(v) => pcf_array(v, enclosing_ns, in_fields),
         serde_json::Value::Number(n) => n.to_string(),
         _ => unreachable!("{:?} cannot yet be printed in canonical form", schema),
     }
 }
 
-fn pcf_map(schema: &Map<String, serde_json::Value>) -> String {
+fn pcf_map(schema: &Map<String, serde_json::Value>, enclosing_ns: &str, in_fields: bool) -> String {
     // Look for the namespace variant up front.
-    let ns = schema.get("namespace").and_then(|v| v.as_str());
+    let default_ns = schema
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .unwrap_or(enclosing_ns);
     let mut fields = Vec::new();
+    let mut found_next_ns = None;
+    let mut deferred_values = vec![];
     for (k, v) in schema {
         // Reduce primitive types to their simple form. ([PRIMITIVE] rule)
         if schema.len() == 1 && k == "type" {
@@ -2074,15 +2121,31 @@ fn pcf_map(schema: &Map<String, serde_json::Value>) -> String {
 
         // Fully qualify the name, if it isn't already ([FULLNAMES] rule).
         if k == "name" {
+            // The `fields` stanza needs special handling, as it has "name"
+            // fields that don't get canonicalized (since they are not type names).
+            if in_fields {
+                fields.push((
+                    k,
+                    format!("{}:{}", pcf_string(k), pcf_string(v.as_str().unwrap())),
+                ));
+                continue;
+            }
             // Invariant: Only valid schemas. Must be a string.
             let name = v.as_str().unwrap();
-            let n = match ns {
-                Some(namespace) if !name.contains('.') => {
-                    Cow::Owned(format!("{}.{}", namespace, name))
-                }
-                _ => Cow::Borrowed(name),
+            assert!(
+                found_next_ns.is_none(),
+                "`name` must not be specified multiple times"
+            );
+            let next_ns = match name.rsplit_once('.') {
+                None => default_ns,
+                Some((ns, _name)) => ns,
             };
-
+            found_next_ns = Some(next_ns);
+            let n = if next_ns.is_empty() {
+                Cow::Borrowed(name)
+            } else {
+                Cow::Owned(format!("{next_ns}.{name}"))
+            };
             fields.push((k, format!("{}:{}", pcf_string(k), pcf_string(&*n))));
             continue;
         }
@@ -2097,10 +2160,16 @@ fn pcf_map(schema: &Map<String, serde_json::Value>) -> String {
             continue;
         }
 
-        // For anything else, recursively process the result.
+        // For anything else, recursively process the result
+        // (deferred until we know the namespace)
+        deferred_values.push((k, v));
+    }
+
+    let next_ns = found_next_ns.unwrap_or(default_ns);
+    for (k, v) in deferred_values {
         fields.push((
             k,
-            format!("{}:{}", pcf_string(k), parsing_canonical_form(v)),
+            format!("{}:{}", pcf_string(k), pcf(v, next_ns, &*k == "fields")),
         ));
     }
 
@@ -2114,10 +2183,10 @@ fn pcf_map(schema: &Map<String, serde_json::Value>) -> String {
     format!("{{{}}}", inter)
 }
 
-fn pcf_array(arr: &[serde_json::Value]) -> String {
+fn pcf_array(arr: &[serde_json::Value], enclosing_ns: &str, in_fields: bool) -> String {
     let inter = arr
         .iter()
-        .map(parsing_canonical_form)
+        .map(|s| pcf(s, enclosing_ns, in_fields))
         .collect::<Vec<String>>()
         .join(",");
     format!("[{}]", inter)
@@ -2823,7 +2892,6 @@ mod tests {
 
     #[test]
     fn test_schema_fingerprint() {
-        use md5::Md5;
         use sha2::Sha256;
 
         let raw_schema = r#"
@@ -2836,16 +2904,39 @@ mod tests {
             ]
         }
     "#;
-
+        let expected_canonical = r#"{"name":"test","type":"record","fields":[{"name":"a","type":"long"},{"name":"b","type":"string"}]}"#;
         let schema = Schema::from_str(raw_schema).unwrap();
+        assert_eq!(&schema.canonical_form(), expected_canonical);
+        let expected_fingerprint = format!("{:02x}", Sha256::digest(expected_canonical));
         assert_eq!(
-            "5ecb2d1f0eaa647d409e6adbd5d70cd274d85802aa9167f5fe3b73ba70b32c76",
-            format!("{}", schema.fingerprint::<Sha256>())
+            format!("{}", schema.fingerprint::<Sha256>()),
+            expected_fingerprint
         );
 
+        let raw_schema = r#"
+{
+  "type": "record",
+  "name": "ns.r1",
+  "namespace": "ignored",
+  "fields": [
+    {
+      "name": "f1",
+      "type": {
+        "type": "fixed",
+        "name": "r2",
+        "size": 1
+      }
+    }
+  ]
+}
+"#;
+        let expected_canonical = r#"{"name":"ns.r1","type":"record","fields":[{"name":"f1","type":{"name":"ns.r2","type":"fixed","size":1}}]}"#;
+        let schema = Schema::from_str(raw_schema).unwrap();
+        assert_eq!(&schema.canonical_form(), expected_canonical);
+        let expected_fingerprint = format!("{:02x}", Sha256::digest(expected_canonical));
         assert_eq!(
-            "a2c99a3f40ea2eea32593d63b483e962",
-            format!("{}", schema.fingerprint::<Md5>())
+            format!("{}", schema.fingerprint::<Sha256>()),
+            expected_fingerprint
         );
     }
 }

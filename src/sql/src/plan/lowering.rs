@@ -611,7 +611,12 @@ impl HirRelationExpr {
                     let input_type = input.typ();
                     let default = applied_aggregates
                         .iter()
-                        .map(|agg| (agg.func.default(), agg.typ(&input_type).scalar_type))
+                        .map(|agg| {
+                            (
+                                agg.func.default(),
+                                agg.typ(&input_type.column_types).scalar_type,
+                            )
+                        })
                         .collect();
                     // NOTE we don't need to remove any extra columns from aggregate.applied_to above because the reduce will do that anyway
                     let mut reduced =
@@ -1068,8 +1073,9 @@ impl HirScalarExpr {
                                             &mut get_inner,
                                             subquery_map,
                                         );
-                                        let mir_encoded_args_type =
-                                            mir_encoded_args.typ(&get_inner.typ()).scalar_type;
+                                        let mir_encoded_args_type = mir_encoded_args
+                                            .typ(&get_inner.typ().column_types)
+                                            .scalar_type;
 
                                         // Record input arity here so that any group_keys that need to mutate get_inner
                                         // don't add those columns to the aggregate input.

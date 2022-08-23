@@ -18,7 +18,6 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::Collection;
@@ -37,10 +36,12 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context};
+use crate::render::reduce::monoids::ReductionMonoid;
 use crate::render::ArrangementFlavor;
-use crate::typedefs::RowSpine;
+use crate::typedefs::{RowKeySpine, RowSpine};
 
 /// Render a dataflow based on the provided plan.
 ///
@@ -250,7 +251,6 @@ where
 
         // Demux out the potential errors from key and value selector evaluation.
         use differential_dataflow::operators::consolidate::ConsolidateStream;
-        use mz_timely_util::operator::CollectionExt;
         let (ok, mut err) = key_val_input
             .as_collection()
             .consolidate_stream()
@@ -279,6 +279,13 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
+    // we must have more than one arrangement to collate
+    soft_assert_or_log!(
+        arrangements.len() > 1,
+        "Building a collation of {} arrangements, but expected more than one",
+        arrangements.len()
+    );
+
     let mut to_concat = vec![];
 
     // First, lets collect all results into a single collection.
@@ -664,20 +671,20 @@ where
                 ));
             }
 
-            (key, time, output)
+            ((key, ()), time, output)
         })
         .as_collection();
     partial
-        .arrange_by_self()
+        .arrange_named::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
             let mut row_buf = Row::default();
             move |_key, input, output| {
                 let mut row_packer = row_buf.packer();
                 let accum = &input[0].1;
                 for monoid in accum.iter() {
+                    use ReductionMonoid::*;
                     match monoid {
-                        monoids::ReductionMonoid::Min(row) => row_packer.extend(row.iter()),
-                        monoids::ReductionMonoid::Max(row) => row_packer.extend(row.iter()),
+                        Min(row) | Max(row) => row_packer.extend(row.iter()),
                     }
                 }
                 output.push((row_buf.clone(), 1));
@@ -979,6 +986,13 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
+    // we must have called this function with something to reduce
+    soft_assert_or_log!(
+        full_aggrs.len() > 0 && (simple_aggrs.len() + distinct_aggrs.len() == full_aggrs.len()),
+        "Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {})",
+        full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len()
+    );
+
     // Some of the aggregations may have the `distinct` bit set, which means that they'll
     // need to be extracted from `collection` and be subjected to `distinct` with `key`.
     // Other aggregations can be directly moved in to the `diff` field.
@@ -1144,29 +1158,31 @@ where
     };
 
     let mut to_aggregate = Vec::new();
-    // First, collect all non-distinct aggregations in one pass.
-    let easy_cases = collection.explode({
-        let zero_diffs = zero_diffs.clone();
-        move |(key, row)| {
-            let mut diffs = zero_diffs.clone();
-            // Try to unpack only the datums we need. Unfortunately, since we
-            // can't random access into a Row, we have to iterate through one by one.
-            // TODO: Even though we don't have random access, we could still avoid unpacking
-            // everything that we don't care about, and it might be worth it to extend the
-            // Row API to do that.
-            let mut row_iter = row.iter().enumerate();
-            for (accumulable_index, datum_index, aggr) in simple_aggrs.iter() {
-                let mut datum = row_iter.next().unwrap();
-                while datum_index != &datum.0 {
-                    datum = row_iter.next().unwrap();
+    if simple_aggrs.len() > 0 {
+        // First, collect all non-distinct aggregations in one pass.
+        let easy_cases = collection.explode_one({
+            let zero_diffs = zero_diffs.clone();
+            move |(key, row)| {
+                let mut diffs = zero_diffs.clone();
+                // Try to unpack only the datums we need. Unfortunately, since we
+                // can't random access into a Row, we have to iterate through one by one.
+                // TODO: Even though we don't have random access, we could still avoid unpacking
+                // everything that we don't care about, and it might be worth it to extend the
+                // Row API to do that.
+                let mut row_iter = row.iter().enumerate();
+                for (accumulable_index, datum_index, aggr) in simple_aggrs.iter() {
+                    let mut datum = row_iter.next().unwrap();
+                    while datum_index != &datum.0 {
+                        datum = row_iter.next().unwrap();
+                    }
+                    let datum = datum.1;
+                    diffs[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
                 }
-                let datum = datum.1;
-                diffs[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
+                ((key, ()), diffs)
             }
-            Some((key, diffs))
-        }
-    });
-    to_aggregate.push(easy_cases);
+        });
+        to_aggregate.push(easy_cases);
+    }
 
     // Next, collect all aggregations that require distinctness.
     for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
@@ -1178,22 +1194,27 @@ where
                 (key, row_buf.clone())
             })
             .distinct_core()
-            .explode({
+            .explode_one({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
                     let datum = row.iter().next().unwrap();
                     let mut diffs = zero_diffs.clone();
                     diffs[accumulable_index] = datum_to_accumulator(datum, &aggr.func);
-                    Some((key, diffs))
+                    ((key, ()), diffs)
                 }
             });
         to_aggregate.push(collection);
     }
-    let collection =
-        differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate);
+
+    // now concatenate, if necessary, multiple aggregations
+    let collection = if to_aggregate.len() == 1 {
+        to_aggregate.remove(0)
+    } else {
+        differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate)
+    };
 
     collection
-        .arrange_by_self()
+        .arrange_named::<RowKeySpine<_, _, Vec<Accum>>>("ArrangeAccumulable")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
             let mut row_buf = Row::default();
             move |_key, input, output| {

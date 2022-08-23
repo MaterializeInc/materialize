@@ -32,11 +32,11 @@ use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
-use crate::r#impl::encoding::SerdeReaderEnrichedHollowBatch;
-use crate::r#impl::machine::{retry_external, Machine};
-use crate::r#impl::metrics::Metrics;
-use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::state::{HollowBatch, Since};
+use crate::internal::encoding::SerdeReaderEnrichedHollowBatch;
+use crate::internal::machine::{retry_external, Machine};
+use crate::internal::metrics::Metrics;
+use crate::internal::paths::PartialBlobKey;
+use crate::internal::state::{HollowBatch, Since};
 use crate::{GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -254,7 +254,12 @@ where
         })
     }
 
-    /// Retreives the next batch and updates `self`s metadata.
+    /// An exclusive upper bound on the progress of this Listen.
+    pub fn frontier(&self) -> &Antichain<T> {
+        &self.frontier
+    }
+
+    /// Attempt to pull out the next values of this subscription.
     ///
     /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
     /// `ReadHandle::fetch_batch`.
@@ -466,7 +471,8 @@ where
     /// promising that no more data will ever be read by this handle.
     ///
     /// This also acts as a heartbeat for the reader lease (including if called
-    /// with `new_since` equal to `self.since()`, making the call a no-op).
+    /// with `new_since` equal to something like `self.since()` or the minimum
+    /// timestamp, making the call a no-op).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         let (_seqno, current_reader_since, maintenance) = self
@@ -631,7 +637,21 @@ where
                     updates.push(((k, v), t, d));
                 },
             )
-            .await;
+            .await
+            .unwrap_or_else(|err| {
+                // Ideally, readers should never encounter a missing blob. They place a seqno
+                // hold as they consume their snapshot/listen, preventing any blobs they need
+                // from being deleted by garbage collection, and all blob implementations are
+                // linearizable so there should be no possibility of stale reads.
+                //
+                // If we do have a bug and a reader does encounter a missing blob, the state
+                // cannot be recovered, and our best option is to panic and retry the whole
+                // process.
+                panic!(
+                    "reader {} could not fetch batch part: {}",
+                    self.reader_id, err
+                )
+            });
         }
 
         // TODO: This is potentially suprising for the `ReadHandle` to manage.
@@ -671,11 +691,11 @@ where
     ///
     /// This is an internally rate limited helper, designed to allow users to
     /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or [Self::maybe_heartbeat_reader] on some interval that is "frequent"
+    /// or Self::maybe_heartbeat_reader on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     ///
     /// This is communicating actual progress information, so is given
-    /// preferential treatment compared to [Self::maybe_heartbeat_reader].
+    /// preferential treatment compared to Self::maybe_heartbeat_reader.
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
@@ -693,7 +713,7 @@ where
     /// call it as frequently as they like. Call this [Self::downgrade_since],
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    pub async fn maybe_heartbeat_reader(&mut self) {
+    async fn maybe_heartbeat_reader(&mut self) {
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 2;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
@@ -807,7 +827,8 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     key: &PartialBlobKey,
     registered_desc: &Description<T>,
     mut update_fn: UpdateFn,
-) where
+) -> Result<(), anyhow::Error>
+where
     T: Timestamp + Lattice + Codec64,
     UpdateFn: FnMut(&[u8], &[u8], T, [u8; 8]),
 {
@@ -820,9 +841,13 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
 
     let value = match value {
         Some(v) => v,
-        // All blob implementations are linearizable, so a missing
-        // blob here suggests something has gone very wrong.
-        None => panic!("unexpected missing blob: {}", key),
+        None => {
+            return Err(anyhow!(
+                "unexpected missing blob: {} for shard: {}",
+                key,
+                shard_id
+            ))
+        }
     };
     drop(get_span);
 
@@ -908,7 +933,9 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
                 update_fn(k, v, t, d);
             }
         }
-    })
+    });
+
+    Ok(())
 }
 
 // TODO: This goes away the desc on BlobTraceBatchPart becomes a Description<T>,
@@ -941,7 +968,7 @@ mod tests {
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use timely::ExchangeData;
 
-    use crate::r#impl::metrics::Metrics;
+    use crate::internal::metrics::Metrics;
     use crate::tests::all_ok;
     use crate::{PersistClient, PersistConfig};
 

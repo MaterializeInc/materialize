@@ -23,14 +23,16 @@ def test_storaged_creation(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
             > CREATE SOURCE source1
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
+              FROM KAFKA CONNECTION kafka_conn
               TOPIC 'testdrive-test-${testdrive.seed}'
               FORMAT BYTES
               ENVELOPE NONE;
 
             > CREATE SOURCE source2
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
+              FROM KAFKA CONNECTION kafka_conn
               TOPIC 'testdrive-test-${testdrive.seed}'
               FORMAT BYTES
               ENVELOPE NONE;
@@ -58,8 +60,10 @@ def test_storaged_shutdown(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
             > CREATE SOURCE source1
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
+              FROM KAFKA CONNECTION kafka_conn
               TOPIC 'testdrive-test-${testdrive.seed}'
               FORMAT BYTES
               ENVELOPE NONE;

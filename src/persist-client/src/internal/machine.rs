@@ -28,16 +28,16 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::{CodecMismatch, InvalidUsage};
-use crate::r#impl::compact::CompactReq;
-use crate::r#impl::gc::GcReq;
-use crate::r#impl::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
-use crate::r#impl::metrics::{
+use crate::internal::compact::CompactReq;
+use crate::internal::gc::GcReq;
+use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
+use crate::internal::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics, ShardMetrics,
 };
-use crate::r#impl::state::{
+use crate::internal::state::{
     HollowBatch, ReaderState, Since, State, StateCollections, Upper, WriterState,
 };
-use crate::r#impl::trace::FueledMergeRes;
+use crate::internal::trace::FueledMergeRes;
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -129,12 +129,13 @@ where
     pub async fn register_writer(
         &mut self,
         writer_id: &WriterId,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, WriterState) {
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, (shard_upper, writer_state), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, state| {
-                state.register_writer(writer_id, heartbeat_timestamp_ms)
+                state.register_writer(writer_id, lease_duration, heartbeat_timestamp_ms)
             })
             .await;
         (shard_upper, writer_state)
@@ -159,6 +160,7 @@ where
         &mut self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
     ) -> Result<
         Result<Result<(SeqNo, WriterMaintenance<T>), Upper<T>>, InvalidUsage<T>>,
         Indeterminate,
@@ -167,7 +169,7 @@ where
         loop {
             let (seqno, res, routine) = self
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
-                    state.compare_and_append(batch, writer_id)
+                    state.compare_and_append(batch, writer_id, heartbeat_timestamp_ms)
                 })
                 .await?;
 
@@ -280,6 +282,20 @@ where
         let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, state| {
                 state.heartbeat_reader(reader_id, heartbeat_timestamp_ms)
+            })
+            .await;
+        (seqno, maintenance)
+    }
+
+    pub async fn heartbeat_writer(
+        &mut self,
+        writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
+    ) -> (SeqNo, RoutineMaintenance) {
+        let metrics = Arc::clone(&self.metrics);
+        let (seqno, _existed, maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, state| {
+                state.heartbeat_writer(writer_id, heartbeat_timestamp_ms)
             })
             .await;
         (seqno, maintenance)
@@ -524,17 +540,19 @@ where
                         self.shard_metrics.set_upper(&self.state.upper());
                         self.shard_metrics.set_encoded_state_size(payload_len);
                         self.shard_metrics.set_batch_count(self.state.batch_count());
+                        self.shard_metrics
+                            .set_update_count(self.state.num_updates());
                         self.shard_metrics.set_seqnos_held(self.state.seqnos_held());
 
-                        let expired_readers =
-                            self.state.readers_needing_expiration((self.cfg.now)());
+                        let (expired_readers, expired_writers) =
+                            self.state.handles_needing_expiration((self.cfg.now)());
                         self.metrics
                             .lease
                             .timeout_read
                             .inc_by(u64::cast_from(expired_readers.len()));
                         let lease_expiration = Some(LeaseExpiration {
                             readers: expired_readers,
-                            writers: vec![],
+                            writers: expired_writers,
                         });
 
                         let maintenance = RoutineMaintenance {
@@ -751,13 +769,14 @@ mod tests {
     use differential_dataflow::trace::Description;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
+    use mz_ore::now::SYSTEM_TIME;
     use tokio::sync::Mutex;
 
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
-    use crate::r#impl::compact::{CompactReq, Compactor};
-    use crate::r#impl::paths::PartialBlobKey;
-    use crate::r#impl::state::ProtoStateRollup;
+    use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::paths::PartialBlobKey;
+    use crate::internal::state::ProtoStateRollup;
     use crate::read::{fetch_batch_part, Listen, ListenEvent};
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistConfig, ShardId};
@@ -803,6 +822,7 @@ mod tests {
                     .await
                     .expect("invalid shard types"),
             ));
+            let now = SYSTEM_TIME.clone();
 
             f.run_async(move |tc| {
                 let shard_id = shard_id.clone();
@@ -810,7 +830,7 @@ mod tests {
                 let state = Arc::clone(&state);
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
                 let write = Arc::clone(&write);
-
+                let now = now.clone();
                 async move {
                     let mut state = state.lock().await;
 
@@ -938,6 +958,7 @@ mod tests {
                                     },
                                 )
                                 .await
+                                .expect("invalid batch part");
                             }
                             if s.is_empty() {
                                 s.push_str("<empty>\n");
@@ -1078,7 +1099,7 @@ mod tests {
                             let writer_id = write.writer_id.clone();
                             let (_, _) = write
                                 .machine
-                                .compare_and_append(batch, &writer_id)
+                                .compare_and_append(batch, &writer_id, now())
                                 .await
                                 .expect("indeterminate")
                                 .expect("invalid usage")
@@ -1126,7 +1147,11 @@ mod tests {
                 .await;
             let (_, writer_maintenance) = write
                 .machine
-                .compare_and_append(&batch.into_hollow_batch(), &write.writer_id)
+                .compare_and_append(
+                    &batch.into_hollow_batch(),
+                    &write.writer_id,
+                    (write.cfg.now)(),
+                )
                 .await
                 .expect("external durability failed")
                 .expect("invalid usage")

@@ -91,8 +91,11 @@ $ set nums-schema=[
 
 $ kafka-create-topic topic=nums
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE nums
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nums-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-nums-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
 
@@ -104,7 +107,7 @@ $ kafka-create-topic topic=nums
 
 # Create a sink before we ingest any data, to ensure the sink starts AS OF 0
 > CREATE SINK nums_sink FROM nums
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'nums-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'nums-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # ==> Test consolidation.
@@ -141,7 +144,7 @@ $ kafka-verify format=avro sink=materialize.public.nums_sink sort-messages=true
 # # Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)
 # # is fully consolidated.
 # > CREATE SINK nums_sink FROM nums
-#   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'nums-sink'
+#   INTO KAFKA CONNECTION kafka_conn TOPIC 'nums-sink'
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 #   AS OF 3
 #

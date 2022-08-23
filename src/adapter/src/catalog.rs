@@ -3161,7 +3161,7 @@ impl<S: Append> Catalog<S> {
         session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
-    ) -> Result<(Vec<BuiltinTableUpdate>, T), AdapterError>
+    ) -> Result<(Vec<BuiltinTableUpdate>, Vec<mz_stash::Id>, T), AdapterError>
     where
         F: FnOnce(&CatalogState) -> Result<T, AdapterError>,
     {
@@ -3981,14 +3981,18 @@ impl<S: Append> Catalog<S> {
         let result = f(&state)?;
 
         // The user closure was successful, apply the updates.
-        tx.commit().await?;
+        let (_stash, collections) = tx.commit_without_consolidate().await?;
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
         self.state = state;
         self.transient_revision += 1;
 
-        Ok((builtin_table_updates, result))
+        Ok((builtin_table_updates, collections, result))
+    }
+
+    pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
+        Ok(self.storage().await.consolidate(collections).await?)
     }
 
     pub async fn confirm_leadership(&mut self) -> Result<(), AdapterError> {

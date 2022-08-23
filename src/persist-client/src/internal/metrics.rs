@@ -244,6 +244,7 @@ impl MetricsVecs {
             compare_and_append: self.cmd_metrics("compare_and_append"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
             heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
+            heartbeat_writer: self.cmd_metrics("heartbeat_writer"),
             expire_reader: self.cmd_metrics("expire_reader"),
             expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
@@ -384,6 +385,7 @@ pub struct CmdsMetrics {
     pub(crate) clone_reader: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
+    pub(crate) heartbeat_writer: CmdMetrics,
     pub(crate) heartbeat_reader: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
     pub(crate) expire_writer: CmdMetrics,
@@ -649,6 +651,7 @@ pub struct ShardsMetrics {
     // see directly as we're getting started, perhaps we're able to drop it
     // later in favor of only having the latter.
     batch_count: mz_ore::metrics::UIntGaugeVec,
+    update_count: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
@@ -697,6 +700,13 @@ impl ShardsMetrics {
                 metric!(
                     name: "mz_persist_shard_batch_count",
                     help: "count of batches in all active shards on this process",
+                    var_labels: ["shard"],
+                ),
+            ),
+            update_count: registry.register(
+                metric!(
+                    name: "mz_persist_shard_update_count",
+                    help: "count of updates in all active shards on this process",
                     var_labels: ["shard"],
                 ),
             ),
@@ -752,6 +762,7 @@ pub struct ShardMetrics {
     upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     encoded_state_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
@@ -770,6 +781,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             batch_count: shards_metrics
                 .batch_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            update_count: shards_metrics
+                .update_count
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             seqnos_held: shards_metrics
                 .seqnos_held
@@ -808,6 +822,10 @@ impl ShardMetrics {
 
     pub fn set_batch_count(&self, batch_count: usize) {
         self.batch_count.set(u64::cast_from(batch_count))
+    }
+
+    pub fn set_update_count(&self, update_count: usize) {
+        self.update_count.set(u64::cast_from(update_count))
     }
 
     pub fn set_seqnos_held(&self, seqnos_held: usize) {

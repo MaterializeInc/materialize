@@ -57,8 +57,10 @@ class SinkUpsert(Check):
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} publish=true repeat=1000
                 {"key1": "D3${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SOURCE sink_source
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-sink-source-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE UPSERT
@@ -66,7 +68,7 @@ class SinkUpsert(Check):
                 > CREATE MATERIALIZED VIEW sink_source_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM sink_source GROUP BY LEFT(key1, 2), LEFT(f1, 1);
 
                 > CREATE SINK sink_sink1 FROM sink_source_view
-                  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+                  INTO KAFKA CONNECTION kafka_conn
                   TOPIC 'sink-sink1' WITH (reuse_topic=true)
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                 """
@@ -83,8 +85,10 @@ class SinkUpsert(Check):
                 {"key1": "U2${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
                 {"key1": "D2${kafka-ingest.iteration}"}
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SINK sink_sink2 FROM sink_source_view
-                  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+                  INTO KAFKA CONNECTION kafka_conn
                   TOPIC 'sink-sink2' WITH (reuse_topic=true)
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                 """,
@@ -95,7 +99,7 @@ class SinkUpsert(Check):
                 {"key1": "D3${kafka-ingest.iteration}"}
 
                 > CREATE SINK sink_sink3 FROM sink_source_view
-                  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+                  INTO KAFKA CONNECTION kafka_conn
                   TOPIC 'sink-sink3' WITH (reuse_topic=true)
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                 """,
@@ -114,20 +118,22 @@ class SinkUpsert(Check):
 
                 # We check the contents of the sink topics by re-ingesting them.
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SOURCE sink_view1
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'sink-sink1'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view2
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'sink-sink2'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view3
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'sink-sink3'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE NONE
@@ -194,8 +200,10 @@ class SinkTables(Check):
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SINK sink_large_transaction_sink1 FROM sink_large_transaction_view
-                  INTO KAFKA BROKER '${testdrive.kafka-addr}'
+                  INTO KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}'
                   WITH (reuse_topic=true)
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -221,8 +229,10 @@ class SinkTables(Check):
             dedent(
                 """
                 # We check the contents of the sink topics by re-ingesting them.
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SOURCE sink_large_transaction_source
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE NONE

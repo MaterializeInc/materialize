@@ -22,13 +22,17 @@ $ kafka-create-topic topic=data partitions=2
 
 $ kafka-create-topic topic=data2 partitions=2
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data_empty
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE SOURCE data_rt
-    FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-    WITH (topic_metadata_refresh_interval_ms=50)
+    FROM KAFKA CONNECTION kafka_conn
+      WITH (TOPIC METADATA REFRESH INTERVAL MS=50)
+    TOPIC 'testdrive-data-${testdrive.seed}'
     FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW view_rt AS SELECT b, sum(a) FROM data_rt GROUP BY b

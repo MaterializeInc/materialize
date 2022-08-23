@@ -87,6 +87,7 @@ pub fn serve(
     let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
+    let has_networked_workers = config.comm_config.addresses.len() > 1;
 
     let (builders, other) =
         initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
@@ -116,6 +117,7 @@ pub fn serve(
                 trace_metrics: trace_metrics.clone(),
                 connection_context: config.connection_context.clone(),
                 persist_clients,
+                has_networked_workers,
             }
             .run()
         },
@@ -173,6 +175,8 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+    /// Indicates if the timely instance has workers connected via network
+    has_networked_workers: bool,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -339,6 +343,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         }
 
+        if self.compute_state.is_some() && self.has_networked_workers {
+            panic!("Reconciliation is supported only in process local timely instances");
+        };
+
         // Commands we will need to apply before entering normal service.
         // These commands may include dropping existing dataflows, compacting existing dataflows,
         // and creating new dataflows, in addition to standard peek and compaction commands.
@@ -448,6 +456,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     ComputeCommand::CreateInstance(new_config) => {
                         // Cluster creation should not be performed again!
                         assert_eq!(old_config, Some(new_config));
+
+                        // Ensure we retain the logging sink dataflows.
+                        if let Some(logging) = &new_config.logging {
+                            for (id, _) in logging.sink_logs.values() {
+                                retain_ids.insert(*id);
+                            }
+                        }
                     }
                     // All other commands we apply as requested.
                     command => {

@@ -84,7 +84,7 @@ use mz_expr::{
     func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr, VariadicFunc, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_repr::{Datum, ScalarType};
+use mz_repr::{ColumnType, Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -142,7 +142,7 @@ impl PredicatePushdown {
                     // whether they are literal errors before working with them.
                     let input_type = input.typ();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce(&input_type);
+                        predicate.reduce(&input_type.column_types);
                     }
 
                     // It can be helpful to know if there are any non-literal errors,
@@ -219,14 +219,14 @@ impl PredicatePushdown {
                                         // `MirScalarExpr` to a join constraint, we
                                         // need to retain the `!isnull(col1)`
                                         // information.
-                                        if expr1.typ(&input_type).nullable {
+                                        if expr1.typ(&input_type.column_types).nullable {
                                             pred_not_translated.push(
                                                 expr1
                                                     .clone()
                                                     .call_unary(UnaryFunc::IsNull(func::IsNull))
                                                     .call_unary(UnaryFunc::Not(func::Not)),
                                             );
-                                        } else if expr2.typ(&input_type).nullable {
+                                        } else if expr2.typ(&input_type.column_types).nullable {
                                             pred_not_translated.push(
                                                 expr2
                                                     .clone()
@@ -239,7 +239,10 @@ impl PredicatePushdown {
                                         continue;
                                     }
                                 } else if let Some((expr1, expr2)) =
-                                    Self::extract_equal_or_both_null(&mut predicate, &input_type)
+                                    Self::extract_equal_or_both_null(
+                                        &mut predicate,
+                                        &input_type.column_types,
+                                    )
                                 {
                                     // Also translate into join variable constraints:
                                     // 3) `((nonliteral1 = nonliteral2) || (nonliteral
@@ -252,7 +255,7 @@ impl PredicatePushdown {
 
                             mz_expr::canonicalize::canonicalize_equivalences(
                                 equivalences,
-                                &[input_type],
+                                std::iter::once(&input_type.column_types),
                             );
 
                             // // Predicates to push at each input, and to retain.
@@ -482,7 +485,10 @@ impl PredicatePushdown {
                             // Apply the predicates in `list` to value. Canonicalize
                             // `list` so that plans are always deterministic.
                             let mut list = list.into_iter().collect::<Vec<_>>();
-                            mz_expr::canonicalize::canonicalize_predicates(&mut list, &value.typ());
+                            mz_expr::canonicalize::canonicalize_predicates(
+                                &mut list,
+                                &value.typ().column_types,
+                            );
                             **value = value.take_dangerous().filter(list);
                         }
                     }
@@ -501,7 +507,10 @@ impl PredicatePushdown {
                     //   2) equivalences of the form `expr1 = expr2`, where both
                     //      expressions come from the same single input.
                     let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                    mz_expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+                    mz_expr::canonicalize::canonicalize_equivalences(
+                        equivalences,
+                        input_types.iter().map(|t| &t.column_types),
+                    );
 
                     let input_mapper = mz_expr::JoinInputMapper::new_from_input_types(&input_types);
                     // Predicates to push at each input, and to lift out the join.
@@ -693,7 +702,10 @@ impl PredicatePushdown {
                         };
                     }
 
-                    mz_expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+                    mz_expr::canonicalize::canonicalize_equivalences(
+                        equivalences,
+                        input_types.iter().map(|t| &t.column_types),
+                    );
 
                     let new_inputs = inputs
                         .drain(..)
@@ -807,7 +819,7 @@ impl PredicatePushdown {
     /// extract `expr1` and `expr2`.
     fn extract_equal_or_both_null(
         s: &mut MirScalarExpr,
-        relation_type: &mz_repr::RelationType,
+        column_types: &[ColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::Or,
@@ -816,9 +828,9 @@ impl PredicatePushdown {
         {
             if let &[ref or_lhs, ref or_rhs] = &**exprs {
                 // Check both orders of operands of the OR
-                return Self::extract_equal_or_both_null_inner(or_lhs, or_rhs, relation_type)
+                return Self::extract_equal_or_both_null_inner(or_lhs, or_rhs, column_types)
                     .or_else(|| {
-                        Self::extract_equal_or_both_null_inner(or_rhs, or_lhs, relation_type)
+                        Self::extract_equal_or_both_null_inner(or_rhs, or_lhs, column_types)
                     });
             }
         }
@@ -828,7 +840,7 @@ impl PredicatePushdown {
     fn extract_equal_or_both_null_inner(
         or_arg1: &MirScalarExpr,
         or_arg2: &MirScalarExpr,
-        relation_type: &mz_repr::RelationType,
+        column_types: &[ColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         use mz_expr::BinaryFunc;
         if let MirScalarExpr::CallBinary {
@@ -844,8 +856,8 @@ impl PredicatePushdown {
                 exprs: vec![isnull1, isnull2],
             };
 
-            if Self::extract_reduced_conjunction_terms(both_null, relation_type)
-                == Self::extract_reduced_conjunction_terms(or_arg1.clone(), relation_type)
+            if Self::extract_reduced_conjunction_terms(both_null, column_types)
+                == Self::extract_reduced_conjunction_terms(or_arg1.clone(), column_types)
             {
                 return Some(((**eq_lhs).clone(), (**eq_rhs).clone()));
             }
@@ -856,9 +868,9 @@ impl PredicatePushdown {
     /// Reduces the given expression and returns its AND-ed terms.
     fn extract_reduced_conjunction_terms(
         mut s: MirScalarExpr,
-        relation_type: &mz_repr::RelationType,
+        column_types: &[ColumnType],
     ) -> Vec<MirScalarExpr> {
-        s.reduce(relation_type);
+        s.reduce(column_types);
 
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::And,

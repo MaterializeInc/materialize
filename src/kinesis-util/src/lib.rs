@@ -24,7 +24,7 @@ use aws_sdk_kinesis::Client;
 /// Any errors from the underlying `GetShardIterator` API call are surfaced
 /// directly.
 pub async fn list_shards(
-    client: &Client,
+    client: &aws_sdk_kinesis::Client,
     stream_name: &str,
 ) -> Result<Vec<Shard>, SdkError<ListShardsError>> {
     let mut next_token = None;

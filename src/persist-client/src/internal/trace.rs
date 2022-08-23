@@ -58,7 +58,7 @@ use timely::PartialOrder;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
 
-use crate::r#impl::state::HollowBatch;
+use crate::internal::state::HollowBatch;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FueledMergeReq<T> {
@@ -203,7 +203,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
         ret
     }
 
-    #[cfg(test)]
     pub fn num_updates(&self) -> usize {
         let mut ret = 0;
         self.map_batches(|b| ret += b.len);
@@ -1051,7 +1050,7 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::r#impl::paths::PartialBlobKey;
+    use crate::internal::paths::PartialBlobKey;
 
     #[test]
     fn trace_datadriven() {

@@ -127,6 +127,12 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"rows":[[2]],"col_names":["?column?"]}]}"#,
         },
+        // Arrays + lists work
+        TestCase {
+            query: "select array[1], list[2]",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[[1],[2]]],"col_names":["array","list"]}]}"#,
+        },
         // Succeeding and failing queries can mix and match.
         TestCase {
             query: "select 1; select * from noexist;",
