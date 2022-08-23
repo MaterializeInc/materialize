@@ -564,7 +564,7 @@ impl FullName {
         }
     }
     /// Returns the namespace of the name
-    pub fn ns(&self) -> &str {
+    pub fn namespace(&self) -> &str {
         &self.namespace
     }
 }
@@ -1455,7 +1455,7 @@ impl<'a> SchemaNodeOrNamed<'a> {
         }
     }
 
-    pub fn ns(self) -> Option<&'a str> {
+    pub fn namespace(self) -> Option<&'a str> {
         let SchemaNode { name, .. } = self.lookup();
         name.map(|FullName { namespace, .. }| namespace.as_str())
     }
@@ -1815,7 +1815,7 @@ struct RecordFieldSerContext<'a> {
 
 impl<'a> SchemaSerContext<'a> {
     fn step(&'a self, next: SchemaPieceRefOrNamed<'a>) -> Self {
-        let ns = self.node.ns().unwrap_or(self.enclosing_ns);
+        let ns = self.node.namespace().unwrap_or(self.enclosing_ns);
         Self {
             node: self.node.step_ref(next),
             seen_named: Rc::clone(&self.seen_named),
