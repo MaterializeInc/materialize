@@ -676,14 +676,17 @@ WHERE a = 0
 GROUP BY a
 ----
 Explained Query
-  Project (#1, #0) // { non_negative: true }
-    Map (0) // { non_negative: true }
-      Reduce aggregates=[max(#0)] // { non_negative: true }
-        Project (#1) // { non_negative: true }
-          Filter (#0 = 0) // { non_negative: true }
-            CrossJoin type=predicate_index // { non_negative: true }
-              ArrangeBy keys=[[#0]] // { non_negative: true }
-                Get materialize.public.t // { non_negative: true }
+  Project (#1, #0) // { non_negative: false }
+    Map (0) // { non_negative: false }
+      Reduce aggregates=[max(#0)] // { non_negative: false }
+        Project (#1) // { non_negative: false }
+          Filter (#0 = 0) // { non_negative: false }
+            Project (#0, #1) // { non_negative: false }
+              Join on=(#0 = #2) type=indexed_filter // { non_negative: false }
+                ArrangeBy keys=[[#0]] // { non_negative: true }
+                  Get materialize.public.t // { non_negative: true }
+                Constant // { non_negative: false }
+                  - (0)
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -699,14 +702,15 @@ WHERE a = 0
 GROUP BY a
 ----
 Explained Query
-  Project (#1, #0) // { non_negative: true }
-    Map (0) // { non_negative: true }
-      Reduce aggregates=[max(#0)] // { non_negative: true }
-        Project (#1) // { non_negative: true }
-          Filter (#0 = 0) // { non_negative: true }
-            Lookup #0 = 0
-              ArrangeBy keys=[[#0]] // { non_negative: true }
-                Get materialize.public.t // { non_negative: true }
+  Project (#1, #0) // { non_negative: false }
+    Map (0) // { non_negative: false }
+      Reduce aggregates=[max(#0)] // { non_negative: false }
+        Project (#1) // { non_negative: false }
+          Filter (#0 = 0) // { non_negative: false }
+            Project (#0, #1) // { non_negative: false }
+              Lookup #0 = 0
+                ArrangeBy keys=[[#0]] // { non_negative: true }
+                  Get materialize.public.t // { non_negative: true }
 
 Used Indexes:
   - materialize.public.t_a_idx
