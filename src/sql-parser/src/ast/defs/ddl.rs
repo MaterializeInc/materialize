@@ -818,6 +818,8 @@ pub enum KafkaConfigOptionName {
     StatisticsIntervalMs,
     TopicMetadataRefreshIntervalMs,
     TransactionTimeoutMs,
+    StartTimestamp,
+    StartOffset,
 }
 
 impl AstDisplay for KafkaConfigOptionName {
@@ -834,6 +836,8 @@ impl AstDisplay for KafkaConfigOptionName {
                 "TOPIC METADATA REFRESH INTERVAL MS"
             }
             KafkaConfigOptionName::TransactionTimeoutMs => "TRANSACTION TIMEOUT MS",
+            KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
+            KafkaConfigOptionName::StartOffset => "START OFFSET",
         })
     }
 }

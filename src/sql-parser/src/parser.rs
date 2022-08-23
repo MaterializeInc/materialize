@@ -2054,6 +2054,7 @@ impl<'a> Parser<'a> {
             STATISTICS,
             TOPIC,
             TRANSACTION,
+            START,
         ])? {
             ACKS => KafkaConfigOptionName::Acks,
             CLIENT => {
@@ -2088,6 +2089,11 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[TIMEOUT, MS])?;
                 KafkaConfigOptionName::TransactionTimeoutMs
             }
+            START => match self.expect_one_of_keywords(&[OFFSET, TIMESTAMP])? {
+                OFFSET => KafkaConfigOptionName::StartOffset,
+                TIMESTAMP => KafkaConfigOptionName::StartTimestamp,
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         };
         let _ = self.consume_token(&Token::Eq);
