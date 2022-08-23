@@ -28,10 +28,6 @@
 ###   "mz_scheduling_parks_internal",
 ###   "mz_worker_materialization_frontiers"
 ###    "mz_message_counts",
-###    "mz_perf_arrangement_records",
-###    "mz_perf_peek_durations_aggregates",
-###    "mz_perf_peek_durations_bucket",
-###    "mz_perf_peek_durations_core",
 ###    "mz_records_per_dataflow",
 ###    "mz_records_per_dataflow_global",
 ###    "mz_records_per_dataflow_operator",
@@ -322,38 +318,6 @@ SELECT * FROM ((SELECT * FROM mz_message_counts_1) EXCEPT (SELECT * FROM mz_mess
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_perf_arrangement_records) EXCEPT (SELECT * FROM mz_perf_arrangement_records_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_arrangement_records_1) EXCEPT (SELECT * FROM mz_perf_arrangement_records));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_aggregates) EXCEPT (SELECT * FROM mz_perf_peek_durations_aggregates_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_aggregates_1) EXCEPT (SELECT * FROM mz_perf_peek_durations_aggregates));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_bucket) EXCEPT (SELECT * FROM mz_perf_peek_durations_bucket_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_bucket_1) EXCEPT (SELECT * FROM mz_perf_peek_durations_bucket));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_core) EXCEPT (SELECT * FROM mz_perf_peek_durations_core_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_core_1) EXCEPT (SELECT * FROM mz_perf_peek_durations_core));
-----
-
-query T
 SELECT * FROM ((SELECT * FROM mz_records_per_dataflow) EXCEPT (SELECT * FROM mz_records_per_dataflow_1));
 ----
 
@@ -592,38 +556,6 @@ SELECT * FROM ((SELECT * FROM mz_message_counts) EXCEPT (SELECT * FROM mz_messag
 
 query T
 SELECT * FROM ((SELECT * FROM mz_message_counts_2) EXCEPT (SELECT * FROM mz_message_counts));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_arrangement_records) EXCEPT (SELECT * FROM mz_perf_arrangement_records_2));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_arrangement_records_2) EXCEPT (SELECT * FROM mz_perf_arrangement_records));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_aggregates) EXCEPT (SELECT * FROM mz_perf_peek_durations_aggregates_2));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_aggregates_2) EXCEPT (SELECT * FROM mz_perf_peek_durations_aggregates));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_bucket) EXCEPT (SELECT * FROM mz_perf_peek_durations_bucket_2));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_bucket_2) EXCEPT (SELECT * FROM mz_perf_peek_durations_bucket));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_core) EXCEPT (SELECT * FROM mz_perf_peek_durations_core_2));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_core_2) EXCEPT (SELECT * FROM mz_perf_peek_durations_core));
 ----
 
 query T
@@ -875,38 +807,6 @@ SELECT * FROM ((SELECT * FROM mz_message_counts) EXCEPT (SELECT * FROM mz_messag
 
 query T
 SELECT * FROM ((SELECT * FROM mz_message_counts_3) EXCEPT (SELECT * FROM mz_message_counts));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_arrangement_records) EXCEPT (SELECT * FROM mz_perf_arrangement_records_3));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_arrangement_records_3) EXCEPT (SELECT * FROM mz_perf_arrangement_records));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_aggregates) EXCEPT (SELECT * FROM mz_perf_peek_durations_aggregates_3));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_aggregates_3) EXCEPT (SELECT * FROM mz_perf_peek_durations_aggregates));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_bucket) EXCEPT (SELECT * FROM mz_perf_peek_durations_bucket_3));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_bucket_3) EXCEPT (SELECT * FROM mz_perf_peek_durations_bucket));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_core) EXCEPT (SELECT * FROM mz_perf_peek_durations_core_3));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_perf_peek_durations_core_3) EXCEPT (SELECT * FROM mz_perf_peek_durations_core));
 ----
 
 query T

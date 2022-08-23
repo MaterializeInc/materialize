@@ -596,14 +596,6 @@ mz_materialization_source_frontiers
 mz_message_counts
 mz_message_counts_1
 mz_objects
-mz_perf_arrangement_records
-mz_perf_arrangement_records_1
-mz_perf_peek_durations_aggregates
-mz_perf_peek_durations_aggregates_1
-mz_perf_peek_durations_bucket
-mz_perf_peek_durations_bucket_1
-mz_perf_peek_durations_core
-mz_perf_peek_durations_core_1
 mz_records_per_dataflow
 mz_records_per_dataflow_1
 mz_records_per_dataflow_global
@@ -639,14 +631,6 @@ mz_materialization_source_frontiers  system
 mz_message_counts                    system
 mz_message_counts_1                  system
 mz_objects                           system
-mz_perf_arrangement_records          system
-mz_perf_arrangement_records_1        system
-mz_perf_peek_durations_aggregates    system
-mz_perf_peek_durations_aggregates_1  system
-mz_perf_peek_durations_bucket        system
-mz_perf_peek_durations_bucket_1      system
-mz_perf_peek_durations_core          system
-mz_perf_peek_durations_core_1        system
 mz_records_per_dataflow              system
 mz_records_per_dataflow_1            system
 mz_records_per_dataflow_global       system
@@ -666,14 +650,6 @@ mz_peek_active
 mz_peek_active_1
 mz_peek_durations
 mz_peek_durations_1
-
-> SHOW VIEWS FROM mz_catalog LIKE '%peek%';
-mz_perf_peek_durations_aggregates
-mz_perf_peek_durations_aggregates_1
-mz_perf_peek_durations_bucket
-mz_perf_peek_durations_bucket_1
-mz_perf_peek_durations_core
-mz_perf_peek_durations_core_1
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

@@ -75,7 +75,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-drop-default-cluster",
         "test-upsert",
         "test-resource-limits",
-        "test-builtin-migration",
+        # Disabled to permit a breaking change.
+        # See: https://materializeinc.slack.com/archives/C02FWJ94HME/p1661288774456699?thread_ts=1661288684.301649&cid=C02FWJ94HME
+        # "test-builtin-migration",
     ]:
         with c.test_case(name):
             c.workflow(name)
