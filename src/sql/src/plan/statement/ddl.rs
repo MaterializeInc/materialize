@@ -395,13 +395,13 @@ pub fn plan_create_source(
                         _ => sql_bail!("{} is not a kafka connection", item.name()),
                     };
 
-                    let with_options: KafkaConfigOptionExtracted =
-                        with_options.clone().try_into()?;
-                    let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
-
                     if !with_options.is_empty() {
                         scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
                     }
+
+                    let with_options: KafkaConfigOptionExtracted =
+                        with_options.clone().try_into()?;
+                    let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
 
                     (connection, with_options)
                 }
@@ -1871,11 +1871,12 @@ fn kafka_sink_builder(
                 _ => sql_bail!("{} is not a kafka connection", item.name()),
             };
 
-            let with_options: KafkaConfigOptionExtracted = with_options.try_into()?;
-            let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
             if !with_options.is_empty() {
                 scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
             }
+
+            let with_options: KafkaConfigOptionExtracted = with_options.try_into()?;
+            let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
             (connection, with_options)
         }
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
