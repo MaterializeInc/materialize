@@ -473,7 +473,7 @@ where
             Err(err) => return Ok(Err(err)),
         };
 
-        maintenance.perform(&self.machine, &self.gc, self.compact.as_ref());
+        maintenance.start_performing(&self.machine, &self.gc, self.compact.as_ref());
 
         Ok(Ok(Ok(())))
     }
@@ -562,7 +562,7 @@ where
                 .heartbeat_writer(&self.writer_id, heartbeat_timestamp)
                 .await;
             self.last_heartbeat = heartbeat_timestamp;
-            maintenance.perform(&self.machine, &self.gc);
+            maintenance.start_performing(&self.machine, &self.gc);
         }
     }
 
