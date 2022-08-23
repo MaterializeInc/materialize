@@ -456,6 +456,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     ComputeCommand::CreateInstance(new_config) => {
                         // Cluster creation should not be performed again!
                         assert_eq!(old_config, Some(new_config));
+
+                        // Ensure we retain the logging sink dataflows.
+                        if let Some(logging) = &new_config.logging {
+                            for (id, _) in logging.sink_logs.values() {
+                                retain_ids.insert(*id);
+                            }
+                        }
                     }
                     // All other commands we apply as requested.
                     command => {
