@@ -192,10 +192,8 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             }
                             ctx.indent -= 1;
                         }
-                        JoinImplementation::PredicateIndex(_, key, row) => {
+                        JoinImplementation::IndexedFilter(_, key, row) => {
                             write!(f, "{}Lookup ", ctx.indent)?;
-
-                            debug_assert_eq!(inputs.len(), 1);
 
                             for (i, (expr, lit)) in std::iter::zip(key, row.unpack()).enumerate() {
                                 Displayable::from(expr).fmt_text(f, &mut ())?;
