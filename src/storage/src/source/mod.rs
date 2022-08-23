@@ -23,6 +23,7 @@
 #![allow(missing_docs)]
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
@@ -538,9 +539,7 @@ impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
     }
 }
 
-/// A batch of messages from a raw source, along with the current upper.
-// WIP: We don't really want to clone these big boys... What can we do?
-#[derive(Clone, Serialize, Deserialize)]
+/// A batch of messages from a source reader, along with the current upper.
 pub struct SourceMessageBatch<Key, Value, Diff> {
     messages: HashMap<PartitionId, Vec<(SourceMessage<Key, Value, Diff>, MzOffset)>>,
     /// Any errors that occured while obtaining this batch.
@@ -753,7 +752,10 @@ pub fn source_reader_operator<G, S: 'static>(
     connection_context: ConnectionContext,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceMessageBatch<S::Key, S::Value, S::Diff>>,
+        timely::dataflow::Stream<
+            G,
+            Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
+        >,
         timely::dataflow::Stream<G, SourceUpperSummary>,
     ),
     Option<SourceToken>,
@@ -1031,6 +1033,8 @@ where
                     non_definite_errors,
                     source_upper: extended_source_upper,
                 };
+                // Wrap in an Rc to avoid cloning when sending it on.
+                let message_batch = Rc::new(RefCell::new(Some(message_batch)));
 
                 let cap = cap_set.delayed(&batch_counter);
                 let mut session = output.session(&cap);
@@ -1268,7 +1272,10 @@ where
 /// reclocks incoming batches and sends them forward.
 pub fn reclock_operator<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
-    batches: timely::dataflow::Stream<G, SourceMessageBatch<S::Key, S::Value, S::Diff>>,
+    batches: timely::dataflow::Stream<
+        G,
+        Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
+    >,
     remap_trace_updates: timely::dataflow::Stream<G, Vec<(PartitionId, Vec<(u64, MzOffset)>)>>,
 ) -> (
     (
@@ -1340,6 +1347,10 @@ where
             batch_input.for_each(|_cap, data| {
                 data.swap(&mut batch_buffer);
                 for batch in batch_buffer.drain(..) {
+                    let batch = batch
+                        .borrow_mut()
+                        .take()
+                        .expect("batch already taken, but we should be the only consumer");
                     for (pid, offset) in batch.source_upper.iter() {
                         let previous_offset = global_source_upper.insert(pid.clone(), *offset);
                         if let Some(previous_offset) = previous_offset {
