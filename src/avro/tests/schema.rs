@@ -535,26 +535,38 @@ fn test_ignored_logical_types() {
 fn test_namespace_serialization() {
     let input = r#"
 {
-    "type": "record",
-    "name": ".r1",
-    "fields": [{
-	"name": "f1",
-	"type": {
-	    "type": "record",
-	    "name": "r2",
-	    "namespace": "ns1",
-	    "fields": [{
-		"name": "f1",
-		"type": ["null", "ns1.r2"]
-	    }, {
-		"name": "f2",
-		"type": ["null", ".r1"]
-	    }]
-	}
-    }, {
-	"name": "f2",
-	"type": "ns1.r2"
-    }]
+  "type": "record",
+  "name": ".r1",
+  "fields": [
+    {
+      "name": "f1",
+      "type": {
+        "type": "record",
+        "name": "r2",
+        "namespace": "ns1",
+        "fields": [
+          {
+            "name": "f1",
+            "type": [
+              "null",
+              "ns1.r2"
+            ]
+          },
+          {
+            "name": "f2",
+            "type": [
+              "null",
+              ".r1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "f2",
+      "type": "ns1.r2"
+    }
+  ]
 }
 "#;
     let expected_output = r#"{
