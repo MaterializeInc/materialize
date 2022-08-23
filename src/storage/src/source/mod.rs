@@ -51,7 +51,7 @@ use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
-use tracing::info;
+use tracing::trace;
 
 use mz_avro::types::Value;
 use mz_expr::PartitionId;
@@ -842,11 +842,11 @@ where
             // not advance its downstream frontier.
             yield Some((HashMap::new(), Vec::new(), Vec::new(), source_upper.clone()));
 
-            info!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
+            trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
             source_upper.retain(|pid, _offset| {
                 crate::source::responsible_for(&id, worker_id, worker_count, &pid)
             });
-            info!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
+            trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
 
             let mut start_offsets = Vec::with_capacity(source_upper.len());
             for (pid, offset) in source_upper.iter() {
@@ -939,7 +939,7 @@ where
                         let unconsumed_partitions = source_reader.unconsumed_partitions();
 
                         if !untimestamped_messages.is_empty() {
-                            info!("source_reader({id}) {worker_id}/{worker_count}: \
+                            trace!("source_reader({id}) {worker_id}/{worker_count}: \
                                   emitting new batch. \
                                   untimestamped_messages.len(): {} \
                                   unconsumed_partitions: {:?} \
@@ -985,18 +985,18 @@ where
                     if let Some(update) = update {
                         update
                     } else {
-                        info!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
+                        trace!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
                         // We will never produce more data, clear our capabilities to
                         // communicate this downstream.
                         cap_set.downgrade(&[]);
                         return;
                     };
 
-                info!(
+                trace!(
                     "create_source_raw({id}) {worker_id}/{worker_count}: message_batch.len(): {:?}",
                     messages.len()
                 );
-                info!(
+                trace!(
                     "create_source_raw({id}) {worker_id}/{worker_count}: source_upper: {:?}",
                     source_upper
                 );
@@ -1173,12 +1173,13 @@ where
                 // Emit initial snapshot of the remap_shard, bootstrapping
                 // downstream reclock operators.
                 let remap_trace = timestamper.remap_trace();
-                info!(
+                trace!(
                     "remap({id}) {worker_id}/{worker_count}: \
                     emitting initial remap_trace. \
                     source_upper: {:?} \
                     trace_updates: {:?}",
-                    global_source_upper, remap_trace
+                    global_source_upper,
+                    remap_trace
                 );
 
                 let mut remap_output = remap_output.activate();
@@ -1235,12 +1236,14 @@ where
                     .reclock_frontier(&global_source_upper)
                     .expect("compacted past upper");
 
-                info!(
+                trace!(
                     "remap({id}) {worker_id}/{worker_count}: minted new bindings. \
                     source_upper: {:?} \
                     trace_updates: {:?} \
                     new_ts_upper: {:?}",
-                    global_source_upper, remap_trace_updates, new_ts_upper
+                    global_source_upper,
+                    remap_trace_updates,
+                    new_ts_upper
                 );
 
                 cap_set.downgrade(new_ts_upper);
@@ -1356,7 +1359,7 @@ where
             });
 
             let remap_frontier = &frontiers[1];
-            info!(
+            trace!(
                 "reclock({id}) {worker_id}/{worker_count}: remap frontier: {:?}",
                 remap_frontier.frontier()
             );
@@ -1367,7 +1370,7 @@ where
             // Accumulate updates to offsets for system table metrics collection
             let mut metric_updates = HashMap::new();
 
-            info!(
+            trace!(
                 "reclock({id}) {worker_id}/{worker_count}: \
                 untimestamped_batches.len(): {}",
                 untimestamped_batches.len(),
@@ -1381,10 +1384,12 @@ where
 
                     for (_, part_messages) in reclocked {
                         for (message, ts) in part_messages {
-                            info!(
+                            trace!(
                                 "reclock({id}) {worker_id}/{worker_count}: \
                                 handling reclocked message: {:?}:{:?} -> {}",
-                                message.partition, message.offset, ts
+                                message.partition,
+                                message.offset,
+                                ts
                             );
                             handle_message::<S>(
                                 message,
@@ -1422,11 +1427,12 @@ where
                     // Pop off the processed batch.
                     untimestamped_batches.remove(0);
                 } else {
-                    info!(
+                    trace!(
                         "reclock({id}) {worker_id}/{worker_count}: \
                         cannot reclock batch with source frontier {:?} \
                         reclock.source_frontier: {:?}",
-                        untimestamped_batch.source_upper, timestamper.source_upper
+                        untimestamped_batch.source_upper,
+                        timestamper.source_upper
                     );
                     // We keep batches in the order they arrive from the
                     // source. And we assume that the source frontier never
@@ -1462,7 +1468,7 @@ where
                 }
 
                 if !cap_set.is_empty() {
-                    info!(
+                    trace!(
                         "reclock({id}) {worker_id}/{worker_count}: \
                         downgrading to {:?}",
                         new_ts_upper
