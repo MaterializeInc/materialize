@@ -9,9 +9,12 @@
 
 //! `EXPLAIN ... AS TEXT` support for LIR structures.
 
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, ops::Deref};
 
-use mz_compute_client::plan::{AvailableCollections, Plan};
+use mz_compute_client::plan::{
+    reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan},
+    AvailableCollections, Plan,
+};
 use mz_expr::{explain::Indices, Id, MapFilterProject, MirScalarExpr};
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
@@ -150,12 +153,59 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                 // todo
             }
             Reduce {
-                input: _,
-                key_val_plan: _,
-                plan: _,
-                input_key: _,
+                input,
+                key_val_plan,
+                plan,
+                input_key,
             } => {
-                // todo
+                use mz_compute_client::plan::reduce::ReducePlan;
+                match plan {
+                    ReducePlan::Distinct => {
+                        writeln!(f, "{}Reduce::Distinct", ctx.indent)?;
+                    }
+                    ReducePlan::DistinctNegated => {
+                        writeln!(f, "{}Reduce::DistinctNegated", ctx.indent)?;
+                    }
+                    ReducePlan::Accumulable(plan) => {
+                        writeln!(f, "{}Reduce::Accumulable", ctx.indent)?;
+                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                    }
+                    ReducePlan::Hierarchical(plan) => {
+                        writeln!(f, "{}Reduce::Hierarchical", ctx.indent)?;
+                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                    }
+                    ReducePlan::Basic(plan) => {
+                        writeln!(f, "{}Reduce::Basic", ctx.indent)?;
+                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                    }
+                    ReducePlan::Collation(plan) => {
+                        writeln!(f, "{}Reduce::Collation", ctx.indent)?;
+                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                    }
+                }
+                ctx.indented(|ctx| {
+                    if key_val_plan.val_plan.deref().is_identity() {
+                        writeln!(f, "{}val_plan=id", ctx.indent)?;
+                    } else {
+                        writeln!(f, "{}val_plan", ctx.indent)?;
+                        ctx.indented(|ctx| {
+                            Displayable::from(key_val_plan.val_plan.deref()).fmt_text(f, ctx)
+                        })?;
+                    }
+                    if key_val_plan.key_plan.deref().is_identity() {
+                        writeln!(f, "{}key_plan=id", ctx.indent)?;
+                    } else {
+                        writeln!(f, "{}key_plan", ctx.indent)?;
+                        ctx.indented(|ctx| {
+                            Displayable::from(key_val_plan.key_plan.deref()).fmt_text(f, ctx)
+                        })?;
+                    }
+                    if let Some(key) = input_key {
+                        let key = separated_text(", ", key.iter().map(Displayable::from));
+                        writeln!(f, "{}input_key={}", ctx.indent, key)?;
+                    }
+                    Displayable::from(input.as_ref()).fmt_text(f, ctx)
+                })?;
             }
             TopK { input, top_k_plan } => {
                 use mz_compute_client::plan::top_k::TopKPlan;
@@ -312,6 +362,123 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, MapFilt
             writeln!(f, "{}map=({})", ctx.indent, scalars)?;
         }
 
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, AccumulablePlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        // full_aggrs (skipped because they are repeated in simple_aggrs ∪ distinct_aggrs)
+        // for (i, aggr) in self.0.full_aggrs.iter().enumerate() {
+        //     write!(f, "{}full_aggrs[{}]=", ctx.indent, i)?;
+        //     Displayable::from(aggr).fmt_text(f, &mut ())?;
+        //     writeln!(f)?;
+        // }
+        // simple_aggrs
+        for (i, (i_aggs, i_datum, agg)) in self.0.simple_aggrs.iter().enumerate() {
+            write!(f, "{}simple_aggrs[{}]=", ctx.indent, i)?;
+            write!(f, "({}, {}, ", i_aggs, i_datum)?;
+            Displayable::from(agg).fmt_text(f, &mut ())?;
+            writeln!(f, ")")?;
+        }
+        // distinct_aggrs
+        for (i, (i_aggs, i_datum, agg)) in self.0.distinct_aggrs.iter().enumerate() {
+            write!(f, "{}distinct_aggrs[{}]=", ctx.indent, i)?;
+            write!(f, "({}, {}, ", i_aggs, i_datum)?;
+            Displayable::from(agg).fmt_text(f, &mut ())?;
+            writeln!(f, ")")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, HierarchicalPlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        match self.0 {
+            HierarchicalPlan::Monotonic(plan) => {
+                let aggr_funcs = separated(", ", &plan.aggr_funcs);
+                writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
+                let skips = separated(", ", &plan.skips);
+                writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
+            }
+            HierarchicalPlan::Bucketed(plan) => {
+                let aggr_funcs = separated(", ", &plan.aggr_funcs);
+                writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
+                let skips = separated(", ", &plan.skips);
+                writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
+                let buckets = separated(", ", &plan.skips);
+                writeln!(f, "{}buckets=[{}]", ctx.indent, buckets)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, BasicPlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        match self.0 {
+            BasicPlan::Single(idx, agg) => {
+                write!(f, "{}aggr=[({}, ", ctx.indent, idx)?;
+                Displayable::from(agg).fmt_text(f, &mut ())?;
+                writeln!(f, ")")?;
+            }
+            BasicPlan::Multiple(aggs) => {
+                for (i, (i_datum, agg)) in aggs.iter().enumerate() {
+                    write!(f, "{}aggrs[{}]=({}, ", ctx.indent, i, i_datum)?;
+                    Displayable::from(agg).fmt_text(f, &mut ())?;
+                    writeln!(f, ")")?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, CollationPlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        {
+            use mz_compute_client::plan::reduce::ReductionType;
+            let aggregate_types = &self
+                .0
+                .aggregate_types
+                .iter()
+                .map(|reduction_type| match reduction_type {
+                    ReductionType::Accumulable => "a".to_string(),
+                    ReductionType::Hierarchical => "h".to_string(),
+                    ReductionType::Basic => "b".to_string(),
+                })
+                .collect::<Vec<_>>();
+            let aggregate_types = separated(", ", aggregate_types);
+            writeln!(f, "{}aggregate_types=[{}]", ctx.indent, aggregate_types)?;
+        }
+        if let Some(plan) = &self.0.accumulable {
+            writeln!(f, "{}accumulable", ctx.indent)?;
+            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+        }
+        if let Some(plan) = &self.0.hierarchical {
+            writeln!(f, "{}hierarchical", ctx.indent)?;
+            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+        }
+        if let Some(plan) = &self.0.basic {
+            writeln!(f, "{}basic", ctx.indent)?;
+            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+        }
         Ok(())
     }
 }
