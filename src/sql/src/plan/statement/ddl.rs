@@ -389,6 +389,10 @@ pub fn plan_create_source(
                     connection,
                     with_options,
                 } => {
+                    if !with_options.is_empty() {
+                        scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
+                    }
+
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     let connection = match item.connection()? {
                         Connection::Kafka(connection) => connection.clone(),
@@ -398,10 +402,6 @@ pub fn plan_create_source(
                     let with_options: KafkaConfigOptionExtracted =
                         with_options.clone().try_into()?;
                     let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
-
-                    if !with_options.is_empty() {
-                        scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
-                    }
 
                     (connection, with_options)
                 }
@@ -1864,6 +1864,10 @@ fn kafka_sink_builder(
             connection,
             with_options,
         } => {
+            if !with_options.is_empty() {
+                scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
+            }
+
             let item = scx.get_item_by_resolved_name(&connection)?;
             // Get Kafka connection
             let connection = match item.connection()? {
@@ -1873,9 +1877,6 @@ fn kafka_sink_builder(
 
             let with_options: KafkaConfigOptionExtracted = with_options.try_into()?;
             let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
-            if !with_options.is_empty() {
-                scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
-            }
             (connection, with_options)
         }
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
