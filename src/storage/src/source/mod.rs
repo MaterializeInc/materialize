@@ -543,6 +543,12 @@ impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SourceMessageBatch<Key, Value, Diff> {
     messages: HashMap<PartitionId, Vec<(SourceMessage<Key, Value, Diff>, MzOffset)>>,
+    /// Any errors that occured while obtaining this batch.
+    // TODO: These non-definite errors should not show up in the dataflows/the
+    // persist shard but it's the current "correct" behaviour. We need to fix
+    // this as a follow-up issue because it's a bigger thing that breaks with
+    // the current behaviour.
+    non_definite_errors: Vec<SourceError>,
     source_upper: HashMap<PartitionId, MzOffset>,
 }
 
@@ -728,12 +734,12 @@ where
     let (remap_stream, remap_token) =
         remap_operator::<G, S>(config.clone(), source_upper_summaries);
 
-    let ((reclocked_stream, err_stream), _reclock_token) =
+    let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
         reclock_operator::<G, S>(config, batches, remap_stream);
 
     let token = Rc::new((source_reader_token, remap_token));
 
-    ((reclocked_stream, err_stream), Some(token))
+    ((reclocked_stream, reclocked_err_stream), Some(token))
 }
 
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
@@ -834,7 +840,7 @@ where
             // about the current frontier. Otherwise, if there are no new
             // messages after a restart, the reclock operator would be stuck and
             // not advance its downstream frontier.
-            yield Some((HashMap::new(), Vec::new(), source_upper.clone()));
+            yield Some((HashMap::new(), Vec::new(), Vec::new(), source_upper.clone()));
 
             info!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
             source_upper.retain(|pid, _offset| {
@@ -911,7 +917,14 @@ where
                                 // This source reader is done. Yield one final
                                 // update of the source_upper.
                                 let unconsumed_partitions = source_reader.unconsumed_partitions();
-                                yield Some((std::mem::take(&mut untimestamped_messages), unconsumed_partitions, source_upper.clone()));
+                                yield Some(
+                                    (
+                                        std::mem::take(&mut untimestamped_messages),
+                                        non_definite_errors.drain(..).collect_vec(),
+                                        unconsumed_partitions,
+                                        source_upper.clone()
+                                    )
+                                );
 
                                 // Then, let the consumer know we're done.
                                 yield None;
@@ -939,7 +952,14 @@ where
                         // Emit empty batches as well. Just to keep downstream
                         // operators informed about the unconsumed partitions
                         // and the source upper.
-                        yield Some((std::mem::take(&mut untimestamped_messages), unconsumed_partitions, source_upper.clone()));
+                        yield Some(
+                            (
+                                std::mem::take(&mut untimestamped_messages),
+                                non_definite_errors.drain(..).collect_vec(),
+                                unconsumed_partitions,
+                                source_upper.clone()
+                            )
+                        );
                     }
                 }
             }
@@ -961,15 +981,16 @@ where
             let mut batch_counter = 0;
 
             while let Poll::Ready(Some(update)) = source_reader.as_mut().poll_next(&mut context) {
-                let (messages, unconsumed_partitions, source_upper) = if let Some(update) = update {
-                    update
-                } else {
-                    info!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
-                    // We will never produce more data, clear our capabilities to
-                    // communicate this downstream.
-                    cap_set.downgrade(&[]);
-                    return;
-                };
+                let (messages, non_definite_errors, unconsumed_partitions, source_upper) =
+                    if let Some(update) = update {
+                        update
+                    } else {
+                        info!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
+                        // We will never produce more data, clear our capabilities to
+                        // communicate this downstream.
+                        cap_set.downgrade(&[]);
+                        return;
+                    };
 
                 info!(
                     "create_source_raw({id}) {worker_id}/{worker_count}: message_batch.len(): {:?}",
@@ -997,8 +1018,17 @@ where
                         .map(|pid| (pid, MzOffset { offset: u64::MAX })),
                 );
 
+                let non_definite_errors = non_definite_errors
+                    .into_iter()
+                    .map(|e| SourceError {
+                        source_id: id,
+                        error: e.inner,
+                    })
+                    .collect_vec();
+
                 let message_batch = SourceMessageBatch {
                     messages,
+                    non_definite_errors,
                     source_upper: extended_source_upper,
                 };
 
@@ -1036,9 +1066,9 @@ where
                 let mut batch_output = batch_output.activate();
                 let mut summary_output = summary_output.activate();
 
-                for (messages, source_upper) in buffer.drain(..) {
+                for (message_batch, source_upper) in buffer.drain(..) {
                     let mut session = batch_output.session(&cap);
-                    session.give(messages);
+                    session.give(message_batch);
 
                     let summary_cap = cap.delayed_for_output(cap.time(), summary_output_port);
                     let mut session = summary_output.session(&summary_cap);
@@ -1365,6 +1395,28 @@ where
                                 ts,
                             )
                         }
+                    }
+
+                    // TODO: We should not emit the non-definite errors as
+                    // DataflowErrors, which will make them end up on the
+                    // persist shard for this source. Instead they should be
+                    // reported to the Healthchecker. But that's future work.
+                    if !untimestamped_batch.non_definite_errors.is_empty() {
+                        // If there are errors, it means that someone must also
+                        // have given us a capability because a
+                        // batch/batch-summary was emitted to the remap
+                        // operator.
+                        let err_cap = cap_set.delayed(
+                            cap_set
+                                .first()
+                                .expect("missing a capability for emitting errors"),
+                        );
+                        let mut session = output.session(&err_cap);
+                        let errors = untimestamped_batch
+                            .non_definite_errors
+                            .iter()
+                            .map(|e| Err(e.clone()));
+                        session.give_iterator(errors);
                     }
 
                     // Pop off the processed batch.
