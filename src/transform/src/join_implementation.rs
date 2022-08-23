@@ -104,7 +104,10 @@ impl JoinImplementation {
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
             // Canonicalize the equivalence classes
-            mz_expr::canonicalize::canonicalize_equivalences(equivalences, &input_types);
+            mz_expr::canonicalize::canonicalize_equivalences(
+                equivalences,
+                input_types.iter().map(|t| &t.column_types),
+            );
 
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
@@ -529,6 +532,7 @@ fn install_lifted_mfp(
                     expr.permute(&project);
                     // if column references refer to mapped expressions that have been
                     // lifted, replace the column reference with the mapped expression.
+                    #[allow(deprecated)]
                     expr.visit_mut_pre_post(
                         &mut |e| {
                             if let MirScalarExpr::Column(c) = e {

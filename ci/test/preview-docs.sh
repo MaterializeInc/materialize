@@ -9,22 +9,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This file is processed by mkpipeline.py to trim unnecessary steps in PR
-# builds. The inputs for steps using the `mzcompose` plugin are computed
-# automatically. Inputs for other steps need to be manually listed in the
-# `inputs` key.
-
 set -euo pipefail
 
 . misc/shlib/shlib.bash
 
 cd doc/user
-hugo --gc --baseURL "/$BUILDKITE_PULL_REQUEST"
+hugo --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]
 name = "preview"
-url = "s3://materialize-website-previews?region=us-east-1&prefix=$BUILDKITE_PULL_REQUEST/"
+url = "s3://materialize-website-previews?region=us-east-1&prefix=materialize/$BUILDKITE_PULL_REQUEST/"
 EOF
 hugo deploy --config config.toml,config.deployment.toml
 
@@ -35,6 +30,6 @@ curl -fsSL \
     --data "{\
         \"state\": \"success\",\
         \"description\": \"Deploy preview ready.\",\
-        \"target_url\": \"https://preview.materialize.com/$BUILDKITE_PULL_REQUEST/\",\
+        \"target_url\": \"https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST/\",\
         \"context\": \"preview-docs\"\
     }"

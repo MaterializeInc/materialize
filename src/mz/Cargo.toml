@@ -3,7 +3,7 @@ name = "mz"
 description = "Materialize's CLI."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 
@@ -20,3 +20,4 @@ dirs = "4.0.0"
 subprocess = "0.2.9"
 mz-ore = { path = "../ore", features = ["task"] }
 toml_edit = "0.14.4"
+indicatif = "0.16.2"

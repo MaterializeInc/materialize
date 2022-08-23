@@ -19,8 +19,10 @@
 > SELECT time > 0
   FROM
     mz_materialized_views AS views,
+    mz_materializations AS mats,
     mz_materialization_frontiers AS frontiers
   WHERE
     views.name = 'mv' AND
-    views.id = frontiers.global_id
+    views.id = mats.global_id AND
+    mats.global_id = frontiers.global_id
 true

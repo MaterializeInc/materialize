@@ -18,6 +18,7 @@ use mz_repr::{Diff, Row, Timestamp};
 use mz_storage::types::errors::DataflowError;
 
 pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
+pub type RowKeySpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
 pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
 pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;

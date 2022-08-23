@@ -159,13 +159,6 @@ SHOW SINKS FROM foo.bar IN CLUSTER baz
 ShowObjects(ShowObjectsStatement { object_type: Sink, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
 
 parse-statement
-SHOW SINKS IN CLUSTER baz
-----
-SHOW SINKS IN CLUSTER baz
-=>
-ShowObjects(ShowObjectsStatement { object_type: Sink, from: None, in_cluster: Some(Unresolved(Ident("baz"))), extended: false, full: false, filter: None })
-
-parse-statement
 SHOW TABLES LIKE '%foo%'
 ----
 SHOW TABLES LIKE '%foo%'

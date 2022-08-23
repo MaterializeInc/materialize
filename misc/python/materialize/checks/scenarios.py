@@ -17,7 +17,7 @@
 
 from typing import List, Type
 
-from materialize.checks.actions import Action
+from materialize.checks.actions import Action, AlterSystem
 from materialize.checks.actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
@@ -25,6 +25,12 @@ from materialize.checks.actions import Initialize, KillComputed
 from materialize.checks.actions import KillStoraged as KillStoragedAction
 from materialize.checks.actions import Manipulate
 from materialize.checks.actions import RestartMz as RestartMzAction
+from materialize.checks.actions import (
+    RestartPostgresBackend as RestartPostgresBackendAction,
+)
+from materialize.checks.actions import (
+    RestartSourcePostgres as RestartSourcePostgresAction,
+)
 from materialize.checks.actions import StartComputed, StartMz, UseComputed, Validate
 from materialize.checks.checks import Check
 from materialize.mzcompose import Composition
@@ -57,6 +63,7 @@ class RestartEntireMz(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            AlterSystem("max_tables", "1000"),
             Initialize(self.checks),
             RestartMzAction(),
             Manipulate(self.checks, phase=1),
@@ -71,6 +78,7 @@ class DropCreateDefaultReplica(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            AlterSystem("max_tables", "1000"),
             Initialize(self.checks),
             Manipulate(self.checks, phase=1),
             DropCreateDefaultReplicaAction(),
@@ -85,6 +93,7 @@ class RestartComputed(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            AlterSystem("max_tables", "1000"),
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
@@ -106,6 +115,7 @@ class RestartEnvironmentdStoraged(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            AlterSystem("max_tables", "1000"),
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
@@ -124,11 +134,41 @@ class KillStoraged(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            AlterSystem("max_tables", "1000"),
             Initialize(self.checks),
             KillStoragedAction(),
             Manipulate(self.checks, phase=1),
             KillStoragedAction(),
             Manipulate(self.checks, phase=2),
             KillStoragedAction(),
+            Validate(self.checks),
+        ]
+
+
+class RestartPostgresBackend(Scenario):
+    def actions(self) -> List[Action]:
+        return [
+            StartMz(),
+            AlterSystem("max_tables", "1000"),
+            Initialize(self.checks),
+            RestartPostgresBackendAction(),
+            Manipulate(self.checks, phase=1),
+            RestartPostgresBackendAction(),
+            Manipulate(self.checks, phase=2),
+            RestartPostgresBackendAction(),
+            Validate(self.checks),
+        ]
+
+
+class RestartSourcePostgres(Scenario):
+    def actions(self) -> List[Action]:
+        return [
+            StartMz(),
+            Initialize(self.checks),
+            RestartSourcePostgresAction(),
+            Manipulate(self.checks, phase=1),
+            RestartSourcePostgresAction(),
+            Manipulate(self.checks, phase=2),
+            RestartSourcePostgresAction(),
             Validate(self.checks),
         ]

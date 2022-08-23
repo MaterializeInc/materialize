@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use aws_types::credentials::ProvideCredentials;
 use tokio_postgres::Client;
 use tracing::info;
 
@@ -17,11 +18,49 @@ use mz_test_util::mz_client;
 
 pub async fn create_source_and_views(
     client: &Client,
+    config: &aws_config::SdkConfig,
     stream_arn: String,
 ) -> Result<(), anyhow::Error> {
+    let credentials = config
+        .credentials_provider()
+        .unwrap()
+        .provide_credentials()
+        .await?;
+    let secret_access_key = format!(
+        "CREATE SECRET aws_secret_access_key AS '{}';",
+        credentials.secret_access_key()
+    );
+    client
+        .batch_execute(&secret_access_key)
+        .await
+        .context("Creating secret access key secret")?;
+
+    let aws_connection = format!(
+        "CREATE CONNECTION kinesis_conn FOR AWS
+            ACCESS KEY ID = '{}',
+            SECRET ACCESS KEY = SECRET aws_secret_access_key
+            {};",
+        credentials.access_key_id(),
+        if let Some(token) = credentials.session_token() {
+            format!(
+                ",
+                TOKEN = '{}'",
+                token
+            )
+        } else {
+            "".to_string()
+        }
+    );
+    info!("creating connection=> {}", aws_connection);
+    client
+        .batch_execute(&aws_connection)
+        .await
+        .context("Creating connection")?;
+
     let query = format!(
         "CREATE SOURCE foo
-         FROM KINESIS ARN '{stream_arn}'
+         FROM KINESIS CONNECTION kinesis_conn
+         ARN '{stream_arn}'
          FORMAT BYTES",
         stream_arn = stream_arn,
     );

@@ -26,9 +26,9 @@ use tracing::{debug_span, warn, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
-use crate::r#impl::machine::{retry_external, Machine};
-use crate::r#impl::state::HollowBatch;
-use crate::r#impl::trace::FueledMergeRes;
+use crate::internal::machine::{retry_external, Machine};
+use crate::internal::state::HollowBatch;
+use crate::internal::trace::FueledMergeRes;
 use crate::read::fetch_batch_part;
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
@@ -183,6 +183,7 @@ impl Compactor {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        let parts_cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
         let compact_blocking = async move {
             let () = Self::validate_req(&req)?;
 
@@ -193,6 +194,7 @@ impl Compactor {
                 writer_id,
                 req.desc.lower().clone(),
                 Arc::clone(&blob),
+                parts_cpu_heavy_runtime,
                 &metrics.compaction.batch,
             );
 
@@ -216,7 +218,7 @@ impl Compactor {
                             updates.push(((k.to_vec(), v.to_vec()), t, d));
                         },
                     )
-                    .await;
+                    .await?;
                 }
             }
             consolidate_updates(&mut updates);

@@ -32,7 +32,6 @@ macro_rules! coord_bail {
     }
 }
 
-mod client;
 mod command;
 mod coord;
 mod error;
@@ -42,6 +41,7 @@ mod tail;
 mod util;
 
 pub mod catalog;
+pub mod client;
 pub mod session;
 
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};

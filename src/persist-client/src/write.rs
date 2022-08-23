@@ -12,11 +12,12 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, Indeterminate};
 use mz_persist::retry::Retry;
@@ -24,16 +25,16 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug, debug_span, info, instrument, trace, warn, Instrument};
+use tracing::{debug, debug_span, info, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::batch::{validate_truncate_batch, Batch, BatchBuilder};
+use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
-use crate::r#impl::compact::Compactor;
-use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
-use crate::r#impl::metrics::Metrics;
-use crate::r#impl::state::{HollowBatch, Upper};
-use crate::{parse_id, GarbageCollector, PersistConfig};
+use crate::internal::compact::Compactor;
+use crate::internal::machine::{Machine, INFO_MIN_ATTEMPTS};
+use crate::internal::metrics::Metrics;
+use crate::internal::state::{HollowBatch, Upper};
+use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -95,9 +96,10 @@ where
     pub(crate) gc: GarbageCollector,
     pub(crate) compact: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
     pub(crate) explicitly_expired: bool,
-
+    pub(crate) last_heartbeat: EpochMillis,
     pub(crate) upper: Antichain<T>,
 }
 
@@ -121,8 +123,7 @@ where
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn fetch_recent_upper(&mut self) -> Antichain<T> {
-        trace!("WriteHandle::fetch_recent_upper");
+    pub async fn fetch_recent_upper(&mut self) -> &Antichain<T> {
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
         let fresh_upper = self.machine.fetch_upper().await;
@@ -176,7 +177,6 @@ where
         I: IntoIterator<Item = SB>,
         D: Send + Sync,
     {
-        trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
         let batch = self.batch(updates, lower.clone(), upper.clone()).await?;
         self.append_batch(batch, lower, upper).await
     }
@@ -232,12 +232,6 @@ where
         I: IntoIterator<Item = SB>,
         D: Send + Sync,
     {
-        trace!(
-            "WriteHandle::compare_and_append expected_upper={:?} new_upper={:?}",
-            expected_upper,
-            new_upper
-        );
-
         let mut batch = match self
             .batch(updates, expected_upper.clone(), new_upper.clone())
             .await
@@ -297,8 +291,6 @@ where
     where
         D: Send + Sync,
     {
-        trace!("Batch::append lower={:?} upper={:?}", lower, upper);
-
         let mut retry = self
             .metrics
             .retries
@@ -342,6 +334,12 @@ where
                 }
                 Ok(Err(current_upper)) => {
                     let Upper(current_upper) = current_upper;
+
+                    // it's possible a client using `append_batch` continually fails if
+                    // it's racing with another writer. that's perfectly fine, but we should
+                    // be sure to heartbeat our writer explicitly if it's not getting a
+                    // chance to renew its lease through `[Self::compare_and_append]`
+                    self.maybe_heartbeat_writer().await;
 
                     // We tried to to a non-contiguous append, that won't work.
                     if PartialOrder::less_than(&current_upper, &lower) {
@@ -420,12 +418,6 @@ where
     where
         D: Send + Sync,
     {
-        trace!(
-            "Batch::compare_and_append expected_upper={:?} new_upper={:?}",
-            expected_upper,
-            new_upper
-        );
-
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
                 return Ok(Err(InvalidUsage::BatchNotFromThisShard {
@@ -449,6 +441,7 @@ where
             num_updates += batch.num_updates;
         }
 
+        let heartbeat_timestamp = (self.cfg.now)();
         let res = self
             .machine
             .compare_and_append(
@@ -458,12 +451,14 @@ where
                     len: num_updates,
                 },
                 &self.writer_id,
+                heartbeat_timestamp,
             )
             .await?;
 
         let maintenance = match res {
             Ok(Ok((_seqno, maintenance))) => {
                 self.upper = desc.upper().clone();
+                self.last_heartbeat = heartbeat_timestamp;
                 for batch in batches.iter_mut() {
                     batch.mark_consumed();
                 }
@@ -478,7 +473,7 @@ where
             Err(err) => return Ok(Err(err)),
         };
 
-        maintenance.perform(&self.machine, &self.gc, self.compact.as_ref());
+        maintenance.start_performing(&self.machine, &self.gc, self.compact.as_ref());
 
         Ok(Ok(Ok(())))
     }
@@ -496,13 +491,13 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&mut self, size_hint: usize, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
-        trace!("WriteHandle::builder lower={:?}", lower);
         BatchBuilder::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
             size_hint,
             lower,
             Arc::clone(&self.blob),
+            Arc::clone(&self.cpu_heavy_runtime),
             self.machine.shard_id().clone(),
             self.writer_id.clone(),
         )
@@ -525,8 +520,6 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!("WriteHandle::batch lower={:?} upper={:?}", lower, upper);
-
         let iter = updates.into_iter();
 
         // This uses the iter's size_hint's lower+1 to match the logic in Vec.
@@ -538,12 +531,39 @@ where
             let ((k, v), t, d) = update.borrow();
             let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
             match builder.add(k, v, t, d).await {
-                Ok(_) => (),
+                Ok(Added::Record) => (),
+                // We need to maintain this writer's lease in case the batch is taking an
+                // exceptionally long time to write, so that our staged blobs don't get GC'd
+                // while we're still processing the batch.
+                //
+                // Here, we check if we need to heartbeat the writer each time we completed
+                // and began uploading a batch part.
+                Ok(Added::RecordAndParts) => self.maybe_heartbeat_writer().await,
                 Err(invalid_usage) => return Err(invalid_usage),
             }
         }
 
         builder.finish(upper.clone()).await
+    }
+
+    /// Heartbeats the writer lease if necessary.
+    ///
+    /// This is an internally rate limited helper, designed to allow users to
+    /// call it as frequently as they like. Call this on some interval that is
+    /// "frequent" compared to PersistConfig::writer_lease_duration
+    pub async fn maybe_heartbeat_writer(&mut self) {
+        let min_elapsed = self.cfg.writer_lease_duration / 4;
+        let elapsed_since_last_heartbeat =
+            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
+        if elapsed_since_last_heartbeat >= min_elapsed {
+            let heartbeat_timestamp = (self.cfg.now)();
+            let (_, maintenance) = self
+                .machine
+                .heartbeat_writer(&self.writer_id, heartbeat_timestamp)
+                .await;
+            self.last_heartbeat = heartbeat_timestamp;
+            maintenance.start_performing(&self.machine, &self.gc);
+        }
     }
 
     /// Politely expires this writer, releasing its lease.
@@ -556,7 +576,6 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        trace!("WriteHandle::expire");
         self.machine.expire_writer(&self.writer_id).await;
         self.explicitly_expired = true;
     }
@@ -668,7 +687,6 @@ where
         let _ = handle.spawn_named(
             || format!("WriteHandle::expire ({})", self.writer_id),
             async move {
-                trace!("WriteHandle::expire");
                 machine.expire_writer(&writer_id).await;
             }
             .instrument(expire_span),

@@ -42,6 +42,16 @@ where
     }
 }
 
+impl<'a, T> std::fmt::Display for DisplaySeparated<'a, T>
+where
+    T: AstDisplay,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        AstFormatter::new(f, FormatMode::Simple).write_node(self);
+        Ok(())
+    }
+}
+
 pub fn separated<'a, T>(slice: &'a [T], sep: &'static str) -> DisplaySeparated<'a, T>
 where
     T: AstDisplay,

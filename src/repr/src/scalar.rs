@@ -22,7 +22,7 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use uuid::Uuid;
 
 use mz_lowertest::MzReflect;
@@ -124,6 +124,44 @@ pub enum Datum<'a> {
     // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
+}
+
+/// This implementation of serialize is designed to be able to print out Datums
+/// in a human-readable way in JSON. This implementation may not suit other
+/// serialization purposes.
+impl<'a> Serialize for Datum<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use Datum::*;
+        match self {
+            False => serializer.serialize_bool(false),
+            True => serializer.serialize_bool(true),
+            Int16(i) => serializer.serialize_i16(*i),
+            Int32(i) => serializer.serialize_i32(*i),
+            Int64(i) => serializer.serialize_i64(*i),
+            UInt8(u) => serializer.serialize_u8(*u),
+            UInt32(u) => serializer.serialize_u32(*u),
+            Float32(f) => serializer.serialize_f32(**f),
+            Float64(f) => serializer.serialize_f64(**f),
+            Date(d) => d.serialize(serializer),
+            Time(t) => t.serialize(serializer),
+            Timestamp(ts) => ts.serialize(serializer),
+            TimestampTz(tstz) => tstz.serialize(serializer),
+            Interval(i) => i.serialize(serializer),
+            Bytes(b) => serializer.serialize_bytes(b),
+            String(s) => serializer.serialize_str(s),
+            Array(a) => a.serialize(serializer),
+            List(l) => l.serialize(serializer),
+            Map(m) => m.serialize(serializer),
+            Numeric(n) => serializer.serialize_str(&n.to_string()),
+            Uuid(u) => u.serialize(serializer),
+            Dummy => serializer.serialize_str("Dummy"),
+            JsonNull => serializer.serialize_str("JsonNull"),
+            Null => serializer.serialize_none(),
+        }
+    }
 }
 
 impl TryFrom<Datum<'_>> for bool {
@@ -870,6 +908,65 @@ impl fmt::Display for Datum<'_> {
             Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
+        }
+    }
+}
+
+impl From<&Datum<'_>> for serde_json::Value {
+    fn from(datum: &Datum) -> serde_json::Value {
+        // Convert most floats to a JSON Number. JSON Numbers don't support NaN or
+        // Infinity, so those will still be rendered as strings.
+        fn float_to_json(f: f64) -> serde_json::Value {
+            match serde_json::Number::from_f64(f) {
+                Some(n) => serde_json::Value::Number(n),
+                None => serde_json::Value::String(f.to_string()),
+            }
+        }
+        match datum {
+            Datum::Null | Datum::JsonNull => serde_json::Value::Null,
+            Datum::False => serde_json::Value::Bool(false),
+            Datum::True => serde_json::Value::Bool(true),
+            Datum::Int16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::UInt8(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::UInt32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::Float32(n) => float_to_json(n.into_inner() as f64),
+            Datum::Float64(n) => float_to_json(n.into_inner()),
+            Datum::Numeric(d) => {
+                // serde_json requires floats to be finite
+                if d.0.is_infinite() {
+                    serde_json::Value::String(d.0.to_string())
+                } else {
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(f64::try_from(d.0).unwrap()).unwrap(),
+                    )
+                }
+            }
+            Datum::String(s) => serde_json::Value::String(s.to_string()),
+            Datum::List(list) => {
+                serde_json::Value::Array(list.iter().map(|datum| Self::from(&datum)).collect())
+            }
+            Datum::Array(array) => serde_json::Value::Array(
+                array
+                    .elements()
+                    .iter()
+                    .map(|datum| Self::from(&datum))
+                    .collect(),
+            ),
+            Datum::Map(map) => serde_json::Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.to_owned(), Self::from(&v)))
+                    .collect(),
+            ),
+            Datum::Dummy => unreachable!(),
+            Datum::Bytes(_)
+            | Datum::Date(_)
+            | Datum::Interval(_)
+            | Datum::Time(_)
+            | Datum::Timestamp(_)
+            | Datum::TimestampTz(_)
+            | Datum::Uuid(_) => serde_json::Value::String(datum.to_string()),
         }
     }
 }

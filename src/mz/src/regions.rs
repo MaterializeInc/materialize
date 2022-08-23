@@ -7,26 +7,35 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::utils::trim_newline;
+use crate::utils::exit_with_fail_message;
 /// ----------------------------
 ///  Regions commands
 /// ----------------------------
-use crate::{CloudProvider, CloudProviderRegion, FronteggAuthMachine, Region, CLOUD_PROVIDERS_URL};
+use crate::{
+    CloudProvider, CloudProviderAndRegion, CloudProviderRegion, ExitMessage, FronteggAuthMachine,
+    Region, CLOUD_PROVIDERS_URL,
+};
 
 use std::collections::HashMap;
-use std::io::Write;
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
-use reqwest::{Client, Error, Response};
+use reqwest::{Client, Error};
 
-fn parse_cloud_provider_region(cloud_provider_region: CloudProviderRegion) -> String {
+/**
+ * Parse cloud providers.
+ * TODO: us-east-1 and eu-west-1 should be AWS/us-east-1, AWS/eu-west-1
+ */
+pub(crate) fn parse_cloud_provider_region(cloud_provider_region: CloudProviderRegion) -> String {
     match cloud_provider_region {
         CloudProviderRegion::usEast_1 => "us-east-1".to_string(),
         CloudProviderRegion::euWest_1 => "eu-west-1".to_string(),
     }
 }
 
-// TODO: ec.0 is dynamic.
+/**
+ * Format cloud provider region url to interact with.
+ * TODO: ec.0 is dynamic.
+ */
 fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
     format!(
         "https://ec.0.{}.aws.cloud.materialize.com/api/environment",
@@ -34,6 +43,9 @@ fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
     )
 }
 
+/**
+ * Build the headers for reqwest request with the frontegg authorization.
+ */
 fn build_region_request_headers(authorization: String) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
@@ -46,6 +58,9 @@ fn build_region_request_headers(authorization: String) -> HeaderMap {
     headers
 }
 
+/**
+ * Enables a particular cloud provider's region
+ */
 pub(crate) async fn enable_region(
     client: Client,
     cloud_provider_region: CloudProviderRegion,
@@ -68,49 +83,13 @@ pub(crate) async fn enable_region(
         .await
 }
 
-pub(crate) fn warning_delete_region(cloud_provider_region: CloudProviderRegion) -> bool {
-    let region = parse_cloud_provider_region(cloud_provider_region);
-
-    println!();
-    println!("**** WARNING ****");
-    println!("Are you sure? Deleting a region is irreversible.");
-    println!("Enter {:?} to proceed:", region);
-
-    // Handle user input
-    let mut region_input = String::new();
-    let _ = std::io::stdout().flush();
-
-    match std::io::stdin().read_line(&mut region_input) {
-        Ok(_) => {
-            trim_newline(&mut region_input);
-            if region_input == region {
-                true
-            } else {
-                println!("The region's name doesn't match.");
-                false
-            }
-        }
-        Err(error) => panic!("Error parsing the region input: {:?}", error),
-    }
-}
-
-pub(crate) async fn delete_region(
-    client: Client,
-    cloud_provider_region: CloudProviderRegion,
-    frontegg_auth_machine: FronteggAuthMachine,
-) -> Result<Response, Error> {
-    let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
-    let region_url: String = format_region_url(cloud_provider_region);
-
-    let headers = build_region_request_headers(authorization);
-
-    client.delete(region_url).headers(headers).send().await
-}
-
+/**
+ * Get a cloud provider's regions
+ */
 pub(crate) async fn cloud_provider_region_details(
-    client: Client,
-    cloud_provider_region: CloudProvider,
-    frontegg_auth_machine: FronteggAuthMachine,
+    client: &Client,
+    cloud_provider_region: &CloudProvider,
+    frontegg_auth_machine: &FronteggAuthMachine,
 ) -> Result<Option<Vec<Region>>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
     let headers = build_region_request_headers(authorization);
@@ -131,39 +110,49 @@ pub(crate) async fn cloud_provider_region_details(
     }
 }
 
+/**
+ * List all the available regions for a list of cloud providers.
+ */
 pub(crate) async fn list_regions(
-    cloud_providers: Vec<CloudProvider>,
-    client: Client,
-    frontegg_auth_machine: FronteggAuthMachine,
-) -> Vec<Region> {
+    cloud_providers: &Vec<CloudProvider>,
+    client: &Client,
+    frontegg_auth_machine: &FronteggAuthMachine,
+) -> Vec<CloudProviderAndRegion> {
     // TODO: Run requests in parallel
-    let mut regions: Vec<Region> = Vec::new();
+    let mut cloud_providers_and_regions: Vec<CloudProviderAndRegion> = Vec::new();
 
     for cloud_provider in cloud_providers {
-        match cloud_provider_region_details(
-            client.clone(),
-            cloud_provider,
-            frontegg_auth_machine.clone(),
-        )
-        .await
-        {
+        match cloud_provider_region_details(client, cloud_provider, frontegg_auth_machine).await {
             Ok(Some(mut region)) => match region.pop() {
-                Some(region) => regions.push(region),
-                None => {}
+                Some(region) => cloud_providers_and_regions.push(CloudProviderAndRegion {
+                    cloud_provider: cloud_provider.clone(),
+                    region: Some(region),
+                }),
+                None => cloud_providers_and_regions.push(CloudProviderAndRegion {
+                    cloud_provider: cloud_provider.clone(),
+                    region: None,
+                }),
             },
             Err(error) => {
-                panic!("Error retrieving region details: {:?}", error);
+                exit_with_fail_message(ExitMessage::String(format!(
+                    "Error retrieving region details: {:?}",
+                    error
+                )));
             }
             _ => {}
         }
     }
 
-    regions
+    cloud_providers_and_regions
 }
 
+/**
+ * List all the available cloud providers.
+ * E.g.: [us-east-1, eu-west-1]
+ */
 pub(crate) async fn list_cloud_providers(
-    client: Client,
-    frontegg_auth_machine: FronteggAuthMachine,
+    client: &Client,
+    frontegg_auth_machine: &FronteggAuthMachine,
 ) -> Result<Vec<CloudProvider>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
 
@@ -177,3 +166,85 @@ pub(crate) async fn list_cloud_providers(
         .json::<Vec<CloudProvider>>()
         .await
 }
+
+/**
+ * Prints if a region is enabled or not
+ * E.g.: AWS/us-east-1  enabled
+ */
+pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderAndRegion) {
+    let region = &cloud_provider_and_region.region;
+    let cloud_provider = &cloud_provider_and_region.cloud_provider;
+
+    match region {
+        Some(_) => println!(
+            "{:}/{:}  enabled",
+            cloud_provider.provider, cloud_provider.region
+        ),
+        None => println!(
+            "{:}/{:}  disabled",
+            cloud_provider.provider, cloud_provider.region
+        ),
+    };
+}
+
+/**
+ * Prints a region's status and addresses
+ * Healthy:         {yes/no}
+ * SQL address:     foo.materialize.cloud:6875
+ * HTTPS address:   <https://foo.materialize.cloud>
+ */
+pub(crate) fn print_region_status(region: Region, health: bool) {
+    if health {
+        println!("Healthy:\tyes");
+    } else {
+        println!("Healthy:\tno");
+    }
+    println!("SQL address: \t{}", region.environmentd_pgwire_address);
+    // Remove port from url
+    println!(
+        "HTTPS address: \thttps://{}",
+        &region.environmentd_https_address[0..region.environmentd_https_address.len() - 4]
+    );
+}
+
+// ------------------------------------------------------------------------
+// Delete is currently disabled. Preserving the code for once is available.
+// ------------------------------------------------------------------------
+// pub(crate) fn warning_delete_region(cloud_provider_region: CloudProviderRegion) -> bool {
+//     let region = parse_cloud_provider_region(cloud_provider_region);
+
+//     println!();
+//     println!("**** WARNING ****");
+//     println!("Are you sure? Deleting a region is irreversible.");
+//     println!("Enter {:?} to proceed:", region);
+
+//     // Handle user input
+//     let mut region_input = String::new();
+//     let _ = std::io::stdout().flush();
+
+//     match std::io::stdin().read_line(&mut region_input) {
+//         Ok(_) => {
+//             trim_newline(&mut region_input);
+//             if region_input == region {
+//                 true
+//             } else {
+//                 println!("The region's name doesn't match.");
+//                 false
+//             }
+//         }
+//         Err(error) => panic!("Error parsing the region input: {:?}", error),
+//     }
+// }
+
+// pub(crate) async fn delete_region(
+//     client: Client,
+//     cloud_provider_region: CloudProviderRegion,
+//     frontegg_auth_machine: FronteggAuthMachine,
+// ) -> Result<Response, Error> {
+//     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
+//     let region_url: String = format_region_url(cloud_provider_region);
+
+//     let headers = build_region_request_headers(authorization);
+
+//     client.delete(region_url).headers(headers).send().await
+// }

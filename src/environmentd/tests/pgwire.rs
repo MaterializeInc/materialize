@@ -43,13 +43,6 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
 
-    match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
-        Ok(_) => panic!("query with invalid parameters executed successfully"),
-        Err(err) => {
-            assert!(format!("{:?}", err.source()).contains("WrongType"));
-        }
-    }
-
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
         Err(err) => assert!(err.to_string().contains("no overload")),
@@ -473,7 +466,7 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
             _ => panic!("only tcp connections supported"),
         };
         let user = config.get_user().unwrap();
-        let timeout = Duration::from_secs(5);
+        let timeout = Duration::from_secs(30);
 
         mz_pgtest::run_test(tf, addr, user.to_string(), timeout);
     });

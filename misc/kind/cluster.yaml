@@ -151,3 +151,7 @@ nodes:
         hostPort: 32062
       - containerPort: 32063
         hostPort: 32063
+
+  - role: worker
+  - role: worker
+  - role: worker

@@ -1,6 +1,16 @@
 # Test PREPARE, EXECUTE, DEALLOCATE.
 
 send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
 Query {"query": "DEALLOCATE ALL"}
 Query {"query": "DEALLOCATE a"}
 Query {"query": "EXECUTE a"}

@@ -495,6 +495,7 @@ mod tests {
     use std::time::Duration;
 
     use itertools::Itertools;
+    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
     use once_cell::sync::Lazy;
 
@@ -503,7 +504,7 @@ mod tests {
 
     static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> = Lazy::new(|| {
         Arc::new(Mutex::new(PersistClientCache::new(
-            PersistConfig::new(SYSTEM_TIME.clone()),
+            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
         )))
     });

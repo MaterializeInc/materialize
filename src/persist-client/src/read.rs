@@ -12,7 +12,7 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
@@ -24,20 +24,19 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, info, instrument, trace, trace_span, warn, Instrument};
+use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::Blob;
-use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
-use crate::r#impl::encoding::SerdeReaderEnrichedHollowBatch;
-use crate::r#impl::machine::{retry_external, Machine};
-use crate::r#impl::metrics::Metrics;
-use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::state::{HollowBatch, Since};
+use crate::internal::encoding::SerdeReaderEnrichedHollowBatch;
+use crate::internal::machine::{retry_external, Machine};
+use crate::internal::metrics::Metrics;
+use crate::internal::paths::PartialBlobKey;
+use crate::internal::state::{HollowBatch, Since};
 use crate::{GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -159,11 +158,6 @@ where
     /// `ReadHandle::fetch_batch`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
     pub async fn next(&mut self) -> ReaderEnrichedHollowBatch<T> {
-        trace!(
-            "Subscribe::next as_of={:?}, frontier={:?}",
-            self.listen.as_of,
-            self.listen.frontier
-        );
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
@@ -180,11 +174,6 @@ where
     /// `storage::source::persist_source::persist_source_sharded`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
     pub async fn next_listen_events(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
-        trace!(
-            "Subscribe::next as_of={:?}, frontier={:?}",
-            self.listen.as_of,
-            self.listen.frontier
-        );
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
@@ -250,7 +239,7 @@ where
         // This listen only needs to distinguish things after its frontier
         // (initially as_of although the frontier is inclusive and the as_of
         // isn't). Be a good citizen and downgrade early.
-        ret.handle.downgrade_since(ret.since.clone()).await;
+        ret.handle.downgrade_since(&ret.since).await;
         ret
     }
 
@@ -265,7 +254,12 @@ where
         })
     }
 
-    /// Retreives the next batch and updates `self`s metadata.
+    /// An exclusive upper bound on the progress of this Listen.
+    pub fn frontier(&self) -> &Antichain<T> {
+        &self.frontier
+    }
+
+    /// Attempt to pull out the next values of this subscription.
     ///
     /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
     /// `ReadHandle::fetch_batch`.
@@ -358,7 +352,6 @@ where
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
-        trace!("Listen::next");
         let batch = self.next_batch().await;
         let progress = batch.batch.desc.upper().clone();
         let updates = self
@@ -432,7 +425,7 @@ where
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let new_since: timely::progress::Antichain<u64> = unimplemented!();
 /// # async {
-/// tokio::time::timeout(timeout, read.downgrade_since(new_since)).await
+/// tokio::time::timeout(timeout, read.downgrade_since(&new_since)).await
 /// # };
 /// ```
 #[derive(Debug)]
@@ -478,19 +471,19 @@ where
     /// promising that no more data will ever be read by this handle.
     ///
     /// This also acts as a heartbeat for the reader lease (including if called
-    /// with `new_since` equal to `self.since()`, making the call a no-op).
+    /// with `new_since` equal to something like `self.since()` or the minimum
+    /// timestamp, making the call a no-op).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
-        trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
+    pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         let (_seqno, current_reader_since, maintenance) = self
             .machine
-            .downgrade_since(&self.reader_id, &new_since, (self.cfg.now)())
+            .downgrade_since(&self.reader_id, new_since, (self.cfg.now)())
             .await;
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
         self.last_heartbeat = Instant::now();
-        maintenance.perform(&self.machine, &self.gc);
+        maintenance.start_performing(&self.machine, &self.gc);
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -511,8 +504,6 @@ where
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
-        trace!("ReadHandle::listen as_of={:?}", as_of);
-
         let () = self.machine.verify_listen(&as_of).await?;
         Ok(Listen::new(self, as_of).await)
     }
@@ -537,10 +528,7 @@ where
     ) -> Result<Vec<ReaderEnrichedHollowBatch<T>>, Since<T>> {
         let mut machine = self.machine.clone();
 
-        let batches = machine
-            .snapshot(&as_of)
-            .await
-            .expect("ReadHandle should validate `as_of` valid before generating Subscribe");
+        let batches = machine.snapshot(&as_of).await?;
 
         let r = batches
             .into_iter()
@@ -583,8 +571,6 @@ where
     /// [Self::listen].
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn subscribe(self, as_of: Antichain<T>) -> Result<Subscribe<K, V, T, D>, Since<T>> {
-        trace!("ReadHandle::subscribe as_of={:?}", as_of);
-
         let snapshot_batches = self.snapshot(as_of.clone()).await?.into();
         let listen = self.listen(as_of).await?;
         Ok(Subscribe::new(snapshot_batches, listen))
@@ -597,7 +583,6 @@ where
         &mut self,
         batch: ReaderEnrichedHollowBatch<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
-        trace!("ReadHandle::fetch_batch");
         if batch.shard_id != self.machine.shard_id() {
             return Err(InvalidUsage::BatchNotFromThisShard {
                 batch_shard: batch.shard_id,
@@ -652,7 +637,21 @@ where
                     updates.push(((k, v), t, d));
                 },
             )
-            .await;
+            .await
+            .unwrap_or_else(|err| {
+                // Ideally, readers should never encounter a missing blob. They place a seqno
+                // hold as they consume their snapshot/listen, preventing any blobs they need
+                // from being deleted by garbage collection, and all blob implementations are
+                // linearizable so there should be no possibility of stale reads.
+                //
+                // If we do have a bug and a reader does encounter a missing blob, the state
+                // cannot be recovered, and our best option is to panic and retry the whole
+                // process.
+                panic!(
+                    "reader {} could not fetch batch part: {}",
+                    self.reader_id, err
+                )
+            });
         }
 
         // TODO: This is potentially suprising for the `ReadHandle` to manage.
@@ -671,7 +670,6 @@ where
     /// `since`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn clone(&self) -> Self {
-        trace!("ReadHandle::clone");
         let new_reader_id = ReaderId::new();
         let mut machine = self.machine.clone();
         let read_cap = machine.clone_reader(&new_reader_id, (self.cfg.now)()).await;
@@ -693,11 +691,11 @@ where
     ///
     /// This is an internally rate limited helper, designed to allow users to
     /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or [Self::maybe_heartbeat_reader] on some interval that is "frequent"
+    /// or Self::maybe_heartbeat_reader on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     ///
     /// This is communicating actual progress information, so is given
-    /// preferential treatment compared to [Self::maybe_heartbeat_reader].
+    /// preferential treatment compared to Self::maybe_heartbeat_reader.
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
@@ -705,7 +703,7 @@ where
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 4;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(new_since.clone()).await;
+            self.downgrade_since(&new_since).await;
         }
     }
 
@@ -715,7 +713,7 @@ where
     /// call it as frequently as they like. Call this [Self::downgrade_since],
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    pub async fn maybe_heartbeat_reader(&mut self) {
+    async fn maybe_heartbeat_reader(&mut self) {
         let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 2;
         let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
         if elapsed_since_last_heartbeat >= min_elapsed {
@@ -724,7 +722,7 @@ where
                 .heartbeat_reader(&self.reader_id, (self.cfg.now)())
                 .await;
             self.last_heartbeat = Instant::now();
-            maintenance.perform(&self.machine, &self.gc);
+            maintenance.start_performing(&self.machine, &self.gc);
         }
     }
 
@@ -738,7 +736,6 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        trace!("ReadHandle::expire");
         self.machine.expire_reader(&self.reader_id).await;
         self.explicitly_expired = true;
     }
@@ -816,7 +813,6 @@ where
         let _ = handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
-                trace!("ReadHandle::expire");
                 machine.expire_reader(&reader_id).await;
             }
             .instrument(expire_span),
@@ -831,37 +827,27 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     key: &PartialBlobKey,
     registered_desc: &Description<T>,
     mut update_fn: UpdateFn,
-) where
+) -> Result<(), anyhow::Error>
+where
     T: Timestamp + Lattice + Codec64,
     UpdateFn: FnMut(&[u8], &[u8], T, [u8; 8]),
 {
-    let mut retry = metrics
-        .retries
-        .fetch_batch_part
-        .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
     let get_span = debug_span!("fetch_batch::get");
-    let value = loop {
-        let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
-            blob.get(&key.complete(shard_id)).await
-        })
-        .instrument(get_span.clone())
-        .await;
-        match value {
-            Some(x) => break x,
-            // If the underlying impl of blob isn't linearizable, then we
-            // might get a key reference that that blob isn't returning yet.
-            // Keep trying, it'll show up.
-            None => {
-                // This is quite unexpected given that our initial blobs _are_
-                // linearizable, so always log at info.
-                info!(
-                    "unexpected missing blob, trying again in {:?}: {}",
-                    retry.next_sleep(),
-                    key
-                );
-                retry = retry.sleep().await;
-            }
-        };
+    let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        blob.get(&key.complete(shard_id)).await
+    })
+    .instrument(get_span.clone())
+    .await;
+
+    let value = match value {
+        Some(v) => v,
+        None => {
+            return Err(anyhow!(
+                "unexpected missing blob: {} for shard: {}",
+                key,
+                shard_id
+            ))
+        }
     };
     drop(get_span);
 
@@ -947,7 +933,9 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
                 update_fn(k, v, t, d);
             }
         }
-    })
+    });
+
+    Ok(())
 }
 
 // TODO: This goes away the desc on BlobTraceBatchPart becomes a Description<T>,
@@ -980,7 +968,7 @@ mod tests {
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use timely::ExchangeData;
 
-    use crate::r#impl::metrics::Metrics;
+    use crate::internal::metrics::Metrics;
     use crate::tests::all_ok;
     use crate::{PersistClient, PersistConfig};
 

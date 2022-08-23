@@ -71,18 +71,18 @@ use std::num::NonZeroUsize;
 use std::ops::Neg;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_ore::tracing::OpenTelemetryContext;
 use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tracing::{span, Level};
 use uuid::Uuid;
 
@@ -94,26 +94,29 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
 use mz_ore::thread::JoinHandleExt;
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::usage::StorageUsageClient;
+use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ExportDescription};
+use mz_storage::controller::CollectionDescription;
 use mz_storage::types::connections::ConnectionContext;
-use mz_storage::types::sinks::{SinkAsOf, SinkConnection, TailSinkConnection};
+use mz_storage::types::sinks::StorageSinkConnection;
 use mz_storage::types::sources::{IngestionDescription, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, Sink, SinkConnectionState, StorageHostSizeMap,
+    ClusterReplicaSizeMap, StorageHostSizeMap, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::coord::appends::{AdvanceLocalInput, Deferred, PendingWriteTxn};
+use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
@@ -122,7 +125,7 @@ use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::sink_connection;
 use crate::tail::PendingTail;
-use crate::util::ClientTransmitter;
+use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
@@ -142,6 +145,9 @@ mod timestamp_selection;
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
 
+/// The default interval at which to collect storage usage information.
+pub const DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
+
 /// A dummy availability zone to use when no availability zones are explicitly
 /// specified.
 pub const DUMMY_AVAILABILITY_ZONE: &str = "";
@@ -154,12 +160,25 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
-    AdvanceTimelines,
-    AdvanceLocalInput(AdvanceLocalInput<T>),
-    GroupCommit,
+    /// Initiates a group commit.
+    GroupCommitInitiate,
+    /// Makes a group commit visible to all clients.
+    GroupCommitApply(
+        /// Timestamp of the writes in the group commit.
+        T,
+        /// Clients waiting on responses from the group commit.
+        Vec<CompletedClientTransmitter<ExecuteResponse>>,
+        /// Optional lock if the group commit contained writes to user tables.
+        Option<OwnedMutexGuard<()>>,
+    ),
     ComputeInstanceStatus(ComputeInstanceEvent),
-    RemovePendingPeeks { conn_id: ConnectionId },
+    RemovePendingPeeks {
+        conn_id: ConnectionId,
+    },
     LinearizeReads(Vec<PendingTxn>),
+    StorageUsageFetch,
+    StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
+    Consolidate(Vec<mz_stash::Id>),
 }
 
 #[derive(Derivative)]
@@ -195,8 +214,7 @@ pub struct SinkConnectionReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
-    pub result: Result<SinkConnection, AdapterError>,
-    pub compute_instance: ComputeInstanceId,
+    pub result: Result<StorageSinkConnection, AdapterError>,
 }
 
 /// Configures a coordinator.
@@ -213,6 +231,7 @@ pub struct Config<S> {
     pub storage_host_sizes: StorageHostSizeMap,
     pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
+    pub storage_usage_client: StorageUsageClient,
 }
 
 /// Soft-state metadata about a compute replica
@@ -274,6 +293,9 @@ pub struct Coordinator<S> {
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingTxn>,
 
+    /// Channel for catalog stash consolidations.
+    consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
+
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
@@ -329,6 +351,11 @@ pub struct Coordinator<S> {
     /// `None` is used as a tombstone value for replicas that have been
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
+
+    // Persist client for fetching storage metadata such as size metrics.
+    storage_usage_client: StorageUsageClient,
+    /// The interval at which to collect storage usage information.
+    storage_usage_collection_interval: Duration,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -341,7 +368,7 @@ impl<S: Append + 'static> Coordinator<S> {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
-        let mut persisted_log_ids = vec![];
+        let mut persisted_source_ids = vec![];
         for instance in self.catalog.compute_instances() {
             self.controller
                 .create_instance(instance.id, instance.logging.clone())
@@ -350,7 +377,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let introspection_collections = replica
                     .config
                     .persisted_logs
-                    .get_logs()
+                    .get_sources()
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
@@ -363,7 +390,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_log_ids.extend(replica.config.persisted_logs.get_log_ids().iter());
+                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids().iter());
 
                 self.controller
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
@@ -373,19 +400,12 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.initialize_storage_read_policies(
-            persisted_log_ids,
+            persisted_source_ids,
             DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
         )
         .await;
 
         // Migrate builtin objects.
-        for (compute_id, sink_ids) in builtin_migration_metadata.previous_sink_ids {
-            self.controller
-                .compute_mut(compute_id)
-                .unwrap()
-                .drop_sinks_unvalidated(sink_ids)
-                .await?;
-        }
         for (compute_id, index_ids) in builtin_migration_metadata.previous_index_ids {
             self.controller
                 .compute_mut(compute_id)
@@ -410,6 +430,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .storage_mut()
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
             .await?;
+        self.controller
+            .storage_mut()
+            .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids)
+            .await?;
 
         let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
         // Topologically sort entries based on the used_by relationship
@@ -431,9 +455,16 @@ impl<S: Append + 'static> Coordinator<S> {
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         let mut policies_to_set: CollectionIdBundle = Default::default();
 
-        let source_status_collection_id = self
-            .catalog
-            .resolve_builtin_storage_collection(&crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+        // This is disabled for the moment because it has unusual upper
+        // advancement behavior.
+        // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+        let status_collection_id = if false {
+            Some(self.catalog.resolve_builtin_storage_collection(
+                &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+            ))
+        } else {
+            None
+        };
 
         for entry in &entries {
             match entry.item() {
@@ -465,7 +496,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 desc: source.desc.clone(),
                                 ingestion: Some(ingestion),
                                 since: None,
-                                status_collection_id: Some(source_status_collection_id),
+                                status_collection_id,
                                 host_config: Some(source.host_config.clone()),
                             },
                         )])
@@ -538,8 +569,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
-                        SinkConnectionState::Pending(builder) => builder,
-                        SinkConnectionState::Ready(_) => {
+                        StorageSinkConnectionState::Pending(builder) => builder,
+                        StorageSinkConnectionState::Ready(_) => {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
@@ -563,7 +594,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         entry.oid(),
                         connection,
                         // The sink should be established on a specific compute instance.
-                        sink.compute_instance,
                         None,
                     )
                     .await?;
@@ -652,7 +682,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let WriteTimestamp {
             timestamp: _,
             advance_to,
-        } = self.get_and_step_local_write_ts().await;
+        } = self.get_local_write_ts().await;
         let appends = entries
             .iter()
             .filter(|entry| entry.is_table())
@@ -663,7 +693,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .expect("invalid updates")
             .await
-            .expect("One-shot shouldn't fail")
+            .expect("One-shot shouldn't be dropped during bootstrap")
             .unwrap();
 
         // Add builtin table updates the clear the contents of all system tables
@@ -688,7 +718,8 @@ impl<S: Append + 'static> Coordinator<S> {
             builtin_table_updates.extend(retractions);
         }
 
-        self.send_builtin_table_updates(builtin_table_updates).await;
+        self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
+            .await;
 
         Ok(())
     }
@@ -702,6 +733,7 @@ impl<S: Append + 'static> Coordinator<S> {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
+        mut consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     ) {
         // For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
         // table's timestamps, but there are cases where timestamps are not bumped but
@@ -716,6 +748,10 @@ impl<S: Append + 'static> Coordinator<S> {
             tokio::time::interval(self.catalog.config().timestamp_frequency);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
+
+        // Trigger a storage usage metric collection on configured interval.
+        let mut storage_usage_update_interval =
+            tokio::time::interval(self.storage_usage_collection_interval);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -754,7 +790,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = advance_timelines_interval.tick() => Message::AdvanceTimelines,
+                _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
+                _ = storage_usage_update_interval.tick() => Message::StorageUsageFetch,
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                Some(collections) = consolidations_rx.recv() => {
+                    let mut ids:HashSet<mz_stash::Id> = HashSet::from_iter(collections);
+                    while let Ok(collections) = consolidations_rx.try_recv() {
+                        ids.extend(collections);
+                    }
+                    Message::Consolidate(ids.into_iter().collect())
+                }
             };
 
             // All message processing functions trace. Start a parent span for them to make
@@ -763,46 +809,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let _enter = span.enter();
 
             self.handle_message(msg).await;
-
-            if let Some(timestamp) = self.get_local_timestamp_oracle_mut().should_advance_to() {
-                self.queue_local_input_advances(timestamp).await;
-            }
         }
-    }
-
-    #[allow(dead_code)]
-    async fn create_storage_export(&mut self, id: GlobalId, sink: &Sink) {
-        let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
-        let storage_sink_desc = mz_storage::types::sinks::SinkDesc {
-            from: sink.from,
-            from_desc: storage_sink_from_entry
-                .desc(&self.catalog.resolve_full_name(
-                    storage_sink_from_entry.name(),
-                    storage_sink_from_entry.conn_id(),
-                ))
-                .unwrap()
-                .into_owned(),
-            connection: SinkConnection::Tail(TailSinkConnection {}),
-            envelope: Some(sink.envelope),
-            as_of: SinkAsOf {
-                frontier: Antichain::new(),
-                strict: false,
-            },
-        };
-
-        // TODO(chae): This is where we'll create the export/sink in storaged
-        let _ = self
-            .controller
-            .storage_mut()
-            .create_exports(vec![(
-                id,
-                ExportDescription {
-                    sink: storage_sink_desc,
-                    remote_addr: None,
-                },
-            )])
-            .await
-            .unwrap();
     }
 }
 
@@ -827,11 +834,13 @@ pub async fn serve<S: Append + 'static>(
         default_storage_host_size,
         mut availability_zones,
         connection_context,
+        storage_usage_client,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
+    let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
@@ -912,6 +921,7 @@ pub async fn serve<S: Append + 'static>(
                 catalog,
                 internal_cmd_tx,
                 strict_serializable_reads_tx,
+                consolidations_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
@@ -926,13 +936,20 @@ pub async fn serve<S: Append + 'static>(
                 secrets_controller,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
+                storage_usage_client,
+                storage_usage_collection_interval: DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
+                handle.block_on(coord.serve(
+                    internal_cmd_rx,
+                    strict_serializable_reads_rx,
+                    cmd_rx,
+                    consolidations_rx,
+                ));
             }
         })
         .unwrap();
@@ -944,7 +961,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx);
+            let client = Client::new(cmd_tx.clone());
             Ok((handle, client))
         }
         Err(e) => Err(e),

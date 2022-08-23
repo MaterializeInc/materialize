@@ -114,6 +114,12 @@ pub enum AdapterError {
         relations: Vec<String>,
         names: Vec<String>,
     },
+    /// A query tried to create more resources than is allowed in the system configuration.
+    ResourceExhaustion {
+        resource_type: String,
+        limit: i32,
+        current_amount: i32,
+    },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
     /// Waiting on a query timed out.
@@ -126,6 +132,8 @@ pub enum AdapterError {
     TailOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
+    /// A user tried to perform an action that they were unauthorized to do.
+    Unauthorized(String),
     /// The specified function cannot be called
     UncallableFunction {
         func: UnmaterializableFunc,
@@ -356,6 +364,17 @@ impl fmt::Display for AdapterError {
                      See https://materialize.com/docs/sql/begin/#same-timedomain-error",
                 )
             }
+            AdapterError::ResourceExhaustion {
+                resource_type,
+                limit,
+                current_amount,
+            } => {
+                write!(
+                    f,
+                    "{resource_type} resource limit of {limit} cannot be exceeded. \
+                    Current amount is {current_amount}."
+                )
+            }
             AdapterError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }
@@ -366,6 +385,9 @@ impl fmt::Display for AdapterError {
             AdapterError::Transform(e) => e.fmt(f),
             AdapterError::UncallableFunction { func, context } => {
                 write!(f, "cannot call {} in {}", func, context)
+            }
+            AdapterError::Unauthorized(msg) => {
+                write!(f, "unauthorized: {msg}")
             }
             AdapterError::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())

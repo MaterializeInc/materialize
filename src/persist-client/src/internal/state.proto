@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package mz_persist_client.impl.state;
+package mz_persist_client.internal.state;
 
 message ProtoU64Antichain {
     repeated int64 elements = 1;
@@ -47,9 +47,12 @@ message ProtoReaderState {
 message ProtoWriterState {
     string writer_id = 1;
     uint64 last_heartbeat_timestamp_ms = 2;
+    uint64 lease_duration_ms = 3;
 }
 
 message ProtoStateRollup {
+    string applier_version = 11;
+
     string shard_id = 1;
     string key_codec = 2;
     string val_codec = 3;

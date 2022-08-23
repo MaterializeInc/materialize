@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
-    ResolvedDatabaseSpecifier, SchemaSpecifier,
+    ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::plan::statement::StatementDesc;
 
@@ -253,7 +253,7 @@ pub trait CatalogRole {
     fn name(&self) -> &str;
 
     /// Returns a stable ID for the role.
-    fn id(&self) -> u64;
+    fn id(&self) -> RoleId;
 }
 
 /// A compute instance in a [`SessionCatalog`].
@@ -272,7 +272,7 @@ pub trait CatalogComputeInstance<'a> {
     fn replica_names(&self) -> HashSet<&String>;
 
     /// Returns the set of persisted logs of replica `name` of this cluster.
-    fn replica_logs(&self, name: &String) -> Option<Vec<GlobalId>>;
+    fn replica_logs_and_views(&self, name: &String) -> Option<(Vec<GlobalId>, Vec<GlobalId>)>;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -543,10 +543,10 @@ pub enum CatalogError {
     UnknownItem(String),
     /// Unknown function.
     UnknownFunction(String),
-    /// Unknown source.
-    UnknownSource(String),
     /// Unknown connection.
     UnknownConnection(String),
+    /// Expected the catalog item to have the given type, but it did not.
+    UnexpectedType(String, CatalogItemType),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -561,7 +561,6 @@ impl fmt::Display for CatalogError {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
-            Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
@@ -570,6 +569,9 @@ impl fmt::Display for CatalogError {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::UnexpectedType(name, item_type) => {
+                write!(f, "\"{name}\" is not of type {item_type}")
+            }
             Self::InvalidDependency { name, typ } => write!(
                 f,
                 "catalog item '{}' is {} {} and so cannot be depended upon",

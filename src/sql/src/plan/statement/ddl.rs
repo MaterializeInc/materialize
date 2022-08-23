@@ -20,15 +20,13 @@ use std::time::Duration;
 use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_kafka_util::KafkaAddrs;
-use mz_sql_parser::ast::{LoadGenerator, SshConnectionOption};
-use mz_storage::source::generator::as_generator;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
 
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
+use mz_kafka_util::KafkaAddrs;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -36,13 +34,21 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_sql_parser::ast::display::comma_separated;
+use mz_sql_parser::ast::{
+    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, LoadGenerator, SetVariableValue,
+    SshConnectionOption,
+};
+use mz_storage::source::generator::as_generator;
+use mz_storage::types::connections::aws::AwsCredentials;
 use mz_storage::types::connections::{
     Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
     StringOrSecret, TlsIdentity,
 };
 use mz_storage::types::sinks::{
-    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
-    SinkConnectionBuilder, SinkEnvelope,
+    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope,
+    StorageSinkConnectionBuilder,
 };
 use mz_storage::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -59,7 +65,8 @@ use mz_storage::types::sources::{
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
-    AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
+    AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
+    AwsConnectionOptionName, ClusterOption, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
@@ -80,27 +87,27 @@ use crate::ast::{
     Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
-use crate::kafka_util;
+use crate::kafka_util::{self, KafkaConfigOptionExtracted};
 use crate::names::{
     Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
     ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
-use crate::normalize::ident;
-use crate::normalize::{self, SqlValueOrSecret};
+use crate::normalize::{self, ident, SqlValueOrSecret};
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
-    StorageHostConfig, Table, Type, View,
+    AlterNoopPlan, AlterSecretPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    Index, MaterializedView, Params, Plan, Secret, Sink, Source, StorageHostConfig, Table, Type,
+    View,
 };
 
 pub fn describe_create_database(
@@ -302,7 +309,7 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSourceOption, (Size, String));
+generate_extracted_config!(CreateSourceOption, (Size, String), (Remote, String));
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -318,7 +325,6 @@ pub fn plan_create_source(
         format,
         key_constraint,
         include_metadata,
-        remote,
         with_options,
     } = &stmt;
 
@@ -327,8 +333,17 @@ pub fn plan_create_source(
     let legacy_with_options_original = legacy_with_options;
     let mut legacy_with_options = normalize::options(legacy_with_options_original)?;
 
-    if !legacy_with_options.is_empty() || !with_options.is_empty() {
-        scx.require_unsafe_mode("creating sources with WITH options")?;
+    const SAFE_WITH_OPTIONS: &'static [CreateSourceOptionName] = &[CreateSourceOptionName::Size];
+
+    if !legacy_with_options.is_empty()
+        || with_options
+            .iter()
+            .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+    {
+        scx.require_unsafe_mode(&format!(
+            "creating sources with WITH options other than {}",
+            comma_separated(SAFE_WITH_OPTIONS)
+        ))?;
     }
 
     let ts_frequency = match legacy_with_options.remove("timestamp_frequency_ms") {
@@ -356,10 +371,10 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
-            let mut options = kafka_util::extract_config(&mut legacy_with_options)?;
-            let kafka_connection = match &kafka.connection {
+            let (kafka_connection, options) = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
                     scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
+                    let mut options = BTreeMap::new();
                     options.insert(
                         "bootstrap.servers".into(),
                         KafkaAddrs::from_str(broker)
@@ -367,28 +382,28 @@ pub fn plan_create_source(
                             .to_string()
                             .into(),
                     );
-                    KafkaConnection::try_from(&mut options)?
+                    let connection = KafkaConnection::try_from(&mut options)?;
+                    (connection, options)
                 }
-                mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
+                mz_sql_parser::ast::KafkaConnection::Reference {
+                    connection,
+                    with_options,
+                } => {
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     let connection = match item.connection()? {
                         Connection::Kafka(connection) => connection.clone(),
                         _ => sql_bail!("{} is not a kafka connection", item.name()),
                     };
 
-                    // TODO: Once we remove use of `String`-keyed options, we
-                    // can remove this check because permitted values here will
-                    // simply be a disjoint set of what `CONNECTION`s support.
-                    for k in BTreeMap::<String, StringOrSecret>::from(connection.clone()).keys() {
-                        if options.contains_key(k) {
-                            sql_bail!(
-                                "cannot set option {} for SOURCE using CONNECTION {}",
-                                k,
-                                scx.catalog.resolve_full_name(item.name())
-                            );
-                        }
+                    let with_options: KafkaConfigOptionExtracted =
+                        with_options.clone().try_into()?;
+                    let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
+
+                    if !with_options.is_empty() {
+                        scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
                     }
-                    connection
+
+                    (connection, with_options)
                 }
             };
 
@@ -411,12 +426,14 @@ pub fn plan_create_source(
             };
 
             let mut start_offsets = HashMap::new();
-            match legacy_with_options.remove("start_offset") {
+            let has_nontrivial_start_offsets = match legacy_with_options.remove("start_offset") {
                 None => {
                     start_offsets.insert(0, MzOffset::from(0));
+                    false
                 }
                 Some(SqlValueOrSecret::Value(Value::Number(n))) => {
                     start_offsets.insert(0, parse_offset(&n)?);
+                    true
                 }
                 Some(SqlValueOrSecret::Value(Value::Array(vs))) => {
                     for (i, v) in vs.iter().enumerate() {
@@ -427,8 +444,13 @@ pub fn plan_create_source(
                             _ => sql_bail!("start_offset value must be a number: {}", v),
                         }
                     }
+                    true
                 }
                 Some(v) => sql_bail!("invalid start_offset value: {}", v),
+            };
+
+            if has_nontrivial_start_offsets && envelope.requires_all_input() {
+                sql_bail!("start_offset is not supported with ENVELOPE {}", envelope)
             }
 
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
@@ -508,7 +530,10 @@ pub fn plan_create_source(
 
             (connection, encoding)
         }
-        CreateSourceConnection::Kinesis { arn, .. } => {
+        CreateSourceConnection::Kinesis {
+            connection: aws_connection,
+            arn,
+        } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM KINESIS")?;
             let arn: AmazonResourceName = arn
                 .parse()
@@ -525,19 +550,37 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| sql_err!("Provided ARN does not include an AWS region"))?;
 
-            let aws = normalize::aws_config(&mut legacy_with_options, Some(region.into()))?;
+            let item = scx.get_item_by_resolved_name(&aws_connection)?;
+            let aws_connection = match item.connection()? {
+                Connection::Aws(connection) => connection.clone(),
+                _ => sql_bail!("{} is not an AWS connection", item.name()),
+            };
+
+            let aws = normalize::aws_config(
+                &mut legacy_with_options,
+                Some(region.into()),
+                aws_connection,
+            )?;
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
             (connection, encoding)
         }
         CreateSourceConnection::S3 {
+            connection: aws_connection,
             key_sources,
             pattern,
             compression,
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
-            let aws = normalize::aws_config(&mut legacy_with_options, None)?;
+
+            let item = scx.get_item_by_resolved_name(&aws_connection)?;
+            let aws_connection = match item.connection()? {
+                Connection::Aws(connection) => connection.clone(),
+                _ => sql_bail!("{} is not an AWS connection", item.name()),
+            };
+
+            let aws = normalize::aws_config(&mut legacy_with_options, None, aws_connection)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
@@ -799,19 +842,13 @@ pub fn plan_create_source(
         }
     }
 
-    let remote = if let Some(remote) = &remote {
-        scx.require_unsafe_mode("CREATE SOURCE ... REMOTE ...")?;
-        Some(remote.clone())
-    } else {
-        None
-    };
+    let CreateSourceOptionExtracted { size, remote, .. } =
+        CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let opt = CreateSourceOptionExtracted::try_from(with_options.clone())?;
-
-    let host_config = match (&remote, &opt.size) {
+    let host_config = match (remote, size) {
         (None, None) => StorageHostConfig::Undefined,
-        (None, Some(size)) => StorageHostConfig::Managed { size: size.clone() },
-        (Some(addr), None) => StorageHostConfig::Remote { addr: addr.clone() },
+        (None, Some(size)) => StorageHostConfig::Managed { size },
+        (Some(addr), None) => StorageHostConfig::Remote { addr },
         (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
     };
 
@@ -855,7 +892,6 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        remote,
         host_config,
     }))
 }
@@ -1654,16 +1690,27 @@ pub fn plan_create_views(
                     let data_type = scx.resolve_type(ty)?;
                     projection.push(SelectItem::Expr {
                         expr: Expr::Cast {
-                            expr: Box::new(Expr::Subscript {
-                                expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
-                                positions: vec![SubscriptPosition {
-                                    start: Some(Expr::Value(Value::Number(
-                                        // LIST is one based
-                                        (i + 1).to_string(),
-                                    ))),
-                                    end: None,
-                                    explicit_slice: false,
+                            expr: Box::new(Expr::Case {
+                                operand: None,
+                                conditions: vec![Expr::Op {
+                                    op: Op::bare("="),
+                                    expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
+                                    expr2: Some(Box::new(Expr::Value(Value::Number(
+                                        table_desc.oid.to_string(),
+                                    )))),
                                 }],
+                                results: vec![Expr::Subscript {
+                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
+                                    positions: vec![SubscriptPosition {
+                                        start: Some(Expr::Value(Value::Number(
+                                            // LIST is one based
+                                            (i + 1).to_string(),
+                                        ))),
+                                        end: None,
+                                        explicit_slice: false,
+                                    }],
+                                }],
+                                else_result: Some(Box::new(Expr::null())),
                             }),
                             data_type,
                         },
@@ -1801,42 +1848,44 @@ pub fn plan_create_materialized_view(
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
     scx: &StatementContext,
+    connection: mz_sql_parser::ast::KafkaConnection<Aug>,
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-    broker: String,
     topic_prefix: String,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
-    root_dependencies: &[&dyn CatalogItem],
-) -> Result<SinkConnectionBuilder, PlanError> {
-    let consistency_topic = match with_options.remove("consistency_topic") {
-        None => None,
-        Some(SqlValueOrSecret::Value(Value::String(topic))) => Some(topic),
-        Some(_) => sql_bail!("consistency_topic must be a string"),
+) -> Result<StorageSinkConnectionBuilder, PlanError> {
+    let (connection, config_options) = match connection {
+        mz_sql_parser::ast::KafkaConnection::Reference {
+            connection,
+            with_options,
+        } => {
+            let item = scx.get_item_by_resolved_name(&connection)?;
+            // Get Kafka connection
+            let connection = match item.connection()? {
+                Connection::Kafka(connection) => connection.clone(),
+                _ => sql_bail!("{} is not a kafka connection", item.name()),
+            };
+
+            let with_options: KafkaConfigOptionExtracted = with_options.try_into()?;
+            let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
+            if !with_options.is_empty() {
+                scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
+            }
+            (connection, with_options)
+        }
+        mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
     };
-    if consistency_topic.is_some() && consistency.is_some() {
-        // We're keeping consistency_topic around for backwards compatibility. Users
-        // should not be able to specify consistency_topic and the newer CONSISTENCY options.
-        sql_bail!("Cannot specify consistency_topic and CONSISTENCY options simultaneously");
-    }
+
     let reuse_topic = match with_options.remove("reuse_topic") {
         Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
         None => false,
         Some(_) => sql_bail!("reuse_topic must be a boolean"),
     };
-    let mut config_options = kafka_util::extract_config(with_options)?;
-    config_options.insert(
-        "bootstrap.servers".into(),
-        // Normalize broker address
-        KafkaAddrs::from_str(&broker)
-            .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
-            .to_string()
-            .into(),
-    );
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
         Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
@@ -1864,7 +1913,7 @@ fn kafka_sink_builder(
         Some(Format::Avro(AvroSchema::Csr {
             csr_connection:
                 CsrConnectionAvro {
-                    connection: CsrConnection::Inline { url },
+                    connection,
                     seed,
                     key_strategy,
                     value_strategy,
@@ -1882,15 +1931,26 @@ fn kafka_sink_builder(
             }
 
             let mut normalized_with_options = normalize::options(&with_options)?;
-            let csr_connection = kafka_util::generate_ccsr_connection(
-                url.parse()
-                    .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
-                &mut normalized_with_options,
-            )?;
+            let csr_connection = match connection {
+                CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                    url.parse()
+                        .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
+                    &mut normalized_with_options,
+                )?,
+                CsrConnection::Reference { connection } => {
+                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    match item.connection()? {
+                        Connection::Csr(connection) => connection.clone(),
+                        _ => {
+                            sql_bail!("{} is not a schema registry connection", item.name())
+                        }
+                    }
+                }
+            };
+
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
-            let include_transaction =
-                reuse_topic || consistency_topic.is_some() || consistency.is_some();
+            let include_transaction = reuse_topic || consistency.is_some();
             let schema_generator = AvroSchemaGenerator::new(
                 avro_key_fullname.as_deref(),
                 avro_value_fullname.as_deref(),
@@ -1917,35 +1977,8 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let consistency_config = get_kafka_sink_consistency_config(
-        &topic_prefix,
-        &format,
-        reuse_topic,
-        consistency,
-        consistency_topic,
-    )?;
-
-    let transitive_source_dependencies: Vec<_> = if reuse_topic {
-        for item in root_dependencies.iter() {
-            if item.item_type() == CatalogItemType::Source {
-                if !item.source_desc()?.yields_stable_input() {
-                    sql_bail!(
-                    "reuse_topic requires that sink input dependencies are replayable, {} is not",
-                    scx.catalog.resolve_full_name(item.name())
-                );
-                }
-            } else if item.item_type() != CatalogItemType::Source {
-                sql_bail!(
-                    "reuse_topic requires that sink input dependencies are sources, {} is not",
-                    scx.catalog.resolve_full_name(item.name())
-                );
-            };
-        }
-
-        root_dependencies.iter().map(|i| i.id()).collect()
-    } else {
-        Vec::new()
-    };
+    let consistency_config =
+        get_kafka_sink_consistency_config(&topic_prefix, &format, reuse_topic, consistency)?;
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -2000,39 +2033,37 @@ fn kafka_sink_builder(
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
-    Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
-        connection: KafkaConnection::try_from(&mut config_options)?,
-        options: config_options,
-        format,
-        topic_prefix,
-        consistency_topic_prefix: consistency_topic,
-        consistency_format,
-        topic_suffix_nonce,
-        partition_count,
-        replication_factor,
-        fuel: 10000,
-        relation_key_indices,
-        key_desc_and_indices,
-        value_desc,
-        reuse_topic,
-        transitive_source_dependencies,
-        retention,
-    }))
+    Ok(StorageSinkConnectionBuilder::Kafka(
+        KafkaSinkConnectionBuilder {
+            connection,
+            options: config_options,
+            format,
+            topic_prefix,
+            consistency_topic_prefix: consistency_topic,
+            consistency_format,
+            topic_suffix_nonce,
+            partition_count,
+            replication_factor,
+            fuel: 10000,
+            relation_key_indices,
+            key_desc_and_indices,
+            value_desc,
+            reuse_topic,
+            retention,
+        },
+    ))
 }
 
 /// Determines the consistency configuration (topic and format) that should be used for a Kafka
 /// sink based on the given configuration items.
 ///
 /// This is slightly complicated because of a desire to maintain backwards compatibility with
-/// previous ways of specifying consistency configuration. [`KafkaConsistency`] is the new way of
-/// doing things, we support specifying just a topic name (via `consistency_topic`) for backwards
-/// compatibility.
+/// previous ways of specifying consistency configuration.
 fn get_kafka_sink_consistency_config(
     topic_prefix: &str,
     sink_format: &KafkaSinkFormat,
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
-    consistency_topic: Option<String>,
 ) -> Result<Option<(String, KafkaSinkFormat)>, PlanError> {
     let result = match consistency {
         Some(KafkaConsistency {
@@ -2084,28 +2115,19 @@ fn get_kafka_sink_consistency_config(
             Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
         },
         None => {
-            // Support use of `consistency_topic` with option if the sink is Avro-formatted
-            // for backwards compatibility.
-            if reuse_topic | consistency_topic.is_some() {
+            if reuse_topic {
                 match sink_format {
                     KafkaSinkFormat::Avro {
                         csr_connection,
                         ..
                     } => {
-                        let consistency_topic = match consistency_topic {
-                            Some(topic) => topic,
-                            None => {
-                                let default_consistency_topic =
-                                    format!("{}-consistency", topic_prefix);
-                                debug!(
-                                    "Using default consistency topic '{}' for topic '{}'",
-                                    default_consistency_topic, topic_prefix
-                                );
-                                default_consistency_topic
-                            }
-                        };
+                        let default_consistency_topic = format!("{}-consistency", topic_prefix);
+                        debug!(
+                            "Using default consistency topic '{}' for topic '{}'",
+                            default_consistency_topic, topic_prefix
+                        );
                         Some((
-                            consistency_topic,
+                            default_consistency_topic,
                             KafkaSinkFormat::Avro {
                                 key_schema: None,
                                 value_schema: avro::get_debezium_transaction_schema()
@@ -2114,7 +2136,7 @@ fn get_kafka_sink_consistency_config(
                             },
                         ))
                     }
-                    KafkaSinkFormat::Json => sql_bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY TOPIC consistency_topic CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url'. The default of using a JSON consistency topic is not supported."),
+                    KafkaSinkFormat::Json => sql_bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url)'. The default of using a JSON consistency topic is not supported."),
                 }
             } else {
                 None
@@ -2135,23 +2157,14 @@ pub fn describe_create_sink(
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    mut stmt: CreateSinkStatement<Aug>,
+    stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     scx.require_unsafe_mode("CREATE SINK")?;
-    let compute_instance = match &stmt.in_cluster {
-        None => scx.resolve_compute_instance(None)?.id(),
-        Some(in_cluster) => in_cluster.id,
-    };
-    stmt.in_cluster = Some(ResolvedClusterName {
-        id: compute_instance,
-        print_name: None,
-    });
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
         from,
-        in_cluster: _,
         connection,
         with_options,
         format,
@@ -2258,27 +2271,24 @@ pub fn plan_create_sink(
         sql_bail!("CREATE SINK ... AS OF is no longer supported");
     }
 
-    let root_user_dependencies = get_root_dependencies(scx, &[from.id()]);
-
     let connection_builder = match connection {
         CreateSinkConnection::Kafka {
-            broker,
+            connection,
             topic,
             consistency,
             ..
         } => kafka_sink_builder(
             scx,
+            connection,
             format,
             consistency,
             &mut with_options,
-            broker,
             topic,
             relation_key_indices,
             key_desc_and_indices,
             desc.into_owned(),
             envelope,
             suffix_nonce,
-            &root_user_dependencies,
         )?,
     };
 
@@ -2291,7 +2301,6 @@ pub fn plan_create_sink(
             from: from.id(),
             connection_builder,
             envelope,
-            compute_instance,
         },
         with_snapshot,
         if_not_exists,
@@ -2344,35 +2353,6 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
         user_keys,
         existing_keys
     )
-}
-
-/// Returns only those `CatalogItem`s that don't have any other user
-/// dependencies. Those are the root dependencies.
-fn get_root_dependencies<'a>(
-    scx: &'a StatementContext,
-    depends_on: &[GlobalId],
-) -> Vec<&'a dyn CatalogItem> {
-    let mut result = Vec::new();
-    let mut work_queue: Vec<&GlobalId> = Vec::new();
-    let mut visited = HashSet::new();
-    work_queue.extend(depends_on.iter().filter(|id| id.is_user()));
-
-    while let Some(dep) = work_queue.pop() {
-        let item = scx.get_item(&dep);
-        let transitive_uses = item.uses().iter().filter(|id| id.is_user());
-        let mut transitive_uses = transitive_uses.peekable();
-        if let Some(_) = transitive_uses.peek() {
-            for transitive_dep in transitive_uses {
-                if visited.insert(transitive_dep) {
-                    work_queue.push(transitive_dep);
-                }
-            }
-        } else {
-            // no transitive uses, so we must be a root dependency
-            result.push(item);
-        }
-    }
-    result
 }
 
 pub fn describe_create_index(
@@ -3130,6 +3110,30 @@ impl TryFrom<SshConnectionOptionExtracted> for mz_storage::types::connections::S
     }
 }
 
+generate_extracted_config!(
+    AwsConnectionOption,
+    (AccessKeyId, StringOrSecret),
+    (SecretAccessKey, with_options::Secret),
+    (Token, StringOrSecret)
+);
+
+impl TryFrom<AwsConnectionOptionExtracted> for AwsCredentials {
+    type Error = PlanError;
+
+    fn try_from(options: AwsConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(AwsCredentials {
+            access_key_id: options
+                .access_key_id
+                .ok_or_else(|| sql_err!("ACCESS KEY ID option is required"))?,
+            secret_access_key: options
+                .secret_access_key
+                .ok_or_else(|| sql_err!("SECRET ACCESS KEY option is required"))?
+                .into(),
+            session_token: options.token,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -3154,6 +3158,11 @@ pub fn plan_create_connection(
             let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
             let connection = mz_storage::types::connections::PostgresConnection::try_from(c)?;
             Connection::Postgres(connection)
+        }
+        CreateConnection::Aws { with_options } => {
+            let c = AwsConnectionOptionExtracted::try_from(with_options)?;
+            let connection = AwsCredentials::try_from(c)?;
+            Connection::Aws(connection)
         }
         CreateConnection::Ssh { with_options } => {
             scx.require_unsafe_mode("CREATE CONNECTION ... SSH")?;
@@ -3413,20 +3422,24 @@ pub fn plan_drop_cluster_replica(
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
-            // Check if we have an item that depends on the replica's logs
             if !cascade {
-                let log_ids = instance.replica_logs(&replica_name).unwrap();
-                for id in log_ids {
+                let (log_ids, view_ids) = instance.replica_logs_and_views(&replica_name).unwrap();
+
+                // Check if we have an item that depends on the replica's logs or log views
+                for id in log_ids.iter().chain(view_ids.iter()) {
                     let log_item = scx.catalog.get_item(&id);
                     for id in log_item.used_by() {
-                        let dep = scx.catalog.get_item(id);
-                        if dependency_prevents_drop(ObjectType::Source, dep) {
-                            sql_bail!(
-                                "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
-                                replica_name.quoted(),
-                                instance.name().quoted(),
-                                scx.catalog.resolve_full_name(dep.name())
-                            );
+                        // Dependencies on log views can be removed without cascade.
+                        if !view_ids.contains(id) {
+                            let dep = scx.catalog.get_item(id);
+                            if dependency_prevents_drop(ObjectType::Source, dep) {
+                                sql_bail!(
+                                    "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
+                                    replica_name.quoted(),
+                                    instance.name().quoted(),
+                                    scx.catalog.resolve_full_name(dep.name())
+                                );
+                            }
                         }
                     }
                 }
@@ -3703,4 +3716,68 @@ pub fn plan_alter_secret(
     let secret_as = query::plan_secret_as(scx, value)?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
+}
+
+pub fn describe_alter_source(
+    _: &StatementContext,
+    _: AlterSourceStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_source(
+    scx: &StatementContext,
+    stmt: AlterSourceStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER SOURCE")?;
+    let _: AlterSourceAction<Aug> = stmt.action;
+    let _: AlterSourcePlan = sql_bail!("ALTER SOURCE not yet implemented!");
+}
+
+pub fn describe_alter_system_set(
+    _: &StatementContext,
+    _: AlterSystemSetStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_system_set(
+    _: &StatementContext,
+    AlterSystemSetStatement { name, value }: AlterSystemSetStatement,
+) -> Result<Plan, PlanError> {
+    let name = name.to_string();
+    if matches!(&value, SetVariableValue::Literal(value) if matches!(value, mz_sql_parser::ast::Value::Null))
+    {
+        sql_bail!("Unable to set system configuration '{}' to NULL", name)
+    }
+    Ok(Plan::AlterSystemSet(AlterSystemSetPlan { name, value }))
+}
+
+pub fn describe_alter_system_reset(
+    _: &StatementContext,
+    _: AlterSystemResetStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_system_reset(
+    _: &StatementContext,
+    AlterSystemResetStatement { name }: AlterSystemResetStatement,
+) -> Result<Plan, PlanError> {
+    let name = name.to_string();
+    Ok(Plan::AlterSystemReset(AlterSystemResetPlan { name }))
+}
+
+pub fn describe_alter_system_reset_all(
+    _: &StatementContext,
+    _: AlterSystemResetAllStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_system_reset_all(
+    _: &StatementContext,
+    _: AlterSystemResetAllStatement,
+) -> Result<Plan, PlanError> {
+    Ok(Plan::AlterSystemResetAll(AlterSystemResetAllPlan {}))
 }

@@ -180,7 +180,7 @@ impl RedundantJoin {
 
                         mz_expr::canonicalize::canonicalize_equivalences(
                             equivalences,
-                            &input_types,
+                            input_types.iter().map(|t| &t.column_types),
                         );
 
                         // Build a projection that leaves the binding expressions in the same

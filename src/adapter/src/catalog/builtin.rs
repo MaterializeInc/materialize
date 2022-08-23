@@ -32,6 +32,8 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
 
+use crate::catalog::SYSTEM_USER;
+
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
 pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
@@ -112,9 +114,13 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
+pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
+
 pub struct BuiltinRole {
+    /// Name of the builtin role.
+    ///
+    /// IMPORTANT: Must start with a prefix from [`BUILTIN_ROLE_PREFIXES`].
     pub name: &'static str,
-    pub id: u64,
 }
 
 pub trait Fingerprint {
@@ -838,7 +844,7 @@ pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
 };
 
 pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_operator_addresses",
+    name: "mz_dataflow_addresses",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
 };
@@ -895,6 +901,12 @@ pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
     name: "mz_worker_materialization_frontiers",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
+};
+
+pub const MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_materialization_source_frontiers",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
 };
 
 pub const MZ_WORKER_MATERIALIZATION_DELAYS: BuiltinLog = BuiltinLog {
@@ -1063,8 +1075,7 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::Int64.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false)),
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",
@@ -1128,7 +1139,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_roles",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
@@ -1225,6 +1236,18 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
             .with_column("error", ScalarType::String.nullable(true))
             .with_column("metadata", ScalarType::Jsonb.nullable(true)),
     });
+pub static MZ_STORAGE_USAGE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_storage_usage",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("object_id", ScalarType::String.nullable(true))
+        .with_column("size_bytes", ScalarType::Int64.nullable(false))
+        .with_column(
+            "collection_timestamp",
+            ScalarType::TimestampTz.nullable(false),
+        ),
+});
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
@@ -1274,17 +1297,17 @@ pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
     name: "mz_dataflow_names",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_dataflow_names AS SELECT
-    mz_dataflow_operator_addresses.id,
-    mz_dataflow_operator_addresses.worker,
-    mz_dataflow_operator_addresses.address[1] AS local_id,
+    mz_dataflow_addresses.id,
+    mz_dataflow_addresses.worker,
+    mz_dataflow_addresses.address[1] AS local_id,
     mz_dataflow_operators.name
 FROM
-    mz_catalog.mz_dataflow_operator_addresses,
+    mz_catalog.mz_dataflow_addresses,
     mz_catalog.mz_dataflow_operators
 WHERE
-    mz_dataflow_operator_addresses.id = mz_dataflow_operators.id AND
-    mz_dataflow_operator_addresses.worker = mz_dataflow_operators.worker AND
-    mz_catalog.list_length(mz_dataflow_operator_addresses.address) = 1",
+    mz_dataflow_addresses.id = mz_dataflow_operators.id AND
+    mz_dataflow_addresses.worker = mz_dataflow_operators.worker AND
+    mz_catalog.list_length(mz_dataflow_addresses.address) = 1",
 };
 
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
@@ -1298,13 +1321,13 @@ pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
     mz_dataflow_names.name as dataflow_name
 FROM
     mz_catalog.mz_dataflow_operators,
-    mz_catalog.mz_dataflow_operator_addresses,
+    mz_catalog.mz_dataflow_addresses,
     mz_catalog.mz_dataflow_names
 WHERE
-    mz_dataflow_operators.id = mz_dataflow_operator_addresses.id AND
-    mz_dataflow_operators.worker = mz_dataflow_operator_addresses.worker AND
-    mz_dataflow_names.local_id = mz_dataflow_operator_addresses.address[1] AND
-    mz_dataflow_names.worker = mz_dataflow_operator_addresses.worker",
+    mz_dataflow_operators.id = mz_dataflow_addresses.id AND
+    mz_dataflow_operators.worker = mz_dataflow_addresses.worker AND
+    mz_dataflow_names.local_id = mz_dataflow_addresses.address[1] AND
+    mz_dataflow_names.worker = mz_dataflow_addresses.worker",
 };
 
 pub const MZ_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
@@ -1341,6 +1364,15 @@ pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
     global_id, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_frontiers
 GROUP BY global_id",
+};
+
+pub const MZ_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_materialization_source_frontiers",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_catalog.mz_materialization_source_frontiers AS SELECT
+    global_id, source, pg_catalog.min(time) AS time
+FROM mz_catalog.mz_worker_materialization_source_frontiers
+GROUP BY global_id, source",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -1921,11 +1953,19 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     name: "pg_roles",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_roles AS SELECT
-    r.name AS rolname,
+    r.rolname,
+    r.rolsuper,
+    r.rolinherit,
+    r.rolcreaterole,
+    r.rolcreatedb,
+    r.rolcanlogin,
+    r.rolreplication,
+    r.rolconnlimit,
     '********'::pg_catalog.text AS rolpassword,
+    r.rolvaliduntil,
+    r.rolbypassrls,
     r.oid AS oid
-FROM mz_catalog.mz_roles r
-JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
+FROM pg_catalog.pg_authid r",
 };
 
 pub const PG_VIEWS: BuiltinView = BuiltinView {
@@ -2071,13 +2111,11 @@ AS SELECT
     NULL::pg_catalog.text AS rolpassword,
     -- MZ doesn't have role passwords
     NULL::pg_catalog.timestamptz AS rolvaliduntil
-FROM mz_catalog.mz_roles r",
+FROM mz_catalog.mz_roles r
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
-pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
-    name: "mz_system",
-    id: 0,
-};
+pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: SYSTEM_USER };
 
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
@@ -2178,6 +2216,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
         Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
+        Builtin::Log(&MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS),
         Builtin::Log(&MZ_WORKER_MATERIALIZATION_DELAYS),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
@@ -2208,6 +2247,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
+        Builtin::Table(&MZ_STORAGE_USAGE),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_CATALOG_NAMES),
@@ -2218,6 +2258,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICAS),
         Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
+        Builtin::View(&MZ_MATERIALIZATION_SOURCE_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
         Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
         Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
@@ -2244,16 +2285,19 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_CONSTRAINT),
         Builtin::View(&PG_TABLES),
         Builtin::View(&PG_ACCESS_METHODS),
+        Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),
         Builtin::View(&PG_MATVIEWS),
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
-        Builtin::View(&PG_AUTHID),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
-        Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
+        // This is disabled for the moment because it has unusual upper
+        // advancement behavior.
+        // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+        // Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
     ]);
 
     builtins
@@ -2263,6 +2307,7 @@ pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM])
 #[allow(non_snake_case)]
 pub mod BUILTINS {
     use super::*;
+
     pub fn logs() -> impl Iterator<Item = &'static BuiltinLog> {
         BUILTINS_STATIC.iter().filter_map(|b| match b {
             Builtin::Log(log) => Some(*log),
@@ -2297,14 +2342,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::env;
 
-    use mz_ore::now::NOW_ZERO;
     use tokio_postgres::NoTls;
 
-    use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
+    use mz_ore::now::NOW_ZERO;
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::names::{PartialObjectName, ResolvedDatabaseSpecifier};
+
+    use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
 
     use super::*;
 

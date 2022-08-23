@@ -394,10 +394,11 @@ class Composition:
         self,
         service: str = "materialized",
         user: str = "materialize",
+        port: Optional[int] = None,
         password: Optional[str] = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        port = self.default_port(service)
+        port = self.port(service, port) if port else self.default_port(service)
         conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
         conn.autocommit = True
         return conn.cursor()
@@ -407,10 +408,13 @@ class Composition:
         sql: str,
         service: str = "materialized",
         user: str = "materialize",
+        port: Optional[int] = None,
         password: Optional[str] = None,
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
-        with self.sql_cursor(service=service, user=user, password=password) as cursor:
+        with self.sql_cursor(
+            service=service, user=user, port=port, password=password
+        ) as cursor:
             for statement in sqlparse.split(sql):
                 print(f"> {statement}")
                 cursor.execute(statement)

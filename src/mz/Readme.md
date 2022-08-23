@@ -113,7 +113,6 @@ source ~/.bash_profile
 
 ### Future work
 #### Improvements
-- [ ]  Make error messages standard
 - [ ]  Selecting a default region
 - [ ]  Run requests in parallel
 - [ ]  Enable selecting an environment as a flag in `Shell`
@@ -123,4 +122,3 @@ source ~/.bash_profile
 - [ ]  Add optional `—force` command to delete to avoid manual input
 - [ ]  Handle request errors to frontegg
 - [ ]  Handle port already taken
-- [ ]  Share config path

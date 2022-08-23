@@ -357,7 +357,6 @@ pub fn create_statement(
             envelope: _,
             if_not_exists,
             key_constraint: _,
-            remote: _,
             with_options: _,
         }) => {
             *name = allocate_name(name)?;
@@ -391,7 +390,6 @@ pub fn create_statement(
             name,
             connection: _,
             with_options: _,
-            in_cluster: _,
             format: _,
             envelope: _,
             with_snapshot: _,
@@ -605,6 +603,8 @@ macro_rules! generate_extracted_config {
     };
 }
 
+pub(crate) use generate_extracted_config;
+
 /// Ensures that the given set of options are empty, useful for validating that
 /// `WITH` options are all real, used options
 pub(crate) fn ensure_empty_options<V>(
@@ -625,6 +625,7 @@ pub(crate) fn ensure_empty_options<V>(
 pub fn aws_config(
     options: &mut BTreeMap<String, SqlValueOrSecret>,
     region: Option<String>,
+    credentials: AwsCredentials,
 ) -> Result<AwsConfig, PlanError> {
     let mut extract = |key| match options.remove(key) {
         // TODO: support secrets in S3
@@ -637,48 +638,6 @@ pub fn aws_config(
         }
         Some(_) => sql_bail!("{} must be a string", key),
         _ => Ok(None),
-    };
-
-    let credentials = match extract("profile")? {
-        Some(profile_name) => {
-            for name in &["access_key_id", "secret_access_key", "token"] {
-                let extracted = extract(name);
-                if matches!(extracted, Ok(Some(_)) | Err(_)) {
-                    sql_bail!(
-                        "AWS profile cannot be set in combination with '{0}', \
-                         configure '{0}' inside the profile file",
-                        name
-                    );
-                }
-            }
-            AwsCredentials::Profile { profile_name }
-        }
-        None => {
-            let access_key_id = extract("access_key_id")?;
-            let secret_access_key = extract("secret_access_key")?;
-            let session_token = extract("token")?;
-            let credentials = match (access_key_id, secret_access_key, session_token) {
-                (None, None, None) => AwsCredentials::Default,
-                (Some(access_key_id), Some(secret_access_key), session_token) => {
-                    AwsCredentials::Static {
-                        access_key_id,
-                        secret_access_key,
-                        session_token,
-                    }
-                }
-                (Some(_), None, _) => {
-                    sql_bail!("secret_access_key must be specified if access_key_id is specified")
-                }
-                (None, Some(_), _) => {
-                    sql_bail!("secret_access_key cannot be specified without access_key_id")
-                }
-                (None, None, Some(_)) => {
-                    sql_bail!("token cannot be specified without access_key_id")
-                }
-            };
-
-            credentials
-        }
     };
 
     let region = match region {

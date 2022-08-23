@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
+use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use tracing::{error, trace};
@@ -187,7 +188,7 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
         consensus_uri: args.consensus_uri,
     };
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-    let config = PersistConfig::new(SYSTEM_TIME.clone());
+    let config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let (blob, consensus) = location.open_locations(&config, &metrics).await?;
     let unreliable = UnreliableHandle::default();
     let should_happen = 1.0 - args.unreliability;
@@ -366,7 +367,7 @@ mod api {
         async fn snapshot(&mut self, as_of: Antichain<T>)
             -> Result<Vec<((K, V), T)>, Antichain<T>>;
 
-        async fn current_upper(&mut self) -> Antichain<T>;
+        async fn current_upper(&mut self) -> &Antichain<T>;
 
         /// Tries to append the given updates to the maintained collection. If the current
         /// upper is not `expected_upper` this will return an `Err` containing the current
@@ -888,7 +889,7 @@ mod impls {
             + Sync
             + Copy,
     {
-        async fn current_upper(&mut self) -> Antichain<T> {
+        async fn current_upper(&mut self) -> &Antichain<T> {
             self.write.fetch_recent_upper().await
         }
 
@@ -1400,7 +1401,7 @@ mod reader {
                                 break 'outer;
                             }
 
-                            read.downgrade_since(p).await;
+                            read.downgrade_since(&p).await;
                         }
                         ListenEvent::Updates(updates) => {
                             println!("instance {}: got updates from listen: {:?}", name, updates);

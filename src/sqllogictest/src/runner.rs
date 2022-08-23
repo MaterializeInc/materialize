@@ -606,8 +606,10 @@ impl Runner {
         );
         let now = SYSTEM_TIME.clone();
         let metrics_registry = MetricsRegistry::new();
-        let persist_clients =
-            PersistClientCache::new(PersistConfig::new(now.clone()), &metrics_registry);
+        let persist_clients = PersistClientCache::new(
+            PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
+            &metrics_registry,
+        );
         let persist_clients = Arc::new(Mutex::new(persist_clients));
         let server_config = mz_environmentd::Config {
             adapter_stash_url,

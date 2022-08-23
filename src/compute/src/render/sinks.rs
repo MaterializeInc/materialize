@@ -23,7 +23,7 @@ use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format}
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
+use mz_storage::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SinkEnvelope};
 
 use crate::compute_state::SinkToken;
 use crate::render::context::Context;
@@ -39,7 +39,7 @@ where
         tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
-        sink: &SinkDesc<CollectionMetadata>,
+        sink: &ComputeSinkDesc<CollectionMetadata>,
     ) {
         let sink_render = get_sink_render_for(&sink.connection);
 
@@ -93,7 +93,7 @@ where
             sink_id,
             SinkToken {
                 token: Box::new(needed_tokens),
-                is_tail: matches!(sink.connection, SinkConnection::Tail(_)),
+                is_tail: matches!(sink.connection, ComputeSinkConnection::Tail(_)),
             },
         );
     }
@@ -101,7 +101,7 @@ where
 
 #[allow(clippy::borrowed_box)]
 fn apply_sink_envelope<G>(
-    sink: &SinkDesc<CollectionMetadata>,
+    sink: &ComputeSinkDesc<CollectionMetadata>,
     sink_render: &Box<dyn SinkRender<G>>,
     collection: Collection<G, Row, Diff>,
 ) -> Collection<G, (Option<Row>, Option<Row>), Diff>
@@ -224,7 +224,7 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
-        sink: &SinkDesc<CollectionMetadata>,
+        sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
@@ -233,13 +233,14 @@ where
         G: Scope<Timestamp = Timestamp>;
 }
 
-fn get_sink_render_for<G>(connection: &SinkConnection<CollectionMetadata>) -> Box<dyn SinkRender<G>>
+fn get_sink_render_for<G>(
+    connection: &ComputeSinkConnection<CollectionMetadata>,
+) -> Box<dyn SinkRender<G>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     match connection {
-        SinkConnection::Kafka(connection) => Box::new(connection.clone()),
-        SinkConnection::Tail(connection) => Box::new(connection.clone()),
-        SinkConnection::Persist(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::Tail(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::Persist(connection) => Box::new(connection.clone()),
     }
 }

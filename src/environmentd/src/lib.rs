@@ -19,13 +19,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
+use tracing::error;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
@@ -36,9 +37,9 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
-use tracing::error;
 
 use crate::tcp_connection::ConnectionHandler;
 
@@ -46,6 +47,7 @@ pub mod http;
 pub mod tcp_connection;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
+// TODO: should storage usage default go here?
 
 /// Configuration for an `environmentd` server.
 #[derive(Debug, Clone)]
@@ -193,8 +195,10 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize network listeners.
     let sql_listener = TcpListener::bind(&config.sql_listen_addr).await?;
     let http_listener = TcpListener::bind(&config.http_listen_addr).await?;
+    let internal_sql_listener = TcpListener::bind(&config.internal_sql_listen_addr).await?;
     let sql_local_addr = sql_listener.local_addr()?;
     let http_local_addr = http_listener.local_addr()?;
+    let internal_sql_local_addr = internal_sql_listener.local_addr()?;
 
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
@@ -236,8 +240,17 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     )
     .await?;
 
+    // Initialize storage usage client.
+    let storage_usage_client = StorageUsageClient::open(
+        config.controller.persist_location.blob_uri.clone(),
+        &mut *config.controller.persist_clients.lock().await,
+    )
+    .await
+    .context("opening storage usage client")?;
+
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller).await;
+
     // Initialize adapter.
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
         dataflow_client: controller,
@@ -252,6 +265,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_host_size: config.default_storage_host_size,
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
+        storage_usage_client,
     })
     .await?;
 
@@ -272,6 +286,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             tls: pgwire_tls,
             adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
+            internal: false,
         });
 
         async move {
@@ -285,13 +300,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Listen on the internal SQL port.
     let (internal_sql_drain_trigger, internal_sql_local_addr) = {
         let (internal_sql_drain_trigger, internal_sql_drain_tripwire) = oneshot::channel();
-        let internal_sql_listener = TcpListener::bind(&config.internal_sql_listen_addr).await?;
-        let internal_sql_local_addr = internal_sql_listener.local_addr()?;
         task::spawn(|| "internal_pgwire_server", {
             let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 tls: None,
                 adapter_client: adapter_client.clone(),
                 frontegg: None,
+                internal: true,
             });
             let mut incoming = TcpListenerStream::new(internal_sql_listener);
             async move {

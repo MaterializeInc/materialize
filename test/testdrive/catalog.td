@@ -356,8 +356,8 @@ mz_arrangement_sharing_internal
 mz_arrangement_sharing_internal_1
 mz_dataflow_channels
 mz_dataflow_channels_1
-mz_dataflow_operator_addresses
-mz_dataflow_operator_addresses_1
+mz_dataflow_addresses
+mz_dataflow_addresses_1
 mz_dataflow_operator_reachability_internal
 mz_dataflow_operator_reachability_internal_1
 mz_dataflow_operators
@@ -380,11 +380,12 @@ mz_scheduling_histogram_internal
 mz_scheduling_histogram_internal_1
 mz_scheduling_parks_internal
 mz_scheduling_parks_internal_1
-mz_source_status_history
 mz_worker_materialization_delays
 mz_worker_materialization_delays_1
 mz_worker_materialization_frontiers
 mz_worker_materialization_frontiers_1
+mz_worker_materialization_source_frontiers
+mz_worker_materialization_source_frontiers_1
 
 > SHOW FULL SOURCES FROM mz_catalog
 name                                          type   type
@@ -397,8 +398,8 @@ mz_arrangement_sharing_internal               system log
 mz_arrangement_sharing_internal_1             system log
 mz_dataflow_channels                          system log
 mz_dataflow_channels_1                        system log
-mz_dataflow_operator_addresses                system log
-mz_dataflow_operator_addresses_1              system log
+mz_dataflow_addresses                         system log
+mz_dataflow_addresses_1                       system log
 mz_dataflow_operator_reachability_internal    system log
 mz_dataflow_operator_reachability_internal_1  system log
 mz_dataflow_operators                         system log
@@ -421,11 +422,12 @@ mz_scheduling_histogram_internal              system log
 mz_scheduling_histogram_internal_1            system log
 mz_scheduling_parks_internal                  system log
 mz_scheduling_parks_internal_1                system log
-mz_source_status_history                      system "storage collection"
 mz_worker_materialization_delays              system log
 mz_worker_materialization_delays_1            system log
 mz_worker_materialization_frontiers           system log
 mz_worker_materialization_frontiers_1         system log
+mz_worker_materialization_source_frontiers    system log
+mz_worker_materialization_source_frontiers_1  system log
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -452,6 +454,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_storage_usage
 mz_tables
 mz_types
 mz_view_foreign_keys
@@ -485,6 +488,7 @@ mz_secrets                    system
 mz_sinks                      system
 mz_sources                    system
 mz_ssh_tunnel_connections system
+mz_storage_usage              system
 mz_tables                     system
 mz_types                      system
 mz_view_foreign_keys          system
@@ -520,6 +524,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_storage_usage
 mz_tables
 mz_types
 mz_view_foreign_keys
@@ -556,6 +561,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_storage_usage
 mz_tables
 mz_types
 mz_view_foreign_keys
@@ -565,59 +571,95 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-29
+30
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-18
+19
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing
+mz_arrangement_sharing_1
 mz_arrangement_sizes
+mz_arrangement_sizes_1
 mz_catalog_names
 mz_cluster_replicas
 mz_dataflow_names
+mz_dataflow_names_1
 mz_dataflow_operator_dataflows
+mz_dataflow_operator_dataflows_1
 mz_dataflow_operator_reachability
+mz_dataflow_operator_reachability_1
 mz_materialization_frontiers
+mz_materialization_frontiers_1
+mz_materialization_source_frontiers
 mz_message_counts
+mz_message_counts_1
 mz_objects
 mz_perf_arrangement_records
+mz_perf_arrangement_records_1
 mz_perf_peek_durations_aggregates
+mz_perf_peek_durations_aggregates_1
 mz_perf_peek_durations_bucket
+mz_perf_peek_durations_bucket_1
 mz_perf_peek_durations_core
+mz_perf_peek_durations_core_1
 mz_records_per_dataflow
+mz_records_per_dataflow_1
 mz_records_per_dataflow_global
+mz_records_per_dataflow_global_1
 mz_records_per_dataflow_operator
+mz_records_per_dataflow_operator_1
 mz_relations
 mz_scheduling_elapsed
+mz_scheduling_elapsed_1
 mz_scheduling_histogram
+mz_scheduling_histogram_1
 mz_scheduling_parks
+mz_scheduling_parks_1
 
 > SHOW FULL VIEWS FROM mz_catalog
-name                              type
-----------------------------------------
-mz_arrangement_sharing            system
-mz_arrangement_sizes              system
-mz_dataflow_names                 system
-mz_dataflow_operator_dataflows    system
-mz_dataflow_operator_reachability system
-mz_materialization_frontiers      system
-mz_message_counts                 system
-mz_objects                        system
-mz_perf_arrangement_records       system
-mz_perf_peek_durations_aggregates system
-mz_perf_peek_durations_bucket     system
-mz_perf_peek_durations_core       system
-mz_records_per_dataflow           system
-mz_records_per_dataflow_global    system
-mz_records_per_dataflow_operator  system
-mz_relations                      system
-mz_catalog_names                  system
-mz_cluster_replicas               system
-mz_scheduling_elapsed             system
-mz_scheduling_histogram           system
-mz_scheduling_parks               system
+name                                 type
+-------------------------------------------
+mz_arrangement_sharing               system
+mz_arrangement_sharing_1             system
+mz_arrangement_sizes                 system
+mz_arrangement_sizes_1               system
+mz_catalog_names                     system
+mz_cluster_replicas                  system
+mz_dataflow_names                    system
+mz_dataflow_names_1                  system
+mz_dataflow_operator_dataflows       system
+mz_dataflow_operator_dataflows_1     system
+mz_dataflow_operator_reachability    system
+mz_dataflow_operator_reachability_1  system
+mz_materialization_frontiers         system
+mz_materialization_frontiers_1       system
+mz_materialization_source_frontiers  system
+mz_message_counts                    system
+mz_message_counts_1                  system
+mz_objects                           system
+mz_perf_arrangement_records          system
+mz_perf_arrangement_records_1        system
+mz_perf_peek_durations_aggregates    system
+mz_perf_peek_durations_aggregates_1  system
+mz_perf_peek_durations_bucket        system
+mz_perf_peek_durations_bucket_1      system
+mz_perf_peek_durations_core          system
+mz_perf_peek_durations_core_1        system
+mz_records_per_dataflow              system
+mz_records_per_dataflow_1            system
+mz_records_per_dataflow_global       system
+mz_records_per_dataflow_global_1     system
+mz_records_per_dataflow_operator     system
+mz_records_per_dataflow_operator_1   system
+mz_relations                         system
+mz_scheduling_elapsed                system
+mz_scheduling_elapsed_1              system
+mz_scheduling_histogram              system
+mz_scheduling_histogram_1            system
+mz_scheduling_parks                  system
+mz_scheduling_parks_1                system
 
 > SHOW SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active
@@ -627,8 +669,11 @@ mz_peek_durations_1
 
 > SHOW VIEWS FROM mz_catalog LIKE '%peek%';
 mz_perf_peek_durations_aggregates
+mz_perf_peek_durations_aggregates_1
 mz_perf_peek_durations_bucket
+mz_perf_peek_durations_bucket_1
 mz_perf_peek_durations_core
+mz_perf_peek_durations_core_1
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

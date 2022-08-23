@@ -118,6 +118,13 @@ struct Args {
         value_name = "URL"
     )]
     materialize_url: tokio_postgres::Config,
+    /// materialize SQL internal connection string.
+    #[clap(
+        long,
+        default_value = "postgres://materialize@localhost:6877",
+        value_name = "INTERNAL_URL"
+    )]
+    materialize_url_internal: tokio_postgres::Config,
     /// The port on which Materialize is listening for untrusted HTTP connections.
     ///
     /// The hostname is taken from `materialize_url`.
@@ -172,14 +179,40 @@ struct Args {
     /// Named AWS region to target for AWS API requests.
     ///
     /// Cannot be specified if --aws-endpoint is specified.
-    #[clap(long, conflicts_with = "aws-endpoint", value_name = "REGION")]
+    #[clap(
+        long,
+        conflicts_with = "aws-endpoint",
+        value_name = "REGION",
+        env = "AWS_REGION"
+    )]
     aws_region: Option<String>,
     /// Custom AWS endpoint.
     ///
     /// Defaults to http://localhost:4566 unless --aws-region is specified.
     /// Cannot be specified if --aws-region is specified.
-    #[clap(long, conflicts_with = "aws-region", value_name = "URL")]
+    #[clap(
+        long,
+        conflicts_with = "aws-region",
+        value_name = "URL",
+        env = "AWS_ENDPOINT"
+    )]
     aws_endpoint: Option<Uri>,
+
+    #[clap(
+        long,
+        value_name = "KEY_ID",
+        default_value = "dummy-access-key-id",
+        env = "AWS_ACCESS_KEY_ID"
+    )]
+    aws_access_key_id: String,
+
+    #[clap(
+        long,
+        value_name = "KEY",
+        default_value = "dummy-secret-access-key",
+        env = "AWS_SECRET_ACCESS_KEY"
+    )]
+    aws_secret_access_key: String,
 }
 
 #[tokio::main]
@@ -217,17 +250,15 @@ async fn main() {
         }
         None => {
             // The user specified a a custom endpoint. We assume we're targeting
-            // a stubbed-out AWS implementation that does not use regions or
-            // check authentication credentials, so we use dummy credentials and
-            // a dummy region.
+            // a stubbed-out AWS implementation.
             let endpoint = args
                 .aws_endpoint
                 .unwrap_or_else(|| "http://localhost:4566".parse().unwrap());
             let config = aws_config::from_env()
                 .region(Region::new("us-east-1"))
                 .credentials_provider(Credentials::from_keys(
-                    "dummy-access-key-id",
-                    "dummy-secret-access-key",
+                    args.aws_access_key_id,
+                    args.aws_secret_access_key,
                     None,
                 ))
                 .endpoint_resolver(Endpoint::immutable(endpoint))
@@ -280,6 +311,7 @@ async fn main() {
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,
+        materialize_pgconfig_internal: args.materialize_url_internal,
         materialize_http_port: args.materialize_http_port,
         materialize_params: args.materialize_param,
         materialize_catalog_postgres_stash: args.validate_postgres_stash,

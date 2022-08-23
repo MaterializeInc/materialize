@@ -39,8 +39,11 @@ impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
+        // unless raw plans are explicitly requested
         // ensure that all nested subqueries are wrapped in Let blocks
-        normalize_subqueries(self.0)?;
+        if !config.raw_plans {
+            normalize_subqueries(self.0)?;
+        }
 
         // TODO: use config values to infer requested
         // plan annotations

@@ -37,8 +37,10 @@ class RenameSource(Check):
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema} publish=true
                 {"f1": "A"}
 
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
                 > CREATE SOURCE rename_source1
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
+                  FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-rename-source-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                   ENVELOPE NONE

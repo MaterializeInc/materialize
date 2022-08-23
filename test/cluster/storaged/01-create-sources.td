@@ -17,14 +17,21 @@ one
 $ kafka-ingest format=bytes topic=remote2
 one
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE remote1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-remote1-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-remote1-${testdrive.seed}'
   FORMAT TEXT
-  REMOTE 'storaged:2100'
+  WITH (
+    REMOTE 'storaged:2100'
+  )
 > CREATE SOURCE remote2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-remote2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-remote2-${testdrive.seed}'
   FORMAT TEXT
-  REMOTE 'storaged:2100'
+  WITH (
+    REMOTE 'storaged:2100'
+  )
 
 > SELECT * from remote1
 one

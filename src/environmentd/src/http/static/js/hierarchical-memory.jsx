@@ -52,7 +52,7 @@ function Dataflows() {
                 SELECT DISTINCT
                     id, address
                 FROM
-                    mz_catalog.mz_dataflow_operator_addresses;
+                    mz_catalog.mz_dataflow_addresses;
 
                 SELECT DISTINCT
                     id, name

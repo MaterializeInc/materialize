@@ -7,27 +7,52 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# 22.1.2 community images with amd and arm variants. Used here so we can copy
+# the cockroach binary if this is an arm host. We are temporarily using this
+# image from the community until an official image is published.
+FROM juliuszaromskis/cockroachdb:22.1.2 AS crdb-arm
+
+# Create an image that determines the cockroach binary (so we don't have two
+# copies in the final image).
+MZFROM ubuntu-base AS crdb-bin
+
+RUN apt-get update \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
+        ca-certificates \
+        curl
+
+COPY --from=crdb-arm /cockroach/cockroach /cockroach-arm
+
+ARG COCKROACH_VERSION=22.1.5
+
+RUN set -eux; \
+	arch="$(dpkg --print-architecture)"; arch="${arch##*-}"; \
+	case "$arch" in \
+		'amd64') \
+		         curl https://binaries.cockroachdb.com/cockroach-v${COCKROACH_VERSION}.linux-amd64.tgz | tar -xz;  \
+		         cp cockroach-v${COCKROACH_VERSION}.linux-amd64/cockroach /cockroach; \
+			;; \
+		'arm64') \
+			mv /cockroach-arm /cockroach; \
+			;; \
+		*) echo >&2 "error: unsupported architecture '$arch'"; exit 1 ;; \
+	esac;
+
 MZFROM ubuntu-base
 
-# We install sqlite3 to allow debugging of the catalog file, if necessary.
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
         curl \
-        postgresql-14 \
-        sqlite3 \
+        postgresql-client-14 \
         tini \
     && groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
-    && pg_dropcluster 14 main \
-    && pg_createcluster 14 materialize --user=materialize --start \
-        --pgoption listen_addresses=* \
-        --pgoption max_connections=5000 \
-    && su materialize -c "createdb materialize" \
     && mkdir /mzdata \
-    && chown materialize /mzdata
+    && mkdir /cockroach-data \
+    && chown materialize /mzdata /cockroach-data
 
-COPY pg_hba.conf /etc/postgresql/14/materialize/pg_hba.conf
+COPY --from=crdb-bin /cockroach /usr/local/bin/cockroach
 
 COPY storaged computed environmentd entrypoint.sh /usr/local/bin/
 

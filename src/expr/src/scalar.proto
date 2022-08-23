@@ -334,6 +334,9 @@ message ProtoUnaryFunc {
         google.protobuf.Empty pg_column_size = 213;
         google.protobuf.Empty mz_row_size = 214;
         google.protobuf.Empty mz_type_name = 215;
+        google.protobuf.Empty trunc_float32 = 216;
+        google.protobuf.Empty trunc_float64 = 217;
+        google.protobuf.Empty trunc_numeric = 218;
     }
 }
 

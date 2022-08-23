@@ -251,12 +251,31 @@ fn intercept_source_instantiation_frontiers<G>(
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
+    let mut previous_time = None;
     source_instantiation.inspect_container(move |event| {
         if let Err(frontier) = event {
+            if let Some(previous) = previous_time {
+                for dataflow_id in dataflow_ids.iter() {
+                    logger.log(ComputeEvent::SourceFrontier(
+                        *dataflow_id,
+                        source_id,
+                        previous,
+                        -1,
+                    ));
+                }
+            }
             if let Some(time) = frontier.get(0) {
                 for dataflow_id in dataflow_ids.iter() {
-                    logger.log(ComputeEvent::SourceFrontier(*dataflow_id, source_id, *time));
+                    logger.log(ComputeEvent::SourceFrontier(
+                        *dataflow_id,
+                        source_id,
+                        *time,
+                        1,
+                    ));
                 }
+                previous_time = Some(*time);
+            } else {
+                previous_time = None;
             }
         }
     })

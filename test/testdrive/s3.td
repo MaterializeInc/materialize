@@ -19,14 +19,19 @@ b1
 b2
 b3
 
+> CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
+
+> CREATE CONNECTION s3_conn FOR AWS
+  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+  TOKEN = '${testdrive.aws-token}';
+
 > CREATE SOURCE s3_all
-  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT TEXT;
 
@@ -39,13 +44,11 @@ b2
 b3
 
 > CREATE SOURCE s3_glob_a
-  FROM S3 DISCOVER OBJECTS MATCHING '**/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING '**/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT TEXT;
 
@@ -55,13 +58,11 @@ a2
 a3
 
 > CREATE SOURCE s3_just_a
-  FROM S3 DISCOVER OBJECTS MATCHING 'short/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'short/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT TEXT;
 
@@ -76,13 +77,11 @@ c,8
 c,9
 
 > CREATE SOURCE csv_example (name, counts)
-  FROM S3 DISCOVER OBJECTS MATCHING '*.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING '*.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH 2 COLUMNS;
 
@@ -117,13 +116,11 @@ $ s3-put-object bucket=test key=logs/2021/01/01/frontend.log
 173.203.139.108 - - [01/01/2021:00:00:39] "GET /downloads/materialized HTTP/1.1" 404 335 "-" "Python/Requests_22"
 
 > CREATE SOURCE frontend_logs
-  FROM S3 DISCOVER OBJECTS MATCHING 'logs/**/*.log' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'logs/**/*.log' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT REGEX '(?P<ip>[^ ]+) - - \[(?P<dt>[^]]+)\] "(?P<method>\w+) (?P<path>[^ ]+)[^"]+" (?P<status>\d+) (?P<content_length>\d+) "-" "(?P<user_agent>[^"]+)"';
 
@@ -144,14 +141,12 @@ c2
 c3
 
 > CREATE SOURCE s3_multi
-  FROM S3 DISCOVER OBJECTS MATCHING 'short/*'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'short/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}', BUCKET SCAN 'testdrive-other-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT TEXT;
 
@@ -184,14 +179,12 @@ id,value
 5,c
 
 > CREATE SOURCE s3_csv_headers
-  FROM S3 DISCOVER OBJECTS MATCHING 'csv/*'
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'csv/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (id, value);
 

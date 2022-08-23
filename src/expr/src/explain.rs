@@ -411,7 +411,7 @@ impl<'a> ViewExplanation<'a> {
                 }
                 Ok(())
             }
-            JoinImplementation::PredicateIndex(_, key, val) => {
+            JoinImplementation::IndexedFilter(_, key, val) => {
                 writeln!(
                     f,
                     "IndexedFilter {}",

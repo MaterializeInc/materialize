@@ -20,10 +20,13 @@ def test_wait(mz: MaterializeApplication) -> None:
 def test_sql(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("SELECT 1")
 
+    one = mz.environmentd.sql_query("SELECT 1")[0][0]
+    assert int(one) == 1
+
 
 def test_testdrive(mz: MaterializeApplication) -> None:
     mz.testdrive.run_string(
-        input=dedent(
+        dedent(
             """
                 $ kafka-create-topic topic=test
 
@@ -37,10 +40,8 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'));
                 > SET cluster=c1
 
-                > CREATE CONNECTION kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
-
                 > CREATE SOURCE s1
-                  FROM KAFKA CONNECTION kafka
+                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
                   TOPIC'testdrive-test-${testdrive.seed}'
                   FORMAT BYTES
                   ENVELOPE NONE;
@@ -52,6 +53,8 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM s1;
                 > SELECT * FROM v2;
                 1
+
+                > DROP CLUSTER c1 CASCADE;
                 """
         )
     )

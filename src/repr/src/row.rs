@@ -22,7 +22,8 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use serde::{Deserialize, Serialize};
+use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Deserialize, Serialize, Serializer};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
@@ -233,6 +234,20 @@ impl PartialOrd for DatumList<'_> {
     }
 }
 
+impl<'a> Serialize for DatumList<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(None)?;
+        let mut iter = self.iter();
+        while let Some(datum) = iter.next() {
+            seq.serialize_element(&datum)?;
+        }
+        seq.end()
+    }
+}
+
 /// A mapping from string keys to Datums
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DatumMap<'a> {
@@ -240,6 +255,19 @@ pub struct DatumMap<'a> {
     data: &'a [u8],
 }
 
+impl<'a> Serialize for DatumMap<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(None)?;
+        let mut iter = self.iter();
+        while let Some((key, val)) = iter.next() {
+            map.serialize_entry(&key, &val)?;
+        }
+        map.end()
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 enum Tag {

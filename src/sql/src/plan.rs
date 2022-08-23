@@ -39,7 +39,7 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage::types::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
@@ -119,8 +119,12 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
+    AlterSource(AlterSourcePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
+    AlterSystemSet(AlterSystemSetPlan),
+    AlterSystemReset(AlterSystemResetPlan),
+    AlterSystemResetAll(AlterSystemResetAllPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -207,7 +211,6 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
-    pub remote: Option<String>,
     pub host_config: StorageHostConfig,
 }
 
@@ -454,6 +457,12 @@ pub struct AlterIndexResetOptionsPlan {
 }
 
 #[derive(Debug)]
+pub struct AlterSourcePlan {
+    pub id: GlobalId,
+    pub config: Option<StorageHostConfig>,
+}
+
+#[derive(Debug)]
 pub struct AlterItemRenamePlan {
     pub id: GlobalId,
     pub current_full_name: FullObjectName,
@@ -466,6 +475,20 @@ pub struct AlterSecretPlan {
     pub id: GlobalId,
     pub secret_as: MirScalarExpr,
 }
+
+#[derive(Debug)]
+pub struct AlterSystemSetPlan {
+    pub name: String,
+    pub value: SetVariableValue,
+}
+
+#[derive(Debug)]
+pub struct AlterSystemResetPlan {
+    pub name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterSystemResetAllPlan {}
 
 #[derive(Debug)]
 pub struct DeclarePlan {
@@ -539,9 +562,8 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: SinkConnectionBuilder,
+    pub connection_builder: StorageSinkConnectionBuilder,
     pub envelope: SinkEnvelope,
-    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]

@@ -237,7 +237,7 @@ is stable, so the behaviour of the function should never change, modulo bugs.
 
 But unit/integration tests can be detrimental when testing stateful functions,
 especially those in the middle of the stack. Trying to unit test some of the
-functions in the [dataflow](/src/dataflow) package would be an exercise in
+functions in the [compute](/src/compute) package would be an exercise in
 frustration. You'd need to mock out a dozen different objects and introduce
 several traits, and the logic under test is changing frequently, so the test
 will hamper development as often as it catches regressions.

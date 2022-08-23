@@ -9,6 +9,7 @@
 
 fn main() {
     prost_build::Config::new()
-        .compile_protos(&["persist-client/src/impl/state.proto"], &[".."])
+        .type_attribute(".", "#[derive(serde::Serialize)]")
+        .compile_protos(&["persist-client/src/internal/state.proto"], &[".."])
         .unwrap();
 }

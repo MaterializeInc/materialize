@@ -3,13 +3,13 @@ name = "mz-lowertest"
 description = "Utilities for testing lower layers of the Materialize stack"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]
 mz-lowertest-derive = { path = "../lowertest-derive" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.40"
+proc-macro2 = "1.0.43"
 serde = { version = "1.0.140", features = ["derive"] }
 serde_json = "1.0.82"
 

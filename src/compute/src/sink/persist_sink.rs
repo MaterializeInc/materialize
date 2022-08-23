@@ -26,7 +26,7 @@ use timely::PartialOrder;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{PersistSinkConnection, SinkDesc};
+use mz_storage::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_storage::types::sources::SourceData;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -52,7 +52,7 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut ComputeState,
-        _sink: &SinkDesc<CollectionMetadata>,
+        _sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,

@@ -53,7 +53,7 @@ Type               | Supported? | Details
 `view`             | YES        | Creates a [view].
 `materializedview` | YES        | Creates a [materialized view].
 `table`            | YES        | Creates a [materialized view]. (Actual table support pending [#5266].)
-`index`            | YES         | (Deprecated) Creates an index. Use the `indexes` config to create indexes on `materializedview`, `view` or `source` relations instead.
+`index`            | YES        | (Deprecated) Creates an index. Use the `indexes` config to create indexes on `materializedview`, `view` or `source` relations instead.
 `sink`             | YES        | Creates a [sink].
 `ephemeral`        | YES        | Executes queries using CTEs.
 `incremental`      | NO         | Use the `materializedview` materialization instead! dbt's incremental models are valuable because they only spend your time and money transforming your new data as it arrives. Luckily, this is exactly what Materialize's materialized views were built to do! Better yet, our materialized views will always return up-to-date results without manual or configured refreshes. For more information, check out [our documentation](https://materialize.com/docs/).
@@ -62,7 +62,7 @@ Type               | Supported? | Details
 
 Macro | Purpose
 ------|----------
-`mz_generate_name(identifier)` | Generates a fully-qualified name (including the database and schema) given an object name.
+`mz_generate_name(identifier)` | (Deprecated) Generates a fully-qualified name given an object name. Use the native Jinja function [`{{ this }}`](https://docs.getdbt.com/reference/dbt-jinja-functions/this) to reference relations instead.
 
 We provide a `materialize-dbt-utils` package with Materialize-specific implementations of dispatched macros from `dbt-utils`. To use this package in your dbt project, check the latest installation instructions in [dbt Hub](https://hub.getdbt.com/materializeinc/materialize_dbt_utils/latest/).
 

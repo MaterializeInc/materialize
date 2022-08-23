@@ -8,12 +8,10 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
-from pathlib import Path
 from typing import Any
 
 import pg8000
 import sqlparse
-import yaml
 from kubernetes.client import (
     AppsV1Api,
     CoreV1Api,
@@ -27,36 +25,28 @@ from kubernetes.client import (
     V1StatefulSet,
 )
 from kubernetes.client.exceptions import ApiException
-from kubernetes.config import new_client_from_config_dict  # type: ignore
+from kubernetes.config import new_client_from_config  # type: ignore
 from pg8000 import Cursor
 
 from materialize import ROOT, mzbuild
 
 
 class K8sResource:
-    def kubectl(self, *args: str) -> None:
-        subprocess.check_call(["kubectl", "--context", self.context(), *args])
-
-    def kube_config(self) -> Any:
-        with open(Path.home() / ".kube" / "config") as f:
-            return yaml.safe_load(f)
+    def kubectl(self, *args: str) -> str:
+        return subprocess.check_output(
+            ["kubectl", "--context", self.context(), *args]
+        ).decode("ascii")
 
     def api(self) -> CoreV1Api:
-        api_client = new_client_from_config_dict(
-            self.kube_config(), context=self.context()
-        )
+        api_client = new_client_from_config(context=self.context())
         return CoreV1Api(api_client)
 
     def apps_api(self) -> AppsV1Api:
-        api_client = new_client_from_config_dict(
-            self.kube_config(), context=self.context()
-        )
+        api_client = new_client_from_config(context=self.context())
         return AppsV1Api(api_client)
 
     def rbac_api(self) -> RbacAuthorizationV1Api:
-        api_client = new_client_from_config_dict(
-            self.kube_config(), context=self.context()
-        )
+        api_client = new_client_from_config(context=self.context())
         return RbacAuthorizationV1Api(api_client)
 
     def context(self) -> str:
