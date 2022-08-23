@@ -259,14 +259,13 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 
 > CREATE TABLE tbl (a int, b text);
 > CREATE SECRET pass_secret AS 'pass';
-> CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE CONNECTION kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 > CREATE MATERIALIZED VIEW mv AS SELECT (1);
 > CREATE SOURCE source_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
-> CREATE SINK snk FROM mv
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output-${testdrive.seed}'
+> CREATE SINK snk FROM source_data
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-catalog-sink-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
 
