@@ -37,7 +37,7 @@ Kafka is supported as a [**source**](/overview/key-concepts/#sources), with feat
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
 | Apache Kafka | {{< supportLevel production >}} | See the [source](/sql/create-source/kafka/) documentation for more details. |  |
-| Confluent Cloud Kafka | {{< supportLevel production >}} | Use [`SASL/PLAIN` authentication](/sql/create-connection/#kafka-sasl), to securely connect to a Confluent Cloud cluster. See the [source](/sql/create-source/kafka/) documentation for more details. |  |
+| Confluent Cloud Kafka | {{< supportLevel production >}} | Use [`SASL/PLAIN` authentication](/sql/create-connection/#kafka-sasl), to securely connect to a Confluent Cloud cluster. See the [source](/sql/create-source/kafka/) documentation for more details and the [Confluent Cloud guide](/integrations/confluent-cloud/) for a step-by-step breakdown of the integration. |  |
 | AWS MSK (Managed Streaming for Kafka) | {{< supportLevel production >}} | See the [source documentation](/sql/create-source/kafka/) for more details, and the [AWS MSK guide](/integrations/aws-msk/) for a step-by-step breakdown of the integration.  |  |
 | Heroku Kafka | {{< supportLevel alpha >}} | Use [`SSL` authentication](/sql/create-connection/#kafka-ssl) and the Heroku-provided provided keys and certificates for security, and the `KAFKA_URL` as the broker address (replacing `kafka+ssl://` with `ssl://`). | [](#notify) |
 
