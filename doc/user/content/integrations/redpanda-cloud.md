@@ -88,8 +88,6 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
           ssl_ca_location = '/secrets/ca.crt'
       )
       FORMAT BYTES;
-    CREATE MATERIALIZED VIEW <topic_name> AS
-      SELECT * FROM <redpanda_cloud>;
     ```
 
     e. If the commands execute without an error and outputs _CREATE SOURCE_ and _CREATE MATERIALIZED VIEW_, it means that you have successfully connected Materialize to your Redpanda cluster. You can quickly test your connection by running the following statement:
