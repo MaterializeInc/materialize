@@ -110,7 +110,7 @@ FROM contacts
 WHERE upper(first_name) || '-' || phone = 'CHARLIE-1';
 ```
 
-[Unmaterialized functions](/sql/functions/#unmaterializable-functions), like `now()` or `current_user()`, are not possible to use in an index due to their external dependencies.
+[Unmaterialized functions](/sql/functions/#unmaterializable-functions), like `now()` or `current_user()`, are not possible to use in an index.
 
 
 #### Literal Values and Expressions
@@ -265,18 +265,6 @@ By default, a container has no [resource
 constraints](https://docs.docker.com/config/containers/resource_constraints/)
 and can use as much memory and swap as the host allows, unless you have
 overridden this with the `--memory` or the `--memory-swap` flags.
-
-E.g., setting 8GB of memory and 20GB of swap:
-
-```shell
-docker run -p 6875:6875 --memory='8g' --memory-swap '28g' materialize/materialized:{{< version >}} --workers 1
-```
-
-While Materialize starts up, it will show the available amount of memory and swap:
-```shell
-memory: 10434412KB total, 1067521KB used, 8388608KiB limit
-swap: 2147479KB total, 204931KB used, 20971520KiB limit
-```
 
 ### Linux
 
