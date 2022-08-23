@@ -303,11 +303,13 @@ where
                 scope,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
+                Default::default(),
             );
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 scope,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
+                Default::default(),
             );
             let ok_arranged = ok_arranged.enter(region);
             let err_arranged = err_arranged.enter(region);
