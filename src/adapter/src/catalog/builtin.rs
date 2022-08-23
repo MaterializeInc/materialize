@@ -1254,9 +1254,9 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type) AS
       SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
-UNION SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
-UNION SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views
-UNION SELECT id, oid, schema_id, name, 'materialized view' FROM mz_catalog.mz_materialized_views",
+UNION ALL SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
+UNION ALL SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views
+UNION ALL SELECT id, oid, schema_id, name, 'materialized view' FROM mz_catalog.mz_materialized_views",
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
@@ -1264,19 +1264,19 @@ pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_objects (id, oid, schema_id, name, type) AS
     SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
-UNION
+UNION ALL
     SELECT id, oid, schema_id, name, 'sink' FROM mz_catalog.mz_sinks
-UNION
-    SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
+UNION ALL
+    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index'
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
-UNION
+UNION ALL
     SELECT id, oid, schema_id, name, 'connection' FROM mz_catalog.mz_connections
-UNION
+UNION ALL
     SELECT id, oid, schema_id, name, 'type' FROM mz_catalog.mz_types
-UNION
+UNION ALL
     SELECT id, oid, schema_id, name, 'function' FROM mz_catalog.mz_functions
-UNION
+UNION ALL
     SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret' FROM mz_catalog.mz_secrets",
 };
 
@@ -1560,8 +1560,8 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
 FROM (
     -- pg_class catalogs relations and indexes
     SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
-    UNION
-        SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
+    UNION ALL
+        SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index' AS type
         FROM mz_catalog.mz_indexes
         JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 ) AS class_objects
@@ -1716,8 +1716,8 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
 FROM (
     -- pg_attribute catalogs columns on relations and indexes
     SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
-    UNION
-        SELECT mz_indexes.id, mz_indexes.oid, schema_id, mz_indexes.name, 'index'
+    UNION ALL
+        SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index' AS type
         FROM mz_catalog.mz_indexes
         JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 ) AS class_objects
