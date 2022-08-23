@@ -56,7 +56,7 @@ class MaterializeConnectionManager(PostgresConnectionManager):
 
         creds = connection.credentials
         if creds.cluster:
-            cursor.execute("SET cluster = '{}'".format(creds.cluster))
+            cursor.execute("SET cluster = %s" % creds.cluster)
 
         return connection
 

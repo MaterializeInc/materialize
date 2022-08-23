@@ -17,8 +17,7 @@ import pytest
 from dbt.tests.util import check_relations_equal, run_dbt
 from fixtures import (
     actual_indexes,
-    expected_indexes_binary,
-    expected_indexes_cloud,
+    expected_indexes,
     test_index,
     test_materialized_view,
     test_materialized_view_index,
@@ -30,7 +29,7 @@ from fixtures import (
 
 
 class TestCustomMaterializations:
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope="class")
     def _pass_profile_value(self, profile):
         self._profile = profile
 
@@ -41,8 +40,7 @@ class TestCustomMaterializations:
     @pytest.fixture(scope="class")
     def seeds(self):
         return {
-            "expected_indexes_materialize_cloud.csv": expected_indexes_cloud,
-            "expected_indexes_materialize_binary.csv": expected_indexes_binary,
+            "expected_indexes.csv": expected_indexes[self._profile],
         }
 
     @pytest.fixture(scope="class")
@@ -51,10 +49,10 @@ class TestCustomMaterializations:
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_view_index.sql": test_view_index,
-            "test_source.sql": test_source,
+            "test_source.sql": test_source[self._profile],
             "test_index.sql": test_index,
             "test_source_index.sql": test_source_index,
-            "test_sink.sql": test_sink,
+            "test_sink.sql": test_sink[self._profile],
             "actual_indexes.sql": actual_indexes,
         }
 
@@ -62,7 +60,7 @@ class TestCustomMaterializations:
         # seed seeds
         results = run_dbt(["seed"])
         # seed result length
-        assert len(results) == 2
+        assert len(results) == 1
         # run models
         results = run_dbt(["run"])
         # run result length
@@ -72,9 +70,7 @@ class TestCustomMaterializations:
             project.adapter, ["test_materialized_view", "test_view_index"]
         )
 
-        check_relations_equal(
-            project.adapter, ["actual_indexes", "expected_indexes_" + self._profile]
-        )
+        check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
 
         # TODO(morsapaes): add test that ensures that the source/sink emit the
         # correct data once sinks land.

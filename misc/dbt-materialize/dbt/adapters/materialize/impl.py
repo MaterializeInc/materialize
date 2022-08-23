@@ -86,8 +86,8 @@ class MaterializeAdapter(PostgresAdapter):
             raise RuntimeException("Could not get current cluster: no results")
         return str(table[0][0])
 
-    def _use_cluster(self, cluster: str):
-        self.execute("SET CLUSTER = '{}'".format(cluster))
+    def _set_cluster(self, cluster: str):
+        self.execute("SET CLUSTER = %s" % cluster)
 
     def pre_model_hook(self, config: Mapping[str, Any]) -> Optional[str]:
         default_cluster = self.config.credentials.cluster
@@ -95,11 +95,11 @@ class MaterializeAdapter(PostgresAdapter):
         if cluster == default_cluster or cluster is None:
             return None
         previous = self._get_cluster()
-        self._use_cluster(cluster)
+        self._set_cluster(cluster)
         return previous
 
     def post_model_hook(
         self, config: Mapping[str, Any], context: Optional[str]
     ) -> None:
         if context is not None:
-            self._use_cluster(context)
+            self._set_cluster(context)

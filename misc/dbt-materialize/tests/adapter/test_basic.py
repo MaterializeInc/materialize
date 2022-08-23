@@ -33,21 +33,7 @@ from dbt.tests.util import (
     relation_from_name,
     run_dbt,
 )
-
-expected = {
-    "materialize_cloud": {
-        "base": "materializedview",
-        "view_model": "view",
-        "table_model": "materializedview",
-        "swappable": "materializedview",
-    },
-    "materialize_binary": {
-        "base": "view",
-        "view_model": "view",
-        "table_model": "view",
-        "swappable": "view",
-    },
-}
+from fixtures import expected_base_relation_types
 
 
 class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
@@ -69,10 +55,12 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
         # run result length
         assert len(results) == 3
 
+        expected = expected_base_relation_types[self._profile]
+
         # names exist in result nodes
         check_result_nodes_by_name(results, ["view_model", "table_model", "swappable"])
 
-        check_relation_types(project.adapter, expected[self._profile])
+        check_relation_types(project.adapter, expected)
 
         # base table rowcount
         relation = relation_from_name(project.adapter, "base")
