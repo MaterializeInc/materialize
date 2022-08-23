@@ -2165,11 +2165,7 @@ fn pcf_map(schema: &Map<String, serde_json::Value>, enclosing_ns: &str, in_field
         deferred_values.push((k, v));
     }
 
-    let next_ns = if !in_fields {
-        found_next_ns.expect("`name` must be specified at least once")
-    } else {
-        default_ns
-    };
+    let next_ns = found_next_ns.unwrap_or(default_ns);
     for (k, v) in deferred_values {
         fields.push((
             k,
