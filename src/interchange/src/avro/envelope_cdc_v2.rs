@@ -30,7 +30,7 @@ pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode
     let data_name = FullName::from_parts("data", Some("com.materialize.cdc"), "");
     let data_schema = &schema
         .try_lookup_name(&data_name)
-        .ok_or_else(|| anyhow!("record not found: {}", data_name))?
+        .ok_or_else(|| anyhow!("record not found: {:?}", data_name))?
         .piece;
     Ok(SchemaNode {
         root: &schema,

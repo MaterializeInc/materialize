@@ -387,7 +387,7 @@ impl<'a> RandomAvroGenerator<'a> {
             } => {
                 let name = node.name.unwrap();
                 for f in fields {
-                    let fn_ = format!("{}::{}", name, f.name);
+                    let fn_ = format!("{}.{}::{}", name.namespace(), name.base_name(), f.name);
                     self.new_inner(node.step(&f.schema), annotations, Some(&fn_));
                 }
             }
