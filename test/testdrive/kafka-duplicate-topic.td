@@ -34,3 +34,9 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} publish=true repeat=1
   KEY (f2)
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
+$ kafka-verify format=avro sink=materialize.public.sink1
+{"f2": 1} {"before": null, "after": {"row": {"f2": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"f2": 1} {"before": null, "after": {"row": {"f2": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
