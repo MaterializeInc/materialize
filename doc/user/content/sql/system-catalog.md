@@ -425,7 +425,7 @@ Field         | Type        | Meaning
 
 ### `mz_relations`
 
-The `mz_relations` view contains a row for each table, source, view, and 
+The `mz_relations` view contains a row for each table, source, view, and
 materialized view in the system.
 
 Field       | Type       | Meaning
