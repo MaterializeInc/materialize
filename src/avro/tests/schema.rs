@@ -319,3 +319,80 @@ fn test_ignored_logical_types() {
         );
     }
 }
+
+#[test]
+fn test_namespace_serialization() {
+    let input = r#"
+{
+  "type": "record",
+  "name": ".r1",
+  "fields": [
+    {
+      "name": "f1",
+      "type": {
+        "type": "record",
+        "name": "r2",
+        "namespace": "ns1",
+        "fields": [
+          {
+            "name": "f1",
+            "type": [
+              "null",
+              "ns1.r2"
+            ]
+          },
+          {
+            "name": "f2",
+            "type": [
+              "null",
+              ".r1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "f2",
+      "type": "ns1.r2"
+    }
+  ]
+}
+"#;
+    let expected_output = r#"{
+  "type": "record",
+  "name": "r1",
+  "fields": [
+    {
+      "name": "f1",
+      "type": {
+        "type": "record",
+        "name": "r2",
+        "namespace": "ns1",
+        "fields": [
+          {
+            "name": "f1",
+            "type": [
+              "null",
+              "r2"
+            ]
+          },
+          {
+            "name": "f2",
+            "type": [
+              "null",
+              ".r1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "f2",
+      "type": "ns1.r2"
+    }
+  ]
+}"#;
+    let schema = Schema::from_str(input).unwrap();
+    let json = serde_json::to_string_pretty(&schema).unwrap();
+    assert_eq!(expected_output, json);
+}

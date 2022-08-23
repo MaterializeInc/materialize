@@ -186,7 +186,11 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
                     SchemaPieceOrNamed::Named(idx) => {
                         let schema_name = &schema.root.lookup(*idx).name;
                         if name.chars().any(|ch| ch == '.') {
-                            name == &schema_name.to_string()
+                            name == &format!(
+                                "{}.{}",
+                                schema_name.namespace(),
+                                schema_name.base_name()
+                            )
                         } else {
                             name == schema_name.base_name()
                         }

@@ -142,7 +142,7 @@ impl SchemaPieceOrNamed {
     pub fn get_human_name(&self, root: &Schema) -> String {
         match self {
             Self::Piece(piece) => format!("{:?}", piece),
-            Self::Named(idx) => format!("{}", root.lookup(*idx).name),
+            Self::Named(idx) => format!("{:?}", root.lookup(*idx).name),
         }
     }
     #[inline(always)]
@@ -518,13 +518,14 @@ pub struct Name {
     pub aliases: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct FullName {
     name: String,
     namespace: String,
 }
 
 impl FullName {
+    // [XXX] btv - what happens if `name` contains dots, _and_ `namespace` is `Some` ?
     pub fn from_parts(name: &str, namespace: Option<&str>, default_namespace: &str) -> FullName {
         if let Some(ns) = namespace {
             FullName {
@@ -551,9 +552,24 @@ impl FullName {
         }
         return format!("{}.{}", self.namespace, self.name);
     }
+    /// Get the shortest unambiguous synonym of this name
+    /// at a given point in the schema graph. If this name
+    /// is in the same namespace as the enclosing node, this
+    /// returns the short name; otherwise, it returns the fully qualified name.
+    pub fn short_name(&self, enclosing_ns: &str) -> Cow<'_, str> {
+        if enclosing_ns == &self.namespace {
+            Cow::Borrowed(&self.name)
+        } else {
+            Cow::Owned(format!("{}.{}", self.namespace, self.name))
+        }
+    }
+    /// Returns the namespace of the name
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
 }
 
-impl fmt::Display for FullName {
+impl fmt::Debug for FullName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}", self.namespace, self.name)
     }
@@ -827,7 +843,7 @@ impl SchemaParser {
             Entry::Vacant(ve) => *ve.insert(self.named.len()),
             Entry::Occupied(oe) => {
                 return Err(ParseSchemaError::new(format!(
-                    "Sub-schema with name {} encountered multiple times",
+                    "Sub-schema with name {:?} encountered multiple times",
                     oe.key()
                 ))
                 .into())
@@ -1372,7 +1388,7 @@ impl<'a> SchemaPieceRefOrNamed<'a> {
     pub fn get_human_name(&self, root: &Schema) -> String {
         match self {
             Self::Piece(piece) => format!("{:?}", piece),
-            Self::Named(idx) => format!("{}", root.lookup(*idx).name),
+            Self::Named(idx) => format!("{:?}", root.lookup(*idx).name),
         }
     }
 
@@ -1437,6 +1453,11 @@ impl<'a> SchemaNodeOrNamed<'a> {
             indices,
             top: piece,
         }
+    }
+
+    pub fn namespace(self) -> Option<&'a str> {
+        let SchemaNode { name, .. } = self.lookup();
+        name.map(|FullName { namespace, .. }| namespace.as_str())
     }
 }
 
@@ -1781,7 +1802,9 @@ struct SchemaSerContext<'a> {
     // it is only ever mutated in one stack frame at a time.
     // But AFAICT serde doesn't expose a way to
     // provide some mutable context to every node in the tree...
-    seen_named: Rc<RefCell<HashMap<usize, String>>>,
+    seen_named: Rc<RefCell<HashMap<usize, FullName>>>,
+    /// The namespace of this node's parent, or "" by default
+    enclosing_ns: &'a str,
 }
 
 #[derive(Clone)]
@@ -1792,9 +1815,11 @@ struct RecordFieldSerContext<'a> {
 
 impl<'a> SchemaSerContext<'a> {
     fn step(&'a self, next: SchemaPieceRefOrNamed<'a>) -> Self {
+        let ns = self.node.namespace().unwrap_or(self.enclosing_ns);
         Self {
             node: self.node.step_ref(next),
             seen_named: Rc::clone(&self.seen_named),
+            enclosing_ns: ns,
         }
     }
 }
@@ -1904,18 +1929,21 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                 let mut map = self.seen_named.borrow_mut();
                 let named_piece = match map.get(&index) {
                     Some(name) => {
-                        return serializer.serialize_str(name.as_str());
+                        return serializer.serialize_str(&*name.short_name(self.enclosing_ns));
                     }
                     None => self.node.root.lookup(index),
                 };
-                let name = named_piece.name.to_string();
+                let name = &named_piece.name;
                 map.insert(index, name.clone());
                 std::mem::drop(map);
                 match &named_piece.piece {
                     SchemaPiece::Record { doc, fields, .. } => {
                         let mut map = serializer.serialize_map(None)?;
                         map.serialize_entry("type", "record")?;
-                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("name", &name.name)?;
+                        if self.enclosing_ns != &name.namespace {
+                            map.serialize_entry("namespace", &name.namespace)?;
+                        }
                         if let Some(ref docstr) = doc {
                             map.serialize_entry("doc", docstr)?;
                         }
@@ -1939,7 +1967,10 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     } => {
                         let mut map = serializer.serialize_map(None)?;
                         map.serialize_entry("type", "enum")?;
-                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("name", &name.name)?;
+                        if self.enclosing_ns != &name.namespace {
+                            map.serialize_entry("namespace", &name.namespace)?;
+                        }
                         map.serialize_entry("symbols", symbols)?;
                         if let Some(default_idx) = *default_idx {
                             assert!(default_idx < symbols.len());
@@ -1950,7 +1981,10 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     SchemaPiece::Fixed { size } => {
                         let mut map = serializer.serialize_map(None)?;
                         map.serialize_entry("type", "fixed")?;
-                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("name", &name.name)?;
+                        if self.enclosing_ns != &name.namespace {
+                            map.serialize_entry("namespace", &name.namespace)?;
+                        }
                         map.serialize_entry("size", size)?;
                         map.end()
                     }
@@ -1962,7 +1996,10 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                         let mut map = serializer.serialize_map(Some(6))?;
                         map.serialize_entry("type", "fixed")?;
                         map.serialize_entry("logicalType", "decimal")?;
-                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("name", &name.name)?;
+                        if self.enclosing_ns != &name.namespace {
+                            map.serialize_entry("namespace", &name.namespace)?;
+                        }
                         map.serialize_entry("size", size)?;
                         map.serialize_entry("precision", precision)?;
                         map.serialize_entry("scale", scale)?;
@@ -2022,6 +2059,7 @@ impl Serialize for Schema {
                 inner: self.top.as_ref(),
             },
             seen_named: Rc::new(RefCell::new(Default::default())),
+            enclosing_ns: "",
         };
         ctx.serialize(serializer)
     }
@@ -2823,7 +2861,6 @@ mod tests {
 
     #[test]
     fn test_schema_fingerprint() {
-        use md5::Md5;
         use sha2::Sha256;
 
         let raw_schema = r#"
@@ -2839,13 +2876,8 @@ mod tests {
 
         let schema = Schema::from_str(raw_schema).unwrap();
         assert_eq!(
-            "5ecb2d1f0eaa647d409e6adbd5d70cd274d85802aa9167f5fe3b73ba70b32c76",
+            "c4d97949770866dec733ae7afa3046757e901d0cfea32eb92a8faeadcc4de153",
             format!("{}", schema.fingerprint::<Sha256>())
-        );
-
-        assert_eq!(
-            "a2c99a3f40ea2eea32593d63b483e962",
-            format!("{}", schema.fingerprint::<Md5>())
         );
     }
 }
