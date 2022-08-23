@@ -1437,62 +1437,6 @@ GROUP BY
     mz_records_per_dataflow.name",
 };
 
-pub const MZ_PERF_ARRANGEMENT_RECORDS: BuiltinView = BuiltinView {
-    name: "mz_perf_arrangement_records",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_perf_arrangement_records AS
-WITH records_cte AS (
-    SELECT
-        operator,
-        worker,
-        pg_catalog.count(*) AS records
-    FROM
-        mz_catalog.mz_arrangement_records_internal
-    GROUP BY
-        operator, worker
-)
-SELECT mas.worker, name, records, operator
-FROM
-    records_cte mas LEFT JOIN mz_catalog.mz_dataflow_operators mdo
-        ON mdo.id = mas.operator AND mdo.worker = mas.worker",
-};
-
-pub const MZ_PERF_PEEK_DURATIONS_CORE: BuiltinView = BuiltinView {
-    name: "mz_perf_peek_durations_core",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_perf_peek_durations_core AS SELECT
-    d_upper.worker,
-    d_upper.duration_ns::pg_catalog.text AS le,
-    pg_catalog.sum(d_summed.count) AS count
-FROM
-    mz_catalog.mz_peek_durations AS d_upper,
-    mz_catalog.mz_peek_durations AS d_summed
-WHERE
-    d_upper.worker = d_summed.worker AND
-    d_upper.duration_ns >= d_summed.duration_ns
-GROUP BY d_upper.worker, d_upper.duration_ns",
-};
-
-pub const MZ_PERF_PEEK_DURATIONS_BUCKET: BuiltinView = BuiltinView {
-    name: "mz_perf_peek_durations_bucket",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_perf_peek_durations_bucket AS
-(
-    SELECT * FROM mz_catalog.mz_perf_peek_durations_core
-) UNION (
-    SELECT worker, '+Inf', pg_catalog.max(count) AS count FROM mz_catalog.mz_perf_peek_durations_core
-    GROUP BY worker
-)",
-};
-
-pub const MZ_PERF_PEEK_DURATIONS_AGGREGATES: BuiltinView = BuiltinView {
-    name: "mz_perf_peek_durations_aggregates",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_perf_peek_durations_aggregates AS SELECT worker, pg_catalog.sum(duration_ns * count) AS sum, pg_catalog.sum(count) AS count
-FROM mz_catalog.mz_peek_durations lpd
-GROUP BY worker",
-};
-
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
@@ -2260,10 +2204,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
         Builtin::View(&MZ_MATERIALIZATION_SOURCE_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
-        Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
-        Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
-        Builtin::View(&MZ_PERF_PEEK_DURATIONS_CORE),
-        Builtin::View(&MZ_PERF_PEEK_DURATIONS_BUCKET),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_GLOBAL),
