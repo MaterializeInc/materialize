@@ -745,7 +745,15 @@ impl PendingPeek {
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
 
-        while cursor.key_valid(&storage) {
+        while cursor.key_valid(&storage)
+            && if self.peek.key.is_some() {
+                // If `seek_key` tried to seek to a non-existent key, then it landed on a different
+                // key, so we should quit already.
+                *self.peek.key.as_ref().unwrap() == *cursor.get_key(&storage).unwrap()
+            } else {
+                true
+            }
+        {
             while cursor.val_valid(&storage) {
                 // TODO: This arena could be maintained and reuse for longer
                 // but it wasn't clear at what interval we should flush
@@ -760,7 +768,7 @@ impl PendingPeek {
                 // to outlive the arena above, from which it might borrow).
                 let mut borrow = datum_vec.borrow_with_many(&[key, row]);
                 if let Some(ref key_val) = self.peek.key {
-                    // If the peek has a `key` that means it was created from an IndexedFilter join.
+                    // If the peek has a `key`, that means it was created from an IndexedFilter join.
                     // We have to add those columns here that the join would add in a dataflow.
                     let datum_vec = borrow.deref_mut();
                     datum_vec.extend(key_val.iter());
