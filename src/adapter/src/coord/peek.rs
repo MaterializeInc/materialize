@@ -71,7 +71,7 @@ pub enum FastPathPlan<T = mz_repr::Timestamp> {
     /// may be helpful when printing out an explanation.
     Constant(Result<Vec<(Row, T, Diff)>, EvalError>, RelationType),
     /// The view can be read out of an existing arrangement.
-    PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
+    PeekExisting(GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
 }
 
 impl FastPathPlan {
@@ -79,7 +79,7 @@ impl FastPathPlan {
         let mut explanation = String::new();
         use std::fmt::Write;
         match self {
-            FastPathPlan::PeekExisting(index, value, mfp) => {
+            FastPathPlan::PeekExisting(index, literal_constraints, mfp) => {
                 writeln!(
                     &mut explanation,
                     "%0 =\n| ReadExistingIndex {}",
@@ -88,8 +88,23 @@ impl FastPathPlan {
                         .unwrap_or_else(|| index.to_string())
                 )
                 .unwrap();
-                if let Some(value) = value {
-                    writeln!(&mut explanation, "| | Lookup value {}", value).unwrap();
+                if let Some(literal_constraints) = literal_constraints {
+                    write!(&mut explanation, "| | Lookup ").unwrap();
+                    if literal_constraints.len() == 1 {
+                        writeln!(
+                            &mut explanation,
+                            "value {}",
+                            literal_constraints.get(0).unwrap()
+                        )
+                        .unwrap();
+                    } else {
+                        writeln!(
+                            &mut explanation,
+                            "values [{}]",
+                            separated("; ", literal_constraints)
+                        )
+                        .unwrap();
+                    }
                 }
                 if !mfp.is_identity() {
                     let (map, filter, project) = mfp.as_map_filter_project();
@@ -186,7 +201,7 @@ where
             FastPathPlan::Constant(Err(err), _) => {
                 writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
             }
-            FastPathPlan::PeekExisting(id, lookup, mfp) => {
+            FastPathPlan::PeekExisting(id, literal_constraints, mfp) => {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
                 if project.len() != mfp.input_arity + map.len()
@@ -210,14 +225,18 @@ where
                     .as_ref()
                     .humanize_id(*id)
                     .unwrap_or_else(|| id.to_string());
-                if let Some(lookup) = lookup {
-                    writeln!(
+                if let Some(literal_constraints) = literal_constraints {
+                    write!(
                         f,
-                        "{}ReadExistingIndex {} lookup_value={}",
+                        "{}ReadExistingIndex {} lookup ",
                         ctx.as_mut(),
-                        humanized_index,
-                        lookup
+                        humanized_index
                     )?;
+                    if literal_constraints.len() == 1 {
+                        writeln!(f, "value {}", literal_constraints.get(0).unwrap())?;
+                    } else {
+                        writeln!(f, "values [{}]", separated("; ", literal_constraints))?;
+                    }
                 } else {
                     writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
                 }
@@ -308,22 +327,18 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                     if let mz_expr::JoinImplementation::IndexedFilter(id, key, vals) =
                         implementation
                     {
-                        // For now, PeekExisting handles only 1 lookup.
-                        if vals.len() == 1 {
-                            let val = vals.get(0).unwrap();
-                            // We should only get excited if we can track down an index for `id`.
-                            // If `keys` is non-empty, that means we think one exists.
-                            for (index_id, (desc, _typ, _monotonic)) in
-                                dataflow_plan.index_imports.iter()
-                            {
-                                if desc.on_id == *id && &desc.key == key {
-                                    // Indicate an early exit with a specific index and key value.
-                                    return Ok(Some(FastPathPlan::PeekExisting(
-                                        *index_id,
-                                        Some(val.clone()),
-                                        permute_oneshot_mfp_around_index(mfp, key)?,
-                                    )));
-                                }
+                        // We should only get excited if we can track down an index for `id`.
+                        // If `keys` is non-empty, that means we think one exists.
+                        for (index_id, (desc, _typ, _monotonic)) in
+                            dataflow_plan.index_imports.iter()
+                        {
+                            if desc.on_id == *id && &desc.key == key {
+                                // Indicate an early exit with a specific index and key value.
+                                return Ok(Some(FastPathPlan::PeekExisting(
+                                    *index_id,
+                                    Some(vals.clone()),
+                                    permute_oneshot_mfp_around_index(mfp, key)?,
+                                )));
                             }
                         }
                     }
@@ -437,8 +452,18 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // If we must build the view, ship the dataflow.
         let (peek_command, drop_dataflow) = match fast_path {
-            PeekPlan::FastPath(FastPathPlan::PeekExisting(id, key, map_filter_project)) => (
-                (id, key, timestamp, finishing.clone(), map_filter_project),
+            PeekPlan::FastPath(FastPathPlan::PeekExisting(
+                id,
+                literal_constraints,
+                map_filter_project,
+            )) => (
+                (
+                    id,
+                    literal_constraints,
+                    timestamp,
+                    finishing.clone(),
+                    map_filter_project,
+                ),
                 None,
             ),
             PeekPlan::SlowPath(PeekDataflowPlan {
@@ -521,14 +546,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
+        let (id, literal_constraints, timestamp, _finishing, map_filter_project) = peek_command;
 
         self.controller
             .compute_mut(compute_instance)
             .unwrap()
             .peek(
                 id,
-                key,
+                literal_constraints,
                 uuid,
                 timestamp,
                 finishing.clone(),
@@ -667,7 +692,7 @@ mod tests {
         );
         let lookup = FastPathPlan::<mz_repr::Timestamp>::PeekExisting(
             GlobalId::User(11),
-            Some(Row::pack(Some(Datum::Int32(5)))),
+            Some(vec![Row::pack(Some(Datum::Int32(5)))]),
             MapFilterProject::new(3)
                 .filter(Some(
                     MirScalarExpr::column(0).call_unary(UnaryFunc::IsNull(IsNull)),
@@ -683,7 +708,7 @@ mod tests {
 
         let constant_err_exp = "Error \"division by zero\"\n";
         let no_lookup_exp = "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadExistingIndex u10\n";
-        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup_value=(5)\n";
+        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup value (5)\n";
 
         assert_eq!(text_string_at(&constant_err, ctx_gen), constant_err_exp);
         assert_eq!(text_string_at(&no_lookup, ctx_gen), no_lookup_exp);

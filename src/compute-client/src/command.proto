@@ -111,7 +111,7 @@ message ProtoSourceInstanceArguments {
 
 message ProtoPeek {
     mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_repr.row.ProtoRow key = 2;
+    repeated mz_repr.row.ProtoRow key = 2;
     mz_proto.ProtoU128 uuid = 3;
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;

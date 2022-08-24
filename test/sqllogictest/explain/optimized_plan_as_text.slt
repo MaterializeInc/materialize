@@ -715,3 +715,19 @@ Used Indexes:
   - materialize.public.t_a_b_idx
 
 EOF
+
+# Test an IndexedFilter join on fast path WITH(join_impls).
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(join_impls, non_negative) AS TEXT FOR
+SELECT *
+FROM t
+WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
+----
+Explained Query (fast path)
+  Project (#0, #1)
+    ReadExistingIndex materialize.public.t_a_b_idx lookup values [(0, 1); (3, 4); (7, 8)]
+
+Used Indexes:
+  - materialize.public.t_a_b_idx
+
+EOF

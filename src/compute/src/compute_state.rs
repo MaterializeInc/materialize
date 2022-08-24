@@ -732,10 +732,6 @@ impl PendingPeek {
             .limit
             .map(|l| l + self.peek.finishing.offset);
 
-        if let Some(literal) = &self.peek.key {
-            cursor.seek_key(&storage, literal);
-        }
-
         use differential_dataflow::trace::Cursor;
         use mz_ore::result::ResultExt;
         use mz_repr::{DatumVec, RowArena};
@@ -745,17 +741,42 @@ impl PendingPeek {
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
 
-        while cursor.key_valid(&storage)
-            && if self.peek.key.is_some() {
-                // If `seek_key` tried to seek to a non-existent key, then it landed on a different
-                // key, so we should quit already.
-                *self.peek.key.as_ref().unwrap() == *cursor.get_key(&storage).unwrap()
-            } else {
-                true
+        // We have to sort the literal constraints because cursor.seek_key can seek only forward.
+        self.peek
+            .literal_constraints
+            .iter_mut()
+            .for_each(|vec| vec.sort());
+        let has_literal_constraints = self.peek.literal_constraints.is_some();
+        let mut literals = self.peek.literal_constraints.iter().flat_map(|l| l);
+        let mut current_literal = None;
+
+        while cursor.key_valid(&storage) {
+            if has_literal_constraints {
+                loop {
+                    // Go to the next literal constraint.
+                    // (i.e., to the next OR argument in something like `c=3 OR c=7 OR c=9`)
+                    current_literal = literals.next();
+                    match current_literal {
+                        None => return Ok(results),
+                        Some(current_literal) => {
+                            cursor.seek_key(&storage, current_literal);
+                            if !cursor.key_valid(&storage) {
+                                return Ok(results);
+                            }
+                            if *cursor.get_key(&storage).unwrap() == *current_literal {
+                                // The cursor found a record whose key matches the current literal.
+                                // We break from the inner loop, and process this key.
+                                break;
+                            }
+                            // The cursor landed on a record that has a different key, meaning that there is
+                            // no record whose key would match the current literal.
+                        }
+                    }
+                }
             }
-        {
+
             while cursor.val_valid(&storage) {
-                // TODO: This arena could be maintained and reuse for longer
+                // TODO: This arena could be maintained and reused for longer,
                 // but it wasn't clear at what interval we should flush
                 // it to ensure we don't accidentally spike our memory use.
                 // This choice is conservative, and not the end of the world
@@ -767,11 +788,15 @@ impl PendingPeek {
                 // for the arena above (the allocation would not be allowed
                 // to outlive the arena above, from which it might borrow).
                 let mut borrow = datum_vec.borrow_with_many(&[key, row]);
-                if let Some(ref key_val) = self.peek.key {
-                    // If the peek has a `key`, that means it was created from an IndexedFilter join.
-                    // We have to add those columns here that the join would add in a dataflow.
+
+                if has_literal_constraints {
+                    // The peek was created from an IndexedFilter join. We have to add those columns
+                    // here that the join would add in a dataflow.
                     let datum_vec = borrow.deref_mut();
-                    datum_vec.extend(key_val.iter());
+                    // unwrap is ok, because it could be None only if !has_literal_constraints or if
+                    // the iteration is finished. In the latter case we already exited the while
+                    // loop.
+                    datum_vec.extend(current_literal.unwrap().iter());
                 }
                 if let Some(result) = self
                     .peek
@@ -835,10 +860,10 @@ impl PendingPeek {
                 }
                 cursor.step_val(&storage);
             }
-            // If we had a key, we are now done and can return.
-            if self.peek.key.is_some() {
-                return Ok(results);
-            } else {
+            // The cursor doesn't have anything more to say for the current key.
+
+            if !has_literal_constraints {
+                // We are simply stepping through all the keys that the index has.
                 cursor.step_key(&storage);
             }
         }
