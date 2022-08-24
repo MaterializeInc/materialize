@@ -49,7 +49,7 @@ pub mod encoding;
 include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sources.rs"));
 
 /// A description of a source ingestion
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct IngestionDescription<S = ()> {
     /// The source description
     pub desc: SourceDesc,
@@ -59,6 +59,30 @@ pub struct IngestionDescription<S = ()> {
     pub storage_metadata: S,
     /// The relation type this ingestion should produce
     pub typ: RelationType,
+}
+
+impl<S> Arbitrary for IngestionDescription<S>
+where
+    S: Arbitrary + 'static,
+{
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<SourceDesc>(),
+            any::<BTreeMap<GlobalId, S>>(),
+            any::<S>(),
+            any::<RelationType>(),
+        )
+            .prop_map(|(desc, source_imports, storage_metadata, typ)| Self {
+                desc,
+                source_imports,
+                storage_metadata,
+                typ,
+            })
+            .boxed()
+    }
 }
 
 impl IngestionDescription<CollectionMetadata> {
@@ -1167,13 +1191,38 @@ impl RustType<ProtoCompression> for Compression {
 }
 
 /// An external source of updates for a relational collection.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceDesc {
     pub connection: SourceConnection,
     pub encoding: encoding::SourceDataEncoding,
     pub envelope: SourceEnvelope,
     pub metadata_columns: Vec<IncludedColumnSource>,
     pub ts_frequency: Duration,
+}
+
+impl Arbitrary for SourceDesc {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<SourceConnection>(),
+            any::<encoding::SourceDataEncoding>(),
+            any::<SourceEnvelope>(),
+            any::<Vec<IncludedColumnSource>>(),
+            any::<Duration>(),
+        )
+            .prop_map(
+                |(connection, encoding, envelope, metadata_columns, ts_frequency)| Self {
+                    connection,
+                    encoding,
+                    envelope,
+                    metadata_columns,
+                    ts_frequency,
+                },
+            )
+            .boxed()
+    }
 }
 
 impl RustType<ProtoSourceDesc> for SourceDesc {
