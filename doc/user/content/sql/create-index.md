@@ -1,6 +1,6 @@
 ---
 title: "CREATE INDEX"
-description: "`CREATE INDEX` creates an in-memory index on a source or view."
+description: "`CREATE INDEX` creates an in-memory index on a source, view, or materialized view."
 menu:
   # This should also have a "non-content entry" under Reference, which is
   # configured in doc/user/config.toml
@@ -8,45 +8,38 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory index on a source or view.
+`CREATE INDEX` creates an in-memory [index](/overview/key-concepts/#indexes) on a source, view, or materialized
+view.
 
--   For materialized views, this creates additional indexes.
--   For non-materialized views, it converts them into materialized views.
+Indexes assemble and maintain a query's results in memory within a [cluster](/overview/key-concepts#clusters),
+which provides future queries the data
+they need in a format they can immediately use. In particular, creating indexes
+can be very helpful for the [`JOIN`](../join) operator, which needs to build
+and maintain the appropriate indexes if they do not otherwise exist.
 
-## Conceptual framework
-
-Indexes assemble and maintain a query's results in memory, which can
-provide future queries the data they need in a format they can immediately use.
-
-In particular, manually creating indexes can be very helpful for the
-[`JOIN`](../join) operator which needs to build and maintain the appropriate
-indexes if they do not otherwise exist. For more information, see [Key Concepts:
-Indexes](/overview/key-concepts/#indexes).
-
-### When to create indexes
+### Usage patterns
 
 You might want to create indexes when...
 
--   You want to use non-primary keys (e.g. foreign keys) as a join condition.
-    In this case, you could create an index on the columns in the join condition.
--   You want to convert a non-materialized view or source to a materialized view or source.
+-   You want to use non-primary keys (e.g. foreign keys) as a join condition. In
+    this case, you could create an index on the columns in the join condition.
 -   You want to speed up searches filtering by literal values or expressions.
 
-### Indexes + clusters
-
-Materialize maintains indexes using dataflows. Each dataflow must belong to a
-[cluster](/overview/key-concepts#clusters).
+[//]: # "TODO(morsapaes) Point to relevant operational guide on indexes once
+this exists."
 
 ## Syntax
 
 {{< diagram "create-index.svg" >}}
 
+[//]: # "TODO(morsapaes) This diagram is out of control."
+
 Field | Use
 ------|-----
-**DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view). This provides a simple method to convert a non-materialized object to a materialized one.
+**DEFAULT** | Creates a default index that stores all columns in a source, view, or materialized view in memory.
 _index&lowbar;name_ | A name for the index.
-_obj&lowbar;name_ | The name of the source or view on which you want to create an index.
-_cluster_name_ | The [cluster](/sql/create-cluster) to maintain this index. If not provided, uses the session's `cluster` variable.
+_obj&lowbar;name_ | The name of the source, view, or materialized view on which you want to create an index.
+_cluster_name_ | The [cluster](/sql/create-cluster) to maintain this index. If not specified, defaults to the active cluster.
 _method_ | The name of the index method to use. The only supported method is [`arrangement`](/overview/arrangements).
 _col&lowbar;expr_**...** | The expressions to use as the key for the index.
 _field_ | The name of the option you want to set.
@@ -140,26 +133,6 @@ In the above example, the index `active_customers_geo_idx`...
 -   Obeys our restrictions by containing only a subset of columns in the result
     set.
 
-### Materializing views
-
-You can convert a non-materialized view into a materialized view by adding an
-index to it.
-
-```sql
-CREATE VIEW active_customers AS
-    SELECT guid, geo_id, last_active_on
-    FROM customer_source
-    WHERE last_active_on > now() - INTERVAL '30' DAYS;
-
-CREATE INDEX active_customers_primary_idx ON active_customers (guid);
-```
-
-Note that this index is different than the primary index that Materialize would
-automatically create if you had used `CREATE MATERIALIZED VIEW`. Indexes that
-are automatically created contain an index of all columns in the result set,
-unless they contain a unique key. (Remember that indexes store a copy of a
-row's indexed columns _and_ a copy of the entire row.)
-
 ### Speed up filtering with indexes
 
 You can set up an index over a column were filtering by literal values or expressions are common to improve the performance.
@@ -187,7 +160,7 @@ SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-4041
 
 Create an index with an expression to improve query performance over a frequent used expression and
 avoid building downstream views to apply the function like the one used in the example: `upper()`.
-Take into account that aggregations like `count()` are not possible to use as expressions.
+Take into account that aggregations like `count()` cannot be used as expressions.
 
 ## Related pages
 
