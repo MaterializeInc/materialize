@@ -2898,15 +2898,18 @@ impl<'a> Parser<'a> {
         }))
     }
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
-            AVAILABILITY => {
-                self.expect_keyword(ZONE)?;
-                ReplicaOptionName::AvailabilityZone
-            }
-            REMOTE => ReplicaOptionName::Remote,
-            SIZE => ReplicaOptionName::Size,
-            _ => unreachable!(),
-        };
+        let name =
+            match self.expect_one_of_keywords(&[AVAILABILITY, COMPUTE, REMOTE, SIZE, WORKERS])? {
+                AVAILABILITY => {
+                    self.expect_keyword(ZONE)?;
+                    ReplicaOptionName::AvailabilityZone
+                }
+                COMPUTE => ReplicaOptionName::Compute,
+                REMOTE => ReplicaOptionName::Remote,
+                SIZE => ReplicaOptionName::Size,
+                WORKERS => ReplicaOptionName::Workers,
+                _ => unreachable!(),
+            };
         let value = self.parse_opt_with_option_value(false)?;
         Ok(ReplicaOption { name, value })
     }

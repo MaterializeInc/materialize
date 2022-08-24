@@ -44,7 +44,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 /// Commands related to the computation and maintenance of views.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
-    /// Indicates the creation of an instance, and is the first command for its compute instance.
+    /// Create the timely runtime according to CommunicationConfig
+    CreateTimely(CommunicationConfig),
+    /// After CreateTimely this is the first command that sets up logging sources.
     CreateInstance(InstanceConfig),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
@@ -105,6 +107,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 ComputeCommand::UpdateMaxResultSize(max_result_size) => {
                     UpdateMaxResultSize(max_result_size.into_proto())
                 }
+                ComputeCommand::CreateTimely(comm_config) => CreateTimely(comm_config.into_proto()),
             }),
         }
     }
@@ -128,6 +131,9 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             }),
             Some(UpdateMaxResultSize(ProtoUpdateMaxResultSize { max_result_size })) => {
                 Ok(ComputeCommand::UpdateMaxResultSize(max_result_size))
+            }
+            Some(CreateTimely(proto_comm_config)) => {
+                Ok(ComputeCommand::CreateTimely(proto_comm_config.into_rust()?))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeCommand::kind",
@@ -226,6 +232,17 @@ pub struct InstanceConfig {
     pub max_result_size: u32,
 }
 
+/// Configuration of the cluster we will spin up
+#[derive(Arbitrary, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommunicationConfig {
+    /// Number of per-process worker threads
+    pub workers: usize,
+    /// Identity of this process
+    pub process: usize,
+    /// Addresses of all processes
+    pub addresses: Vec<String>,
+}
+
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
@@ -240,6 +257,24 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
             replica_id: proto.replica_id,
             logging: proto.logging.into_rust()?,
             max_result_size: proto.max_result_size,
+        })
+    }
+}
+
+impl RustType<ProtoCommunicationConfig> for CommunicationConfig {
+    fn into_proto(&self) -> ProtoCommunicationConfig {
+        ProtoCommunicationConfig {
+            workers: self.workers.into_proto(),
+            addresses: self.addresses.into_proto(),
+            process: self.process.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCommunicationConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            process: proto.process.into_rust()?,
+            workers: proto.workers.into_rust()?,
+            addresses: proto.addresses.into_rust()?,
         })
     }
 }
@@ -958,7 +993,8 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         let mut live_peeks = Vec::new();
         let mut live_cancels = std::collections::BTreeSet::new();
 
-        let mut create_command = None;
+        let mut create_inst_command = None;
+        let mut create_timely_command = None;
         let mut drop_command = None;
         let mut update_max_result_size_command = None;
 
@@ -966,10 +1002,14 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
 
         for command in self.commands.drain(..) {
             match command {
-                create @ ComputeCommand::CreateInstance(_) => {
-                    // We should be able to handle this, should this client need to be restartable.
-                    assert!(create_command.is_none());
-                    create_command = Some(create);
+                create_timely @ ComputeCommand::CreateTimely(_) => {
+                    assert!(create_timely_command.is_none());
+                    create_timely_command = Some(create_timely);
+                }
+                // We should be able to handle the Create* commands, should this client need to be restartable.
+                create_inst @ ComputeCommand::CreateInstance(_) => {
+                    assert!(create_inst_command.is_none());
+                    create_inst_command = Some(create_inst);
                 }
                 cmd @ ComputeCommand::DropInstance => {
                     assert!(drop_command.is_none());
@@ -1054,8 +1094,11 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         }
 
         // Reconstitute the commands as a compact history.
-        if let Some(create_command) = create_command {
-            self.commands.push(create_command);
+        if let Some(create_timely_command) = create_timely_command {
+            self.commands.push(create_timely_command);
+        }
+        if let Some(create_inst_command) = create_inst_command {
+            self.commands.push(create_inst_command);
         }
         if !live_dataflows.is_empty() {
             self.commands

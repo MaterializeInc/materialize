@@ -31,26 +31,10 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
-    Computed(
-        name="computed_1",
-        options="--workers 2 --process 0 computed_1:2102 computed_2:2102 ",
-        ports=[2100, 2102],
-    ),
-    Computed(
-        name="computed_2",
-        options="--workers 2 --process 1 computed_1:2102 computed_2:2102",
-        ports=[2100, 2102],
-    ),
-    Computed(
-        name="computed_3",
-        options="--workers 2 --process 0 computed_3:2102 computed_4:2102",
-        ports=[2100, 2102],
-    ),
-    Computed(
-        name="computed_4",
-        options="--workers 2 --process 1 computed_3:2102 computed_4:2102",
-        ports=[2100, 2102],
-    ),
+    Computed(name="computed_1"),
+    Computed(name="computed_2"),
+    Computed(name="computed_3"),
+    Computed(name="computed_4"),
     Materialized(),
     Redpanda(),
     Testdrive(
@@ -106,7 +90,12 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     c.up("computed_2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
-        "CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100', 'computed_2:2100']));"
+        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            REMOTE ['computed_1:2100', 'computed_2:2100'],
+            COMPUTE ['computed_1:2102', 'computed_2:2102'],
+            WORKERS 2
+            ));
+    """
     )
     c.run("testdrive", *args.glob)
 
@@ -114,7 +103,11 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     c.up("computed_3")
     c.up("computed_4")
     c.sql(
-        "CREATE CLUSTER REPLICA cluster1.replica2 REMOTE ['computed_3:2100', 'computed_4:2100']"
+        """CREATE CLUSTER REPLICA cluster1.replica2
+            REMOTE ['computed_3:2100', 'computed_4:2100'],
+            COMPUTE ['computed_3:2102', 'computed_4:2102'],
+            WORKERS 2
+    """
     )
     c.run("testdrive", *args.glob)
 
@@ -138,7 +131,7 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100']));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100'], WORKERS 2));
         SET cluster = cluster1;
         """
     )

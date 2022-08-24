@@ -1071,6 +1071,10 @@ pub enum ReplicaOptionName {
     Size,
     /// The `AVAILABILITY ZONE [[=] <size>]` option.
     AvailabilityZone,
+    /// The `WORKERS [[=] <workers>]` option
+    Workers,
+    /// The `COMPUTE [<host> [, <host> ...]]` option.
+    Compute,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -1079,6 +1083,8 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::Remote => f.write_str("REMOTE"),
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
+            ReplicaOptionName::Workers => f.write_str("WORKERS"),
+            ReplicaOptionName::Compute => f.write_str("COMPUTE"),
         }
     }
 }

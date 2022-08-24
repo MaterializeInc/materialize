@@ -274,6 +274,8 @@ pub struct ComputeInstanceIntrospectionConfig {
 pub enum ComputeInstanceReplicaConfig {
     Remote {
         addrs: BTreeSet<String>,
+        compute_addrs: BTreeSet<String>,
+        workers: NonZeroUsize,
     },
     Managed {
         size: String,
@@ -284,7 +286,11 @@ pub enum ComputeInstanceReplicaConfig {
 impl ComputeInstanceReplicaConfig {
     pub fn get_az(&self) -> Option<&str> {
         match self {
-            ComputeInstanceReplicaConfig::Remote { addrs: _ } => None,
+            ComputeInstanceReplicaConfig::Remote {
+                addrs: _,
+                compute_addrs: _,
+                workers: _,
+            } => None,
             ComputeInstanceReplicaConfig::Managed {
                 size: _,
                 availability_zone,

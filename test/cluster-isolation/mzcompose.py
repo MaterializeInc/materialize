@@ -216,22 +216,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.wait_for_materialized()
 
     nodes = [
-        Computed(
-            name="computed_1_1",
-            peers=["computed_1_1", "computed_1_2"],
-        ),
-        Computed(
-            name="computed_1_2",
-            peers=["computed_1_1", "computed_1_2"],
-        ),
-        Computed(
-            name="computed_2_1",
-            peers=["computed_2_1", "computed_2_2"],
-        ),
-        Computed(
-            name="computed_2_2",
-            peers=["computed_2_1", "computed_2_2"],
-        ),
+        Computed(name="computed_1_1"),
+        Computed(name="computed_1_2"),
+        Computed(name="computed_2_1"),
+        Computed(name="computed_2_2"),
     ]
 
     with c.override(*nodes):
@@ -240,14 +228,22 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.sql(
             """
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
-            CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1_1:2100', 'computed_1_2:2100']));
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
+                COMPUTE ['computed_1_1:2102', 'computed_1_2:2102'],
+                WORKERS 1
+            ));
             """
         )
 
         c.sql(
             """
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
-            CREATE CLUSTER cluster2 REPLICAS (replica1 (REMOTE ['computed_2_1:2100', 'computed_2_2:2100']));
+            CREATE CLUSTER cluster2 REPLICAS (replica1 (
+                REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
+                COMPUTE ['computed_2_1:2102', 'computed_2_2:2102'],
+                WORKERS 1
+            ));
             """
         )
 

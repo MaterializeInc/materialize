@@ -30,7 +30,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
 
-use crate::command::{ComputeCommand, ProtoComputeCommand};
+use crate::command::{CommunicationConfig, ComputeCommand, ProtoComputeCommand};
 use crate::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, TailBatch, TailResponse,
 };
@@ -148,7 +148,9 @@ where
     /// In particular, this method installs and removes upper frontier maintenance.
     pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateInstance(_) | ComputeCommand::DropInstance => {
+            ComputeCommand::CreateTimely(_)
+            | ComputeCommand::CreateInstance(_)
+            | ComputeCommand::DropInstance => {
                 self.reset();
             }
             _ => (),
@@ -181,9 +183,22 @@ where
 {
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<Option<ComputeCommand<T>>> {
         self.observe_command(&command);
-        let mut r = vec![None; self.parts];
-        r[0] = Some(command);
-        r
+        match command {
+            ComputeCommand::CreateTimely(comm_config) => (0..self.parts)
+                .into_iter()
+                .map(|part| {
+                    Some(ComputeCommand::CreateTimely(CommunicationConfig {
+                        process: part,
+                        ..comm_config.clone()
+                    }))
+                })
+                .collect(),
+            command => {
+                let mut r = vec![None; self.parts];
+                r[0] = Some(command);
+                r
+            }
+        }
     }
 
     fn absorb_response(

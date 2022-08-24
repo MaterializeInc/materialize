@@ -3188,6 +3188,7 @@ name = "mz-compute"
 version = "0.27.0-dev"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "bytesize",
  "clap",
@@ -3195,6 +3196,7 @@ dependencies = [
  "dec",
  "differential-dataflow",
  "dogsdogsdogs",
+ "futures",
  "mz-build-info",
  "mz-compute-client",
  "mz-expr",

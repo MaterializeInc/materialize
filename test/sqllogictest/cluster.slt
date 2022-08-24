@@ -26,19 +26,19 @@ CREATE CLUSTER foo REPLICAS (), REPLICAS()
 # Creating cluster w/ remote replica works.
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 1))
 
 statement error cluster 'foo' already exists
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 1))
 
 statement error cannot create multiple replicas named 'r1' on cluster 'bar'
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234']), r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 1), r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 1))
 
 statement error REMOTE specified more than once
 CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234'], REMOTE ['localhost:1234']))
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235']), r2 (REMOTE ['localhost:1236']))
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235'], COMPUTE [], WORKERS 1), r2 (REMOTE ['localhost:1236'], COMPUTE [], WORKERS 1))
 
 query TT rowsort
 SELECT * FROM mz_clusters
@@ -63,6 +63,12 @@ default
 
 statement error only one of REMOTE or SIZE may be specified
 CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], SIZE 'small'))
+
+statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234', 'localhost:4567'], COMPUTE [], WORKERS 1))
+
+statement error WORKERS must be greater 0
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 0))
 
 # Test `cluster` session variable.
 
@@ -268,7 +274,7 @@ statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234']))
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 1))
 
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
@@ -285,13 +291,13 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION INTERVAL '1s'
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 1)), INTROSPECTION INTERVAL '1s'
 
 statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION INTERVAL '1s'
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 1)), INTROSPECTION INTERVAL '1s'
 
 statement ok
 DROP CLUSTER foo CASCADE
@@ -487,13 +493,13 @@ statement error AVAILABILITY ZONE specified more than once
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], WORKERS 1, AVAILABILITY ZONE 'a'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], WORKERS 1, AVAILABILITY ZONE 'a'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ['host1']
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ['host1'], WORKERS 1
 
 # Test that the contents of mz_cluster_replicas look sensible
 
