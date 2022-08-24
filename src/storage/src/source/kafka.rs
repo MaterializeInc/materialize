@@ -127,6 +127,10 @@ impl SourceReader for KafkaSourceReader {
         let mut start_offsets: HashMap<_, u64> = kc
             .start_offsets
             .into_iter()
+            .filter(|(pid, _offset)| {
+                let pid = PartitionId::Kafka(*pid);
+                crate::source::responsible_for(&source_id, worker_id, worker_count, &pid)
+            })
             .map(|(k, v)| (k, v.offset))
             .collect();
 
@@ -147,7 +151,7 @@ impl SourceReader for KafkaSourceReader {
             }
         }
 
-        info!("Instantiating Kafka source reader at offsets {start_offsets:?}");
+        info!("worker {worker_id}/{worker_count}: Instantiating Kafka source reader at offsets {start_offsets:?}");
 
         let partition_info = Arc::new(Mutex::new(None));
         let metadata_thread_handle = {
