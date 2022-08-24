@@ -16,7 +16,7 @@ harness = false
 
 [dependencies]
 anyhow = "1.0.58"
-bytes = "1.2.0"
+bytes = "1.2.1"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.6.3", features = ["serde", "case-insensitive"] }
 dec = "0.4.8"
@@ -36,7 +36,7 @@ num_enum = "0.5.7"
 ordered-float = { version = "3.0.0", features = ["serde"] }
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 regex = "1.6.0"
-ryu = "1.0.10"
+ryu = "1.0.11"
 serde = { version = "1.0.140", features = ["derive"] }
 serde_json = { version = "1.0.82", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
