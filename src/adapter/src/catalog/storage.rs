@@ -1018,11 +1018,6 @@ impl<'a, S: Append> Transaction<'a, S> {
         let next_id = id
             .checked_add(1)
             .ok_or_else(|| Error::new(ErrorKind::IdExhaustion))?;
-        // TODO(jkosh44) We currently don't support u64 Datums, so these eventually are converted to
-        //i64 to store in system tables
-        if next_id > u64::try_from(i64::MAX).expect("max i64 should fit in u64") {
-            return Err(Error::new(ErrorKind::IdExhaustion));
-        }
         let diff = self.id_allocator.update(|k, _v| {
             if k.name == key {
                 Some(IdAllocValue { next_id })

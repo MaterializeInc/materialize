@@ -221,9 +221,11 @@ contains:unknown catalog item 'double_temp_v'
 
 > DISCARD TEMP
 
-> SELECT * FROM mz_indexes WHERE name = 'foo_primary_idx'
+> SELECT id, oid, name, on_id, CAST(cluster_id as NUMERIC)
+  FROM mz_indexes WHERE name = 'foo_primary_idx'
 
-> SELECT * FROM mz_indexes WHERE name = 'temp_t_primary_idx'
+> SELECT id, oid, name, on_id, CAST(cluster_id as NUMERIC)
+  FROM mz_indexes WHERE name = 'temp_t_primary_idx'
 
 ! SELECT * FROM temp_v;
 contains:unknown catalog item 'temp_v'
