@@ -52,11 +52,11 @@ impl PartId {
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
-pub struct PartialBlobKey(pub(crate) String);
+pub struct PartialBatchKey(pub(crate) String);
 
-impl PartialBlobKey {
-    pub fn new(writer_id: &WriterId, part_id: &PartId) -> PartialBlobKey {
-        PartialBlobKey(format!("{}/{}", writer_id, part_id))
+impl PartialBatchKey {
+    pub fn new(writer_id: &WriterId, part_id: &PartId) -> PartialBatchKey {
+        PartialBatchKey(format!("{}/{}", writer_id, part_id))
     }
 
     pub fn complete(&self, shard_id: &ShardId) -> BlobKey {
@@ -73,13 +73,13 @@ impl PartialBlobKey {
     }
 }
 
-impl std::fmt::Display for PartialBlobKey {
+impl std::fmt::Display for PartialBatchKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl Deref for PartialBlobKey {
+impl Deref for PartialBatchKey {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -91,7 +91,7 @@ impl Deref for PartialBlobKey {
 /// a [ShardId], [WriterId] and [PartId].
 ///
 /// Use when directly interacting with a [mz_persist::location::Blob], otherwise
-/// use [PartialBlobKey] to refer to a blob without needing to copy the
+/// use [PartialBatchKey] to refer to a blob without needing to copy the
 /// [ShardId].
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlobKey(String);
@@ -159,13 +159,13 @@ mod tests {
     #[test]
     fn partial_blob_key_completion() {
         let (shard_id, writer_id, part_id) = (ShardId::new(), WriterId::new(), PartId::new());
-        let partial_key = PartialBlobKey::new(&writer_id, &part_id);
+        let partial_key = PartialBatchKey::new(&writer_id, &part_id);
         assert_eq!(
             partial_key.complete(&shard_id),
             BlobKey(format!("{}/{}/{}", shard_id, writer_id, part_id))
         );
 
-        let partial_key = PartialBlobKey("random-legacy-key".to_string());
+        let partial_key = PartialBatchKey("random-legacy-key".to_string());
         assert_eq!(
             partial_key.complete(&shard_id),
             BlobKey("random-legacy-key".to_string())

@@ -32,7 +32,7 @@ use crate::error::InvalidUsage;
 use crate::internal::encoding::ProtoLeasedBatch;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::Metrics;
-use crate::internal::paths::PartialBlobKey;
+use crate::internal::paths::PartialBatchKey;
 use crate::internal::state::HollowBatch;
 use crate::read::{ReadHandle, ReaderId};
 use crate::ShardId;
@@ -189,7 +189,7 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
-    key: &PartialBlobKey,
+    key: &PartialBatchKey,
     registered_desc: &Description<T>,
     mut update_fn: UpdateFn,
 ) -> Result<(), anyhow::Error>

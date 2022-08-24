@@ -33,7 +33,7 @@ use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics};
-use crate::internal::paths::{PartId, PartialBlobKey};
+use crate::internal::paths::{PartId, PartialBatchKey};
 use crate::{PersistConfig, ShardId, WriterId};
 
 /// A handle to a batch of updates that has been written to blob storage but
@@ -52,7 +52,7 @@ where
     shard_id: ShardId,
 
     /// Keys to blobs that make up this batch of updates.
-    pub(crate) blob_keys: Vec<PartialBlobKey>,
+    pub(crate) blob_keys: Vec<PartialBatchKey>,
 
     /// The number of updates in this batch.
     pub(crate) num_updates: usize,
@@ -91,7 +91,7 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
         desc: Description<T>,
-        blob_keys: Vec<PartialBlobKey>,
+        blob_keys: Vec<PartialBatchKey>,
         num_updates: usize,
     ) -> Self {
         Self {
@@ -364,8 +364,8 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    writing_parts: VecDeque<(PartialBlobKey, JoinHandle<()>)>,
-    finished_parts: Vec<PartialBlobKey>,
+    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<()>)>,
+    finished_parts: Vec<PartialBatchKey>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -405,7 +405,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let blob = Arc::clone(&self.blob);
         let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let batch_metrics = self.batch_metrics.clone();
-        let partial_key = PartialBlobKey::new(&self.writer_id, &PartId::new());
+        let partial_key = PartialBatchKey::new(&self.writer_id, &PartId::new());
         let key = partial_key.complete(&self.shard_id);
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
 
@@ -498,7 +498,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", skip_all, fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<PartialBlobKey> {
+    pub(crate) async fn finish(self) -> Vec<PartialBatchKey> {
         let mut keys = self.finished_parts;
         for (key, handle) in self.writing_parts {
             let () = match handle.await {

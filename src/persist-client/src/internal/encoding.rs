@@ -23,7 +23,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use crate::error::CodecMismatch;
 use crate::fetch::{LeasedBatch, LeasedBatchMetadata};
-use crate::internal::paths::PartialBlobKey;
+use crate::internal::paths::PartialBatchKey;
 use crate::internal::state::proto_leased_batch_metadata;
 use crate::internal::state::{
     HollowBatch, ProtoHollowBatch, ProtoLeasedBatchMetadata, ProtoReaderState, ProtoStateRollup,
@@ -88,13 +88,13 @@ impl RustType<String> for WriterId {
     }
 }
 
-impl RustType<String> for PartialBlobKey {
+impl RustType<String> for PartialBatchKey {
     fn into_proto(&self) -> String {
         self.0.clone()
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        Ok(PartialBlobKey(proto))
+        Ok(PartialBatchKey(proto))
     }
 }
 

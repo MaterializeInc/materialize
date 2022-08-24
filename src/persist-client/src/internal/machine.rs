@@ -794,7 +794,7 @@ mod tests {
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
     use crate::internal::compact::{CompactReq, Compactor};
-    use crate::internal::paths::PartialBlobKey;
+    use crate::internal::paths::PartialBatchKey;
     use crate::internal::state::ProtoStateRollup;
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
@@ -876,10 +876,10 @@ mod tests {
                                 let mut batches = vec![];
                                 if let Some(trace) = persisted_state.trace.as_ref() {
                                     for batch in trace.spine.iter() {
-                                        let part_keys: Vec<PartialBlobKey> = batch
+                                        let part_keys: Vec<PartialBatchKey> = batch
                                             .keys
                                             .iter()
-                                            .map(|k| PartialBlobKey(k.to_owned()))
+                                            .map(|k| PartialBatchKey(k.to_owned()))
                                             .collect();
 
                                         for (batch_name, original_batch) in &state.batches {

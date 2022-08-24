@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use mz_persist::location::{Determinate, ExternalError, Indeterminate};
 use timely::progress::Antichain;
 
-use crate::internal::paths::PartialBlobKey;
+use crate::internal::paths::PartialBatchKey;
 use crate::{ShardId, WriterId};
 
 /// An indication of whether the given error type indicates an operation
@@ -66,7 +66,7 @@ pub enum InvalidUsage<T> {
         /// The given upper bound
         upper: Antichain<T>,
         /// Set of keys containing updates.
-        keys: Vec<PartialBlobKey>,
+        keys: Vec<PartialBatchKey>,
     },
     /// Bounds of a [crate::batch::Batch] are not valid for the attempted append call
     InvalidBatchBounds {

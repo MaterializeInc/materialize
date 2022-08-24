@@ -1050,7 +1050,7 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal::paths::PartialBlobKey;
+    use crate::internal::paths::PartialBatchKey;
 
     #[test]
     fn trace_datadriven() {
@@ -1075,7 +1075,7 @@ mod tests {
                 len,
                 keys: keys
                     .iter()
-                    .map(|x| PartialBlobKey((*x).to_owned()))
+                    .map(|x| PartialBatchKey((*x).to_owned()))
                     .collect(),
             }
         }

@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use crate::internal::machine::retry_external;
-use crate::internal::paths::PartialBlobKey;
+use crate::internal::paths::PartialBatchKey;
 use crate::internal::state::ProtoStateRollup;
 use crate::{Metrics, ShardId};
 
@@ -242,7 +242,7 @@ impl GarbageCollector {
         // concurrently, but this requires a bunch of Arc cloning, so wait to
         // see if it's worth it.
         for key in deleteable_blobs {
-            let key = PartialBlobKey(key).complete(&req.shard_id);
+            let key = PartialBatchKey(key).complete(&req.shard_id);
             retry_external(&metrics.retries.external.gc_delete, || async {
                 blob.delete(&key).await
             })
