@@ -174,7 +174,7 @@ pub struct CreateComputeInstanceReplicaPlan {
 }
 
 /// Configuration of introspection for a compute instance.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
 pub struct ComputeInstanceIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,

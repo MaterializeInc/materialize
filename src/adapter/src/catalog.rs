@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -2141,13 +2140,11 @@ impl<S: Append> Catalog<S> {
         }
         let audit_logs = catalog.storage().await.load_audit_log().await?;
         for event in audit_logs {
-            let event = VersionedEvent::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
         let storage_usage_events = catalog.storage().await.storage_usage().await?;
         for event in storage_usage_events {
-            let event = VersionedStorageUsage::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 
@@ -2484,7 +2481,7 @@ impl<S: Append> Catalog<S> {
         for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
             let item = self.get_entry(&id).item();
             let serialized_item = self.serialize_item(item);
-            tx.insert_item(id, schema_id, &name, &serialized_item)?;
+            tx.insert_item(id, schema_id, &name, serialized_item)?;
         }
         tx.update_system_object_mappings(
             &migration_metadata
@@ -3440,7 +3437,7 @@ impl<S: Append> Catalog<S> {
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = self.serialize_item(&item);
-                        tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
+                        tx.insert_item(id, schema_id, &name.item, serialized_item)?;
                     }
 
                     if Self::should_audit_log_item(&item) {
@@ -4009,58 +4006,47 @@ impl<S: Append> Catalog<S> {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
-    fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {
-        let item = match item {
+    fn serialize_item(&self, item: &CatalogItem) -> SerializedCatalogItem {
+        match item {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
                 create_sql: mview.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
                 create_sql: secret.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
                 create_sql: connection.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::StorageCollection(_) => {
                 unreachable!("builtin storage collections cannot be serialized")
             }
-        };
-        serde_json::to_vec(&item).expect("catalog serialization cannot fail")
+        }
     }
 
-    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
-        let SerializedCatalogItem::V1 {
-            create_sql,
-            eval_env: _,
-        } = serde_json::from_slice(&bytes)?;
+    fn deserialize_item(
+        &self,
+        SerializedCatalogItem::V1 { create_sql }: SerializedCatalogItem,
+    ) -> Result<CatalogItem, anyhow::Error> {
         self.parse_item(create_sql, Some(&PlanContext::zero()))
     }
 
@@ -4389,42 +4375,14 @@ pub enum Op {
     ResetAllSystemConfiguration {},
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum SerializedCatalogItem {
-    V1 {
-        create_sql: String,
-        // The name "eval_env" is historical.
-        eval_env: Option<SerializedPlanContext>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SerializedPlanContext {
-    pub logical_time: Option<u64>,
-    pub wall_time: Option<DateTime<Utc>>,
-}
-
-impl From<SerializedPlanContext> for PlanContext {
-    fn from(cx: SerializedPlanContext) -> PlanContext {
-        PlanContext {
-            wall_time: cx.wall_time.unwrap_or_else(|| Utc.timestamp(0, 0)),
-            qgm_optimizations: false,
-        }
-    }
-}
-
-impl From<PlanContext> for SerializedPlanContext {
-    fn from(cx: PlanContext) -> SerializedPlanContext {
-        SerializedPlanContext {
-            logical_time: None,
-            wall_time: Some(cx.wall_time),
-        }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SerializedCatalogItem {
+    V1 { create_sql: String },
 }
 
 /// Serialized (stored alongside the replica) logging configuration of
 /// a replica. Serialized variant of ConcreteComputeInstanceReplicaLogging.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
     /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
@@ -4445,7 +4403,7 @@ impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceRe
 /// A [`mz_sql::plan::ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
 /// to the catalog stash. This is a separate type to allow us to evolve the
 /// on-disk format independently from the SQL layer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedComputeInstanceReplicaConfig {
     pub persisted_logs: SerializedComputeInstanceReplicaLogging,
     pub location: SerializedComputeInstanceReplicaLocation,
@@ -4465,7 +4423,7 @@ impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceRep
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedComputeInstanceReplicaLocation {
     Remote {
         addrs: BTreeSet<String>,
