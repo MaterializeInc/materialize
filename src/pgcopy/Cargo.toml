@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-bytes = "1.2.0"
+bytes = "1.2.1"
 csv = "1.1.6"
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
