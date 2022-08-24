@@ -119,30 +119,26 @@ WHERE i.id LIKE 'u%'
 
 expected_indexes = {
     "materialize_cloud": """
-        name,index_position,on_position,on_expression
-        test_materialized_view_index,1,1,
-        test_source,1,1,
-        test_source_index,1,1,
-        test_view_index,1,1,
-        test_view_index,2,,pg_catalog.length(a)""".lstrip(),
+name,index_position,on_position,on_expression
+test_materialized_view_index,1,1,
+test_source,1,1,
+test_source_index,1,1,
+test_view_index,1,1,
+test_view_index,2,,pg_catalog.length(a)""".lstrip(),
     "materialize_binary": """
-        name,index_position,on_position,on_expression
-        expected_indexes_materialize_cloud,1,1,
-        expected_indexes_materialize_cloud,2,2,
-        expected_indexes_materialize_cloud,3,3,
-        expected_indexes_materialize_cloud,4,4,
-        expected_indexes_materialize_binary,1,1,
-        expected_indexes_materialize_binary,2,2,
-        expected_indexes_materialize_binary,3,3,
-        expected_indexes_materialize_binary,4,4,
-        test_materialized_view,1,1,
-        test_materialized_view_index,1,1,
-        test_materialized_view_index,1,1,
-        test_source,1,1,
-        test_source,2,2,
-        test_source_index,1,1,
-        test_view_index,1,1,
-        test_view_index,2,,pg_catalog.length(a)""".lstrip(),
+name,index_position,on_position,on_expression
+expected_indexes,1,1,
+expected_indexes,2,2,
+expected_indexes,3,3,
+expected_indexes,4,4,
+test_materialized_view,1,1,
+test_materialized_view_index,1,1,
+test_materialized_view_index,1,1,
+test_source,1,1,
+test_source,2,2,
+test_source_index,1,1,
+test_view_index,1,1,
+test_view_index,2,,pg_catalog.length(a)""".lstrip(),
 }
 
 not_null = """

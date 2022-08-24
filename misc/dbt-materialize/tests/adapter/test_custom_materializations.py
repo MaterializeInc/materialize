@@ -51,7 +51,7 @@ class TestCustomMaterializations:
             "test_view_index.sql": test_view_index,
             "test_source.sql": test_source[self._profile],
             "test_index.sql": test_index,
-            "test_source_index.sql": test_source_index,
+            "test_source_index.sql": test_source_index[self._profile],
             "test_sink.sql": test_sink[self._profile],
             "actual_indexes.sql": actual_indexes,
         }
