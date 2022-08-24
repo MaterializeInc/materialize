@@ -2291,9 +2291,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SIZE, REMOTE])? {
-            SIZE => CreateSourceOptionName::Size,
+        let name = match self.expect_one_of_keywords(&[REMOTE, SIZE, TIMELINE])? {
             REMOTE => CreateSourceOptionName::Remote,
+            SIZE => CreateSourceOptionName::Size,
+            TIMELINE => CreateSourceOptionName::Timeline,
             _ => unreachable!(),
         };
         Ok(name)
