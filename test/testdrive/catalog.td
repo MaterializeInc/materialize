@@ -240,8 +240,62 @@ contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or MATERIALI
 > SHOW FULL OBJECTS
 name            type
 --------------------------
+bool            user
+int_list        user
 v1              user
 v2              user
+
+# Create one of every mz_object type
+$ set schema={
+    "name": "row",
+    "type": "record",
+    "fields": [
+      {"name": "a", "type": "long"}
+    ]
+  }
+$ kafka-create-topic topic=data
+$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+{"a": 1}
+
+> CREATE TABLE tbl (a int, b text);
+> CREATE SECRET pass_secret AS 'pass';
+> CREATE CONNECTION kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+> CREATE MATERIALIZED VIEW mv AS SELECT (1);
+> CREATE SOURCE source_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
+> CREATE SINK snk FROM source_data
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-catalog-sink-${testdrive.seed}'
+  WITH (reuse_topic=true)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
+
+> SHOW FULL OBJECTS
+name            type
+--------------------------
+bool            user
+int_list        user
+v1              user
+v2              user
+tbl             user
+pass_secret     user
+kafka_conn      user
+mv              user
+source_data     user
+snk             user
+
+> SELECT DISTINCT(TYPE) FROM mz_objects
+type
+----
+table
+source
+view
+"materialized view"
+sink
+index
+connection
+type
+function
+secret
 
 # DROP DATABASE does not support both RESTRICT and CASCADE.
 ! DROP DATABASE d RESTRICT CASCADE
@@ -596,14 +650,6 @@ mz_materialization_source_frontiers
 mz_message_counts
 mz_message_counts_1
 mz_objects
-mz_perf_arrangement_records
-mz_perf_arrangement_records_1
-mz_perf_peek_durations_aggregates
-mz_perf_peek_durations_aggregates_1
-mz_perf_peek_durations_bucket
-mz_perf_peek_durations_bucket_1
-mz_perf_peek_durations_core
-mz_perf_peek_durations_core_1
 mz_records_per_dataflow
 mz_records_per_dataflow_1
 mz_records_per_dataflow_global
@@ -639,14 +685,6 @@ mz_materialization_source_frontiers  system
 mz_message_counts                    system
 mz_message_counts_1                  system
 mz_objects                           system
-mz_perf_arrangement_records          system
-mz_perf_arrangement_records_1        system
-mz_perf_peek_durations_aggregates    system
-mz_perf_peek_durations_aggregates_1  system
-mz_perf_peek_durations_bucket        system
-mz_perf_peek_durations_bucket_1      system
-mz_perf_peek_durations_core          system
-mz_perf_peek_durations_core_1        system
 mz_records_per_dataflow              system
 mz_records_per_dataflow_1            system
 mz_records_per_dataflow_global       system
@@ -666,14 +704,6 @@ mz_peek_active
 mz_peek_active_1
 mz_peek_durations
 mz_peek_durations_1
-
-> SHOW VIEWS FROM mz_catalog LIKE '%peek%';
-mz_perf_peek_durations_aggregates
-mz_perf_peek_durations_aggregates_1
-mz_perf_peek_durations_bucket
-mz_perf_peek_durations_bucket_1
-mz_perf_peek_durations_core
-mz_perf_peek_durations_core_1
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

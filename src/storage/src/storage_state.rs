@@ -263,7 +263,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
             // This is protection against `frontier` lagging behind what we have conditionally reported.
-            if <_ as PartialOrder>::less_than(reported_frontier, &observed_frontier) {
+            if PartialOrder::less_than(reported_frontier, &observed_frontier) {
                 let mut change_batch = ChangeBatch::new();
                 for time in reported_frontier.elements().iter() {
                     change_batch.update(time.clone(), -1);

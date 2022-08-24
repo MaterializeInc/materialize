@@ -21,7 +21,7 @@ year=$(date "+%Y")
 export GIT_AUTHOR_DATE=$git_date
 export GIT_COMMITTER_DATE=$git_date
 export GIT_AUTHOR_NAME=Materialize Bot
-export GIT_AUTHOR_EMAIL=infra+github-materializer@materialize.com
+export GIT_AUTHOR_EMAIL=infra+bot@materialize.com
 export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
 export GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
 

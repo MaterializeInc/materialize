@@ -339,7 +339,7 @@ where
                     .or(Err(ComputeError::IdentifierMissing(*source_id)))?
                     .read_capabilities
                     .frontier();
-                if !(<_ as timely::order::PartialOrder>::less_equal(since, &as_of.borrow())) {
+                if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*source_id))?;
                 }
 
@@ -351,7 +351,7 @@ where
             for index_id in dataflow.index_imports.keys() {
                 let collection = self.as_ref().collection(*index_id)?;
                 let since = collection.read_capabilities.frontier();
-                if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
+                if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*index_id))?;
                 } else {
                     compute_dependencies.push(*index_id);
@@ -655,7 +655,7 @@ where
             if let Ok(collection) = self.collection_mut(id) {
                 let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
 
-                if <_ as timely::order::PartialOrder>::less_equal(
+                if timely::order::PartialOrder::less_equal(
                     &collection.implied_capability,
                     &new_read_capability,
                 ) {
@@ -787,7 +787,7 @@ where
             let mut new_read_capability = collection
                 .read_policy
                 .frontier(collection.write_frontier.frontier());
-            if <_ as timely::order::PartialOrder>::less_equal(
+            if timely::order::PartialOrder::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,
             ) {

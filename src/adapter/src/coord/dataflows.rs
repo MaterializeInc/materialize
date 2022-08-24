@@ -162,7 +162,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // It should not be possible to request an invalid time. SINK doesn't support
             // AS OF. TAIL and Peek check that their AS OF is >= since.
             assert!(
-                <_ as PartialOrder>::less_equal(&since, as_of),
+                PartialOrder::less_equal(&since, as_of),
                 "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
                 dataflow.debug_name,
                 as_of,
