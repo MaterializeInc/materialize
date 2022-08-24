@@ -164,6 +164,11 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
+    async fn alter_collections(
+        &mut self,
+        collections: Vec<(GlobalId, StorageHostConfig)>,
+    ) -> Result<(), StorageError>;
+
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError>;
 
@@ -830,6 +835,16 @@ where
             }
         }
 
+        Ok(())
+    }
+
+    async fn alter_collections(
+        &mut self,
+        collections: Vec<(GlobalId, StorageHostConfig)>,
+    ) -> Result<(), StorageError> {
+        for (id, config) in collections {
+            let _ = self.hosts.provision(id, config).await?;
+        }
         Ok(())
     }
 

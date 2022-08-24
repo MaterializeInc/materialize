@@ -99,15 +99,15 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, ComputeInstanceIntrospectionConfig, ComputeInstanceReplicaConfig,
-    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
-    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    Index, MaterializedView, Params, Plan, Secret, Sink, Source, StorageHostConfig, Table, Type,
-    View,
+    AlterNoopPlan, AlterSecretPlan, AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, ComputeInstanceIntrospectionConfig,
+    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, Secret, Sink, Source,
+    StorageHostConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -3723,6 +3723,7 @@ pub fn describe_alter_source(
     _: &StatementContext,
     _: AlterSourceStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
+    // TODO: put the options here, right?
     Ok(StatementDesc::new(None))
 }
 
@@ -3731,8 +3732,63 @@ pub fn plan_alter_source(
     stmt: AlterSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     scx.require_unsafe_mode("ALTER SOURCE")?;
-    let _: AlterSourceAction<Aug> = stmt.action;
-    let _: AlterSourcePlan = sql_bail!("ALTER SOURCE not yet implemented!");
+    let AlterSourceStatement {
+        source_name,
+        if_exists,
+        action,
+    } = stmt;
+    let source_name = normalize::unresolved_object_name(source_name)?;
+    let entry = match scx.catalog.resolve_item(&source_name) {
+        Ok(source) => source,
+        Err(_) if if_exists => {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Source,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if entry.item_type() != CatalogItemType::Source {
+        sql_bail!(
+            "{} is a {} not a source",
+            scx.catalog.resolve_full_name(entry.name()),
+            entry.item_type()
+        )
+    }
+    let id = entry.id();
+
+    let mut size = AlterSourceItem::Unchanged;
+    let mut remote = AlterSourceItem::Unchanged;
+    match action {
+        AlterSourceAction::SetOptions(options) => {
+            let CreateSourceOptionExtracted {
+                size: size_opt,
+                remote: remote_opt,
+                ..
+            } = CreateSourceOptionExtracted::try_from(options)?;
+
+            if let Some(value) = size_opt {
+                size = AlterSourceItem::Set(value);
+            }
+
+            if let Some(value) = remote_opt {
+                remote = AlterSourceItem::Set(value);
+            }
+        }
+        AlterSourceAction::ResetOptions(reset) => {
+            for name in reset {
+                match name {
+                    CreateSourceOptionName::Size => {
+                        size = AlterSourceItem::Reset;
+                    }
+                    CreateSourceOptionName::Remote => {
+                        remote = AlterSourceItem::Reset;
+                    }
+                }
+            }
+        }
+    };
+
+    Ok(Plan::AlterSource(AlterSourcePlan { id, size, remote }))
 }
 
 pub fn describe_alter_system_set(

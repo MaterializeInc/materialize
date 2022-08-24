@@ -457,9 +457,17 @@ pub struct AlterIndexResetOptionsPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterSourceItem {
+    Set(String),
+    Reset,
+    Unchanged,
+}
+
+#[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub config: Option<StorageHostConfig>,
+    pub size: AlterSourceItem,
+    pub remote: AlterSourceItem,
 }
 
 #[derive(Debug)]

@@ -572,7 +572,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
-                | Op::ResetAllSystemConfiguration { .. } => {}
+                | Op::ResetAllSystemConfiguration { .. }
+                | Op::UpdateItem { .. } => {}
             }
         }
 

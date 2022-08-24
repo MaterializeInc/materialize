@@ -3703,6 +3703,16 @@ impl<S: Append> Catalog<S> {
 
                     vec![Action::UpdateComputeInstanceStatus { event }]
                 }
+                Op::UpdateItem { id, name, to_item } => {
+                    let ser = self.serialize_item(&to_item);
+                    tx.update_item(id, &name.item, &ser)?;
+                    builtin_table_updates.extend(self.state.pack_item_update(id, -1));
+                    vec![Action::UpdateItem {
+                        id,
+                        to_name: name,
+                        to_item,
+                    }]
+                }
                 Op::UpdateStorageUsage {
                     object_id,
                     size_bytes,
@@ -4359,6 +4369,11 @@ pub enum Op {
     },
     UpdateComputeInstanceStatus {
         event: ComputeInstanceEvent,
+    },
+    UpdateItem {
+        id: GlobalId,
+        name: QualifiedObjectName,
+        to_item: CatalogItem,
     },
     UpdateStorageUsage {
         object_id: Option<String>,

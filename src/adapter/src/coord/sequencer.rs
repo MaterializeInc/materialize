@@ -31,6 +31,7 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
+use mz_ore::collections::CollectionExt;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
@@ -39,21 +40,25 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Ti
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
+use mz_sql::plan;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
     SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{CreateSourceOption, CreateSourceOptionName, Statement, WithOptionValue};
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
+use mz_storage::types::hosts::StorageHostConfig;
 use mz_storage::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
     TailSinkConnection,
@@ -62,7 +67,7 @@ use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection,
-    SerializedComputeInstanceReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
+    SerializedComputeInstanceReplicaLocation, Source, StorageSinkConnectionState, SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -3127,6 +3132,87 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
 
+    async fn sequence_alter_source(
+        &mut self,
+        session: &Session,
+        AlterSourcePlan { id, size, remote }: AlterSourcePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        use mz_sql::ast::Value;
+        use AlterSourceItem::*;
+        use CreateSourceOptionName::*;
+
+        let entry = self.catalog.get_entry(&id);
+        let old_source = match entry.item() {
+            CatalogItem::Source(source) => source.clone(),
+            other => coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ()),
+        };
+
+        // Since the catalog serializes the items using only their creation statement
+        // and context, we need to parse and rewrite the with options in that statement.
+        // (And then make any other changes to the source definition to match.)
+        let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
+            .unwrap()
+            .into_element();
+
+        let create_stmt = match &mut stmt {
+            Statement::CreateSource(s) => s,
+            _ => coord_bail!("source {id} was not created with a CREATE SOURCE statement"),
+        };
+
+        let new_config = match (&old_source.host_config, size, remote) {
+            (_, Set(_), Set(_)) => coord_bail!("Can't set both SIZE and REMOTE on source"),
+            (_, Set(size), _) => Some(plan::StorageHostConfig::Managed { size }),
+            (_, _, Set(addr)) => Some(plan::StorageHostConfig::Remote { addr }),
+            (StorageHostConfig::Remote { .. }, _, Reset)
+            | (StorageHostConfig::Managed { .. }, Reset, _) => {
+                Some(plan::StorageHostConfig::Undefined)
+            }
+            (_, _, _) => None,
+        };
+
+        if let Some(config) = new_config {
+            create_stmt
+                .with_options
+                .retain(|x| ![Size, Remote].contains(&x.name));
+
+            let new_host_option = match &config {
+                plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
+                plan::StorageHostConfig::Undefined => None,
+            };
+
+            if let Some((name, value)) = new_host_option {
+                create_stmt.with_options.push(CreateSourceOption {
+                    name,
+                    value: Some(WithOptionValue::Value(Value::String(value))),
+                });
+            }
+
+            let host_config = self.catalog.resolve_storage_host_config(config)?;
+            let create_sql = stmt.to_ast_string_stable();
+            let source = Source {
+                create_sql,
+                host_config: host_config.clone(),
+                ..old_source
+            };
+
+            let op = catalog::Op::UpdateItem {
+                id,
+                name: entry.name().clone(),
+                to_item: CatalogItem::Source(source.clone()),
+            };
+            self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+                .await?;
+
+            self.controller
+                .storage_mut()
+                .alter_collections(vec![(id, host_config)])
+                .await?;
+        };
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
+    }
+
     fn extract_secret(
         &mut self,
         session: &Session,
@@ -3175,14 +3261,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         return Ok(Vec::from(payload));
-    }
-
-    async fn sequence_alter_source(
-        &mut self,
-        _: &Session,
-        _: AlterSourcePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        coord_bail!("ALTER SOURCE not yet implemented")
     }
 
     async fn sequence_alter_system_set(
