@@ -1,0 +1,765 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This comment was copied from map.slt
+# The unsigned types have an uncommon OID. If tokio-postres (the driver
+# used
+# by sqllogictest) encounters an OID it doesn't recognize (uint2,
+# uint4, or uint8 in
+# this case), then it queries pg_type (a wrapper around mz_types) for
+# information about it. Our unsigned types currently don't have entries
+# in
+# mz_types, so that query fails and tokio-postgres is unable to execute
+# queries with unsigned types. As a workaround until unsigned types
+# are reflected in pg_type,
+# we just convert everything to `numeric`.
+
+query I
+SELECT 42::uint2::numeric
+----
+42
+
+query I
+SELECT 32768::uint2::numeric
+----
+32768
+
+query T
+SELECT pg_typeof(42::uint2)
+----
+uint2
+
+query error uint2 out of range
+SELECT -666::uint2::numeric
+
+query error uint2 out of range
+SELECT 65536::uint2::numeric
+
+query I
+SELECT 42::uint4::numeric
+----
+42
+
+query I
+SELECT 65536::uint4::numeric
+----
+65536
+
+query I
+SELECT 2147483648::uint4::numeric
+----
+2147483648
+
+query T
+SELECT pg_typeof(42::uint4)
+----
+uint4
+
+query error uint4 out of range
+SELECT -666::uint4::numeric
+
+query error uint4 out of range
+SELECT 4294967296::uint4::numeric
+
+query I
+SELECT 42::uint8::numeric
+----
+42
+
+query I
+SELECT 65536::uint8::numeric
+----
+65536
+
+query I
+SELECT 4294967296::uint8::numeric
+----
+4294967296
+
+query I
+SELECT 9223372036854775808::uint8::numeric
+----
+9223372036854775808
+
+query T
+SELECT pg_typeof(42::uint8)
+----
+uint8
+
+query error uint8 out of range
+SELECT -666::uint8::numeric
+
+query error uint8 out of range
+SELECT 18446744073709551616::uint8::numeric
+
+statement ok
+CREATE TABLE t2 (a uint2)
+
+statement ok
+INSERT INTO t2 VALUES (13)
+
+statement ok
+INSERT INTO t2 VALUES (32768)
+
+statement error uint2 out of range
+INSERT INTO t2 VALUES (65536)
+
+statement error uint2 out of range
+INSERT INTO t2 VALUES (-13)
+
+query I rowsort
+SELECT CAST(a AS numeric) from t2
+----
+13
+32768
+
+statement ok
+CREATE TABLE t4 (a uint4)
+
+statement ok
+INSERT INTO t4 VALUES (13), (65536), (2147483648)
+
+statement error uint4 out of range
+INSERT INTO t4 VALUES (4294967296)
+
+statement error uint4 out of range
+INSERT INTO t4 VALUES (-13)
+
+query I rowsort
+SELECT CAST(a AS numeric) FROM t4
+----
+13
+2147483648
+65536
+
+statement ok
+CREATE TABLE t8 (a uint8)
+
+statement ok
+INSERT INTO t8 VALUES (13), (65536), (4294967296), (9223372036854775808)
+
+statement error uint8 out of range
+INSERT INTO t8 VALUES (18446744073709551616)
+
+statement error uint8 out of range
+INSERT INTO t8 VALUES (-13)
+
+query I rowsort
+SELECT CAST(a AS numeric) FROM t8
+----
+13
+4294967296
+65536
+9223372036854775808
+
+
+# Test casts to/from unsigned integers
+
+# From int2
+
+query I
+SELECT 21::int2::uint2::numeric
+----
+21
+
+query error uint2 out of range
+SELECT -21::int2::uint2::numeric
+
+query I
+SELECT 47::int2::uint4::numeric
+----
+47
+
+query error uint4 out of range
+SELECT -47::int2::uint4::numeric
+
+query I
+SELECT 99::int2::uint8::numeric
+----
+99
+
+query error uint8 out of range
+SELECT -99::int2::uint8::numeric
+
+# From int4
+
+query I
+SELECT 21::int4::uint2::numeric
+----
+21
+
+query error uint2 out of range
+SELECT -21::int4::uint2::numeric
+
+query error uint2 out of range
+SELECT 65536::int4::uint2::numeric
+
+query I
+SELECT 47::int4::uint4::numeric
+----
+47
+
+query I
+SELECT 65536::int4::uint4::numeric
+----
+65536
+
+query error uint4 out of range
+SELECT -47::int4::uint4::numeric
+
+query I
+SELECT 99::int4::uint8::numeric
+----
+99
+
+query I
+SELECT 65536::int4::uint8::numeric
+----
+65536
+
+query error uint8 out of range
+SELECT -99::int4::uint8::numeric
+
+# From int8
+
+query I
+SELECT 21::int8::uint2::numeric
+----
+21
+
+query error uint2 out of range
+SELECT -21::int8::uint2::numeric
+
+query error uint2 out of range
+SELECT 65536::int8::uint2::numeric
+
+query I
+SELECT 47::int8::uint4::numeric
+----
+47
+
+query I
+SELECT 65536::int8::uint4::numeric
+----
+65536
+
+query error uint4 out of range
+SELECT -47::int8::uint4::numeric
+
+query error uint4 out of range
+SELECT 4294967296::int8::uint4::numeric
+
+query I
+SELECT 99::int8::uint8::numeric
+----
+99
+
+query I
+SELECT 65536::int8::uint8::numeric
+----
+65536
+
+query I
+SELECT 4294967296::int8::uint8::numeric
+----
+4294967296
+
+query error uint8 out of range
+SELECT -99::int8::uint8::numeric
+
+# From numeric
+
+query I
+SELECT 12.0::numeric::uint2::numeric
+----
+12
+
+query I
+SELECT 12.4::numeric::uint2::numeric
+----
+12
+
+query I
+SELECT 12.6::numeric::uint2::numeric
+----
+13
+
+query error uint2 out of range
+SELECT -12.0::numeric::uint2::numeric
+
+query error uint2 out of range
+SELECT 65536.0::numeric::uint2::numeric
+
+query I
+SELECT 65535.4::numeric::uint2::numeric
+----
+65535
+
+query error uint2 out of range
+SELECT 65535.5::numeric::uint2::numeric
+
+query I
+SELECT 12.0::numeric::uint4::numeric
+----
+12
+
+query I
+SELECT 12.4::numeric::uint4::numeric
+----
+12
+
+query I
+SELECT 12.6::numeric::uint4::numeric
+----
+13
+
+query I
+SELECT 65536.0::numeric::uint4::numeric
+----
+65536
+
+query error uint4 out of range
+SELECT -12.0::numeric::uint4::numeric
+
+query error uint4 out of range
+SELECT 4294967296::numeric::uint4::numeric
+
+query I
+SELECT 4294967295.4::numeric::uint4::numeric
+----
+4294967295
+
+query error uint4 out of range
+SELECT 4294967295.5::numeric::uint4::numeric
+
+query I
+SELECT 12.0::numeric::uint8::numeric
+----
+12
+
+query I
+SELECT 12.4::numeric::uint8::numeric
+----
+12
+
+query I
+SELECT 12.6::numeric::uint8::numeric
+----
+13
+
+query I
+SELECT 65536.0::numeric::uint8::numeric
+----
+65536
+
+query I
+SELECT 4294967296.0::numeric::uint8::numeric
+----
+4294967296
+
+query error uint8 out of range
+SELECT -12.0::numeric::uint8::numeric
+
+query error uint8 out of range
+SELECT 18446744073709551616::numeric::uint8::numeric
+
+query I
+SELECT 18446744073709551615.4::numeric::uint8::numeric
+----
+18446744073709551615
+
+query error uint8 out of range
+SELECT 18446744073709551615.5::numeric::uint8::numeric
+
+# From float32
+
+query I
+SELECT 12.0::float::uint2::numeric
+----
+12
+
+query I
+SELECT 12.4::float::uint2::numeric
+----
+12
+
+query I
+SELECT 12.6::float::uint2::numeric
+----
+13
+
+query error uint2 out of range
+SELECT -12.0::float::uint2::numeric
+
+query error uint2 out of range
+SELECT 65536.0::float::uint2::numeric
+
+query I
+SELECT 65535.4::float::uint2::numeric
+----
+65535
+
+query error uint2 out of range
+SELECT 65535.5::float::uint2::numeric
+
+query I
+SELECT 12.0::float::uint4::numeric
+----
+12
+
+query I
+SELECT 12.4::float::uint4::numeric
+----
+12
+
+query I
+SELECT 12.6::float::uint4::numeric
+----
+13
+
+query I
+SELECT 65536.0::float::uint4::numeric
+----
+65536
+
+query error uint4 out of range
+SELECT -12.0::float::uint4::numeric
+
+query error uint4 out of range
+SELECT 4294967296::float::uint4::numeric
+
+query I
+SELECT 4294967295.4::float::uint4::numeric
+----
+4294967295
+
+query error uint4 out of range
+SELECT 4294967295.5::float::uint4::numeric
+
+query I
+SELECT 12.0::float::uint8::numeric
+----
+12
+
+query I
+SELECT 12.4::float::uint8::numeric
+----
+12
+
+query I
+SELECT 12.6::float::uint8::numeric
+----
+13
+
+query I
+SELECT 65536.0::float::uint8::numeric
+----
+65536
+
+query I
+SELECT 4294967296.0::float::uint8::numeric
+----
+4294967296
+
+query error uint8 out of range
+SELECT -12.0::float::uint8::numeric
+
+query error uint8 out of range
+SELECT 18446744073709553665::float::uint8::numeric
+
+query I
+SELECT 18446744073709553664.0::float::uint8::numeric
+----
+18446744073709551615
+
+query error uint8 out of range
+SELECT 18446744073709553664.5::float::uint8::numeric
+
+# From float64
+
+query I
+SELECT 12.0::double::uint2::numeric
+----
+12
+
+query I
+SELECT 12.4::double::uint2::numeric
+----
+12
+
+query I
+SELECT 12.6::double::uint2::numeric
+----
+13
+
+query error uint2 out of range
+SELECT -12.0::double::uint2::numeric
+
+query error uint2 out of range
+SELECT 65536.0::double::uint2::numeric
+
+query I
+SELECT 65535.4::double::uint2::numeric
+----
+65535
+
+query error uint2 out of range
+SELECT 65535.5::double::uint2::numeric
+
+query I
+SELECT 12.0::double::uint4::numeric
+----
+12
+
+query I
+SELECT 12.4::double::uint4::numeric
+----
+12
+
+query I
+SELECT 12.6::double::uint4::numeric
+----
+13
+
+query I
+SELECT 65536.0::double::uint4::numeric
+----
+65536
+
+query error uint4 out of range
+SELECT -12.0::double::uint4::numeric
+
+query error uint4 out of range
+SELECT 4294967296::double::uint4::numeric
+
+query I
+SELECT 4294967295.4::double::uint4::numeric
+----
+4294967295
+
+query error uint4 out of range
+SELECT 4294967295.5::double::uint4::numeric
+
+query I
+SELECT 12.0::double::uint8::numeric
+----
+12
+
+query I
+SELECT 12.4::double::uint8::numeric
+----
+12
+
+query I
+SELECT 12.6::double::uint8::numeric
+----
+13
+
+query I
+SELECT 65536.0::double::uint8::numeric
+----
+65536
+
+query I
+SELECT 4294967296.0::double::uint8::numeric
+----
+4294967296
+
+query error uint8 out of range
+SELECT -12.0::double::uint8::numeric
+
+query error uint8 out of range
+SELECT 18446744073709553665::double::uint8::numeric
+
+query I
+SELECT 18446744073709553664.0::double::uint8::numeric
+----
+18446744073709551615
+
+query error uint8 out of range
+SELECT 18446744073709553664.5::double::uint8::numeric
+
+# From text
+
+query I
+SELECT '44'::uint2::numeric
+----
+44
+
+query error invalid input syntax for type uint2: invalid digit found in string: "-44"
+SELECT '-44'::uint2::numeric
+
+query error invalid input syntax for type uint2: number too large to fit in target type: "65536"
+SELECT '65536'::uint2::numeric
+
+query I
+SELECT '44'::uint4::numeric
+----
+44
+
+query error invalid input syntax for type uint4: invalid digit found in string: "-44"
+SELECT '-44'::uint4::numeric
+
+query error invalid input syntax for type uint4: number too large to fit in target type: "4294967296"
+SELECT '4294967296'::uint4::numeric
+
+query I
+SELECT '44'::uint8::numeric
+----
+44
+
+query error invalid input syntax for type uint8: invalid digit found in string: "-44"
+SELECT '-44'::uint8::numeric
+
+query error invalid input syntax for type uint8: number too large to fit in target type: "18446744073709551616"
+SELECT '18446744073709551616'::uint8::numeric
+
+# From uint2
+
+query I
+SELECT 124::uint2::uint4::numeric
+----
+124
+
+query I
+SELECT 124::uint2::uint8::numeric
+----
+124
+
+query I
+SELECT 124::uint2::int4
+----
+124
+
+query I
+SELECT 124::uint2::int8
+----
+124
+
+query I
+SELECT 124::uint2::numeric
+----
+124
+
+query I
+SELECT 124::uint2::real
+----
+124
+
+query I
+SELECT 124::uint2::double
+----
+124
+
+query T
+SELECT 124::uint2::text
+----
+124
+
+# From uint4
+
+query I
+SELECT 6789::uint4::uint2::numeric
+----
+6789
+
+query error uint2 out of range
+SELECT 65536::uint4::uint2::numeric
+
+query I
+SELECT 6789::uint4::uint8::numeric
+----
+6789
+
+query I
+SELECT 6789::uint4::int4
+----
+6789
+
+query error integer out of range
+SELECT 2147483648::uint4::int4
+
+query I
+SELECT 6789::uint4::int8
+----
+6789
+
+query I
+SELECT 6789::uint4::numeric
+----
+6789
+
+query I
+SELECT 6789::uint4::real
+----
+6789
+
+query I
+SELECT 6789::uint4::double
+----
+6789
+
+query T
+SELECT 6789::uint4::text
+----
+6789
+
+# From uint8
+
+query I
+SELECT 15445::uint8::uint2::numeric
+----
+15445
+
+query error uint2 out of range
+SELECT 65536::uint8::uint2::numeric
+
+query I
+SELECT 15445::uint8::uint4::numeric
+----
+15445
+
+query error uint4 out of range
+SELECT 4294967296::uint8::uint4::numeric
+
+query I
+SELECT 15445::uint8::int4
+----
+15445
+
+query error integer out of range
+SELECT 2147483648::uint8::int4
+
+query I
+SELECT 15445::uint8::int8
+----
+15445
+
+query error bigint out of range
+SELECT 9223372036854775808::uint8::int8
+
+query I
+SELECT 15445::uint8::numeric
+----
+15445
+
+query I
+SELECT 15445::uint8::real
+----
+15445
+
+query I
+SELECT 15445::uint8::double
+----
+15445
+
+query T
+SELECT 15445::uint8::text
+----
+15445

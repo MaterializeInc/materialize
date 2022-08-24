@@ -81,6 +81,30 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "smallint_to_uint2"]
+    #[preserves_uniqueness = true]
+    fn cast_int16_to_uint16(a: i16) -> Result<u16, EvalError> {
+        u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "smallint_to_uint4"]
+    #[preserves_uniqueness = true]
+    fn cast_int16_to_uint32(a: i16) -> Result<u32, EvalError> {
+        u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "smallint_to_uint8"]
+    #[preserves_uniqueness = true]
+    fn cast_int16_to_uint64(a: i16) -> Result<u64, EvalError> {
+        u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
+    }
+);
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastInt16ToNumeric(pub Option<NumericMaxScale>);
 

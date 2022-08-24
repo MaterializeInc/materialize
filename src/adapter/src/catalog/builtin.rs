@@ -837,6 +837,72 @@ pub const TYPE_ANYCOMPATIBLEMAP: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_UINT2: BuiltinType<NameReference> = BuiltinType {
+    name: "uint2",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT2_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::UInt16,
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT2_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_uint2",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT2_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_UINT2.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT4: BuiltinType<NameReference> = BuiltinType {
+    name: "uint4",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT4_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::UInt32,
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_uint4",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT4_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_UINT4.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT8: BuiltinType<NameReference> = BuiltinType {
+    name: "uint8",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT8_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::UInt64,
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_uint8",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT8_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_UINT8.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
     schema: MZ_CATALOG_SCHEMA,
@@ -2146,6 +2212,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_ANYCOMPATIBLENONARRAY),
         Builtin::Type(&TYPE_ANYCOMPATIBLELIST),
         Builtin::Type(&TYPE_ANYCOMPATIBLEMAP),
+        Builtin::Type(&TYPE_UINT2),
+        Builtin::Type(&TYPE_UINT2_ARRAY),
+        Builtin::Type(&TYPE_UINT4),
+        Builtin::Type(&TYPE_UINT4_ARRAY),
+        Builtin::Type(&TYPE_UINT8),
+        Builtin::Type(&TYPE_UINT8_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),

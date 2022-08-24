@@ -81,6 +81,9 @@ impl TypeCategory {
             | ScalarType::Int16
             | ScalarType::Int32
             | ScalarType::Int64
+            | ScalarType::UInt16
+            | ScalarType::UInt32
+            | ScalarType::UInt64
             | ScalarType::Oid
             | ScalarType::RegClass
             | ScalarType::RegProc
@@ -141,6 +144,9 @@ impl TypeCategory {
             | CatalogType::Int16
             | CatalogType::Int32
             | CatalogType::Int64
+            | CatalogType::UInt16
+            | CatalogType::UInt32
+            | CatalogType::UInt64
             | CatalogType::Oid
             | CatalogType::RegClass
             | CatalogType::RegProc
@@ -814,6 +820,9 @@ impl From<ScalarBaseType> for ParamType {
             Int16 => ScalarType::Int16,
             Int32 => ScalarType::Int32,
             Int64 => ScalarType::Int64,
+            UInt16 => ScalarType::UInt16,
+            UInt32 => ScalarType::UInt32,
+            UInt64 => ScalarType::UInt64,
             Float32 => ScalarType::Float32,
             Float64 => ScalarType::Float64,
             Numeric => ScalarType::Numeric { max_scale: None },

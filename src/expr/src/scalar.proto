@@ -337,6 +337,51 @@ message ProtoUnaryFunc {
         google.protobuf.Empty trunc_float32 = 216;
         google.protobuf.Empty trunc_float64 = 217;
         google.protobuf.Empty trunc_numeric = 218;
+        google.protobuf.Empty cast_int16_to_uint16 = 219;
+        google.protobuf.Empty cast_int16_to_uint32 = 220;
+        google.protobuf.Empty cast_int16_to_uint64 = 221;
+        google.protobuf.Empty cast_int32_to_uint16 = 222;
+        google.protobuf.Empty cast_int32_to_uint32 = 223;
+        google.protobuf.Empty cast_int32_to_uint64 = 224;
+        google.protobuf.Empty cast_int64_to_uint16 = 225;
+        google.protobuf.Empty cast_int64_to_uint32 = 226;
+        google.protobuf.Empty cast_int64_to_uint64 = 227;
+        google.protobuf.Empty cast_numeric_to_uint16 = 228;
+        google.protobuf.Empty cast_numeric_to_uint32 = 229;
+        google.protobuf.Empty cast_numeric_to_uint64 = 230;
+        google.protobuf.Empty cast_float32_to_uint16 = 231;
+        google.protobuf.Empty cast_float32_to_uint32 = 232;
+        google.protobuf.Empty cast_float32_to_uint64 = 233;
+        google.protobuf.Empty cast_float64_to_uint16 = 234;
+        google.protobuf.Empty cast_float64_to_uint32 = 235;
+        google.protobuf.Empty cast_float64_to_uint64 = 236;
+        google.protobuf.Empty cast_string_to_uint16 = 237;
+        google.protobuf.Empty cast_string_to_uint32 = 238;
+        google.protobuf.Empty cast_string_to_uint64 = 239;
+        google.protobuf.Empty cast_uint16_to_float32 = 240;
+        google.protobuf.Empty cast_uint16_to_float64 = 241;
+        google.protobuf.Empty cast_uint16_to_int32 = 242;
+        google.protobuf.Empty cast_uint16_to_uint32 = 243;
+        google.protobuf.Empty cast_uint16_to_int64 = 244;
+        google.protobuf.Empty cast_uint16_to_uint64 = 245;
+        google.protobuf.Empty cast_uint16_to_string = 246;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_uint16_to_numeric = 247;
+        google.protobuf.Empty cast_uint32_to_float32 = 248;
+        google.protobuf.Empty cast_uint32_to_float64 = 249;
+        google.protobuf.Empty cast_uint32_to_uint16 = 250;
+        google.protobuf.Empty cast_uint32_to_int32 = 251;
+        google.protobuf.Empty cast_uint32_to_int64 = 252;
+        google.protobuf.Empty cast_uint32_to_uint64 = 253;
+        google.protobuf.Empty cast_uint32_to_string = 254;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_uint32_to_numeric = 255;
+        google.protobuf.Empty cast_uint64_to_float32 = 256;
+        google.protobuf.Empty cast_uint64_to_float64 = 257;
+        google.protobuf.Empty cast_uint64_to_uint16 = 258;
+        google.protobuf.Empty cast_uint64_to_int32 = 259;
+        google.protobuf.Empty cast_uint64_to_uint32 = 260;
+        google.protobuf.Empty cast_uint64_to_int64 = 261;
+        google.protobuf.Empty cast_uint64_to_string = 262;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_uint64_to_numeric = 263;
     }
 }
 
@@ -621,5 +666,8 @@ message ProtoEvalError {
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
         ProtoIndexOutOfRange index_out_of_range = 54;
+        google.protobuf.Empty uint16_out_of_range = 55;
+        google.protobuf.Empty uint32_out_of_range = 56;
+        google.protobuf.Empty uint64_out_of_range = 57;
     }
 }
