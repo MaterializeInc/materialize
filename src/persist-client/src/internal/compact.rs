@@ -26,10 +26,10 @@ use tracing::{debug_span, warn, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
+use crate::fetch::fetch_batch_part;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::HollowBatch;
 use crate::internal::trace::FueledMergeRes;
-use crate::read::fetch_batch_part;
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.

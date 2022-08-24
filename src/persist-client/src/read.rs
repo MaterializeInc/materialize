@@ -9,35 +9,29 @@
 
 //! Read capabilities and handles
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Description;
 use futures::Stream;
 use mz_ore::task::RuntimeExt;
-use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::Blob;
+use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
-use crate::error::InvalidUsage;
-use crate::internal::encoding::SerdeReaderEnrichedHollowBatch;
-use crate::internal::machine::{retry_external, Machine};
+use crate::fetch::{fetch_batch, BatchFetcher, LeasedBatch};
+use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
-use crate::internal::paths::PartialBlobKey;
-use crate::internal::state::{HollowBatch, Since};
-use crate::{GarbageCollector, PersistConfig, ShardId};
+use crate::internal::state::Since;
+use crate::{GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -61,60 +55,6 @@ impl ReaderId {
     }
 }
 
-/// Propagates metadata from readers alongside a `HollowBatch` to apply the
-/// desired semantics.
-#[derive(Debug, Clone)]
-pub(crate) enum HollowBatchReaderMetadata<T> {
-    /// Apply snapshot-style semantics to the fetched batch.
-    Snapshot {
-        /// Return all values with time leq `as_of`.
-        as_of: Antichain<T>,
-    },
-    /// Apply listen-style semantics to the fetched batch.
-    Listen {
-        /// Return all values with time in advance of `as_of`.
-        as_of: Antichain<T>,
-        /// Return all values with time leq `until`.
-        until: Antichain<T>,
-        /// After reading the batch, you can downgrade the reader's `since` to
-        /// this value.
-        since: Antichain<T>,
-    },
-}
-
-/// A token representing one read batch.
-///
-/// This may be exchanged (including over the network). It is tradeable via
-/// [ReadHandle::fetch_batch] for the resulting data stored in the batch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "T: Timestamp + Codec64",
-    deserialize = "T: Timestamp + Codec64"
-))]
-#[serde(
-    into = "SerdeReaderEnrichedHollowBatch",
-    from = "SerdeReaderEnrichedHollowBatch"
-)]
-pub struct ReaderEnrichedHollowBatch<T> {
-    pub(crate) shard_id: ShardId,
-    pub(crate) reader_metadata: HollowBatchReaderMetadata<T>,
-    pub(crate) batch: HollowBatch<T>,
-}
-
-impl<T> ReaderEnrichedHollowBatch<T>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    /// Signals whether or not `self` should downgrade the `Capability` its
-    /// presented alongside.
-    pub fn generate_progress(&self) -> Option<Antichain<T>> {
-        match self.reader_metadata {
-            HollowBatchReaderMetadata::Listen { .. } => Some(self.batch.desc.upper().clone()),
-            HollowBatchReaderMetadata::Snapshot { .. } => None,
-        }
-    }
-}
-
 /// Capable of generating a snapshot of all data at `as_of`, followed by a
 /// listen of all updates.
 ///
@@ -128,7 +68,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    snapshot_batches: VecDeque<ReaderEnrichedHollowBatch<T>>,
+    snapshot_batches: VecDeque<LeasedBatch<T>>,
     listen: Listen<K, V, T, D>,
 }
 
@@ -139,10 +79,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    fn new(
-        snapshot_batches: VecDeque<ReaderEnrichedHollowBatch<T>>,
-        listen: Listen<K, V, T, D>,
-    ) -> Self {
+    fn new(snapshot_batches: VecDeque<LeasedBatch<T>>, listen: Listen<K, V, T, D>) -> Self {
         Subscribe {
             snapshot_batches,
             listen,
@@ -153,11 +90,8 @@ where
     ///
     /// First returns snapshot batches, until they're exhausted, at which point
     /// begins returning listen batches.
-    ///
-    /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
-    /// `ReadHandle::fetch_batch`.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> ReaderEnrichedHollowBatch<T> {
+    pub async fn next(&mut self) -> LeasedBatch<T> {
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
@@ -167,28 +101,11 @@ where
         }
     }
 
-    /// Attempt to pull out the next values of this subscription. For more
-    /// details, see [`Listen::next`].
-    ///
-    /// TODO: delete this method when refactoring
-    /// `storage::source::persist_source::persist_source_sharded`.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next_listen_events(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
-        // This is odd, but we move our handle into a `Listen`.
-        self.listen.handle.maybe_heartbeat_reader().await;
-
-        match self.snapshot_batches.pop_front() {
-            Some(batch) => {
-                let updates = self
-                    .listen
-                    .handle
-                    .fetch_batch(batch)
-                    .await
-                    .expect("must accept self-generated batch");
-                vec![ListenEvent::Updates(updates)]
-            }
-            None => self.listen.next().await,
-        }
+    /// Returns the given [`LeasedBatch`], releasing its lease.
+    pub fn return_leased_batch(&mut self, leased_batch: LeasedBatch<T>) {
+        self.listen
+            .handle
+            .process_returned_leased_batch(leased_batch)
     }
 }
 
@@ -215,8 +132,8 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
-    as_of: Antichain<T>,
 
+    as_of: Antichain<T>,
     since: Antichain<T>,
     frontier: Antichain<T>,
 }
@@ -228,19 +145,19 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    async fn new(handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
-        let mut ret = Listen {
-            handle,
-            since: as_of.clone(),
-            frontier: as_of.clone(),
-            as_of,
-        };
-
+    async fn new(mut handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
+        let since = as_of.clone();
         // This listen only needs to distinguish things after its frontier
         // (initially as_of although the frontier is inclusive and the as_of
         // isn't). Be a good citizen and downgrade early.
-        ret.handle.downgrade_since(&ret.since).await;
-        ret
+        handle.downgrade_since(&since).await;
+
+        Listen {
+            handle,
+            since,
+            frontier: as_of.clone(),
+            as_of,
+        }
     }
 
     /// Convert listener into futures::Stream
@@ -261,9 +178,9 @@ where
 
     /// Attempt to pull out the next values of this subscription.
     ///
-    /// The returned [`ReaderEnrichedHollowBatch`] is appropriate to use with
-    /// `ReadHandle::fetch_batch`.
-    pub async fn next_batch(&mut self) -> ReaderEnrichedHollowBatch<T> {
+    /// The returned [`LeasedBatch`] is appropriate to use with
+    /// `crate::fetch::fetch_batch`.
+    pub async fn next_batch(&mut self) -> LeasedBatch<T> {
         // We might also want to call maybe_heartbeat_reader in the
         // `next_listen_batch` loop so that we can heartbeat even when batches
         // aren't incoming. At the moment, the ownership would be weird and we
@@ -326,15 +243,19 @@ where
             }
         }
 
-        let r = ReaderEnrichedHollowBatch {
+        self.handle.maybe_downgrade_since(&self.since).await;
+
+        let r = LeasedBatch {
             shard_id: self.handle.machine.shard_id(),
-            reader_metadata: HollowBatchReaderMetadata::Listen {
+            reader_id: self.handle.reader_id.clone(),
+            metadata: crate::fetch::LeasedBatchMetadata::Listen {
                 as_of: self.as_of.clone(),
                 until: self.frontier.clone(),
-                since: self.since.clone(),
             },
             batch,
+            leased_seqno: Some(self.handle.lease_seqno()),
         };
+
         // NB: Keep this after we use self.frontier to join_assign self.since.
         self.frontier = new_frontier;
         r
@@ -354,11 +275,16 @@ where
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
         let batch = self.next_batch().await;
         let progress = batch.batch.desc.upper().clone();
-        let updates = self
-            .handle
-            .fetch_batch(batch)
-            .await
-            .expect("must accept self-generated batch");
+
+        let (batch, updates) = fetch_batch(
+            batch,
+            self.handle.blob.as_ref(),
+            &self.handle.metrics,
+            Some(&self.handle.reader_id),
+        )
+        .await;
+
+        self.handle.process_returned_leased_batch(batch);
 
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
@@ -447,6 +373,8 @@ where
     pub(crate) since: Antichain<T>,
     pub(crate) last_heartbeat: Instant,
     pub(crate) explicitly_expired: bool,
+
+    pub(crate) leased_seqnos: BTreeMap<SeqNo, usize>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -475,9 +403,17 @@ where
     /// timestamp, making the call a no-op).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
+        // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
+        let outstanding_seqno = self.leased_seqnos.keys().next().cloned();
+
         let (_seqno, current_reader_since, maintenance) = self
             .machine
-            .downgrade_since(&self.reader_id, new_since, (self.cfg.now)())
+            .downgrade_since(
+                &self.reader_id,
+                outstanding_seqno,
+                new_since,
+                (self.cfg.now)(),
+            )
             .await;
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
@@ -508,9 +444,15 @@ where
         Ok(Listen::new(self, as_of).await)
     }
 
+    /// Returns a [`BatchFetcher`], which is only capable of fetching batches.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn batch_fetcher(self) -> BatchFetcher<K, V, T, D> {
+        BatchFetcher::new(self).await
+    }
+
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
-    /// [`ReaderEnrichedHollowBatch`]es. These batches can be "turned in" via
-    /// `ReadHandle::fetch_batch` to receive the data they contain.
+    /// [`LeasedBatch`]es. These batches can be "turned in" via
+    /// `crate::fetch::fetch_batch` to receive the data they contain.
     ///
     /// This command returns the contents of this shard as of `as_of` once they
     /// are known. This may "block" (in an async-friendly way) if `as_of` is
@@ -522,31 +464,28 @@ where
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
     #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn snapshot(
-        &self,
-        as_of: Antichain<T>,
-    ) -> Result<Vec<ReaderEnrichedHollowBatch<T>>, Since<T>> {
-        let mut machine = self.machine.clone();
-
-        let batches = machine.snapshot(&as_of).await?;
+    pub async fn snapshot(&mut self, as_of: Antichain<T>) -> Result<Vec<LeasedBatch<T>>, Since<T>> {
+        let batches = self.machine.snapshot(&as_of).await?;
 
         let r = batches
             .into_iter()
             .filter(|batch| batch.len > 0)
-            .map(|batch| ReaderEnrichedHollowBatch {
-                shard_id: machine.shard_id(),
-                reader_metadata: HollowBatchReaderMetadata::Snapshot {
+            .map(|batch| LeasedBatch {
+                shard_id: self.machine.shard_id(),
+                reader_id: self.reader_id.clone(),
+                metadata: crate::fetch::LeasedBatchMetadata::Snapshot {
                     as_of: as_of.clone(),
                 },
                 batch,
+                leased_seqno: Some(self.lease_seqno()),
             })
             .collect::<Vec<_>>();
 
         Ok(r)
     }
 
-    /// Generates a [shapshot](Self::snapshot), and [fetches](Self::fetch_batch)
-    /// all of the batches it contains.
+    /// Generates a [shapshot](Self::snapshot), and fetches all of the batches
+    /// it contains.
     pub async fn snapshot_and_fetch(
         &mut self,
         as_of: Antichain<T>,
@@ -555,10 +494,14 @@ where
 
         let mut contents = Vec::new();
         for batch in snap {
-            let mut r = self
-                .fetch_batch(batch)
-                .await
-                .expect("must accept self-generated snapshot");
+            let (batch, mut r) = fetch_batch(
+                batch,
+                self.blob.as_ref(),
+                &self.metrics,
+                Some(&self.reader_id),
+            )
+            .await;
+            self.process_returned_leased_batch(batch);
             contents.append(&mut r);
         }
         Ok(contents)
@@ -570,100 +513,49 @@ where
     /// For more details on this operation's semantics, see [Self::snapshot] and
     /// [Self::listen].
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn subscribe(self, as_of: Antichain<T>) -> Result<Subscribe<K, V, T, D>, Since<T>> {
+    pub async fn subscribe(
+        mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
         let snapshot_batches = self.snapshot(as_of.clone()).await?.into();
         let listen = self.listen(as_of).await?;
         Ok(Subscribe::new(snapshot_batches, listen))
     }
 
-    /// Trade in an exchange-able [ReaderEnrichedHollowBatch] for the data it
-    /// represents.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn fetch_batch(
-        &mut self,
-        batch: ReaderEnrichedHollowBatch<T>,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>> {
-        if batch.shard_id != self.machine.shard_id() {
-            return Err(InvalidUsage::BatchNotFromThisShard {
-                batch_shard: batch.shard_id,
-                handle_shard: self.machine.shard_id(),
-            });
+    /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
+    /// "leased out" to a `ReaderEncirchedHollowBatch`, and cannot be garbage
+    /// collected until its lease has been returned.
+    fn lease_seqno(&mut self) -> SeqNo {
+        let seqno = self.machine.seqno();
+
+        *self.leased_seqnos.entry(seqno).or_insert(0) += 1;
+
+        seqno
+    }
+
+    /// Processes that a batch issued from `self` has been consumed, and `self`
+    /// can now process any internal bookkeeping.
+    ///
+    /// # Panics
+    /// - If `self` does not have record of issuing the [`LeasedBatch`], e.g.
+    ///   it originated from from another `ReadHandle`.
+    pub(crate) fn process_returned_leased_batch(&mut self, mut leased_batch: LeasedBatch<T>) {
+        if let Some(lease) = leased_batch.return_lease(&self.reader_id) {
+            // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
+            // a `SeqNo` has no more outstanding leases, it can be removed, and
+            // `Self::downgrade_since` no longer needs to prevent it from being
+            // garbage collected.
+            let remaining_leases = self
+                .leased_seqnos
+                .get_mut(&lease)
+                .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
+
+            *remaining_leases -= 1;
+
+            if remaining_leases == &0 {
+                self.leased_seqnos.remove(&lease);
+            }
         }
-
-        let mut updates = Vec::new();
-        for key in batch.batch.keys.iter() {
-            self.maybe_heartbeat_reader().await;
-            fetch_batch_part(
-                &batch.shard_id,
-                self.blob.as_ref(),
-                &self.metrics,
-                &key,
-                &batch.batch.desc.clone(),
-                |k, v, mut t, d| {
-                    match &batch.reader_metadata {
-                        HollowBatchReaderMetadata::Listen {
-                            as_of,
-                            until,
-                            since: _,
-                        } => {
-                            // This time is covered by a snapshot
-                            if !as_of.less_than(&t) {
-                                return;
-                            }
-
-                            // Because of compaction, the next batch we get might also
-                            // contain updates we've already emitted. For example, we
-                            // emitted `[1, 2)` and then compaction combined that batch
-                            // with a `[2, 3)` batch into a new `[1, 3)` batch. If this
-                            // happens, we just need to filter out anything < the
-                            // frontier. This frontier was the upper of the last batch
-                            // (and thus exclusive) so for the == case, we still emit.
-                            if !until.less_equal(&t) {
-                                return;
-                            }
-                        }
-                        HollowBatchReaderMetadata::Snapshot { as_of } => {
-                            // This time is covered by a listen
-                            if as_of.less_than(&t) {
-                                return;
-                            }
-                            t.advance_by(as_of.borrow())
-                        }
-                    }
-
-                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
-                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
-                    let d = D::decode(d);
-                    updates.push(((k, v), t, d));
-                },
-            )
-            .await
-            .unwrap_or_else(|err| {
-                // Ideally, readers should never encounter a missing blob. They place a seqno
-                // hold as they consume their snapshot/listen, preventing any blobs they need
-                // from being deleted by garbage collection, and all blob implementations are
-                // linearizable so there should be no possibility of stale reads.
-                //
-                // If we do have a bug and a reader does encounter a missing blob, the state
-                // cannot be recovered, and our best option is to panic and retry the whole
-                // process.
-                panic!(
-                    "reader {} could not fetch batch part: {}",
-                    self.reader_id, err
-                )
-            });
-        }
-
-        // TODO: This is potentially suprising for the `ReadHandle` to manage.
-        // Instead, we likely want to add a struct akin to a `Listen`
-        // (BatchStreamFetcher?) that wraps the `ReadHandle` and `fetch_batch`
-        // method is only available on that (think the pattern that Listen has
-        // now).
-        if let HollowBatchReaderMetadata::Listen { since, .. } = batch.reader_metadata {
-            self.maybe_downgrade_since(&since).await;
-        }
-
-        Ok(updates)
     }
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
@@ -683,6 +575,7 @@ where
             since: read_cap.since,
             last_heartbeat: Instant::now(),
             explicitly_expired: false,
+            leased_seqnos: BTreeMap::new(),
         };
         new_reader
     }
@@ -738,14 +631,6 @@ where
     pub async fn expire(mut self) {
         self.machine.expire_reader(&self.reader_id).await;
         self.explicitly_expired = true;
-    }
-
-    #[cfg(test)]
-    #[track_caller]
-    pub async fn expect_snapshot(&self, as_of: T) -> Vec<ReaderEnrichedHollowBatch<T>> {
-        self.snapshot(Antichain::from_elem(as_of))
-            .await
-            .expect("cannot serve requested as_of")
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
@@ -820,140 +705,142 @@ where
     }
 }
 
-pub(crate) async fn fetch_batch_part<T, UpdateFn>(
-    shard_id: &ShardId,
-    blob: &(dyn Blob + Send + Sync),
-    metrics: &Metrics,
-    key: &PartialBlobKey,
-    registered_desc: &Description<T>,
-    mut update_fn: UpdateFn,
-) -> Result<(), anyhow::Error>
-where
-    T: Timestamp + Lattice + Codec64,
-    UpdateFn: FnMut(&[u8], &[u8], T, [u8; 8]),
-{
-    let get_span = debug_span!("fetch_batch::get");
-    let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
-        blob.get(&key.complete(shard_id)).await
-    })
-    .instrument(get_span.clone())
-    .await;
+#[cfg(test)]
+mod tests {
+    use crate::tests::new_test_client;
 
-    let value = match value {
-        Some(v) => v,
-        None => {
-            return Err(anyhow!(
-                "unexpected missing blob: {} for shard: {}",
-                key,
-                shard_id
-            ))
+    // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatch` semantics.
+    #[tokio::test]
+    async fn seqno_leases() {
+        mz_ore::test::init_logging();
+        let mut data = vec![];
+        for i in 0..10 {
+            data.push(((i.to_string(), i.to_string()), i, 1))
         }
-    };
-    drop(get_span);
 
-    trace_span!("fetch_batch::decode").in_scope(|| {
-        let batch = metrics
-            .codecs
-            .batch
-            .decode(|| BlobTraceBatchPart::decode(&value))
-            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
-            // We received a State that we couldn't decode. This could happen if
-            // persist messes up backward/forward compatibility, if the durable
-            // data was corrupted, or if operations messes up deployment. In any
-            // case, fail loudly.
-            .expect("internal error: invalid encoded state");
+        let (mut write, read) = new_test_client()
+            .await
+            .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+            .await;
 
-        // Drop the encoded representation as soon as we can to reclaim memory.
-        drop(value);
+        // Seed with some values
+        let mut offset = 0;
+        let mut width = 2;
 
-        // There are two types of batches in persist:
-        // - Batches written by a persist user (either directly or indirectly
-        //   via BatchBuilder). These always have a since of the minimum
-        //   timestamp and may be registered in persist state with a tighter set
-        //   of bounds than are inline in the batch (truncation). To read one of
-        //   these batches, all data physically in the batch but outside of the
-        //   truncated bounds must be ignored. Not every user batch is
-        //   truncated.
-        // - Batches written by compaction. These always have an inline desc
-        //   that exactly matches the one they are registered with. The since
-        //   can be anything.
-        let inline_desc = decode_inline_desc(&batch.desc);
-        let needs_truncation = inline_desc.lower() != registered_desc.lower()
-            || inline_desc.upper() != registered_desc.upper();
-        if needs_truncation {
-            assert!(
-                PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
-            assert!(
-                PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
-            // As mentioned above, batches that needs truncation will always have a
-            // since of the minimum timestamp. Technically we could truncate any
-            // batch where the since is less_than the output_desc's lower, but we're
-            // strict here so we don't get any surprises.
+        for i in offset..offset + width {
+            write
+                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .await;
+        }
+        offset += width;
+
+        // Create machinery for subscribe + fetch
+
+        let fetcher = read.clone().await.batch_fetcher().await;
+
+        let mut subscribe = read
+            .subscribe(timely::progress::Antichain::from_elem(1))
+            .await
+            .expect("cannot serve requested as_of");
+
+        // Determine sequence number at outset.
+        let original_seqno_since = subscribe.listen.handle.machine.seqno_since();
+
+        let mut batches = vec![];
+
+        width = 4;
+        // Collect batches while continuing to write values
+        for i in offset..offset + width {
+            batches.push(subscribe.next().await);
+            // Here and elsewhere we "cheat" and immediately downgrade the since
+            // to demonstate the effects of SeqNo leases immediately.
+            subscribe
+                .listen
+                .handle
+                .downgrade_since(&subscribe.listen.since)
+                .await;
+
+            write
+                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .await;
+
+            // SeqNo is not downgraded
             assert_eq!(
-                inline_desc.since(),
-                &Antichain::from_elem(T::minimum()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
-        } else {
-            assert_eq!(
-                &inline_desc, registered_desc,
-                "key={} inline={:?} registered={:?}",
-                key, inline_desc, registered_desc
+                subscribe.listen.handle.machine.seqno_since(),
+                original_seqno_since
             );
         }
 
-        for chunk in batch.updates {
-            for ((k, v), t, d) in chunk.iter() {
-                let t = T::decode(t);
+        offset += width;
 
-                // This filtering is really subtle, see the comment above for
-                // what's going on here.
-                if needs_truncation {
-                    if !registered_desc.lower().less_equal(&t) {
-                        continue;
-                    }
-                    if registered_desc.upper().less_equal(&t) {
-                        continue;
-                    }
-                }
+        let mut seqno_since = subscribe.listen.handle.machine.seqno_since();
 
-                update_fn(k, v, t, d);
+        // We're starting out with the original, non-downgraded SeqNo
+        assert_eq!(seqno_since, original_seqno_since);
+
+        // We have to handle the batches we generate during the next loop to
+        // ensure they don't panic.
+        let mut subsequent_batches = vec![];
+
+        // Ensure monotonicity of seqnos we're processing, otherwise the
+        // invariant we're testing (returning the last batch of a seqno will
+        // downgrade its since) will not hold.
+        let mut this_seqno = None;
+
+        // Repeat the same process as above, more or less, while fetching + returning batches
+        for (mut i, batch) in batches.into_iter().enumerate() {
+            let batch_seqno = batch.leased_seqno.unwrap();
+            let last_seqno = this_seqno.replace(batch_seqno);
+            assert!(last_seqno.is_none() || this_seqno >= last_seqno);
+
+            let (batch, _) = fetcher.fetch_batch(batch).await;
+
+            // Emulating drop
+            subscribe.return_leased_batch(batch);
+
+            // Simulates an exchange
+            subsequent_batches.push(subscribe.next().await.get_droppable_batch());
+
+            subscribe
+                .listen
+                .handle
+                .downgrade_since(&subscribe.listen.since)
+                .await;
+
+            // Write more new values
+            i += offset;
+            write
+                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .await;
+
+            // We should expect the SeqNo to be downgraded if this batch's SeqNo
+            // is no longer leased to any other batches, either.
+            let expect_downgrade = subscribe
+                .listen
+                .handle
+                .leased_seqnos
+                .get(&batch_seqno)
+                .is_none();
+
+            let new_seqno_since = subscribe.listen.handle.machine.seqno_since();
+            if expect_downgrade {
+                assert!(new_seqno_since > seqno_since);
+            } else {
+                assert_eq!(new_seqno_since, seqno_since);
             }
+            seqno_since = new_seqno_since;
         }
-    });
 
-    Ok(())
-}
+        // SeqNo since was downgraded
+        assert!(seqno_since > original_seqno_since);
 
-// TODO: This goes away the desc on BlobTraceBatchPart becomes a Description<T>,
-// which should be a straightforward refactor but it touches a decent bit.
-fn decode_inline_desc<T: Timestamp + Codec64>(desc: &Description<u64>) -> Description<T> {
-    fn decode_antichain<T: Timestamp + Codec64>(x: &Antichain<u64>) -> Antichain<T> {
-        Antichain::from(
-            x.elements()
-                .iter()
-                .map(|x| T::decode(x.to_le_bytes()))
-                .collect::<Vec<_>>(),
-        )
+        // Return any outstanding batches, to prevent a panic!
+        for batch in subsequent_batches {
+            subscribe.return_leased_batch(crate::fetch::LeasedBatch::from(batch));
+        }
+
+        drop(subscribe);
     }
-    Description::new(
-        decode_antichain(desc.lower()),
-        decode_antichain(desc.upper()),
-        decode_antichain(desc.since()),
-    )
 }
 
 // WIP the way skip_consensus_fetch_optimization works is pretty fundamentally
@@ -1027,15 +914,5 @@ mod tests {
             listen.read_until(&3).await,
             (all_ok(&data[1..], 1), Antichain::from_elem(3))
         );
-    }
-
-    #[test]
-    fn client_exchange_data() {
-        // The whole point of ReaderEnrichedHollowBatch is that it can be exchanged between
-        // timely workers, including over the network. Enforce then that it
-        // implements ExchangeData.
-        fn is_exchange_data<T: ExchangeData>() {}
-        is_exchange_data::<ReaderEnrichedHollowBatch<u64>>();
-        is_exchange_data::<ReaderEnrichedHollowBatch<i64>>();
     }
 }

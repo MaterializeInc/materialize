@@ -181,6 +181,7 @@ where
         &mut self,
         reader_id: &ReaderId,
         seqno: SeqNo,
+        outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, Since<T>> {
@@ -189,6 +190,21 @@ where
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
         reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+
+        let seqno = match outstanding_seqno {
+            Some(outstanding_seqno) => {
+                assert!(
+                    outstanding_seqno >= reader_state.seqno,
+                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+                    is behind current reader_state ({:?})",
+                    outstanding_seqno,
+                    reader_state.seqno,
+                );
+                std::cmp::min(outstanding_seqno, seqno)
+            }
+            None => seqno,
+        };
+
         reader_state.seqno = seqno;
 
         let reader_current_since = if PartialOrder::less_than(&reader_state.since, new_since) {
@@ -359,7 +375,7 @@ where
         self.collections.trace.num_updates()
     }
 
-    fn seqno_since(&self) -> SeqNo {
+    pub(super) fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
         for cap in self.collections.readers.values() {
             seqno_since = std::cmp::min(seqno_since, cap.seqno);
@@ -566,25 +582,37 @@ mod tests {
 
         // Greater
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(2),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Equal (no-op)
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(2),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Less (no-op)
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(1), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(1),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -595,17 +623,25 @@ mod tests {
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader2, seqno, &Antichain::from_elem(3), now()),
+            state.collections.downgrade_since(
+                &reader2,
+                seqno,
+                None,
+                &Antichain::from_elem(3),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(3)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Shard since == 3 when all readers have since >= 3.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(5), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(5),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(5)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -620,9 +656,13 @@ mod tests {
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader3, seqno, &Antichain::from_elem(10), now()),
+            state.collections.downgrade_since(
+                &reader3,
+                seqno,
+                None,
+                &Antichain::from_elem(10),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(10)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -753,6 +793,7 @@ mod tests {
             state.collections.downgrade_since(
                 &reader,
                 SeqNo::minimum(),
+                None,
                 &Antichain::from_elem(2),
                 now()
             ),

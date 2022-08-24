@@ -111,6 +111,15 @@ where
         self.state.upper()
     }
 
+    pub fn seqno(&self) -> SeqNo {
+        self.state.seqno()
+    }
+
+    #[cfg(test)]
+    pub fn seqno_since(&self) -> SeqNo {
+        self.state.seqno_since()
+    }
+
     pub async fn register_reader(
         &mut self,
         reader_id: &ReaderId,
@@ -263,12 +272,19 @@ where
     pub async fn downgrade_since(
         &mut self,
         reader_id: &ReaderId,
+        outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
         self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, state| {
-            state.downgrade_since(reader_id, seqno, new_since, heartbeat_timestamp_ms)
+            state.downgrade_since(
+                reader_id,
+                seqno,
+                outstanding_seqno,
+                new_since,
+                heartbeat_timestamp_ms,
+            )
         })
         .await
     }
@@ -774,10 +790,11 @@ mod tests {
 
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
+    use crate::fetch::fetch_batch_part;
     use crate::internal::compact::{CompactReq, Compactor};
     use crate::internal::paths::PartialBlobKey;
     use crate::internal::state::ProtoStateRollup;
-    use crate::read::{fetch_batch_part, Listen, ListenEvent};
+    use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistConfig, ShardId};
 

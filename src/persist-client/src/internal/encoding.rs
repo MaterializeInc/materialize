@@ -12,25 +12,31 @@ use std::marker::PhantomData;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist_types::{Codec, Codec64};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use prost::Message;
 use semver::Version;
-use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use uuid::Uuid;
 
+use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+
 use crate::error::CodecMismatch;
+use crate::fetch::{LeasedBatch, LeasedBatchMetadata};
 use crate::internal::paths::PartialBlobKey;
-use crate::internal::state::proto_hollow_batch_reader_metadata;
+use crate::internal::state::proto_leased_batch_metadata;
 use crate::internal::state::{
-    HollowBatch, ProtoHollowBatch, ProtoHollowBatchReaderMetadata, ProtoReadEnrichedHollowBatch,
-    ProtoReaderState, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
-    ProtoWriterState, ReaderState, State, StateCollections, WriterState,
+    HollowBatch, ProtoHollowBatch, ProtoLeasedBatchMetadata, ProtoReaderState, ProtoStateRollup,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, ReaderState, State,
+    StateCollections, WriterState,
 };
+
+// This has to be exposed to [`crate::fetch::SerdeLeasedBatch`], which we in
+// turn want to make publicly accessible as part of the persist API.
+pub(crate) use crate::internal::state::ProtoLeasedBatch;
+
 use crate::internal::trace::Trace;
-use crate::read::{HollowBatchReaderMetadata, ReaderEnrichedHollowBatch, ReaderId};
+use crate::read::ReaderId;
 use crate::{ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
@@ -399,98 +405,73 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchReaderMetadata>
-    for HollowBatchReaderMetadata<T>
-{
-    fn into_proto(&self) -> ProtoHollowBatchReaderMetadata {
-        use proto_hollow_batch_reader_metadata::*;
-        ProtoHollowBatchReaderMetadata {
+impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatchMetadata> for LeasedBatchMetadata<T> {
+    fn into_proto(&self) -> ProtoLeasedBatchMetadata {
+        use proto_leased_batch_metadata::*;
+        ProtoLeasedBatchMetadata {
             kind: Some(match self {
-                HollowBatchReaderMetadata::Snapshot { as_of } => {
-                    Kind::Snapshot(ProtoHollowBatchReaderMetadataSnapshot {
+                LeasedBatchMetadata::Snapshot { as_of } => {
+                    Kind::Snapshot(ProtoLeasedBatchMetadataSnapshot {
                         as_of: Some(as_of.into_proto()),
                     })
                 }
-                HollowBatchReaderMetadata::Listen {
-                    as_of,
-                    until,
-                    since,
-                } => Kind::Listen(ProtoHollowBatchReaderMetadataListen {
-                    as_of: Some(as_of.into_proto()),
-                    until: Some(until.into_proto()),
-                    since: Some(since.into_proto()),
-                }),
+                LeasedBatchMetadata::Listen { as_of, until } => {
+                    Kind::Listen(ProtoLeasedBatchMetadataListen {
+                        as_of: Some(as_of.into_proto()),
+                        until: Some(until.into_proto()),
+                    })
+                }
             }),
         }
     }
 
-    fn from_proto(proto: ProtoHollowBatchReaderMetadata) -> Result<Self, TryFromProtoError> {
-        use proto_hollow_batch_reader_metadata::Kind::*;
+    fn from_proto(proto: ProtoLeasedBatchMetadata) -> Result<Self, TryFromProtoError> {
+        use proto_leased_batch_metadata::Kind::*;
         Ok(match proto.kind {
-            Some(Snapshot(snapshot)) => HollowBatchReaderMetadata::Snapshot {
+            Some(Snapshot(snapshot)) => LeasedBatchMetadata::Snapshot {
                 as_of: snapshot
                     .as_of
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Snapshot::as_of")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Snapshot::as_of")?,
             },
-            Some(Listen(listen)) => HollowBatchReaderMetadata::Listen {
+            Some(Listen(listen)) => LeasedBatchMetadata::Listen {
                 as_of: listen
                     .as_of
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::as_of")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::as_of")?,
                 until: listen
                     .until
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::until")?,
-                since: listen
-                    .since
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::since")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::until")?,
             },
             None => {
                 return Err(TryFromProtoError::missing_field(
-                    "ProtoHollowBatchReaderMetadata::Kind",
+                    "ProtoLeasedBatchMetadata::Kind",
                 ))
             }
         })
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SerdeReaderEnrichedHollowBatch(Vec<u8>);
-
-impl<T: Timestamp + Codec64> From<ReaderEnrichedHollowBatch<T>> for SerdeReaderEnrichedHollowBatch {
-    fn from(x: ReaderEnrichedHollowBatch<T>) -> Self {
-        SerdeReaderEnrichedHollowBatch(x.into_proto().encode_to_vec())
-    }
-}
-
-impl<T: Timestamp + Codec64> From<SerdeReaderEnrichedHollowBatch> for ReaderEnrichedHollowBatch<T> {
-    fn from(x: SerdeReaderEnrichedHollowBatch) -> Self {
-        let proto = ProtoReadEnrichedHollowBatch::decode(x.0.as_slice())
-            .expect("internal error: invalid snapshot split");
-        proto
-            .into_rust()
-            .expect("internal error: invalid snapshot split")
-    }
-}
-
-impl<T: Timestamp + Codec64> RustType<ProtoReadEnrichedHollowBatch>
-    for ReaderEnrichedHollowBatch<T>
-{
-    fn into_proto(&self) -> ProtoReadEnrichedHollowBatch {
-        ProtoReadEnrichedHollowBatch {
+impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatch> for LeasedBatch<T> {
+    /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
+    fn into_proto(&self) -> ProtoLeasedBatch {
+        ProtoLeasedBatch {
             shard_id: self.shard_id.into_proto(),
-            reader_metadata: Some(self.reader_metadata.into_proto()),
+            reader_id: self.reader_id.into_proto(),
+            reader_metadata: Some(self.metadata.into_proto()),
             batch: Some(self.batch.into_proto()),
+            leased_seqno: self.leased_seqno.into_proto(),
         }
     }
 
-    fn from_proto(proto: ProtoReadEnrichedHollowBatch) -> Result<Self, TryFromProtoError> {
-        Ok(ReaderEnrichedHollowBatch {
+    /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
+    fn from_proto(proto: ProtoLeasedBatch) -> Result<Self, TryFromProtoError> {
+        Ok(LeasedBatch {
             shard_id: proto.shard_id.into_rust()?,
-            reader_metadata: proto
+            reader_id: proto.reader_id.into_rust()?,
+            metadata: proto
                 .reader_metadata
-                .into_rust_if_some("ProtoReadEnrichedHollowBatch::reader_metadata")?,
-            batch: proto
-                .batch
-                .into_rust_if_some("ProtoReadEnrichedHollowBatch::batch")?,
+                .into_rust_if_some("ProtoLeasedBatch::reader_metadata")?,
+            batch: proto.batch.into_rust_if_some("ProtoLeasedBatch::batch")?,
+            leased_seqno: proto.leased_seqno.into_rust()?,
         })
     }
 }
