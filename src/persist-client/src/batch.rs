@@ -532,7 +532,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 #[cfg(test)]
 mod tests {
     use crate::cache::PersistClientCache;
-    use crate::internal::paths::BlobKey;
+    use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::all_ok;
     use crate::PersistLocation;
 
@@ -645,7 +645,7 @@ mod tests {
         assert_eq!(batch.blob_keys.len(), 3);
         for key in &batch.blob_keys {
             match BlobKey::parse_ids(&key.complete(&shard_id)) {
-                Ok((Some((shard, writer)), _)) => {
+                Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
                     assert_eq!(writer.to_string(), write.writer_id.to_string());
                 }

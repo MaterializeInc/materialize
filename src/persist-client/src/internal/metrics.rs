@@ -18,7 +18,8 @@ use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    ComputedIntGauge, Counter, DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry,
+    ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt,
+    IntCounter, MetricsRegistry,
 };
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
@@ -59,6 +60,8 @@ pub struct Metrics {
     pub lease: LeaseMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
+    /// Metrics for (incremental) state updates and fetches.
+    pub state: StateMetrics,
     /// Metrics for various per-shard measurements.
     pub shards: ShardsMetrics,
 
@@ -80,6 +83,7 @@ impl Metrics {
             compaction: CompactionMetrics::new(registry),
             gc: GcMetrics::new(registry),
             lease: LeaseMetrics::new(registry),
+            state: StateMetrics::new(registry),
             shards: ShardsMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
@@ -249,6 +253,7 @@ impl MetricsVecs {
     fn cmds_metrics(&self) -> CmdsMetrics {
         CmdsMetrics {
             init_state: self.cmd_metrics("init_state"),
+            add_and_remove_rollups: self.cmd_metrics("add_and_remove_rollups"),
             register: self.cmd_metrics("register"),
             clone_reader: self.cmd_metrics("clone_reader"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
@@ -278,20 +283,23 @@ impl MetricsVecs {
                 apply_unbatched_cmd_cas: self.retry_metrics("apply_unbatched_cmd::cas"),
             },
             external: RetryExternal {
+                batch_delete: self.retry_metrics("batch::delete"),
                 batch_set: self.retry_metrics("batch::set"),
                 blob_open: self.retry_metrics("blob::open"),
                 compaction_noop_delete: self.retry_metrics("compaction_noop::delete"),
                 consensus_open: self.retry_metrics("consensus::open"),
-                fetch_and_update_state_head: self.retry_metrics("fetch_and_update_state::head"),
                 fetch_batch_get: self.retry_metrics("fetch_batch::get"),
-                maybe_init_state_cas: self.retry_metrics("maybe_init_state::cas"),
-                maybe_init_state_head: self.retry_metrics("maybe_init_state::head"),
-                gc_scan: self.retry_metrics("gc::scan"),
-                gc_delete: self.retry_metrics("gc::delete"),
+                fetch_state_scan: self.retry_metrics("fetch_state::scan"),
                 gc_truncate: self.retry_metrics("gc::truncate"),
+                maybe_init_cas: self.retry_metrics("maybe_init::cas"),
+                rollup_delete: self.retry_metrics("rollup::delete"),
+                rollup_get: self.retry_metrics("rollup::get"),
+                rollup_set: self.retry_metrics("rollup::set"),
                 storage_usage_shard_size: self.retry_metrics("storage_usage::shard_size"),
             },
             append_batch: self.retry_metrics("append_batch"),
+            fetch_latest_state: self.retry_metrics("fetch_latest_state"),
+            fetch_live_states: self.retry_metrics("fetch_live_states"),
             idempotent_cmd: self.retry_metrics("idempotent_cmd"),
             next_listen_batch: self.retry_metrics("next_listen_batch"),
             snapshot: self.retry_metrics("snapshot"),
@@ -311,6 +319,7 @@ impl MetricsVecs {
     fn codecs_metrics(&self) -> CodecsMetrics {
         CodecsMetrics {
             state: self.codec_metrics("state"),
+            state_diff: self.codec_metrics("state_diff"),
             batch: self.codec_metrics("batch"),
             key: self.codec_metrics("key"),
             val: self.codec_metrics("val"),
@@ -397,6 +406,7 @@ impl CmdMetrics {
 #[derive(Debug)]
 pub struct CmdsMetrics {
     pub(crate) init_state: CmdMetrics,
+    pub(crate) add_and_remove_rollups: CmdMetrics,
     pub(crate) register: CmdMetrics,
     pub(crate) clone_reader: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
@@ -430,17 +440,18 @@ pub struct RetryDeterminate {
 
 #[derive(Debug)]
 pub struct RetryExternal {
+    pub(crate) batch_delete: RetryMetrics,
     pub(crate) batch_set: RetryMetrics,
     pub(crate) blob_open: RetryMetrics,
-    pub(crate) consensus_open: RetryMetrics,
     pub(crate) compaction_noop_delete: RetryMetrics,
-    pub(crate) fetch_and_update_state_head: RetryMetrics,
+    pub(crate) consensus_open: RetryMetrics,
     pub(crate) fetch_batch_get: RetryMetrics,
-    pub(crate) maybe_init_state_cas: RetryMetrics,
-    pub(crate) maybe_init_state_head: RetryMetrics,
-    pub(crate) gc_scan: RetryMetrics,
-    pub(crate) gc_delete: RetryMetrics,
+    pub(crate) fetch_state_scan: RetryMetrics,
     pub(crate) gc_truncate: RetryMetrics,
+    pub(crate) maybe_init_cas: RetryMetrics,
+    pub(crate) rollup_delete: RetryMetrics,
+    pub(crate) rollup_get: RetryMetrics,
+    pub(crate) rollup_set: RetryMetrics,
     pub(crate) storage_usage_shard_size: RetryMetrics,
 }
 
@@ -450,6 +461,8 @@ pub struct RetriesMetrics {
     pub(crate) external: RetryExternal,
 
     pub(crate) append_batch: RetryMetrics,
+    pub(crate) fetch_latest_state: RetryMetrics,
+    pub(crate) fetch_live_states: RetryMetrics,
     pub(crate) idempotent_cmd: RetryMetrics,
     pub(crate) next_listen_batch: RetryMetrics,
     pub(crate) snapshot: RetryMetrics,
@@ -574,7 +587,7 @@ impl Drop for IncOnDrop {
 
 pub struct MetricsRetryStream {
     retry: RetryStream,
-    retries: IntCounter,
+    pub(crate) retries: IntCounter,
     sleep_seconds: Counter,
     _finished: IncOnDrop,
 }
@@ -621,6 +634,7 @@ impl MetricsRetryStream {
 #[derive(Debug)]
 pub struct CodecsMetrics {
     pub(crate) state: CodecMetrics,
+    pub(crate) state_diff: CodecMetrics,
     pub(crate) batch: CodecMetrics,
     pub(crate) key: CodecMetrics,
     pub(crate) val: CodecMetrics,
@@ -655,6 +669,37 @@ impl CodecMetrics {
 }
 
 #[derive(Debug)]
+pub struct StateMetrics {
+    pub(crate) apply_spine_fast_path: IntCounter,
+    pub(crate) apply_spine_slow_path: IntCounter,
+    pub(crate) update_state_fast_path: IntCounter,
+    pub(crate) update_state_slow_path: IntCounter,
+}
+
+impl StateMetrics {
+    pub(crate) fn new(registry: &MetricsRegistry) -> Self {
+        StateMetrics {
+            apply_spine_fast_path: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_fast_path",
+                help: "count of spine diff applications that hit the fast path",
+            )),
+            apply_spine_slow_path: registry.register(metric!(
+                name: "mz_persist_state_apply_spine_slow_path",
+                help: "count of spine diff applications that hit the slow path",
+            )),
+            update_state_fast_path: registry.register(metric!(
+                name: "mz_persist_state_update_state_fast_path",
+                help: "count of state update applications that hit the fast path",
+            )),
+            update_state_slow_path: registry.register(metric!(
+                name: "mz_persist_state_update_state_slow_path",
+                help: "count of state update applications that hit the slow path",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ShardsMetrics {
     // Unlike all the other metrics in here, ShardsMetrics intentionally uses
     // the DeleteOnDrop wrappers. A process might stop using a shard (drop all
@@ -662,7 +707,8 @@ pub struct ShardsMetrics {
     _count: ComputedIntGauge,
     since: mz_ore::metrics::IntGaugeVec,
     upper: mz_ore::metrics::IntGaugeVec,
-    encoded_state_size: mz_ore::metrics::UIntGaugeVec,
+    encoded_rollup_size: mz_ore::metrics::UIntGaugeVec,
+    encoded_diff_size: mz_ore::metrics::IntCounterVec,
     // _batch_count is somewhat redundant with _encoded_state_size. It's nice to
     // see directly as we're getting started, perhaps we're able to drop it
     // later in favor of only having the latter.
@@ -705,10 +751,17 @@ impl ShardsMetrics {
                     var_labels: ["shard"],
                 ),
             ),
-            encoded_state_size: registry.register(
+            encoded_rollup_size: registry.register(
                 metric!(
-                    name: "mz_persist_shard_state_size_bytes",
-                    help: "total encoded state size of all active shards on this process",
+                    name: "mz_persist_shard_rollup_size_bytes",
+                    help: "total encoded rollup size of all active shards on this process",
+                    var_labels: ["shard"],
+                ),
+            ),
+            encoded_diff_size: registry.register(
+                metric!(
+                    name: "mz_persist_shard_diff_size_bytes",
+                    help: "total encoded diff size of all active shards on this process",
                     var_labels: ["shard"],
                 ),
             ),
@@ -774,9 +827,11 @@ impl ShardsMetrics {
 
 #[derive(Debug)]
 pub struct ShardMetrics {
+    pub(crate) shard_id: ShardId,
     since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    encoded_state_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    encoded_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -786,15 +841,19 @@ impl ShardMetrics {
     pub fn new(shard_id: &ShardId, shards_metrics: &ShardsMetrics) -> Self {
         let shard = shard_id.to_string();
         ShardMetrics {
+            shard_id: *shard_id,
             since: shards_metrics
                 .since
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             upper: shards_metrics
                 .upper
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
-            encoded_state_size: shards_metrics
-                .encoded_state_size
+            encoded_rollup_size: shards_metrics
+                .encoded_rollup_size
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
+            encoded_diff_size: shards_metrics
+                .encoded_diff_size
+                .get_delete_on_drop_counter(vec![shard.clone()]),
             batch_count: shards_metrics
                 .batch_count
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
@@ -831,9 +890,14 @@ impl ShardMetrics {
         self.upper.set(Self::encode_ts_metric(upper))
     }
 
-    pub fn set_encoded_state_size(&self, encoded_state_size: usize) {
-        self.encoded_state_size
-            .set(u64::cast_from(encoded_state_size))
+    pub fn set_encoded_rollup_size(&self, encoded_rollup_size: usize) {
+        self.encoded_rollup_size
+            .set(u64::cast_from(encoded_rollup_size))
+    }
+
+    pub fn inc_encoded_diff_size(&self, encoded_diff_size: usize) {
+        self.encoded_diff_size
+            .inc_by(u64::cast_from(encoded_diff_size))
     }
 
     pub fn set_batch_count(&self, batch_count: usize) {

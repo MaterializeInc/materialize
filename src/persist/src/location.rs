@@ -48,6 +48,20 @@ impl timely::PartialOrder for SeqNo {
     }
 }
 
+impl std::str::FromStr for SeqNo {
+    type Err = String;
+
+    fn from_str(encoded: &str) -> Result<Self, Self::Err> {
+        let encoded = match encoded.strip_prefix('v') {
+            Some(x) => x,
+            None => return Err(format!("invalid SeqNo {}: incorrect prefix", encoded)),
+        };
+        let seqno =
+            u64::from_str(&encoded).map_err(|err| format!("invalid SeqNo {}: {}", encoded, err))?;
+        Ok(SeqNo(seqno))
+    }
+}
+
 impl SeqNo {
     /// Returns the next SeqNo in the sequence.
     pub fn next(self) -> SeqNo {

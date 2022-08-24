@@ -9,19 +9,21 @@
 
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::marker::PhantomData;
 use std::time::Instant;
 
-use mz_persist::location::{Blob, Consensus, SeqNo, VersionedData};
-use prost::Message;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
+use mz_persist::location::SeqNo;
+use mz_persist_types::{Codec, Codec64};
+use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, debug_span, warn, Instrument, Span};
 
-use crate::internal::machine::retry_external;
-use crate::internal::paths::PartialBatchKey;
-use crate::internal::state::ProtoStateRollup;
-use crate::{Metrics, ShardId};
+use crate::internal::machine::{retry_external, Machine};
+use crate::internal::paths::{PartialRollupKey, RollupId};
+use crate::ShardId;
 
 #[derive(Debug, Clone)]
 pub struct GcReq {
@@ -30,9 +32,19 @@ pub struct GcReq {
     pub new_seqno_since: SeqNo,
 }
 
-#[derive(Debug, Clone)]
-pub struct GarbageCollector {
+#[derive(Debug)]
+pub struct GarbageCollector<K, V, T, D> {
     sender: UnboundedSender<(GcReq, oneshot::Sender<()>)>,
+    _phantom: PhantomData<fn() -> (K, V, T, D)>,
+}
+
+impl<K, V, T, D> Clone for GarbageCollector<K, V, T, D> {
+    fn clone(&self) -> Self {
+        GarbageCollector {
+            sender: self.sender.clone(),
+            _phantom: PhantomData,
+        }
+    }
 }
 
 /// Cleanup for no longer necessary blobs and consensus versions.
@@ -83,67 +95,57 @@ pub struct GarbageCollector {
 ///   leaked. We anyway always have the possibility of a write process being
 ///   killed between when it writes a blob and links it into state, so this is
 ///   fine; it'll be caught and fixed by the same mechanism.)
-impl GarbageCollector {
-    pub fn new(
-        shard_id: ShardId,
-        consensus: Arc<dyn Consensus + Send + Sync>,
-        blob: Arc<dyn Blob + Send + Sync>,
-        metrics: Arc<Metrics>,
-    ) -> Self {
+impl<K, V, T, D> GarbageCollector<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
+    pub fn new(mut machine: Machine<K, V, T, D>) -> Self {
         let (gc_req_sender, mut gc_req_recv) =
             mpsc::unbounded_channel::<(GcReq, oneshot::Sender<()>)>();
-
-        let consensus = Arc::clone(&consensus);
-        let blob = Arc::clone(&blob);
-        let metrics = Arc::clone(&metrics);
 
         // spin off a single task responsible for executing GC requests.
         // work is enqueued into the task through a channel
         let _worker_handle = mz_ore::task::spawn(|| "PersistGcWorker", async move {
             while let Some((req, completer)) = gc_req_recv.recv().await {
+                let mut consolidated_req = req;
                 let mut gc_completed_senders = vec![completer];
-
-                let mut oldest_seqno_since = req.old_seqno_since;
-                let mut newest_seqno_since = req.new_seqno_since;
-                debug_assert_eq!(shard_id, req.shard_id);
 
                 // check if any further gc requests have built up. we'll merge their requests
                 // together and run a single GC pass to satisfy all of them
                 while let Ok((req, completer)) = gc_req_recv.try_recv() {
+                    assert_eq!(req.shard_id, consolidated_req.shard_id);
                     gc_completed_senders.push(completer);
-                    oldest_seqno_since = std::cmp::min(req.old_seqno_since, oldest_seqno_since);
-                    newest_seqno_since = std::cmp::max(req.new_seqno_since, newest_seqno_since);
-                    debug_assert_eq!(shard_id, req.shard_id);
+                    consolidated_req.old_seqno_since =
+                        std::cmp::min(req.old_seqno_since, consolidated_req.old_seqno_since);
+                    consolidated_req.new_seqno_since =
+                        std::cmp::max(req.new_seqno_since, consolidated_req.new_seqno_since);
                 }
 
                 let merged_requests = gc_completed_senders.len() - 1;
                 if merged_requests > 0 {
                     debug!(
                         "Merged {} gc requests together for shard {}",
-                        merged_requests, shard_id
+                        merged_requests, consolidated_req.shard_id
                     );
                 }
 
-                let consolidated_gc_req = GcReq {
-                    shard_id,
-                    old_seqno_since: oldest_seqno_since,
-                    new_seqno_since: newest_seqno_since,
-                };
-
-                let consensus = Arc::clone(&consensus);
-                let blob = Arc::clone(&blob);
-                let metrics = Arc::clone(&metrics);
-
-                let gc_span = debug_span!(parent: None, "gc_and_truncate", shard_id=%req.shard_id);
+                let gc_span = debug_span!(parent: None, "gc_and_truncate", shard_id=%consolidated_req.shard_id);
                 gc_span.follows_from(&Span::current());
 
                 let start = Instant::now();
-                metrics.gc.started.inc();
-                Self::gc_and_truncate(consensus, blob, &metrics, consolidated_gc_req)
+                machine.metrics.gc.started.inc();
+                Self::gc_and_truncate(&mut machine, consolidated_req)
                     .instrument(gc_span)
                     .await;
-                metrics.gc.finished.inc();
-                metrics.gc.seconds.inc_by(start.elapsed().as_secs_f64());
+                machine.metrics.gc.finished.inc();
+                machine
+                    .metrics
+                    .gc
+                    .seconds
+                    .inc_by(start.elapsed().as_secs_f64());
 
                 // inform all callers who enqueued GC reqs that their work is complete
                 for sender in gc_completed_senders {
@@ -156,6 +158,7 @@ impl GarbageCollector {
 
         GarbageCollector {
             sender: gc_req_sender,
+            _phantom: PhantomData,
         }
     }
 
@@ -180,57 +183,100 @@ impl GarbageCollector {
         Some(gc_completed_receiver)
     }
 
-    pub async fn gc_and_truncate(
-        consensus: Arc<dyn Consensus + Send + Sync>,
-        blob: Arc<dyn Blob + Send + Sync>,
-        metrics: &Metrics,
-        req: GcReq,
-    ) {
+    pub async fn gc_and_truncate(machine: &mut Machine<K, V, T, D>, req: GcReq) {
+        assert_eq!(req.shard_id, machine.shard_id());
         // NB: Because these requests can be processed concurrently (and in
         // arbitrary order), all of the logic below has to work even if we've
         // already gc'd and truncated past new_seqno_since.
 
-        let path = req.shard_id.to_string();
-        let state_versions = retry_external(&metrics.retries.external.gc_scan, || async {
-            consensus.scan(&path, SeqNo::minimum()).await
-        })
-        .await;
+        let mut states = machine
+            .state_versions
+            .fetch_live_states::<K, V, T, D>(&req.shard_id)
+            .await
+            .expect("shard codecs should not change");
 
         debug!(
             "gc {} for [{},{}) got {} versions from scan",
             req.shard_id,
             req.old_seqno_since,
             req.new_seqno_since,
-            state_versions.len()
+            states.len()
         );
 
-        // It'd be minor-ly more efficient to reverse the order and first build
-        // up non_deleteable_blobs, and then check all state_versions with seqno
-        // < new_seqno_since so our hashmap grows to O(non_deleteable) rather
-        // than O(deleteable+non_deleteable). This version of the code reads
-        // slightly more obviously, so hold off on that until/if we see it be a
-        // problem in practice.
-        let mut deleteable_blobs = HashSet::new();
-        for state_version in state_versions {
-            if state_version.seqno < req.new_seqno_since {
-                Self::for_all_keys(&state_version, |key| {
-                    // It's okay (expected) if the key already exists in
-                    // deleteable_blobs, it may have been present in previous
-                    // versions of state.
-                    deleteable_blobs.insert(key.to_owned());
+        let mut deleteable_batch_blobs = HashSet::new();
+        let mut deleteable_rollup_blobs = Vec::new();
+        while let Some(state) = states.next() {
+            if state.seqno < req.new_seqno_since {
+                state.collections.trace.map_batches(|b| {
+                    for key in b.keys.iter() {
+                        // It's okay (expected) if the key already exists in
+                        // deleteable_batch_blobs, it may have been present in
+                        // previous versions of state.
+                        deleteable_batch_blobs.insert(key.to_owned());
+                    }
                 });
-            } else if state_version.seqno == req.new_seqno_since {
-                Self::for_all_keys(&state_version, |key| {
-                    // It's okay (expected) if the key doesn't exist in
-                    // deleteable_blobs, it may have been added in this version
-                    // of state.
-                    let _ = deleteable_blobs.remove(key);
+            } else if state.seqno == req.new_seqno_since {
+                state.collections.trace.map_batches(|b| {
+                    for key in b.keys.iter() {
+                        // It's okay (expected) if the key doesn't exist in
+                        // deleteable_batch_blobs, it may have been added in
+                        // this version of state.
+                        let _ = deleteable_batch_blobs.remove(key);
+                    }
                 });
+                // We only need to detect deletable rollups in the last iter
+                // through the live_diffs loop because they accumulate in state.
+                for (seqno, key) in state.collections.rollups.iter() {
+                    // SUBTLE: This is intentionally comparing vs
+                    // old_seqno_since, not new_seqno_since. We could collect
+                    // all rollups less than new_seqno_since, and then remove
+                    // them from state _after the truncate_, but the state
+                    // change to add the new rollups has to be before the
+                    // truncate and we don't want to create 2 state changes per
+                    // call into gc.
+                    if seqno < &req.old_seqno_since {
+                        deleteable_rollup_blobs.push((*seqno, key.clone()));
+                    } else {
+                        // We iterate in order, may as well short circuit the
+                        // rollup loop.
+                        break;
+                    }
+                }
+                break;
             } else {
                 // Sanity check the loop logic.
-                assert!(state_version.seqno > req.new_seqno_since);
+                assert!(state.seqno > req.new_seqno_since);
                 break;
             }
+        }
+        let state = states.into_inner();
+
+        // As described in the big rustdoc comment on [StateVersions], we
+        // maintain the invariant that there is always a rollup corresponding to
+        // the seqno of the first live version in consensus. So, write a new
+        // rollup at exactly req.new_seqno_since so we're free to truncate
+        // anything before it.
+        //
+        // NB: We write rollups periodically (via maintenance) to cover the case
+        // when GC is being held up by a long seqno hold (such as the 15m read
+        // lease timeouts whenever environmentd restarts).
+        assert_eq!(state.seqno, req.new_seqno_since);
+        let rollup_seqno = state.seqno;
+        let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
+        let () = machine
+            .state_versions
+            .write_rollup_blob(&machine.shard_metrics, &state, &rollup_key)
+            .await;
+        let applied = machine
+            .add_and_remove_rollups((rollup_seqno, &rollup_key), &deleteable_rollup_blobs)
+            .await;
+        // We raced with some other GC process to write this rollup out. Ours
+        // wasn't registered, so delete it.
+        if !applied {
+            machine
+                .state_versions
+                .delete_rollup(&state.shard_id, &rollup_key)
+                .await;
         }
 
         // There's also a bulk delete API in s3 if the performance of this
@@ -241,37 +287,29 @@ impl GarbageCollector {
         // Another idea is to use a FuturesUnordered to at least run them
         // concurrently, but this requires a bunch of Arc cloning, so wait to
         // see if it's worth it.
-        for key in deleteable_blobs {
-            let key = PartialBatchKey(key).complete(&req.shard_id);
-            retry_external(&metrics.retries.external.gc_delete, || async {
-                blob.delete(&key).await
+        for key in deleteable_batch_blobs {
+            retry_external(&machine.metrics.retries.external.batch_delete, || async {
+                machine
+                    .state_versions
+                    .blob
+                    .delete(&key.complete(&req.shard_id))
+                    .await
             })
-            .instrument(debug_span!("gc::delete"))
+            .instrument(debug_span!("batch::delete"))
             .await;
+        }
+        for (_, key) in deleteable_rollup_blobs {
+            machine
+                .state_versions
+                .delete_rollup(&req.shard_id, &key)
+                .await;
         }
 
         // Now that we've deleted the eligible blobs, "commit" this info by
         // truncating the state versions that referenced them.
-        let _deleted_count = retry_external(&metrics.retries.external.gc_truncate, || async {
-            consensus.truncate(&path, req.new_seqno_since).await
-        })
-        .instrument(debug_span!("gc::truncate"))
-        .await;
-    }
-
-    fn for_all_keys<F: FnMut(&str)>(data: &VersionedData, mut f: F) {
-        let state = ProtoStateRollup::decode(&*data.data)
-            // We received a State that we couldn't decode. This could happen if
-            // persist messes up backward/forward compatibility, if the durable
-            // data was corrupted, or if operations messes up deployment. In any
-            // case, fail loudly.
-            .expect("internal error: invalid encoded state");
-        if let Some(trace) = state.trace.as_ref() {
-            for batch in trace.spine.iter() {
-                for key in batch.keys.iter() {
-                    f(key)
-                }
-            }
-        }
+        machine
+            .state_versions
+            .truncate_diffs(&req.shard_id, req.new_seqno_since)
+            .await;
     }
 }

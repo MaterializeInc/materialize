@@ -38,16 +38,14 @@ message ProtoTrace {
 }
 
 message ProtoReaderState {
-    string reader_id = 1;
-    ProtoU64Antichain since = 2;
-    uint64 seqno = 3;
-    uint64 last_heartbeat_timestamp_ms = 4;
+    ProtoU64Antichain since = 1;
+    uint64 seqno = 2;
+    uint64 last_heartbeat_timestamp_ms = 3;
 }
 
 message ProtoWriterState {
-    string writer_id = 1;
-    uint64 last_heartbeat_timestamp_ms = 2;
-    uint64 lease_duration_ms = 3;
+    uint64 last_heartbeat_timestamp_ms = 1;
+    uint64 lease_duration_ms = 2;
 }
 
 message ProtoStateRollup {
@@ -60,9 +58,40 @@ message ProtoStateRollup {
     string diff_codec = 5;
     uint64 seqno = 6;
     uint64 last_gc_req = 10;
+    map<uint64, string> rollups = 12;
+
     ProtoTrace trace = 7;
-    repeated ProtoReaderState readers = 8;
-    repeated ProtoWriterState writers = 9;
+    map<string, ProtoReaderState> readers = 8;
+    map<string, ProtoWriterState> writers = 9;
+}
+
+enum ProtoStateFieldDiffType {
+    INSERT = 0;
+    UPDATE = 1;
+    DELETE = 2;
+}
+
+message ProtoStateFieldDiff {
+    bytes key = 1;
+    ProtoStateFieldDiffType diff_type = 2;
+    bytes from = 3;
+    bytes to = 4;
+}
+
+message ProtoStateDiff {
+    string applier_version = 1;
+
+    uint64 seqno_from = 2;
+    uint64 seqno_to = 3;
+    string latest_rollup_key = 4;
+
+    // TODO: columnar encoding of these just in case?
+    repeated ProtoStateFieldDiff rollups = 5;
+    repeated ProtoStateFieldDiff last_gc_req = 6;
+    repeated ProtoStateFieldDiff readers = 7;
+    repeated ProtoStateFieldDiff writers = 8;
+    repeated ProtoStateFieldDiff since = 9;
+    repeated ProtoStateFieldDiff spine = 10;
 }
 
 message ProtoLeasedBatchMetadata {

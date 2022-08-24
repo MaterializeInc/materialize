@@ -80,17 +80,19 @@ pub struct Trace<T> {
     spine: Spine<T>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 impl<T: PartialEq> PartialEq for Trace<T> {
     fn eq(&self, other: &Self) -> bool {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
-        let Trace { spine: self_spine } = self;
-        let Trace { spine: other_spine } = other;
+        let Trace { spine: _ } = self;
+        let Trace { spine: _ } = other;
 
+        // Intentionally use HollowBatches for this comparison so we ignore
+        // differences in spine layers.
         let (mut self_batches, mut other_batches) = (Vec::new(), Vec::new());
-        self_spine.map_batches(|b| self_batches.push(b));
-        other_spine.map_batches(|b| other_batches.push(b));
+        self.map_batches(|b| self_batches.push(b));
+        other.map_batches(|b| other_batches.push(b));
 
         self_batches == other_batches
     }
@@ -113,7 +115,7 @@ impl<T> Trace<T> {
         &self.spine.upper
     }
 
-    pub fn map_batches<F: FnMut(&HollowBatch<T>)>(&self, mut f: F) {
+    pub fn map_batches<'a, F: FnMut(&'a HollowBatch<T>)>(&'a self, mut f: F) {
         self.spine.map_batches(move |b| match b {
             SpineBatch::Merged(b) => f(b),
             SpineBatch::Fueled { parts, .. } => {
@@ -122,6 +124,14 @@ impl<T> Trace<T> {
                 }
             }
         })
+    }
+
+    #[must_use]
+    pub fn batches<'a>(&'a self) -> impl IntoIterator<Item = &'a HollowBatch<T>> {
+        // It should be possible to do this without the Vec.
+        let mut batches = Vec::new();
+        self.map_batches(|b| batches.push(b));
+        batches
     }
 
     #[cfg(test)]
@@ -234,7 +244,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 enum SpineBatch<T> {
     Merged(HollowBatch<T>),
     Fueled {
