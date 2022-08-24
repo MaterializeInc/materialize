@@ -108,3 +108,8 @@ SELECT count(*) FROM t1
 WHERE a = 2 AND b = 'l2'
 ----
 1
+
+query B rowsort
+SELECT a = 1 FROM t1 WHERE a = 1;
+----
+true

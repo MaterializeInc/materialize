@@ -9,6 +9,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroUsize;
+use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -758,6 +759,12 @@ impl PendingPeek {
                 // for the arena above (the allocation would not be allowed
                 // to outlive the arena above, from which it might borrow).
                 let mut borrow = datum_vec.borrow_with_many(&[key, row]);
+                if let Some(ref key_val) = self.peek.key {
+                    // If the peek has a `key` that means it was created from an IndexedFilter join.
+                    // We have to add those columns here that the join would add in a dataflow.
+                    let datum_vec = borrow.deref_mut();
+                    datum_vec.extend(key_val.iter());
+                }
                 if let Some(result) = self
                     .peek
                     .map_filter_project
