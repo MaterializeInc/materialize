@@ -210,7 +210,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         .collection(*id)
                         .unwrap()
                         .write_frontier
-                        .frontier()
                         .iter()
                         .cloned(),
                 );
@@ -225,7 +224,6 @@ impl<S: Append + 'static> Coordinator<S> {
                             .collection(*id)
                             .unwrap()
                             .write_frontier
-                            .frontier()
                             .iter()
                             .cloned(),
                     );

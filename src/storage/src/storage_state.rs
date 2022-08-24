@@ -16,7 +16,6 @@ use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
-use timely::progress::ChangeBatch;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
@@ -244,7 +243,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// with the understanding if that if made durable (and ack'd back to the workers) the source will
     /// in fact progress with this write frontier.
     pub fn report_frontier_progress(&mut self, response_tx: &ResponseSender) {
-        let mut changes = Vec::new();
+        let mut new_uppers = Vec::new();
 
         // Check if any observed frontier should advance the reported frontiers.
         for (id, frontier) in self
@@ -264,22 +263,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
             // This is protection against `frontier` lagging behind what we have conditionally reported.
             if PartialOrder::less_than(reported_frontier, &observed_frontier) {
-                let mut change_batch = ChangeBatch::new();
-                for time in reported_frontier.elements().iter() {
-                    change_batch.update(time.clone(), -1);
-                }
-                for time in observed_frontier.elements().iter() {
-                    change_batch.update(time.clone(), 1);
-                }
-                if !change_batch.is_empty() {
-                    changes.push((*id, change_batch));
-                }
+                new_uppers.push((*id, observed_frontier.clone()));
                 reported_frontier.clone_from(&observed_frontier);
             }
         }
 
-        if !changes.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(changes));
+        if !new_uppers.is_empty() {
+            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
         }
     }
 

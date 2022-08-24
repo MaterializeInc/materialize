@@ -30,15 +30,15 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::future;
 use futures::stream::{FuturesUnordered, StreamExt};
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{info, warn};
 
 use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
@@ -66,7 +66,7 @@ struct ReplicaTaskConfig<T> {
 /// Asynchronously forwards commands to and responses from a single replica.
 async fn replica_task<T>(config: ReplicaTaskConfig<T>)
 where
-    T: Timestamp,
+    T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
     let replica_id = config.replica_id;
@@ -87,7 +87,7 @@ async fn run_replica_core<T>(
     }: ReplicaTaskConfig<T>,
 ) -> Result<(), anyhow::Error>
 where
-    T: Timestamp,
+    T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
     let mut client = Retry::default()
@@ -156,8 +156,8 @@ pub struct ActiveReplicationState<T> {
     peeks: HashMap<uuid::Uuid, PendingPeek>,
     /// Reported frontier of each in-progress tail.
     tails: HashMap<GlobalId, Antichain<T>>,
-    /// Frontier information, both unioned across all replicas and from each individual replica.
-    uppers: HashMap<GlobalId, (Antichain<T>, HashMap<ReplicaId, MutableAntichain<T>>)>,
+    /// Frontier information, unioned across all replicas.
+    uppers: HashMap<GlobalId, Antichain<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
     /// Responses that should be emitted on the next `recv` call.
@@ -165,11 +165,6 @@ pub struct ActiveReplicationState<T> {
     /// This is introduced to produce peek cancelation responses eagerly, without awaiting a replica
     /// responding with the response itself, which allows us to compact away the peek in `self.history`.
     pending_response: VecDeque<ActiveReplicationResponse<T>>,
-    /// Per-replica uppers for introspection collections.
-    ///
-    /// For each collection, both the previously reported, and current updates.
-    introspection_uppers:
-        BTreeMap<ReplicaId, BTreeMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>>,
 }
 
 impl<T> ActiveReplicationState<T>
@@ -177,11 +172,7 @@ where
     T: Timestamp + Lattice,
 {
     #[tracing::instrument(level = "debug", skip(self))]
-    fn handle_command(
-        &mut self,
-        cmd: &ComputeCommand<T>,
-        frontiers: HashMap<u64, MutableAntichain<T>>,
-    ) {
+    fn handle_command(&mut self, cmd: &ComputeCommand<T>) {
         // Update our tracking of peek commands.
         match &cmd {
             ComputeCommand::Peek(Peek { uuid, otel_ctx, .. }) => {
@@ -223,7 +214,7 @@ where
         for id in start.into_iter() {
             let frontier = timely::progress::Antichain::from_elem(T::minimum());
 
-            let previous = self.uppers.insert(id, (frontier, frontiers.clone()));
+            let previous = self.uppers.insert(id, frontier);
             assert!(previous.is_none());
         }
         for id in cease.into_iter() {
@@ -263,47 +254,22 @@ where
                     ))
                 })
             }
-            ComputeResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
-                    if let Some((frontier, frontiers)) = self.uppers.get_mut(id) {
-                        // Apply changes to replica `replica_id`
-                        frontiers
-                            .get_mut(&replica_id)
-                            .unwrap()
-                            .update_iter(changes.drain());
-                        // We can swap `frontier` into `changes, negated, and then use that to repopulate `frontier`.
-                        // Working
-                        changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
-                        frontier.clear();
-                        for (time1, _neg_one) in changes.iter() {
-                            for time2 in frontiers[&replica_id].frontier().iter() {
-                                frontier.insert(time1.join(time2));
-                            }
+            ComputeResponse::FrontierUppers(list) => {
+                let mut new_uppers = Vec::new();
+
+                for (id, new_upper) in list {
+                    if let Some(reported) = self.uppers.get_mut(&id) {
+                        if PartialOrder::less_than(reported, &new_upper) {
+                            reported.clone_from(&new_upper);
+                            new_uppers.push((id, new_upper));
                         }
-                        changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
-                        changes.compact();
-                    } else if let Some((frontier, updates)) = self
-                        .introspection_uppers
-                        .get_mut(&replica_id)
-                        .unwrap()
-                        .get_mut(id)
-                    {
-                        updates.update_iter(changes.drain());
-                        changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
-                        frontier.clear();
-                        for (time1, _neg_one) in changes.iter() {
-                            for time2 in updates.frontier().iter() {
-                                frontier.insert(time1.join(time2));
-                            }
-                        }
-                        changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
-                        changes.compact();
+                    } else {
+                        tracing::error!("received `FrontierUppers` for untracked ID: {id}");
                     }
                 }
-                list.retain(|(_, changes)| !changes.unstable_internal_updates().is_empty());
-                if !list.is_empty() {
+                if !new_uppers.is_empty() {
                     Some(ActiveReplicationResponse::ComputeResponse(
-                        ComputeResponse::FrontierUppers(list),
+                        ComputeResponse::FrontierUppers(new_uppers),
                     ))
                 } else {
                     None
@@ -386,7 +352,6 @@ impl<T> ActiveReplication<T> {
                 uppers: Default::default(),
                 history: Default::default(),
                 pending_response: Default::default(),
-                introspection_uppers: Default::default(),
             },
         }
     }
@@ -457,7 +422,6 @@ where
         id: ReplicaId,
         addrs: Vec<String>,
         persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
-        introspection_uppers: Option<BTreeMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>>,
     ) {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -479,25 +443,6 @@ where
         self.state.history.retain_peeks(&self.state.peeks);
         self.state.history.reduce();
 
-        // Introduce new tracked uppers for each replica.
-        self.state
-            .introspection_uppers
-            .insert(id, Default::default());
-        for (gid, _) in persisted_logs.values() {
-            let mut frontier = Antichain::from_elem(T::minimum());
-            if let Some(i_uppers) = &introspection_uppers {
-                if let Some((f, _)) = i_uppers.get(gid) {
-                    frontier.clone_from(f);
-                }
-            }
-            let updates = MutableAntichain::new_bottom(T::minimum());
-            self.state
-                .introspection_uppers
-                .get_mut(&id)
-                .unwrap()
-                .insert(*gid, (frontier, updates));
-        }
-
         let replica_state = ReplicaState {
             command_tx,
             response_rx,
@@ -516,10 +461,14 @@ where
                 .expect("Channel to client has gone away!")
         }
 
-        // Add replica to tracked state.
-        for (_, frontiers) in self.state.uppers.values_mut() {
-            frontiers.insert(id, MutableAntichain::new_bottom(T::minimum()));
+        // Start tracking frontiers of persisted_logs collections.
+        for (id, _) in replica_state.persisted_logs.values() {
+            let frontier = Antichain::from_elem(Timestamp::minimum());
+            let previous = self.state.uppers.insert(*id, frontier);
+            assert!(previous.is_none());
         }
+
+        // Add replica to tracked state.
         self.replicas.insert(id, replica_state);
     }
 
@@ -530,19 +479,20 @@ where
 
     /// Remove a replica by its identifier.
     pub fn remove_replica(&mut self, id: ReplicaId) {
-        self.replicas.remove(&id);
-        for (_frontier, frontiers) in self.state.uppers.iter_mut() {
-            frontiers.1.remove(&id);
+        let replica_state = self.replicas.remove(&id).expect("replica not found");
+
+        // Cease tracking frontiers of persisted_logs collections.
+        for (id, _) in replica_state.persisted_logs.values() {
+            let previous = self.state.uppers.remove(id);
+            assert!(previous.is_some());
         }
-        self.state.introspection_uppers.remove(&id);
     }
 
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let addrs = self.replicas[&id].addrs.clone();
         let persisted_logs = self.replicas[&id].persisted_logs.clone();
-        let introspection_uppers = self.state.introspection_uppers.remove(&id);
         self.remove_replica(id);
-        self.add_replica(id, addrs, persisted_logs, introspection_uppers);
+        self.add_replica(id, addrs, persisted_logs);
     }
 
     // We avoid implementing `GenericClient` here, because the protocol between
@@ -553,17 +503,7 @@ where
     /// Sends a command to all replicas.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn send(&mut self, cmd: ComputeCommand<T>) {
-        let frontiers = self
-            .replicas
-            .keys()
-            .map(|id| {
-                let mut frontier = timely::progress::frontier::MutableAntichain::new();
-                frontier.update_iter(Some((T::minimum(), 1)));
-                (id.clone(), frontier)
-            })
-            .collect();
-
-        self.state.handle_command(&cmd, frontiers);
+        self.state.handle_command(&cmd);
 
         // Clone the command for each active replica.
         let mut failed_replicas = vec![];

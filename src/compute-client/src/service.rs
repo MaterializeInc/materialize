@@ -17,7 +17,9 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
-use timely::progress::frontier::MutableAntichain;
+use differential_dataflow::lattice::Lattice;
+use timely::progress::frontier::{Antichain, MutableAntichain};
+use timely::PartialOrder;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::debug;
@@ -97,8 +99,9 @@ where
 pub struct PartitionedComputeState<T> {
     /// Number of partitions the state machine represents.
     parts: usize,
-    /// Upper frontiers for indexes and sinks.
-    uppers: HashMap<GlobalId, MutableAntichain<T>>,
+    /// Upper frontiers for indexes and sinks, both unioned across all partitions and from each
+    /// individual partition.
+    uppers: HashMap<GlobalId, (Antichain<T>, Vec<Antichain<T>>)>,
     /// Pending responses for a peek; returnable once all are available.
     peek_responses: HashMap<Uuid, HashMap<usize, PeekResponse>>,
     /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
@@ -109,7 +112,7 @@ pub struct PartitionedComputeState<T> {
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
     for (ComputeCommand<T>, ComputeResponse<T>)
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + Lattice,
 {
     type PartitionedState = PartitionedComputeState<T>;
 
@@ -156,9 +159,9 @@ where
         command.frontier_tracking(&mut start, &mut cease);
         // Apply the determined effects of the command to `self.uppers`.
         for id in start.into_iter() {
-            let mut frontier = timely::progress::frontier::MutableAntichain::new();
-            frontier.update_iter(Some((T::minimum(), self.parts as i64)));
-            let previous = self.uppers.insert(id, frontier);
+            let frontier = Antichain::from_elem(T::minimum());
+            let part_frontiers = vec![frontier.clone(); self.parts];
+            let previous = self.uppers.insert(id, (frontier, part_frontiers));
             assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command);
         }
         for id in cease.into_iter() {
@@ -172,7 +175,7 @@ where
 
 impl<T> PartitionedState<ComputeCommand<T>, ComputeResponse<T>> for PartitionedComputeState<T>
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + Lattice,
 {
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<ComputeCommand<T>> {
         self.observe_command(&command);
@@ -227,32 +230,29 @@ where
         message: ComputeResponse<T>,
     ) -> Option<Result<ComputeResponse<T>, anyhow::Error>> {
         match message {
-            ComputeResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
-                    if let Some(frontier) = self.uppers.get_mut(id) {
-                        let iter = frontier.update_iter(changes.drain());
-                        changes.extend(iter);
-                    } else {
-                        changes.clear();
+            ComputeResponse::FrontierUppers(list) => {
+                let mut new_uppers = Vec::new();
+
+                for (id, new_shard_upper) in list {
+                    if let Some((reported, tracked)) = self.uppers.get_mut(&id) {
+                        // Update the shard upper and compute a new global upper.
+                        tracked[shard_id].join_assign(&new_shard_upper);
+                        let mut new_upper = Antichain::new();
+                        for upper in tracked {
+                            new_upper.extend(upper.iter().cloned());
+                        }
+
+                        if PartialOrder::less_than(reported, &new_upper) {
+                            reported.clone_from(&new_upper);
+                            new_uppers.push((id, new_upper));
+                        }
                     }
                 }
 
-                // The following block implements a `list.retain()` of non-empty change batches.
-                // This is more verbose than `list.retain()` because that method cannot mutate
-                // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-                let mut cursor = 0;
-                while let Some((_id, changes)) = list.get_mut(cursor) {
-                    if changes.is_empty() {
-                        list.swap_remove(cursor);
-                    } else {
-                        cursor += 1;
-                    }
-                }
-
-                if list.is_empty() {
+                if new_uppers.is_empty() {
                     None
                 } else {
-                    Some(Ok(ComputeResponse::FrontierUppers(list)))
+                    Some(Ok(ComputeResponse::FrontierUppers(new_uppers)))
                 }
             }
             ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
