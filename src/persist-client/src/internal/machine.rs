@@ -578,7 +578,8 @@ where
 
                         return Ok((self.state.seqno(), Ok(work_ret), maintenance));
                     }
-                    Err(current) => {
+                    Err(mut current) => {
+                        let current = current.pop();
                         debug!(
                             "apply_unbatched_cmd {} {} lost the CaS race, retrying: {} vs {:?}",
                             self.shard_id(),
@@ -643,10 +644,11 @@ where
                     );
                     return Ok(state);
                 }
-                Err(x) => {
+                Err(mut x) => {
                     // We lost a CaS race, use the value included in the CaS
                     // expectation error. Because we used None for expected,
                     // this should never be None.
+                    let x = x.pop();
                     debug!(
                         "maybe_init_state lost the CaS race, using current value: {:?}",
                         x.as_ref().map(|x| x.seqno)
