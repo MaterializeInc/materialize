@@ -162,16 +162,12 @@ impl MemConsensus {
         key: &str,
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let mut results = vec![];
-        if let Some(values) = store.get(key) {
-            // TODO: we could instead binary search to find the first valid
-            // key and then binary search the rest.
-            for value in values {
-                if value.seqno >= from {
-                    results.push(value.clone());
-                }
-            }
-        }
+        let results = if let Some(values) = store.get(key) {
+            let from_idx = values.partition_point(|x| x.seqno < from);
+            values[from_idx..].to_vec()
+        } else {
+            Vec::new()
+        };
         Ok(results)
     }
 }

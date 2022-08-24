@@ -29,11 +29,10 @@ use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType};
 
 use crate::error::InvalidUsage;
-use crate::internal::encoding::ProtoLeasedBatch;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::PartialBatchKey;
-use crate::internal::state::HollowBatch;
+use crate::internal::state::{HollowBatch, ProtoLeasedBatch};
 use crate::read::{ReadHandle, ReaderId};
 use crate::ShardId;
 

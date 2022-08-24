@@ -26,14 +26,10 @@ use crate::fetch::{LeasedBatch, LeasedBatchMetadata};
 use crate::internal::paths::PartialBatchKey;
 use crate::internal::state::proto_leased_batch_metadata;
 use crate::internal::state::{
-    HollowBatch, ProtoHollowBatch, ProtoLeasedBatchMetadata, ProtoReaderState, ProtoStateRollup,
-    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, ReaderState, State,
-    StateCollections, WriterState,
+    HollowBatch, ProtoHollowBatch, ProtoLeasedBatch, ProtoLeasedBatchMetadata, ProtoReaderState,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
+    ReaderState, State, StateCollections, WriterState,
 };
-
-// This has to be exposed to [`crate::fetch::SerdeLeasedBatch`], which we in
-// turn want to make publicly accessible as part of the persist API.
-pub(crate) use crate::internal::state::ProtoLeasedBatch;
 
 use crate::internal::trace::Trace;
 use crate::read::ReaderId;
@@ -341,9 +337,11 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
             // turned out to be relatively expensive in practice, but as we
             // tune things (especially when we add inc state) the rate of
             // this deserialization should go down. Revisit as necessary.
-            ret.push_batch(batch);
+            //
+            // Ignore merge_reqs because whichever process generated this diff is
+            // assigned the work.
+            let _merge_reqs = ret.push_batch(batch);
         }
-        let _ = ret.take_merge_reqs();
         Ok(ret)
     }
 }

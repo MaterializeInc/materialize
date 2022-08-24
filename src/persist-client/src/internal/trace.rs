@@ -78,7 +78,6 @@ pub struct FueledMergeRes<T> {
 #[derive(Debug, Clone)]
 pub struct Trace<T> {
     spine: Spine<T>,
-    merge_reqs: Vec<FueledMergeReq<T>>,
 }
 
 #[cfg(test)]
@@ -86,20 +85,14 @@ impl<T: PartialEq> PartialEq for Trace<T> {
     fn eq(&self, other: &Self) -> bool {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
-        let Trace {
-            spine: self_spine,
-            merge_reqs: self_merge_reqs,
-        } = self;
-        let Trace {
-            spine: other_spine,
-            merge_reqs: other_merge_reqs,
-        } = other;
+        let Trace { spine: self_spine } = self;
+        let Trace { spine: other_spine } = other;
 
         let (mut self_batches, mut other_batches) = (Vec::new(), Vec::new());
         self_spine.map_batches(|b| self_batches.push(b));
         other_spine.map_batches(|b| other_batches.push(b));
 
-        self_batches == other_batches && self_merge_reqs == other_merge_reqs
+        self_batches == other_batches
     }
 }
 
@@ -107,36 +100,17 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     fn default() -> Self {
         Self {
             spine: Spine::new(),
-            merge_reqs: Vec::new(),
         }
     }
 }
 
-impl<T: Timestamp + Lattice> Trace<T> {
+impl<T> Trace<T> {
     pub fn since(&self) -> &Antichain<T> {
         &self.spine.since
     }
 
     pub fn upper(&self) -> &Antichain<T> {
         &self.spine.upper
-    }
-
-    pub fn downgrade_since(&mut self, since: &Antichain<T>) {
-        self.spine.since.clone_from(since);
-    }
-
-    pub fn push_batch(&mut self, batch: HollowBatch<T>) {
-        let mut merge_reqs = Vec::new();
-        self.spine
-            .insert(SpineBatch::Merged(batch), &mut merge_reqs);
-        // Spine::roll_up (internally used by insert) clears all batches out of
-        // levels below a target by walking up from level 0 and merging each
-        // level into the next (providing the necessary fuel). In practice, this
-        // means we'll get a series of requests like `(a, b), (a, b, c), ...`.
-        // It's a waste to do all of these (we'll throw away the results), so we
-        // filter out any that are entirely covered by some other request.
-        let mut merge_reqs = Self::remove_redundant_merge_reqs(merge_reqs);
-        self.merge_reqs.append(&mut merge_reqs);
     }
 
     pub fn map_batches<F: FnMut(&HollowBatch<T>)>(&self, mut f: F) {
@@ -150,8 +124,43 @@ impl<T: Timestamp + Lattice> Trace<T> {
         })
     }
 
-    pub fn take_merge_reqs(&mut self) -> Vec<FueledMergeReq<T>> {
-        std::mem::take(&mut self.merge_reqs)
+    #[cfg(test)]
+    pub fn num_spine_batches(&self) -> usize {
+        let mut ret = 0;
+        self.spine.map_batches(|_| ret += 1);
+        ret
+    }
+
+    pub fn num_hollow_batches(&self) -> usize {
+        let mut ret = 0;
+        self.map_batches(|_| ret += 1);
+        ret
+    }
+
+    pub fn num_updates(&self) -> usize {
+        let mut ret = 0;
+        self.map_batches(|b| ret += b.len);
+        ret
+    }
+}
+
+impl<T: Timestamp + Lattice> Trace<T> {
+    pub fn downgrade_since(&mut self, since: &Antichain<T>) {
+        self.spine.since.clone_from(since);
+    }
+
+    #[must_use]
+    pub fn push_batch(&mut self, batch: HollowBatch<T>) -> Vec<FueledMergeReq<T>> {
+        let mut merge_reqs = Vec::new();
+        self.spine
+            .insert(SpineBatch::Merged(batch), &mut merge_reqs);
+        // Spine::roll_up (internally used by insert) clears all batches out of
+        // levels below a target by walking up from level 0 and merging each
+        // level into the next (providing the necessary fuel). In practice, this
+        // means we'll get a series of requests like `(a, b), (a, b, c), ...`.
+        // It's a waste to do all of these (we'll throw away the results), so we
+        // filter out any that are entirely covered by some other request.
+        Self::remove_redundant_merge_reqs(merge_reqs)
     }
 
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> bool {
@@ -188,25 +197,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
 
         applied
-    }
-
-    #[cfg(test)]
-    pub fn num_spine_batches(&self) -> usize {
-        let mut ret = 0;
-        self.spine.map_batches(|_| ret += 1);
-        ret
-    }
-
-    pub fn num_hollow_batches(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|_| ret += 1);
-        ret
-    }
-
-    pub fn num_updates(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|b| ret += b.len);
-        ret
     }
 
     // This is only called with the results of one `insert` and so the length of
@@ -1082,6 +1072,7 @@ mod tests {
 
         datadriven::walk("tests/trace", |f| {
             let mut trace = Trace::default();
+            let mut merge_reqs = Vec::new();
 
             f.run(move |tc| -> String {
                 match tc.directive.as_str() {
@@ -1130,7 +1121,7 @@ mod tests {
                     }
                     "insert" => {
                         for x in tc.input.trim().split('\n') {
-                            trace.push_batch(parse_batch(x));
+                            merge_reqs.append(&mut trace.push_batch(parse_batch(x)));
                         }
                         "ok\n".to_owned()
                     }
@@ -1142,7 +1133,7 @@ mod tests {
                     "take-merge-reqs" => {
                         assert!(tc.input.is_empty());
                         let mut s = String::new();
-                        for merge_req in trace.take_merge_reqs() {
+                        for merge_req in std::mem::take(&mut merge_reqs) {
                             write!(
                                 s,
                                 "{:?}{:?}{:?} {}\n",

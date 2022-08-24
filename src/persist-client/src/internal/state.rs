@@ -161,15 +161,17 @@ where
             return Break(Ok(Upper(shard_upper.clone())));
         }
 
-        if batch.desc.upper() != batch.desc.lower() {
-            self.trace.push_batch(batch.clone());
-        }
+        let merge_reqs = if batch.desc.upper() != batch.desc.lower() {
+            self.trace.push_batch(batch.clone())
+        } else {
+            Vec::new()
+        };
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
 
         // Also use this as an opportunity to heartbeat the writer
         self.writer(writer_id).last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
 
-        Continue(self.trace.take_merge_reqs())
+        Continue(merge_reqs)
     }
 
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ControlFlow<Infallible, bool> {
