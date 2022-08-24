@@ -185,7 +185,7 @@ id creature
 # Test that `WITH (START OFFSET=<whatever>)` works
 > CREATE SOURCE upsert_fast_forward
   FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET = 6)
+  WITH (START OFFSET = [6])
   TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT

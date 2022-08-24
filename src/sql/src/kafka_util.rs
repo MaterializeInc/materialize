@@ -22,14 +22,14 @@ use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName, Value};
+use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName};
 use mz_storage::types::connections::{
     CsrConnection, CsrConnectionHttpAuth, KafkaConnection, StringOrSecret, TlsIdentity,
 };
 
 use crate::names::Aug;
 use crate::normalize::{generate_extracted_config, SqlValueOrSecret};
-use crate::plan::with_options::{ImpliedValue, TryFromValue};
+use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError;
 
 generate_extracted_config!(
@@ -48,48 +48,14 @@ generate_extracted_config!(
     (TopicMetadataRefreshIntervalMs, i32),
     (TransactionTimeoutMs, i32),
     (StartTimestamp, i64),
-    (StartOffset, KafkaStartOffset)
+    (StartOffset, Vec<i64>)
 );
-
-/// A fully specified lets of start offsets for a Kafka consumer.
-#[derive(Debug)]
-pub struct KafkaStartOffset(pub Vec<i64>);
-
-impl TryFromValue<Value> for KafkaStartOffset {
-    fn try_from_value(v: Value) -> Result<Self, PlanError> {
-        match v {
-            Value::Number(v) => Ok(Self(vec![v
-                .parse::<i64>()
-                .map_err(|e| sql_err!("invalid numeric value: {e}"))?])),
-            Value::Array(a) => {
-                let res: Result<Vec<i64>, PlanError> = a
-                    .into_iter()
-                    .map(|v| match v {
-                        Value::Number(v) => v
-                            .parse::<i64>()
-                            .map_err(|e| sql_err!("invalid numeric value: {e}")),
-                        _ => sql_bail!("cannot use value as number"),
-                    })
-                    .collect();
-
-                Ok(Self(res?))
-            }
-            _ => sql_bail!("cannot use value as number"),
-        }
-    }
-}
-
-impl ImpliedValue for KafkaStartOffset {
-    fn implied_value() -> Result<Self, PlanError> {
-        sql_bail!("must provide an array or number value")
-    }
-}
 
 /// An enum that represents start offsets for a kafka consumer.
 #[derive(Debug)]
 pub enum KafkaStartOffsetType {
     /// Fully specified, either by the user or generated.
-    StartOffset(KafkaStartOffset),
+    StartOffset(Vec<i64>),
     /// Specified by the user.
     StartTimestamp(i64),
 }

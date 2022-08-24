@@ -144,7 +144,7 @@ a  b  json                     c            d             e                   f
 
 ! CREATE SOURCE fast_forwarded
   FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=2)
+  WITH (START OFFSET=[2])
   TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
@@ -236,7 +236,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-s
 
 > CREATE SOURCE non_dbz_data_multi_partition
   FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=1)
+  WITH (START OFFSET=[1])
   TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -294,7 +294,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
   FROM KAFKA CONNECTION kafka_conn
     WITH (
       TOPIC METADATA REFRESH INTERVAL MS=10,
-      START OFFSET=1
+      START OFFSET=[1]
     )
   TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'

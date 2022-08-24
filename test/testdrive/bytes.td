@@ -48,7 +48,7 @@ named_col  false     bytea
 
 > CREATE SOURCE data_offset
   FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=1)
+  WITH (START OFFSET=[1])
   TOPIC 'testdrive-bytes-${testdrive.seed}'
   FORMAT BYTES
   INCLUDE OFFSET

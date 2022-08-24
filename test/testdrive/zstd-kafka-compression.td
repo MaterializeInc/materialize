@@ -28,7 +28,7 @@ world
 
 > CREATE SOURCE zstd_fast_forwarded
   FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=1)
+  WITH (START OFFSET=[1])
   TOPIC 'testdrive-zstd-${testdrive.seed}'
   FORMAT TEXT
 > SELECT text FROM zstd_fast_forwarded

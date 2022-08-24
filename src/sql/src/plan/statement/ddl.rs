@@ -443,7 +443,7 @@ pub fn plan_create_source(
                     false
                 }
                 Some(KafkaStartOffsetType::StartOffset(vs)) => {
-                    for (i, v) in vs.0.iter().enumerate() {
+                    for (i, v) in vs.iter().enumerate() {
                         start_offsets.insert(i32::try_from(i)?, parse_offset(*v)?);
                     }
                     true

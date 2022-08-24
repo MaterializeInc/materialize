@@ -46,7 +46,7 @@ $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} 
 
 > CREATE SOURCE start_offset
   FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET = 100)
+  WITH (START OFFSET = [100])
   TOPIC 'testdrive-offset-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT

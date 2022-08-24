@@ -29,7 +29,7 @@ contains:topic missing_topic does not exist
 
 ! CREATE SOURCE pick_one
   FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=1, START OFFSET=1)
+  WITH (START TIMESTAMP=1, START OFFSET=[1])
   TOPIC 'testdrive-t0-${testdrive.seed}'
   FORMAT TEXT
   INCLUDE OFFSET
