@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::process::exit;
+use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -30,10 +31,11 @@ pub(crate) fn trim_newline(s: &mut String) {
  */
 pub(crate) fn run_loading_spinner(message: String) -> ProgressBar {
     let progress_bar = ProgressBar::new_spinner();
-    progress_bar.enable_steady_tick(120);
+    progress_bar.enable_steady_tick(Duration::from_millis(120));
     progress_bar.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner} {msg}")
+            .expect("template known to be valid")
             // For more spinners check out the cli-spinners project:
             // https://github.com/sindresorhus/cli-spinners/blob/master/spinners.json
             .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", ""]),
