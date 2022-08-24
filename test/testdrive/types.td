@@ -187,14 +187,10 @@ ALTER SYSTEM SET max_tables = 10000
 > CREATE TABLE bigint_t (a bigint);
 
 > CREATE TABLE uint2_t (a uint2);
-> CREATE TABLE smalluint_t (a smalluint);
 
 > CREATE TABLE uint4_t (a uint4);
-> CREATE TABLE uint_t (a uint);
-> CREATE TABLE uinteger_t (a uinteger);
 
 > CREATE TABLE uint8_t (a uint8);
-> CREATE TABLE biguint_t (a biguint);
 
 > CREATE TABLE interval_t (a interval);
 

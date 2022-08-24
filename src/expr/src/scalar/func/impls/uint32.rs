@@ -19,14 +19,14 @@ use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
 
 sqlfunc!(
-    #[sqlname = "uinteger_to_real"]
+    #[sqlname = "uint4_to_real"]
     fn cast_uint32_to_float32(a: u32) -> f32 {
         a as f32
     }
 );
 
 sqlfunc!(
-    #[sqlname = "uinteger_to_double"]
+    #[sqlname = "uint4_to_double"]
     #[preserves_uniqueness = true]
     fn cast_uint32_to_float64(a: u32) -> f64 {
         f64::from(a)
@@ -34,7 +34,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "uinteger_to_smalluint"]
+    #[sqlname = "uint4_to_uint2"]
     #[preserves_uniqueness = true]
     fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
@@ -42,7 +42,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "uinteger_to_integer"]
+    #[sqlname = "uint4_to_integer"]
     #[preserves_uniqueness = true]
     fn cast_uint32_to_int32(a: u32) -> Result<i32, EvalError> {
         i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
@@ -50,7 +50,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "uinteger_to_bigint"]
+    #[sqlname = "uint4_to_bigint"]
     #[preserves_uniqueness = true]
     fn cast_uint32_to_int64(a: u32) -> i64 {
         i64::from(a)
@@ -58,7 +58,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "uinteger_to_biguint"]
+    #[sqlname = "uint4_to_uint8"]
     #[preserves_uniqueness = true]
     fn cast_uint32_to_uint64(a: u32) -> u64 {
         u64::from(a)
@@ -66,7 +66,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "uinteger_to_text"]
+    #[sqlname = "uint4_to_text"]
     #[preserves_uniqueness = true]
     fn cast_uint32_to_string(a: u32) -> String {
         let mut buf = String::new();
@@ -100,6 +100,6 @@ impl<'a> EagerUnaryFunc<'a> for CastUint32ToNumeric {
 
 impl fmt::Display for CastUint32ToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("uinteger_to_numeric")
+        f.write_str("uint4_to_numeric")
     }
 }

@@ -165,7 +165,7 @@ where
 pub fn parse_uint16(s: &str) -> Result<u16, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::invalid_input_syntax("smalluint", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("uint2", s).with_details(e))
 }
 
 /// Writes an `u16` to `buf`.
@@ -184,7 +184,7 @@ where
 pub fn parse_uint32(s: &str) -> Result<u32, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::invalid_input_syntax("uinteger", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("uint4", s).with_details(e))
 }
 
 /// Writes an `u32` to `buf`.
@@ -200,7 +200,7 @@ where
 pub fn parse_uint64(s: &str) -> Result<u64, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::invalid_input_syntax("biguint", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("uint8", s).with_details(e))
 }
 
 /// Writes an `u64` to `buf`.

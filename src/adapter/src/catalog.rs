@@ -4583,9 +4583,9 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .join(",")
             ),
             PgLegacyChar => "\"char\"".into(),
-            UInt16 => "smalluint".into(),
-            UInt32 => "uinteger".into(),
-            UInt64 => "biguint".into(),
+            UInt16 => "uint2".into(),
+            UInt32 => "uint4".into(),
+            UInt64 => "uint8".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let pg_catalog_schema =

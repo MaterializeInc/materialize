@@ -76,7 +76,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "bigint_to_smalluint"]
+    #[sqlname = "bigint_to_uint2"]
     #[preserves_uniqueness = true]
     fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
@@ -84,7 +84,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "bigint_to_uinteger"]
+    #[sqlname = "bigint_to_uint4"]
     #[preserves_uniqueness = true]
     fn cast_int64_to_uint32(a: i64) -> Result<u32, EvalError> {
         u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
@@ -92,7 +92,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "bigint_to_biguint"]
+    #[sqlname = "bigint_to_uint8"]
     #[preserves_uniqueness = true]
     fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
         u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))

@@ -5,40 +5,34 @@ menu:
   main:
     parent: 'sql-types'
 aliases:
-  - /sql/types/biguint
-  - /sql/types/uint
   - /sql/types/uint2
   - /sql/types/uint4
   - /sql/types/uint8
-  - /sql/types/usmallint
 ---
 
-## `smalluint` info
+## `uint2` info
 
 Detail | Info
 -------|------
 **Size** | 2 bytes
-**Aliases** | `uint2`
 **Catalog name** | `mz_catalog.uint2`
 **OID** | 16,460
 **Range** | [0, 65,535]
 
-## `uinteger` info
+## `uint4` info
 
 Detail | Info
 -------|------
 **Size** | 4 bytes
-**Aliases** | `uint`, `uint4`
 **Catalog name** | `mz_catalog.uint4`
 **OID** | 16,462
 **Range** | [0, 4,294,967,295]
 
-## `biguint` info
+## `uint8` info
 
 Detail | Info
 -------|------
 **Size** | 8 bytes
-**Aliases** | `uint8`
 **Catalog name** | `mz_catalog.uint8`
 **OID** | 14,464
 **Range** | [0, 18,446,744,073,709,551,615]
@@ -52,14 +46,14 @@ Cast](../../functions/cast).
 
 #### Between unsigned integer types
 
-From | To          | Required context
------|-------------|--------
-`smalluint` | `uinteger`  | Implicit
-`smalluint` | `biguint`   | Implicit
-`uinteger` | `smalluint` | Assignment
-`uinteger` | `biguint`   | Implicit
-`biguint` | `smalluint` | Assignment
-`biguint` | `uinteger`  | Assignment
+From    | To      | Required context
+--------|---------|--------
+`uint2` | `uint4` | Implicit
+`uint2` | `uint8` | Implicit
+`uint4` | `uint2` | Assignment
+`uint4` | `uint8` | Implicit
+`uint8` | `uint2` | Assignment
+`uint8` | `uint4` | Assignment
 
 #### From unsigned integer types
 
@@ -72,7 +66,7 @@ To | Required context
 [`text`](../text) | Assignment
 [`smallint`/`integer`/`bigint`](../integer) | Depends on specific cast
 
-#### To `uinteger` or `biguint`
+#### To `uint4` or `uint8`
 
 You can cast the following types to unsigned integer types:
 
@@ -89,7 +83,7 @@ From | Required context
 ## Examples
 
 ```sql
-SELECT 123::uinteger AS int_v;
+SELECT 123::uint4 AS int_v;
 ```
 ```nofmt
  int_v
@@ -100,7 +94,7 @@ SELECT 123::uinteger AS int_v;
 <hr/>
 
 ```sql
-SELECT 1.23::uinteger AS int_v;
+SELECT 1.23::uint4 AS int_v;
 ```
 ```nofmt
  int_v

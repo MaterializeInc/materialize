@@ -230,7 +230,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numeric_to_smalluint"]
+    #[sqlname = "numeric_to_uint2"]
     fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -241,7 +241,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numeric_to_uinteger"]
+    #[sqlname = "numeric_to_uint4"]
     fn cast_numeric_to_uint32(mut a: Numeric) -> Result<u32, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -251,7 +251,7 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "numeric_to_biguint"]
+    #[sqlname = "numeric_to_uint8"]
     fn cast_numeric_to_uint64(mut a: Numeric) -> Result<u64, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);

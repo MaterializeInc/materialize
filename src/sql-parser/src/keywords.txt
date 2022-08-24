@@ -44,7 +44,6 @@ Aws
 Begin
 Between
 Bigint
-Biguint
 Boolean
 Both
 Bpchar
@@ -294,7 +293,6 @@ Sink
 Sinks
 Size
 Smallint
-Smalluint
 Snapshot
 Some
 Source
@@ -336,8 +334,6 @@ Tunnel
 Type
 Typed
 Types
-Uint
-Uinteger
 Unbounded
 Uncommitted
 Union
