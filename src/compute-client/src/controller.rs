@@ -542,7 +542,7 @@ where
     pub async fn peek(
         &mut self,
         id: GlobalId,
-        key: Option<Row>,
+        literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
         finishing: RowSetFinishing,
@@ -563,7 +563,7 @@ where
 
         self.compute.replicas.send(ComputeCommand::Peek(Peek {
             id,
-            key,
+            literal_constraints,
             uuid,
             timestamp,
             finishing,

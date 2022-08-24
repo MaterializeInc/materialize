@@ -840,7 +840,7 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// The identifier of the arrangement.
     pub id: GlobalId,
     /// An optional key that should be used for the arrangement.
-    pub key: Option<Row>,
+    pub literal_constraints: Option<Vec<Row>>,
     /// The identifier of this peek request.
     ///
     /// Used in responses and cancellation requests.
@@ -868,7 +868,15 @@ impl RustType<ProtoPeek> for Peek {
     fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
             id: Some(self.id.into_proto()),
-            key: self.key.into_proto(),
+            key: match &self.literal_constraints {
+                // In the Some case, the vector is never empty, so it's safe to encode None as an
+                // empty vector, and Some(vector) as just the vector.
+                Some(vec) => {
+                    assert!(!vec.is_empty());
+                    vec.into_proto()
+                }
+                None => Vec::<Row>::new().into_proto(),
+            },
             uuid: Some(self.uuid.into_proto()),
             timestamp: self.timestamp,
             finishing: Some(self.finishing.into_proto()),
@@ -881,7 +889,14 @@ impl RustType<ProtoPeek> for Peek {
     fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             id: x.id.into_rust_if_some("ProtoPeek::id")?,
-            key: x.key.into_rust()?,
+            literal_constraints: {
+                let vec: Vec<Row> = x.key.into_rust()?;
+                if vec.is_empty() {
+                    None
+                } else {
+                    Some(vec)
+                }
+            },
             uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
             timestamp: x.timestamp,
             finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
