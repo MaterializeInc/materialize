@@ -866,10 +866,6 @@ pub fn plan_create_source(
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
-    if legacy_with_options.remove("timeline").is_some() {
-        warn!("unexpected 'timeline' option in the legacy options block");
-    }
-
     let timeline = if let Some(timeline) = timeline {
         Timeline::User(timeline)
     } else {
