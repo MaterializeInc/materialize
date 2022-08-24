@@ -847,8 +847,12 @@ pub fn plan_create_source(
         }
     }
 
-    let CreateSourceOptionExtracted { size, remote, .. } =
-        CreateSourceOptionExtracted::try_from(with_options.clone())?;
+    let CreateSourceOptionExtracted {
+        remote,
+        size,
+        timeline,
+        ..
+    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     let host_config = match (remote, size) {
         (None, None) => StorageHostConfig::Undefined,
@@ -862,12 +866,12 @@ pub fn plan_create_source(
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
-    let timeline = if let Some(timeline) = legacy_with_options.remove("timeline") {
-        match timeline.into() {
-            Some(Value::String(timeline)) => Timeline::User(timeline),
-            Some(v) => sql_bail!("unsupported timeline value {}", v.to_ast_string()),
-            None => sql_bail!("unsupported timeline value: secret"),
-        }
+    if legacy_with_options.remove("timeline").is_some() {
+        warn!("unexpected 'timeline' option in the legacy options block");
+    }
+
+    let timeline = if let Some(timeline) = timeline {
+        Timeline::User(timeline)
     } else {
         match envelope {
             SourceEnvelope::CdcV2 => match legacy_with_options.remove("epoch_ms_timeline") {
