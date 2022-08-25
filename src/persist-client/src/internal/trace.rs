@@ -295,11 +295,12 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         if let Some(compaction_frontier) = compaction_frontier {
             since = since.join(&compaction_frontier.to_owned());
         }
+        let remaining_work = b1.len() + b2.len();
         FuelingMerge {
             b1: b1.clone(),
             b2: b2.clone(),
             since,
-            progress: 0,
+            remaining_work,
         }
     }
 
@@ -339,7 +340,7 @@ pub struct FuelingMerge<T> {
     b1: SpineBatch<T>,
     b2: SpineBatch<T>,
     since: Antichain<T>,
-    progress: usize,
+    remaining_work: usize,
 }
 
 impl<T: Timestamp + Lattice> FuelingMerge<T> {
@@ -348,10 +349,9 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     /// If `fuel` is non-zero after the call, the merging is complete and one
     /// should call `done` to extract the merged results.
     fn work(&mut self, _: &SpineBatch<T>, _: &SpineBatch<T>, fuel: &mut isize) {
-        let remaining = self.b1.len() + self.b2.len() - self.progress;
         #[allow(clippy::cast_sign_loss)]
-        let used = std::cmp::min(*fuel as usize, remaining);
-        self.progress += used;
+        let used = std::cmp::min(*fuel as usize, self.remaining_work);
+        self.remaining_work = self.remaining_work.saturating_sub(used);
         *fuel -= used as isize;
     }
 
