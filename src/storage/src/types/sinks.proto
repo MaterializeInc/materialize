@@ -23,8 +23,7 @@ message ProtoComputeSinkDesc {
     mz_repr.global_id.ProtoGlobalId from = 1;
     mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
     ProtoComputeSinkConnection connection = 3;
-    optional ProtoSinkEnvelope envelope = 4;
-    ProtoSinkAsOf as_of = 5;
+    ProtoSinkAsOf as_of = 4;
 }
 
 message ProtoStorageSinkDesc {

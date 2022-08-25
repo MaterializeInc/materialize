@@ -8,24 +8,16 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-async-trait = "0.1.56"
 axum = "0.5.15"
 clap = { version = "3.2.17", features = ["derive", "env"] }
 crossbeam-channel = "0.5.6"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.21"
-http = "0.2.8"
-h2 = "0.3"
-itertools = "0.10.3"
-mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
 mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
 mz-http-util = { path = "../http-util" }
-mz-interchange = { path = "../interchange" }
-mz-kafka-util = { path = "../kafka-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
@@ -37,13 +29,11 @@ mz-storage = { path = "../storage", default-features = false }
 mz-timely-util = { path = "../timely-util" }
 once_cell = "1.13.0"
 prometheus = { version = "0.13.1", default-features = false }
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 scopeguard = "1.1.0"
 serde = { version = "1.0.140", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync"] }
 tracing = "0.1.36"
-tracing-subscriber = "0.3.15"
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
@@ -53,9 +43,6 @@ uuid = { version = "1.1.2", features = ["serde", "v4"] }
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
 tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
-
-[build-dependencies]
-prost-build = { version = "0.10.3", features = ["vendored"] }
 
 [features]
 default = ["jemalloc"]

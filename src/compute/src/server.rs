@@ -14,8 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use crossbeam_channel::{RecvError, TryRecvError};
-use mz_build_info::BuildInfo;
-use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::execute::execute_from;
@@ -23,6 +21,7 @@ use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
 use tokio::sync::mpsc;
 
+use mz_build_info::BuildInfo;
 use mz_compute_client::command::ComputeCommand;
 use mz_compute_client::controller::replicated::ComputeCommandHistory;
 use mz_compute_client::response::ComputeResponse;
@@ -30,8 +29,8 @@ use mz_compute_client::service::ComputeClient;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::PersistConfig;
 use mz_service::local::LocalClient;
-use mz_storage::types::connections::ConnectionContext;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
@@ -60,9 +59,6 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// Configuration for sink connections.
-    // TODO: remove when sinks move to storage.
-    pub connection_context: ConnectionContext,
 }
 
 /// A handle to a running dataflow server.
@@ -115,7 +111,6 @@ pub fn serve(
                 client_rx,
                 compute_state: None,
                 trace_metrics: trace_metrics.clone(),
-                connection_context: config.connection_context.clone(),
                 persist_clients,
                 has_networked_workers,
             }
@@ -169,9 +164,6 @@ struct Worker<'w, A: Allocate> {
     compute_state: Option<ComputeState>,
     /// Trace metrics.
     trace_metrics: TraceMetrics,
-    /// Configuration for sink connections.
-    // TODO: remove when sinks move to storage.
-    pub connection_context: ConnectionContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
@@ -276,7 +268,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     pending_peeks: Vec::new(),
                     reported_frontiers: HashMap::new(),
                     compute_logger: None,
-                    connection_context: self.connection_context.clone(),
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
                 });
