@@ -2079,7 +2079,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 from,
                 from_desc,
                 connection: ComputeSinkConnection::Tail(TailSinkConnection::default()),
-                envelope: None,
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,

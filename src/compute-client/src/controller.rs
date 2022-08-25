@@ -446,7 +446,6 @@ where
                     from: se.from,
                     from_desc: se.from_desc,
                     connection,
-                    envelope: se.envelope,
                     as_of: se.as_of,
                 };
                 sink_exports.insert(id, desc);
