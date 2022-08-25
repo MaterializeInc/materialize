@@ -107,7 +107,7 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                 f.write_str("USING ");
                 schema.fmt(f);
                 if !with_options.is_empty() {
-                    f.write_str(" WITH (");
+                    f.write_str(" (");
                     f.write_node(&display::comma_separated(with_options));
                     f.write_str(")");
                 }
@@ -1279,6 +1279,7 @@ pub enum CreateSourceOptionName {
     Remote,
     Size,
     Timeline,
+    TimestampGranularity,
 }
 
 impl AstDisplay for CreateSourceOptionName {
@@ -1287,6 +1288,7 @@ impl AstDisplay for CreateSourceOptionName {
             CreateSourceOptionName::Remote => "REMOTE",
             CreateSourceOptionName::Size => "SIZE",
             CreateSourceOptionName::Timeline => "TIMELINE",
+            CreateSourceOptionName::TimestampGranularity => "TIMESTAMP GRANULARITY",
         })
     }
 }

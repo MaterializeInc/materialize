@@ -313,7 +313,8 @@ generate_extracted_config!(
     CreateSourceOption,
     (Remote, String),
     (Size, String),
-    (Timeline, String)
+    (Timeline, String),
+    (TimestampGranularity, Interval)
 );
 
 pub fn plan_create_source(
@@ -350,17 +351,6 @@ pub fn plan_create_source(
             comma_separated(SAFE_WITH_OPTIONS)
         ))?;
     }
-
-    let ts_frequency = match legacy_with_options.remove("timestamp_frequency_ms") {
-        Some(val) => match val.into() {
-            Some(Value::Number(n)) => match n.parse::<u64>() {
-                Ok(n) => Duration::from_millis(n),
-                Err(_) => sql_bail!("timestamp_frequency_ms must be an u64"),
-            },
-            _ => sql_bail!("timestamp_frequency_ms must be an u64"),
-        },
-        None => scx.catalog.config().timestamp_frequency,
-    };
 
     if !matches!(connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
@@ -855,6 +845,7 @@ pub fn plan_create_source(
         remote,
         size,
         timeline,
+        timestamp_granularity,
         ..
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
@@ -863,6 +854,11 @@ pub fn plan_create_source(
         (None, Some(size)) => StorageHostConfig::Managed { size },
         (Some(addr), None) => StorageHostConfig::Remote { addr },
         (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+    };
+
+    let timestamp_granularity = match timestamp_granularity {
+        Some(timestamp_granularity) => timestamp_granularity.duration()?,
+        None => scx.catalog.config().timestamp_granularity,
     };
 
     let if_not_exists = *if_not_exists;
@@ -889,7 +885,7 @@ pub fn plan_create_source(
             encoding,
             envelope,
             metadata_columns: metadata_column_types,
-            ts_frequency,
+            timestamp_granularity,
         },
         desc,
     };
@@ -3784,6 +3780,7 @@ pub fn plan_alter_source(
                 remote: remote_opt,
                 size: size_opt,
                 timeline: timeline_opt,
+                timestamp_granularity: timestamp_granularity_opt,
             } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(value) = remote_opt {
@@ -3794,6 +3791,9 @@ pub fn plan_alter_source(
             }
             if let Some(_) = timeline_opt {
                 sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
+            }
+            if let Some(_) = timestamp_granularity_opt {
+                sql_bail!("Cannot modify the TIMESTAMP GRANULARITY of a SOURCE.");
             }
         }
         AlterSourceAction::ResetOptions(reset) => {
@@ -3807,6 +3807,9 @@ pub fn plan_alter_source(
                     }
                     CreateSourceOptionName::Timeline => {
                         sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
+                    }
+                    CreateSourceOptionName::TimestampGranularity => {
+                        sql_bail!("Cannot modify the TIMESTAMP GRANULARITY of a SOURCE.");
                     }
                 }
             }

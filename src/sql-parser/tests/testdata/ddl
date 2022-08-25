@@ -466,9 +466,9 @@ CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USIN
                                                                                                                   ^
 
 parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(InlineSchema { schema: Inline("string"), with_options: [AvroSchemaOption { name: ConfluentWireFormat, value: Some(Value(Boolean(false))) }] })), envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
 
@@ -1027,7 +1027,7 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected one of REMOTE or SIZE or TIMELINE, found identifier "property"
+error: Expected one of REMOTE or SIZE or TIMELINE or TIMESTAMP, found identifier "property"
 ALTER SOURCE name SET (property = true)
                        ^
 
@@ -1439,14 +1439,14 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), 
 parse-statement
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH ()
 ----
-error: Expected one of REMOTE or SIZE or TIMELINE, found right parenthesis
+error: Expected one of REMOTE or SIZE or TIMELINE or TIMESTAMP, found right parenthesis
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH ()
                                                                                                                                   ^
 
 parse-statement
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (A = 2)
 ----
-error: Expected one of REMOTE or SIZE or TIMELINE, found identifier "a"
+error: Expected one of REMOTE or SIZE or TIMELINE or TIMESTAMP, found identifier "a"
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (A = 2)
                                                                                                                                   ^
 

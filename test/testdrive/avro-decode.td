@@ -185,7 +185,7 @@ $ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} p
 
 > CREATE SOURCE avro_data_no_registry
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-no-registry-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${reader-schema}' WITH (CONFLUENT WIRE FORMAT = false)
+  FORMAT AVRO USING SCHEMA '${reader-schema}' (CONFLUENT WIRE FORMAT = false)
 
 > SELECT f2
   FROM avro_data_no_registry
@@ -212,7 +212,7 @@ garbage
 
 > CREATE SOURCE avro_corrupted_values2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-corrupted-values2-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${reader-schema}' WITH (CONFLUENT WIRE FORMAT = false)
+  FORMAT AVRO USING SCHEMA '${reader-schema}' (CONFLUENT WIRE FORMAT = false)
 
 ! SELECT f2 FROM avro_corrupted_values2
 contains:Decode error: Decoding error: Expected non-negative integer, got -49

@@ -91,7 +91,6 @@ create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   'PUBLICATION' publication_name
-  ('WITH timestamp_frequency_ms =' int)?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
