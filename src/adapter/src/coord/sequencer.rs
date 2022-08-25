@@ -916,6 +916,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
+                // We must advance the timeline to `since_ts` so that the table is not invalid.
+                let timeline = self
+                    .get_timeline(table_id)
+                    .expect("Table not present in a timeline");
+                let old_read_holds = self
+                    .ensure_timeline_state(timeline.clone())
+                    .await
+                    .read_holds
+                    .clone();
+                let new_read_holds = self.update_read_hold(old_read_holds, since_ts).await;
+                self.ensure_timeline_state(timeline).await.read_holds = new_read_holds;
+
                 self.initialize_storage_read_policies(
                     vec![table_id],
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
