@@ -17,7 +17,6 @@ aws-sdk-s3 = { version = "0.17.0", default-features = false, features = ["native
 aws-sdk-sqs = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-smithy-http = "0.47.0"
 aws-types = { version = "0.47.0", features = ["hardcoded-credentials"] }
-bincode = { version = "1.3.3" }
 bytes = "1.2.1"
 bytesize = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
@@ -26,8 +25,6 @@ csv-core = { version = "0.1.10" }
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.23"
-futures-executor = "0.3.21"
-futures-util = "0.3.23"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
 http-serde = "1.1.0"
@@ -63,10 +60,8 @@ prost = { version = "0.10.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.6.0" }
-scopeguard = "1.1.0"
 serde = { version = "1.0.140", features = ["derive"] }
 serde_json = { version = "1.0.82" }
-tempfile = { version = "3.2.0" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }

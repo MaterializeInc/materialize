@@ -10,7 +10,6 @@ publish = false
 anyhow = "1.0.58"
 axum = "0.5.15"
 clap = { version = "3.2.17", features = ["derive", "env"] }
-futures = "0.3.23"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
@@ -20,7 +19,6 @@ mz-prof = { path = "../prof" }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
 once_cell = "1.13.0"
-serde = "1.0.140"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["net"] }
 tracing = "0.1.36"
