@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.20", default-features = false, features = ["serde", "std"] }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }

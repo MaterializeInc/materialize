@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 
@@ -1629,7 +1630,7 @@ macro_rules! impl_def {
     // Return type can be automatically determined as a function of the
     // parameters.
     ($params:expr, $op:expr, $oid:expr) => {{
-        let pcx = crate::plan::PlanContext::new(chrono::MIN_DATETIME, false);
+        let pcx = crate::plan::PlanContext::new(DateTime::<Utc>::MIN_UTC, false);
         let scx = StatementContext::new(None, &crate::catalog::DummyCatalog);
         // This lifetime is compatible with more functions.
         let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(&pcx));

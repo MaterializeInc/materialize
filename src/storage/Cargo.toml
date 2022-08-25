@@ -19,7 +19,7 @@ aws-smithy-http = "0.47.0"
 aws-types = { version = "0.47.0", features = ["hardcoded-credentials"] }
 bytes = "1.2.1"
 bytesize = "1.1.0"
-chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+chrono = { version = "0.4.20", default-features = false, features = ["std"] }
 crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 derivative = "2.2.0"

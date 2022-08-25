@@ -49,7 +49,7 @@ pub trait DateLike: chrono::Datelike {
     ///
     /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
     /// 1 about half of the time
-    fn week(&self) -> u32 {
+    fn iso_week_number(&self) -> u32 {
         self.iso_week().week()
     }
 
@@ -98,7 +98,7 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
         DateTimeUnits::Decade => Ok(Numeric::from(date.decade())),
         DateTimeUnits::Year => Ok(Numeric::from(date.year())),
         DateTimeUnits::Quarter => Ok(Numeric::from(date.quarter())),
-        DateTimeUnits::Week => Ok(Numeric::from(date.week())),
+        DateTimeUnits::Week => Ok(Numeric::from(date.iso_week_number())),
         DateTimeUnits::Month => Ok(Numeric::from(date.month())),
         DateTimeUnits::Day => Ok(Numeric::from(date.day())),
         DateTimeUnits::DayOfWeek => Ok(Numeric::from(date.day_of_week())),

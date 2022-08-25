@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.62"
 bytes = "1.2.1"
-chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+chrono = { version = "0.4.20", default-features = false, features = ["std"] }
 const_format = "0.2.26"
 dec = "0.4.8"
 derivative = "2.2.0"
