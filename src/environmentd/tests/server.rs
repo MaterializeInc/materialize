@@ -9,6 +9,7 @@
 
 //! Integration tests for Materialize server.
 
+use bytes::Buf;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
@@ -16,10 +17,28 @@ use std::time::Duration;
 use mz_ore::retry::Retry;
 use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
+use tokio_postgres::types::{FromSql, Type};
 
 use crate::util::KAFKA_ADDRS;
 
 pub mod util;
+
+#[derive(Debug)]
+struct UInt8(u64);
+
+impl<'a> FromSql<'a> for UInt8 {
+    fn from_sql(_: &Type, mut raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        let v = raw.get_u64();
+        if !raw.is_empty() {
+            return Err("invalid buffer size".into());
+        }
+        Ok(Self(v))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == mz_pgrepr::oid::TYPE_UINT8_OID
+    }
+}
 
 #[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
@@ -64,8 +83,11 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         client
             .query("SHOW INDEXES FROM mat", &[])?
             .into_iter()
-            .map(|row| (row.get("Column_name"), row.get("Seq_in_index")))
-            .collect::<Vec<(String, i64)>>(),
+            .map(|row| (
+                row.get("Column_name"),
+                row.get::<_, UInt8>("Seq_in_index").0
+            ))
+            .collect::<Vec<(String, u64)>>(),
         &[
             ("a".into(), 1),
             ("a_data".into(), 2),
