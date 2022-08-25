@@ -525,6 +525,36 @@ message ProtoBinaryFunc {
         google.protobuf.Empty power = 138;
         google.protobuf.Empty power_numeric = 139;
         google.protobuf.Empty get_byte = 140;
+        google.protobuf.Empty add_uint16 = 141;
+        google.protobuf.Empty add_uint32 = 142;
+        google.protobuf.Empty add_uint64 = 143;
+        google.protobuf.Empty bit_and_uint16 = 144;
+        google.protobuf.Empty bit_and_uint32 = 145;
+        google.protobuf.Empty bit_and_uint64 = 146;
+        google.protobuf.Empty bit_or_uint16 = 147;
+        google.protobuf.Empty bit_or_uint32 = 148;
+        google.protobuf.Empty bit_or_uint64 = 149;
+        google.protobuf.Empty bit_xor_uint16 = 150;
+        google.protobuf.Empty bit_xor_uint32 = 151;
+        google.protobuf.Empty bit_xor_uint64 = 152;
+        google.protobuf.Empty bit_shift_left_uint16 = 153;
+        google.protobuf.Empty bit_shift_left_uint32 = 154;
+        google.protobuf.Empty bit_shift_left_uint64 = 155;
+        google.protobuf.Empty bit_shift_right_uint16 = 156;
+        google.protobuf.Empty bit_shift_right_uint32 = 157;
+        google.protobuf.Empty bit_shift_right_uint64 = 158;
+        google.protobuf.Empty sub_uint16 = 159;
+        google.protobuf.Empty sub_uint32 = 160;
+        google.protobuf.Empty sub_uint64 = 162;
+        google.protobuf.Empty mul_uint16 = 163;
+        google.protobuf.Empty mul_uint32 =164;
+        google.protobuf.Empty mul_uint64 = 165;
+        google.protobuf.Empty div_uint16 = 166;
+        google.protobuf.Empty div_uint32 = 167;
+        google.protobuf.Empty div_uint64 = 168;
+        google.protobuf.Empty mod_uint16 = 169;
+        google.protobuf.Empty mod_uint32 = 170;
+        google.protobuf.Empty mod_uint64 = 171;
     }
 }
 

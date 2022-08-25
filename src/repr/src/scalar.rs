@@ -299,6 +299,69 @@ impl TryFrom<Datum<'_>> for Option<i64> {
     }
 }
 
+impl TryFrom<Datum<'_>> for u16 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::UInt16(u) => Ok(u),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<u16> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::UInt16(u) => Ok(Some(u)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for u32 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::UInt32(u) => Ok(u),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<u32> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::UInt32(u) => Ok(Some(u)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for u64 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::UInt64(u) => Ok(u),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<u64> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::UInt64(u) => Ok(Some(u)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<Datum<'_>> for NaiveDateTime {
     type Error = ();
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
@@ -763,6 +826,24 @@ impl<'a> From<i32> for Datum<'a> {
 impl<'a> From<i64> for Datum<'a> {
     fn from(i: i64) -> Datum<'a> {
         Datum::Int64(i)
+    }
+}
+
+impl<'a> From<u16> for Datum<'a> {
+    fn from(u: u16) -> Datum<'a> {
+        Datum::UInt16(u)
+    }
+}
+
+impl<'a> From<u32> for Datum<'a> {
+    fn from(u: u32) -> Datum<'a> {
+        Datum::UInt32(u)
+    }
+}
+
+impl<'a> From<u64> for Datum<'a> {
+    fn from(u: u64) -> Datum<'a> {
+        Datum::UInt64(u)
     }
 }
 
