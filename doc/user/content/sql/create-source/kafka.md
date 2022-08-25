@@ -1,6 +1,7 @@
 ---
 title: "CREATE SOURCE: Kafka"
 description: "Connecting Materialize to a Kafka or Redpanda broker"
+pagerank: 10
 menu:
   main:
     parent: 'create-source'

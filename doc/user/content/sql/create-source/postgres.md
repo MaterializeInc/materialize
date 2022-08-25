@@ -1,6 +1,7 @@
 ---
 title: "CREATE SOURCE: PostgreSQL"
 description: "Connecting Materialize to a PostgreSQL database"
+pagerank: 10
 menu:
   main:
     parent: 'create-source'

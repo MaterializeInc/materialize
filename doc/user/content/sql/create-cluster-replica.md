@@ -1,6 +1,7 @@
 ---
 title: "CREATE CLUSTER REPLICA"
 description: "`CREATE CLUSTER REPLICA` provisions physical resources to perform computations."
+pagerank: 20
 menu:
   main:
     parent: commands

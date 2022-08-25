@@ -40,16 +40,18 @@
 <link rel="stylesheet" href="{{ $style.RelPermalink }}">
 
 {{/* Algolia DocSearch */}}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css" />
-<script src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+{{if (isset .Params "pagerank")}}
+<meta name="docsearch_pagerank" content='{{ .Params.pagerank }}' />
+{{end}}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@docsearch/css@3" />
+<script src="https://cdn.jsdelivr.net/npm/@docsearch/js@3"></script>
 <script defer>
 addEventListener("DOMContentLoaded", () => {
   docsearch({
     apiKey: "5fb0a95d60e603d3c83c2506e1de4a64",
     appId: "9LF5B9GMOF",
     indexName: "materialize_unstable",
-    inputSelector: '#search-input',
-    debug: true,
+    container: '#docsearch',
   });
 });
 </script>
