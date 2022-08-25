@@ -22,4 +22,4 @@ statement ok
 CREATE TABLE not_a_secret (a int);
 
 statement error materialize.public.not_a_secret is not a secret
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (secret = SECRET not_a_secret);
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (secret = SECRET not_a_secret);

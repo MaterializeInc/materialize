@@ -207,7 +207,7 @@ a count
 
 > CREATE SOURCE data_v4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (ignore_source_keys = true)
+  LEGACYWITH (ignore_source_keys = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 

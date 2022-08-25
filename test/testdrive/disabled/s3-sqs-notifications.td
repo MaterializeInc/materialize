@@ -32,7 +32,7 @@ $ s3-add-notifications bucket=other queue=other sqs-validation-timeout=5m
 > CREATE SOURCE s3_scan_notifications
   FROM S3 DISCOVER OBJECTS MATCHING 'short/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}', SQS NOTIFICATIONS 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
     access_key_id = '${testdrive.aws-access-key-id}',
@@ -74,7 +74,7 @@ e3
 
 > CREATE SOURCE s3_notifications
   FROM S3 DISCOVER OBJECTS MATCHING 'short/e' USING SQS NOTIFICATIONS 'testdrive-other-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
     access_key_id = '${testdrive.aws-access-key-id}',

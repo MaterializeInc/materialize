@@ -29,7 +29,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=1
 
 > CREATE SOURCE t1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-top1-${testdrive.seed}'
-  WITH (timestamp_frequency_ms = 100)
+  LEGACYWITH (timestamp_frequency_ms = 100)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
 

@@ -19,7 +19,7 @@ $ s3-add-notifications bucket=philip-stoev-materialize queue=philip-stoev-materi
   DISCOVER OBJECTS MATCHING '**/*.csv'
   USING BUCKET SCAN 'testdrive-philip-stoev-materialize-${testdrive.seed}',
   SQS NOTIFICATIONS 'testdrive-philip-stoev-materialize-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
     access_key_id = '${testdrive.aws-access-key-id}',
@@ -116,7 +116,7 @@ $ s3-delete-objects bucket=philip-stoev-materialize
   DISCOVER OBJECTS MATCHING '**/*.csv'
   USING BUCKET SCAN 'testdrive-philip-stoev-materialize-${testdrive.seed}',
   SQS NOTIFICATIONS 'testdrive-philip-stoev-materialize-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
     access_key_id = '${testdrive.aws-access-key-id}',

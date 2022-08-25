@@ -63,7 +63,7 @@ $ s3-put-object bucket=test key=static.csv
 ! CREATE SOURCE headers_src
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )

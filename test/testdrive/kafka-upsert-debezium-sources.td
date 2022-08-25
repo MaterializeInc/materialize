@@ -198,7 +198,7 @@ id creature
 # Test that it doesn't work with full deduplication
 ! CREATE SOURCE upsert_full_dedupe
   FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
-  WITH (deduplication = 'full')
+  LEGACYWITH (deduplication = 'full')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
 contains:unexpected parameters for CREATE SOURCE: deduplication

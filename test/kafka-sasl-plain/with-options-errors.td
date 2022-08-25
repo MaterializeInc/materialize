@@ -43,7 +43,7 @@ contains:invalid CONNECTION: under-specified security configuration
 
 # ! CREATE SOURCE data
 #   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-#   WITH (
+#   LEGACYWITH (
 #       security_protocol = 'SASL_SSL',
 #       sasl_mechanisms = 'PLAIN',
 #       sasl_username = 'materialize',

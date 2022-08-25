@@ -23,11 +23,11 @@ place""",CA,92679
   SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
   TOKEN = '${testdrive.aws-token}';
 
-# We should refuse to create a source with invalid WITH options
+# We should refuse to create a source with invalid LEGACYWITH options
 ! CREATE SOURCE invalid_with_option
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
     badoption = true
@@ -38,7 +38,7 @@ contains:unexpected parameters for CREATE SOURCE: badoption
 > CREATE SOURCE mismatched_column_count
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -49,7 +49,7 @@ contains:CSV error at record number 1: expected 2 columns, got 3.
 > CREATE SOURCE matching_column_names
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -63,7 +63,7 @@ Rochester NY 14618
 > CREATE SOURCE matching_column_names_alias (a, b, c)
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -77,7 +77,7 @@ Rochester NY 14618
 > CREATE SOURCE mismatched_column_names
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -88,7 +88,7 @@ contains:first mismatched column at index 1 expected=cities actual="city"
 > CREATE SOURCE mismatched_column_names_count
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -100,7 +100,7 @@ contains:CSV error at record number 1: expected 2 columns, got 3
 > CREATE SOURCE static_csv
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -117,7 +117,7 @@ Rochester      NY        14618
 ! CREATE SOURCE static_csv_nothing_demanded_src
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -134,7 +134,7 @@ $ set-regex match=(\d{13}|u\d{1,3}) replacement=<>
 > CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -188,7 +188,7 @@ badint,
 > CREATE SOURCE malformed_csv
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'malformed.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -205,7 +205,7 @@ dollars,category
 > CREATE SOURCE bad_text_csv
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'bad-text.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -221,7 +221,7 @@ $ kafka-create-topic topic=static-csv-pkne-sink
 > CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )

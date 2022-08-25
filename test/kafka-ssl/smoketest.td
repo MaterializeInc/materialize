@@ -127,7 +127,7 @@ a
 ! CREATE SOURCE IF NOT EXISTS duplicate_option_specified
   FROM KAFKA CONNECTION kafka_ssl
   TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     security_protocol = 'ssl'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
