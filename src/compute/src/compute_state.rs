@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
-use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::logging::Logger;
 use timely::order::PartialOrder;
@@ -34,9 +33,9 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, TailResponse};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
@@ -72,9 +71,6 @@ pub struct ComputeState {
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
-    /// Configuration for sink connections.
-    // TODO: remove when sinks move to storage.
-    pub connection_context: ConnectionContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<Mutex<PersistClientCache>>,

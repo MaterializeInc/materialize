@@ -105,7 +105,6 @@ pub struct ComputeSinkDesc<S = (), T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: ComputeSinkConnection<S>,
-    pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf<T>,
 }
 
@@ -118,18 +117,14 @@ impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
             any::<GlobalId>(),
             any::<RelationDesc>(),
             any::<ComputeSinkConnection<CollectionMetadata>>(),
-            any::<Option<SinkEnvelope>>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
         )
-            .prop_map(
-                |(from, from_desc, connection, envelope, as_of)| ComputeSinkDesc {
-                    from,
-                    from_desc,
-                    connection,
-                    envelope,
-                    as_of,
-                },
-            )
+            .prop_map(|(from, from_desc, connection, as_of)| ComputeSinkDesc {
+                from,
+                from_desc,
+                connection,
+                as_of,
+            })
             .boxed()
     }
 }
@@ -140,7 +135,6 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             connection: Some(self.connection.into_proto()),
             from: Some(self.from.into_proto()),
             from_desc: Some(self.from_desc.into_proto()),
-            envelope: self.envelope.into_proto(),
             as_of: Some(self.as_of.into_proto()),
         }
     }
@@ -154,7 +148,6 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoComputeSinkDesc::connection")?,
-            envelope: proto.envelope.into_rust()?,
             as_of: proto
                 .as_of
                 .into_rust_if_some("ProtoComputeSinkDesc::as_of")?,

@@ -11,14 +11,13 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use axum::routing;
-use mz_compute::server::CommunicationConfig;
-use mz_service::secrets::SecretsReaderCliArgs;
 use once_cell::sync::Lazy;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
+use mz_compute::server::CommunicationConfig;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
@@ -26,7 +25,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
 use mz_service::grpc::GrpcServer;
-use mz_storage::types::connections::ConnectionContext;
+use mz_service::secrets::SecretsReaderCliArgs;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -76,15 +75,6 @@ struct Args {
     /// The addresses of all computed processes in the cluster.
     #[clap(env = "ADDRESSES", use_value_delimiter = true)]
     addresses: Vec<String>,
-
-    // === Cloud options. ===
-    /// An external ID to be supplied to all AWS AssumeRole operations.
-    ///
-    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    // TODO(benesch): remove this when external sinks are moved to the storage
-    // layer.
-    #[clap(long, value_name = "ID")]
-    aws_external_id: Option<String>,
 
     // === Process orchestrator options. ===
     /// Where to write a PID lock file.
@@ -180,22 +170,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
     }
 
-    let secrets_reader = args
-        .secrets
-        .load()
-        .await
-        .context("loading secrets reader")?;
     let config = mz_compute::server::Config {
         build_info: &BUILD_INFO,
         workers: args.workers,
         comm_config,
         metrics_registry,
         now: SYSTEM_TIME.clone(),
-        connection_context: ConnectionContext::from_cli_args(
-            &args.tracing.log_filter.inner,
-            args.aws_external_id,
-            secrets_reader,
-        ),
     };
 
     let (_server, client) = mz_compute::server::serve(config)?;

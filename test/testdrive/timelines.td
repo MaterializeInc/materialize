@@ -17,8 +17,8 @@ $ kafka-create-topic topic=input-system
 
 > CREATE SOURCE source_system_user
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
-    WITH (timeline = 'user')
   FORMAT BYTES
+  WITH (TIMELINE 'user')
 
 $ set schema=[
   {
@@ -124,9 +124,10 @@ contains:unsupported epoch_ms_timeline value
 # Can't specify epoch_ms_timeline and timeline.
 ! CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=false, timeline='user')
+    WITH (epoch_ms_timeline=false)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'user')
 contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 
 > CREATE SOURCE source_cdcv2_system
@@ -137,9 +138,9 @@ contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 
 > CREATE SOURCE source_cdcv2_user
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'user')
 
 > CREATE TABLE input_table (a bigint);
 
