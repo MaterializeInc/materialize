@@ -17,20 +17,20 @@ use clap::ArgEnum;
 
 /// Cloud providers and regions available.
 #[derive(Debug, Clone, ArgEnum)]
-pub(crate) enum CloudProviderRegion {
+pub(crate) enum CloudProviderRegionEnum {
     AwsUsEast1,
     AwsEuWest1,
 }
 
 /// Implementation to name the possible values and parse every option.
-impl CloudProviderRegion {
+impl CloudProviderRegionEnum {
     pub fn variants() -> [&'static str; 2] {
         ["aws/us-east-1", "aws/eu-west-1"]
     }
-    pub fn parse(region: String) -> CloudProviderRegion {
+    pub fn parse(region: String) -> CloudProviderRegionEnum {
         match region.as_str() {
-            "aws/us-east-1" => CloudProviderRegion::AwsUsEast1,
-            "aws/eu-west-1" => CloudProviderRegion::AwsEuWest1,
+            "aws/us-east-1" => CloudProviderRegionEnum::AwsUsEast1,
+            "aws/eu-west-1" => CloudProviderRegionEnum::AwsEuWest1,
             _ => panic!("Unknown region."),
         }
     }
@@ -41,10 +41,10 @@ impl CloudProviderRegion {
             _ => panic!("Unknown region."),
         }
     }
-    pub fn parse_enum_region(region: CloudProviderRegion) -> &'static str {
+    pub fn parse_enum_region(region: CloudProviderRegionEnum) -> &'static str {
         match region {
-            CloudProviderRegion::AwsUsEast1 => "us-east-1",
-            CloudProviderRegion::AwsEuWest1 => "eu-west-1",
+            CloudProviderRegionEnum::AwsUsEast1 => "us-east-1",
+            CloudProviderRegionEnum::AwsEuWest1 => "eu-west-1",
         }
     }
     //-----------------

@@ -22,13 +22,13 @@ mod shell;
 mod utils;
 
 use profiles::get_profile;
-use regions::{print_region_enabled, print_region_status};
+use regions::{print_region_enabled, print_environment_status, region_environment_details};
 use serde::{Deserialize, Serialize};
 
-use clap::{ArgEnum, Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use reqwest::Client;
-use shell::check_region_health;
-use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegion};
+use shell::check_environment_health;
+use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegionEnum};
 
 use crate::login::{login_with_browser, login_with_console};
 use crate::profiles::{authenticate_profile, validate_profile};
@@ -42,37 +42,28 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
+    /// Specify a particular configuration profile
     #[clap(short, long)]
     profile: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Login to Materialize
+    /// Open the docs
+    Docs,
+    /// Open the web login
     Login {
         /// Login by typing your email and password
         #[clap(short, long)]
         interactive: bool,
     },
-    /// Enable or delete a region
+    /// Show commands for interaction with the region
     Regions(Regions),
-    /// Connect to a region using a SQL shell
+    /// Open a SQL shell over a region
     Shell {
-        #[clap(possible_values = CloudProviderRegion::variants())]
+        #[clap(possible_values = CloudProviderRegionEnum::variants())]
         cloud_provider_region: String,
     },
-}
-
-#[derive(Debug, Args)]
-struct Login {
-    #[clap(short, long, arg_enum)]
-    command: Option<LoginCommands>,
-}
-
-#[derive(Debug, Clone, ArgEnum)]
-enum LoginCommands {
-    /// Log in via the console using email and password.
-    Interactive,
 }
 
 #[derive(Debug, Args)]
@@ -83,23 +74,30 @@ struct Regions {
 
 #[derive(Debug, Subcommand)]
 enum RegionsCommands {
-    /// Enable a new region.
+    /// Enable a region.
     Enable {
-        #[clap(possible_values = CloudProviderRegion::variants())]
+        #[clap(possible_values = CloudProviderRegionEnum::variants())]
         cloud_provider_region: String,
     },
     /// List all enabled regions.
     List,
-    /// Check the status of a region.
+    /// Display a region's status.
     Status {
-        #[clap(possible_values = CloudProviderRegion::variants())]
+        #[clap(possible_values = CloudProviderRegionEnum::variants())]
         cloud_provider_region: String,
     },
 }
 
 /// Internal types, struct and enums
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct Region {
+    environment_controller_url: String
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Environment {
     environmentd_pgwire_address: String,
     environmentd_https_address: String,
 }
@@ -108,7 +106,7 @@ struct Region {
 #[serde(rename_all = "camelCase")]
 struct CloudProvider {
     region: String,
-    environment_controller_url: String,
+    region_controller_url: String,
     provider: String,
 }
 
@@ -149,7 +147,7 @@ struct Profile {
     region: Option<String>,
 }
 
-struct CloudProviderAndRegion {
+struct CloudProviderRegion {
     cloud_provider: CloudProvider,
     region: Option<Region>,
 }
@@ -171,6 +169,7 @@ const USER_AUTH_URL: &str =
 const MACHINE_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/auth/v1/api-token";
 const WEB_LOGIN_URL: &str = "https://cloud.materialize.com/account/login?redirectUrl=/access/cli";
+const WEB_DOCS_URL: &str = "https://www.materialize.com/docs";
 const DEFAULT_PROFILE_NAME: &str = "default";
 const PROFILES_PREFIX: &str = "profiles";
 const ERROR_OPENING_PROFILES_MESSAGE: &str = "Error opening the profiles file";
@@ -193,6 +192,15 @@ async fn main() {
     }
 
     match args.command {
+        Commands::Docs => {
+                // Open the browser docs
+                if let Err(err) = open::that(WEB_DOCS_URL) {
+                    exit_with_fail_message(ExitMessage::String(format!(
+                        "Error opening the browser: {}", err
+                    )))
+                }
+        }
+
         Commands::Login { interactive } => {
             if interactive {
                 login_with_console(&profile_name).await.unwrap()
@@ -211,7 +219,7 @@ async fn main() {
                     Some(frontegg_auth_machine) => {
                         let loading_spinner = run_loading_spinner("Enabling region...".to_string());
                         let parsed_cloud_provider_region =
-                            CloudProviderRegion::parse(cloud_provider_region);
+                        CloudProviderRegionEnum::parse(cloud_provider_region);
 
                         match enable_region(
                             client,
@@ -233,12 +241,13 @@ async fn main() {
                     Some(frontegg_auth_machine) => {
                         match list_cloud_providers(&client, &frontegg_auth_machine).await {
                             Ok(cloud_providers) => {
-                                let cloud_providers_and_regions =
+                                let cloud_providers_regions =
                                     list_regions(&cloud_providers, &client, &frontegg_auth_machine)
                                         .await;
-                                cloud_providers_and_regions.iter().for_each(
-                                    |cloud_provider_and_region| {
-                                        print_region_enabled(cloud_provider_and_region);
+
+                                cloud_providers_regions.iter().for_each(
+                                    |cloud_provider_region| {
+                                        print_region_enabled(cloud_provider_region);
                                     },
                                 );
                             }
@@ -260,7 +269,7 @@ async fn main() {
                                 match list_cloud_providers(&client, &frontegg_auth_machine).await {
                                     Ok(cloud_providers) => {
                                         let parsed_cloud_provider_region =
-                                            CloudProviderRegion::parse_region(
+                                        CloudProviderRegionEnum::parse_region(
                                                 cloud_provider_region,
                                             );
                                         let filtered_providers: Vec<CloudProvider> =
@@ -271,21 +280,41 @@ async fn main() {
                                                 })
                                                 .collect::<Vec<CloudProvider>>();
 
-                                        let mut cloud_providers_and_regions = list_regions(
+                                        let mut cloud_provider_regions = list_regions(
                                             &filtered_providers,
                                             &client,
                                             &frontegg_auth_machine,
                                         )
                                         .await;
 
-                                        match cloud_providers_and_regions.pop() {
-                                            Some(cloud_provider_and_region) => {
+                                        match cloud_provider_regions.pop() {
+                                            Some(cloud_provider_region) => {
                                                 if let Some(region) =
-                                                    cloud_provider_and_region.region
+                                                    cloud_provider_region.region
                                                 {
-                                                    let health =
-                                                        check_region_health(profile, &region);
-                                                    print_region_status(region, health);
+                                                    match region_environment_details(&client, &region, &frontegg_auth_machine).await {
+                                                        Ok(environment_details) => {
+                                                            if let Some(mut environment_list) = environment_details {
+                                                                match environment_list.pop() {
+                                                                    Some(environment) => {
+                                                                        let health =
+                                                                        check_environment_health(profile, &environment);
+                                                                        print_environment_status(environment, health);
+                                                                    },
+                                                                    None => exit_with_fail_message(ExitMessage::Str(
+                                                                        "Error. Missing environment.",
+                                                                    )),
+                                                                }
+                                                            } else {
+                                                                exit_with_fail_message(ExitMessage::Str(
+                                                                    "Environment unavailable.",
+                                                                ));
+                                                            }
+                                                        },
+                                                        Err(error) => exit_with_fail_message(ExitMessage::String(
+                                                            format!("Error listing environment: {:}", error),
+                                                        )),
+                                                    }
                                                 } else {
                                                     exit_with_fail_message(ExitMessage::Str(
                                                         "Region unavailable.",
@@ -309,39 +338,14 @@ async fn main() {
                         }
                     }
                     None => exit_with_fail_message(ExitMessage::Str(PROFILE_NOT_FOUND_MESSAGE)),
-                },
-                // ------------------------------------------------------------------------
-                // Delete is currently disabled. Preserving the code for once is available.
-                // ------------------------------------------------------------------------
-                // RegionsCommands::Delete {
-                //     cloud_provider_region,
-                // } => {
-                // if warning_delete_region(cloud_provider_region.clone()) {
-                //     match validate_profile(profile_arg, client.clone()).await {
-                //         Some(frontegg_auth_machine) => {
-                //             let loading_spinner = run_loading_spinner("Deleting region...".to_string());
-                //             match delete_region(
-                //                 client.clone(),
-                //                 cloud_provider_region,
-                //                 frontegg_auth_machine,
-                //             )
-                //             .await
-                //             {
-                //                 Ok(_) => loading_spinner.finish_with_message("Region deleted."),
-                //                 Err(e) => panic!("Error deleting region: {:?}", e),
-                //             }
-                //         }
-                //         None => {}
-                //     }
-                // }
-                // }
+                }
             }
         }
 
         Commands::Shell {
             cloud_provider_region,
         } => {
-            let parsed_cloud_provider_region = CloudProviderRegion::parse(cloud_provider_region);
+            let parsed_cloud_provider_region = CloudProviderRegionEnum::parse(cloud_provider_region);
 
             match get_profile(profile_name) {
                 Some(profile) => {
