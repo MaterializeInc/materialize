@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use mz_adapter::ExecuteResponse;
+use mz_sql::ast::NoticeSeverity;
 use postgres::error::SqlState;
 
 use mz_adapter::session::ClientSeverity as AdapterClientSeverity;
@@ -431,6 +433,147 @@ impl ErrorResponse {
             detail: e.detail(),
             hint: e.hint(),
             position: None,
+        }
+    }
+
+    /// When an appropriate error response can be totally determined by the
+    /// `ExecuteResponse`, generate it if it is non-terminal, i.e. should not be
+    /// returned as an error instead of the value.
+    pub fn non_terminating_from_execute_response(
+        response: &ExecuteResponse,
+    ) -> Option<ErrorResponse> {
+        macro_rules! existed {
+            ($existed:expr, $code:expr, $type:expr) => {{
+                if $existed {
+                    Some(ErrorResponse::notice(
+                        $code,
+                        concat!($type, " already exists, skipping"),
+                    ))
+                } else {
+                    None
+                }
+            }};
+        }
+
+        use ExecuteResponse::*;
+        match response {
+            CreatedConnection { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "connection")
+            }
+            CreatedDatabase { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_DATABASE, "database")
+            }
+            CreatedSchema { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_SCHEMA, "schema")
+            }
+            CreatedRole => {
+                existed!(false, SqlState::DUPLICATE_OBJECT, "role")
+            }
+            CreatedComputeInstance { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "cluster")
+            }
+            CreatedComputeInstanceReplica { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "cluster replica")
+            }
+            CreatedTable { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_TABLE, "table")
+            }
+            CreatedIndex { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "index")
+            }
+            CreatedSecret { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "secret")
+            }
+            CreatedSource { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "source")
+            }
+            CreatedSink { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "sink")
+            }
+            CreatedView { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "view")
+            }
+            CreatedMaterializedView { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "materialized view")
+            }
+
+            Raise { severity } => Some(match severity {
+                NoticeSeverity::Debug => {
+                    ErrorResponse::debug(SqlState::WARNING, "raised a test debug")
+                }
+                NoticeSeverity::Info => {
+                    ErrorResponse::info(SqlState::WARNING, "raised a test info")
+                }
+                NoticeSeverity::Log => ErrorResponse::log(SqlState::WARNING, "raised a test log"),
+                NoticeSeverity::Notice => {
+                    ErrorResponse::notice(SqlState::WARNING, "raised a test notice")
+                }
+                NoticeSeverity::Warning => {
+                    ErrorResponse::warning(SqlState::WARNING, "raised a test warning")
+                }
+            }),
+
+            StartedTransaction { duplicated } => {
+                if *duplicated {
+                    Some(ErrorResponse::warning(
+                        SqlState::ACTIVE_SQL_TRANSACTION,
+                        "there is already a transaction in progress",
+                    ))
+                } else {
+                    None
+                }
+            }
+
+            TransactionExited { was_implicit, .. } => {
+                // In Postgres, if a user sends a COMMIT or ROLLBACK in an implicit
+                // transaction, a warning is sent warning them. (The transaction is still closed
+                // and a new implicit transaction started, though.)
+                if *was_implicit {
+                    Some(ErrorResponse::warning(
+                        SqlState::NO_ACTIVE_SQL_TRANSACTION,
+                        "there is no transaction in progress",
+                    ))
+                } else {
+                    None
+                }
+            }
+
+            CreatedSources
+            | CreatedType
+            | AlteredObject(..)
+            | AlteredIndexLogicalCompaction
+            | AlteredSystemConfiguraion
+            | Canceled
+            | ClosedCursor
+            | CopyTo { .. }
+            | CopyFrom { .. }
+            | Deallocate { .. }
+            | DeclaredCursor
+            | Deleted(..)
+            | DiscardedTemp
+            | DiscardedAll
+            | DroppedConnection
+            | DroppedComputeInstance
+            | DroppedComputeInstanceReplicas
+            | DroppedDatabase
+            | DroppedRole
+            | DroppedSchema
+            | DroppedSource
+            | DroppedTable
+            | DroppedView
+            | DroppedMaterializedView
+            | DroppedIndex
+            | DroppedSink
+            | DroppedType
+            | DroppedSecret
+            | EmptyQuery
+            | Fetch { .. }
+            | Inserted(..)
+            | Prepare
+            | SendingRows { .. }
+            | SetVariable { .. }
+            | Tailing { .. }
+            | Updated(..) => None,
         }
     }
 

@@ -37,7 +37,7 @@ use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, NoticeSeverity, Raw, Statement};
+use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
@@ -1066,29 +1066,25 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
     ) -> Result<State, io::Error> {
-        let tag = response.tag();
+        let mut tag = response.tag();
+        let mut non_term_err = ErrorResponse::non_terminating_from_execute_response(&response);
+
         macro_rules! command_complete {
             () => {{
+                if let Some(msg) = non_term_err.take() {
+                    self.send(msg).await?;
+                }
                 self.send(BackendMessage::CommandComplete {
-                    tag: tag.expect("command_complete only called on tag-generating results"),
+                    tag: tag
+                        .take()
+                        .expect("command_complete only called on tag-generating results"),
                 })
                 .await?;
                 Ok(State::Ready)
             }};
         }
 
-        macro_rules! created {
-            ($existed:expr, $code:expr, $type:expr) => {{
-                if $existed {
-                    let msg =
-                        ErrorResponse::notice($code, concat!($type, " already exists, skipping"));
-                    self.send(msg).await?;
-                }
-                command_complete!()
-            }};
-        }
-
-        match response {
+        let r = match response {
             ExecuteResponse::Canceled => {
                 return self
                     .error(ErrorResponse::error(
@@ -1100,47 +1096,6 @@ where
             ExecuteResponse::ClosedCursor => {
                 self.complete_portal(&portal_name);
                 command_complete!()
-            }
-            ExecuteResponse::CreatedConnection { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "connection")
-            }
-            ExecuteResponse::CreatedDatabase { existed } => {
-                created!(existed, SqlState::DUPLICATE_DATABASE, "database")
-            }
-            ExecuteResponse::CreatedSchema { existed } => {
-                created!(existed, SqlState::DUPLICATE_SCHEMA, "schema")
-            }
-            ExecuteResponse::CreatedRole => {
-                let existed = false;
-                created!(existed, SqlState::DUPLICATE_OBJECT, "role")
-            }
-            ExecuteResponse::CreatedComputeInstance { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "cluster")
-            }
-            ExecuteResponse::CreatedComputeInstanceReplica { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "cluster replica")
-            }
-            ExecuteResponse::CreatedTable { existed } => {
-                created!(existed, SqlState::DUPLICATE_TABLE, "table")
-            }
-            ExecuteResponse::CreatedIndex { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "index")
-            }
-            ExecuteResponse::CreatedSecret { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "secret")
-            }
-            ExecuteResponse::CreatedSource { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "source")
-            }
-            ExecuteResponse::CreatedSources => command_complete!(),
-            ExecuteResponse::CreatedSink { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "sink")
-            }
-            ExecuteResponse::CreatedView { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "view")
-            }
-            ExecuteResponse::CreatedMaterializedView { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "materialized view")
             }
             ExecuteResponse::DeclaredCursor => {
                 self.complete_portal(&portal_name);
@@ -1202,29 +1157,6 @@ where
                 }
                 command_complete!()
             }
-            ExecuteResponse::StartedTransaction { duplicated } => {
-                if duplicated {
-                    let msg = ErrorResponse::warning(
-                        SqlState::ACTIVE_SQL_TRANSACTION,
-                        "there is already a transaction in progress",
-                    );
-                    self.send(msg).await?;
-                }
-                command_complete!()
-            }
-            ExecuteResponse::TransactionExited { was_implicit, .. } => {
-                // In Postgres, if a user sends a COMMIT or ROLLBACK in an implicit
-                // transaction, a warning is sent warning them. (The transaction is still closed
-                // and a new implicit transaction started, though.)
-                if was_implicit {
-                    let msg = ErrorResponse::warning(
-                        SqlState::NO_ACTIVE_SQL_TRANSACTION,
-                        "there is no transaction in progress",
-                    );
-                    self.send(msg).await?;
-                }
-                command_complete!()
-            }
             ExecuteResponse::Tailing { rx } => {
                 if fetch_portal_name.is_none() {
                     let mut msg = ErrorResponse::notice(
@@ -1280,56 +1212,60 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
                 self.copy_from(id, columns, params, row_desc).await
             }
-            ExecuteResponse::Raise { severity } => {
-                let msg = match severity {
-                    NoticeSeverity::Debug => {
-                        ErrorResponse::debug(SqlState::WARNING, "raised a test debug")
-                    }
-                    NoticeSeverity::Info => {
-                        ErrorResponse::info(SqlState::WARNING, "raised a test info")
-                    }
-                    NoticeSeverity::Log => {
-                        ErrorResponse::log(SqlState::WARNING, "raised a test log")
-                    }
-                    NoticeSeverity::Notice => {
-                        ErrorResponse::notice(SqlState::WARNING, "raised a test notice")
-                    }
-                    NoticeSeverity::Warning => {
-                        ErrorResponse::warning(SqlState::WARNING, "raised a test warning")
-                    }
-                };
-                self.send(msg).await?;
-                command_complete!()
-            }
 
-            ExecuteResponse::CreatedType
+            ExecuteResponse::AlteredIndexLogicalCompaction
+            | ExecuteResponse::AlteredObject(..)
+            | ExecuteResponse::AlteredSystemConfiguraion
+            | ExecuteResponse::CreatedComputeInstance { .. }
+            | ExecuteResponse::CreatedComputeInstanceReplica { .. }
+            | ExecuteResponse::CreatedConnection { .. }
+            | ExecuteResponse::CreatedDatabase { .. }
+            | ExecuteResponse::CreatedIndex { .. }
+            | ExecuteResponse::CreatedMaterializedView { .. }
+            | ExecuteResponse::CreatedRole
+            | ExecuteResponse::CreatedSchema { .. }
+            | ExecuteResponse::CreatedSecret { .. }
+            | ExecuteResponse::CreatedSink { .. }
+            | ExecuteResponse::CreatedSource { .. }
+            | ExecuteResponse::CreatedSources
+            | ExecuteResponse::CreatedTable { .. }
+            | ExecuteResponse::CreatedType
+            | ExecuteResponse::CreatedView { .. }
+            | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
-            | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DiscardedAll
-            | ExecuteResponse::DroppedDatabase
-            | ExecuteResponse::DroppedSchema
-            | ExecuteResponse::DroppedRole
+            | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedComputeInstance
             | ExecuteResponse::DroppedComputeInstanceReplicas
-            | ExecuteResponse::DroppedSource
-            | ExecuteResponse::DroppedIndex
-            | ExecuteResponse::DroppedSink
-            | ExecuteResponse::DroppedTable
-            | ExecuteResponse::DroppedView
-            | ExecuteResponse::DroppedMaterializedView
-            | ExecuteResponse::DroppedType
-            | ExecuteResponse::DroppedSecret
             | ExecuteResponse::DroppedConnection
-            | ExecuteResponse::Updated(..)
-            | ExecuteResponse::AlteredObject(..)
-            | ExecuteResponse::AlteredIndexLogicalCompaction
-            | ExecuteResponse::AlteredSystemConfiguraion
+            | ExecuteResponse::DroppedDatabase
+            | ExecuteResponse::DroppedIndex
+            | ExecuteResponse::DroppedMaterializedView
+            | ExecuteResponse::DroppedRole
+            | ExecuteResponse::DroppedSchema
+            | ExecuteResponse::DroppedSecret
+            | ExecuteResponse::DroppedSink
+            | ExecuteResponse::DroppedSource
+            | ExecuteResponse::DroppedTable
+            | ExecuteResponse::DroppedType
+            | ExecuteResponse::DroppedView
+            | ExecuteResponse::Inserted(..)
             | ExecuteResponse::Prepare
-            | ExecuteResponse::Deallocate { .. }
-            | ExecuteResponse::Inserted(..) => {
+            | ExecuteResponse::Raise { .. }
+            | ExecuteResponse::StartedTransaction { .. }
+            | ExecuteResponse::TransactionExited { .. }
+            | ExecuteResponse::Updated(..) => {
                 command_complete!()
             }
-        }
+        };
+
+        assert!(
+            non_term_err.is_none(),
+            "non-terminal error created but not consumed: {:?}",
+            non_term_err
+        );
+        assert!(tag.is_none(), "tag created but not consumed: {:?}", tag);
+        r
     }
 
     #[allow(clippy::too_many_arguments)]
