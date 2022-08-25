@@ -8,6 +8,17 @@
 // by the Apache License, Version 2.0.
 
 //! `EXPLAIN ... AS TEXT` support for LIR structures.
+//!
+//! The format adheres to the following conventions:
+//! 1. In general, every line that starts with an uppercase character
+//!    corresponds to a [`Plan`] variant.
+//! 2. Whenever the variant has an attached `~Plan`, the printed name is
+//!    `$V::$P` where `$V` identifies the variant and `$P` the plan.
+//! 3. The fields of a `~Plan` struct attached to a [`Plan`] are rendered as if
+//!    they were part of the variant themself.
+//! 4. Non-recursive parameters of each sub-plan are written as `$key=$val`
+//!    pairs on the same line or as lowercase `$key` fields on indented lines.
+//! 5. A single non-recursive parameter can be written just as `$val`.
 
 use std::{collections::HashMap, fmt, ops::Deref};
 

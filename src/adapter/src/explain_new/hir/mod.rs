@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for `Hir` structures.
+//! `EXPLAIN` support for HIR structures.
 
 pub(crate) mod text;
 

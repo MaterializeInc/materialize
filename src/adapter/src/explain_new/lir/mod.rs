@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for `Mir` structures.
+//! `EXPLAIN` support for LIR structures.
 
 pub(crate) mod json;
 pub(crate) mod text;
