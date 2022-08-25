@@ -1,21 +1,21 @@
 # Materialize CLI
 
 ```shell
-Command-line interface (CLI) for Materialize.
+Command-line interface for Materialize.
 
 USAGE:
     mz [OPTIONS] <SUBCOMMAND>
 
 OPTIONS:
     -h, --help                 Print help information
-    -p, --profile <PROFILE>
+    -p, --profile <PROFILE>    Specify a particular configuration profile
 
 SUBCOMMANDS:
-    docs       Open Materialize's docs
+    docs       Open the docs
     help       Print this message or the help of the given subcommand(s)
-    login      Login to Materialize
-    regions    Display or enable region/s
-    shell      Connect to a region using a SQL shell
+    login      Open the web login
+    regions    Show commands for interaction with the region
+    shell      Open a SQL shell over a region
 ```
 
 ## Documentation
