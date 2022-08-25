@@ -461,7 +461,6 @@ where
                 index_exports: d.index_exports,
                 as_of: d.as_of,
                 debug_name: d.debug_name,
-                id: d.id,
             });
         }
 

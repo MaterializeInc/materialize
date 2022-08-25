@@ -349,8 +349,6 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub as_of: Option<Antichain<T>>,
     /// Human readable name
     pub debug_name: String,
-    /// Unique ID of the dataflow
-    pub id: uuid::Uuid,
 }
 
 fn any_source_import(
@@ -395,7 +393,6 @@ proptest::prop_compose! {
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<u64>(), 1..5),
         debug_name in ".*",
-        id in any_uuid(),
     ) -> DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -411,7 +408,6 @@ proptest::prop_compose! {
                 None
             },
             debug_name,
-            id,
         }
     }
 }
@@ -436,7 +432,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             sink_exports: Default::default(),
             as_of: Default::default(),
             debug_name: name,
-            id: uuid::Uuid::new_v4(),
         }
     }
 
@@ -673,7 +668,6 @@ impl RustType<ProtoDataflowDescription>
             sink_exports: self.sink_exports.into_proto(),
             as_of: self.as_of.as_ref().map(Into::into),
             debug_name: self.debug_name.clone(),
-            id: Some(self.id.into_proto()),
         }
     }
 
@@ -686,7 +680,6 @@ impl RustType<ProtoDataflowDescription>
             sink_exports: proto.sink_exports.into_rust()?,
             as_of: proto.as_of.map(Into::into),
             debug_name: proto.debug_name,
-            id: proto.id.into_rust_if_some("ProtoDataflowDescription::id")?,
         })
     }
 }

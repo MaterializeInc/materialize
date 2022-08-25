@@ -803,16 +803,11 @@ impl RustType<ProtoGetPlan> for GetPlan {
 pub struct LirDebugInfo<'a> {
     debug_name: &'a str,
     id: GlobalId,
-    dataflow_uuid: uuid::Uuid,
 }
 
 impl<'a> std::fmt::Display for LirDebugInfo<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Debug name: {}; id: {}; dataflow UUID: {}",
-            self.debug_name, self.id, self.dataflow_uuid
-        )
+        write!(f, "Debug name: {}; id: {}", self.debug_name, self.id)
     }
 }
 
@@ -886,7 +881,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         fields(
             dataflow.name = debug_info.debug_name,
             dataflow.id = %debug_info.id,
-            dataflow.uuid = %debug_info.dataflow_uuid
         )
     )]
     pub fn from_mir(
@@ -1491,7 +1485,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 LirDebugInfo {
                     debug_name: &desc.debug_name,
                     id: build.id,
-                    dataflow_uuid: desc.id,
                 },
             )?;
             arrangements.insert(Id::Global(build.id), keys);
@@ -1506,7 +1499,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             sink_exports: desc.sink_exports,
             as_of: desc.as_of,
             debug_name: desc.debug_name,
-            id: desc.id,
         })
     }
 
