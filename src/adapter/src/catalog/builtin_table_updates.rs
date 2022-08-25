@@ -14,6 +14,7 @@ use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
 use mz_expr::MirScalarExpr;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
@@ -228,7 +229,7 @@ impl CatalogState {
                     row: Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::String(column_name.as_str()),
-                        Datum::UInt64(u64::try_from(i + 1).expect("invalid column number")),
+                        Datum::UInt64(u64::cast_from(i + 1)),
                         Datum::from(column_type.nullable),
                         Datum::String(pgtype.name()),
                         default,
@@ -498,16 +499,15 @@ impl CatalogState {
                         .column_types,
                 )
                 .nullable;
-            let seq_in_index = u64::try_from(i + 1).expect("invalid index sequence number");
+            let seq_in_index = u64::cast_from(i + 1);
             let key_sql = key_sqls
                 .get(i)
                 .expect("missing sql information for index key")
                 .to_string();
             let (field_number, expression) = match key {
-                MirScalarExpr::Column(col) => (
-                    Datum::UInt64(u64::try_from(*col + 1).expect("invalid index column number")),
-                    Datum::Null,
-                ),
+                MirScalarExpr::Column(col) => {
+                    (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
+                }
                 _ => (Datum::Null, Datum::String(&key_sql)),
             };
             updates.push(BuiltinTableUpdate {
