@@ -161,6 +161,7 @@ SELECT CAST(a AS numeric) FROM t8
 
 # Test casts to/from unsigned integers
 
+
 # From int2
 
 query I
@@ -763,3 +764,252 @@ query T
 SELECT 15445::uint8::text
 ----
 15445
+
+
+# Test arithmetic
+
+
+# Addition
+
+query I
+SELECT (10::uint2 + 3::uint2)::numeric
+----
+13
+
+query error uint2 out of range
+SELECT (65535::uint2 + 1::uint2)::numeric
+
+query I
+SELECT (10::uint4 + 3::uint4)::numeric
+----
+13
+
+query I
+SELECT (32767::uint4 + 1::uint4)::numeric
+----
+32768
+
+query error uint4 out of range
+SELECT (4294967295::uint4 + 1::uint4)::numeric
+
+query I
+SELECT (10::uint8 + 3::uint8)::numeric
+----
+13
+
+query I
+SELECT (32767::uint8 + 1::uint8)::numeric
+----
+32768
+
+query I
+SELECT (4294967295::uint8 + 1::uint8)::numeric
+----
+4294967296
+
+query error uint8 out of range
+SELECT (18446744073709551615::uint8 + 1::uint8)::numeric
+
+# Subtraction
+
+query I
+SELECT (45::uint2 - 3::uint2)::numeric
+----
+42
+
+query error uint2 out of range
+SELECT (45::uint2 - 50::uint2)::numeric
+
+query I
+SELECT (45::uint4 - 3::uint4)::numeric
+----
+42
+
+query error uint4 out of range
+SELECT (45::uint4 - 50::uint4)::numeric
+
+query I
+SELECT (45::uint8 - 3::uint8)::numeric
+----
+42
+
+query error uint8 out of range
+SELECT (45::uint8 - 50::uint8)::numeric
+
+# Multiplication
+
+query I
+SELECT (10::uint2 * 3::uint2)::numeric
+----
+30
+
+query error uint2 out of range
+SELECT (65535::uint2 * 2::uint2)::numeric
+
+query I
+SELECT (10::uint4 * 3::uint4)::numeric
+----
+30
+
+query I
+SELECT (32767::uint4 * 2::uint4)::numeric
+----
+65534
+
+query error uint4 out of range
+SELECT (4294967295::uint4 * 2::uint4)::numeric
+
+query I
+SELECT (10::uint8 * 3::uint8)::numeric
+----
+30
+
+query I
+SELECT (32767::uint8 * 2::uint8)::numeric
+----
+65534
+
+query I
+SELECT (4294967295::uint8 * 2::uint8)::numeric
+----
+8589934590
+
+query error uint8 out of range
+SELECT (18446744073709551615::uint8 * 2::uint8)::numeric
+
+# Division
+
+query I
+SELECT (20::uint2 / 2::uint2)::numeric
+----
+10
+
+query error division by zero
+SELECT (20::uint2 / 0::uint2)::numeric
+
+query I
+SELECT (20::uint4 / 2::uint4)::numeric
+----
+10
+
+query error division by zero
+SELECT (20::uint4 / 0::uint4)::numeric
+
+query I
+SELECT (20::uint8 / 2::uint8)::numeric
+----
+10
+
+query error division by zero
+SELECT (20::uint8 / 0::uint8)::numeric
+
+# Modulo
+
+query I
+SELECT (13::uint2 % 5::uint2)::numeric
+----
+3
+
+query error division by zero
+SELECT (66::uint2 % 0::uint2)::numeric
+
+query I
+SELECT (13::uint4 % 5::uint4)::numeric
+----
+3
+
+query error division by zero
+SELECT (66::uint4 % 0::uint4)::numeric
+
+query I
+SELECT (13::uint8 % 5::uint8)::numeric
+----
+3
+
+query error division by zero
+SELECT (66::uint8 % 0::uint8)::numeric
+
+# And
+
+query I
+SELECT (4::uint2 & 5::uint2)::numeric
+----
+4
+
+query I
+SELECT (4::uint4 & 5::uint4)::numeric
+----
+4
+
+query I
+SELECT (4::uint8 & 5::uint8)::numeric
+----
+4
+
+# Or
+
+query I
+SELECT (4::uint2 | 5::uint2)::numeric
+----
+5
+
+query I
+SELECT (4::uint4 | 5::uint4)::numeric
+----
+5
+
+query I
+SELECT (4::uint8 | 5::uint8)::numeric
+----
+5
+
+# Xor
+
+query I
+SELECT (4::uint2 # 5::uint2)::numeric
+----
+1
+
+query I
+SELECT (4::uint4 # 5::uint4)::numeric
+----
+1
+
+query I
+SELECT (4::uint8 # 5::uint8)::numeric
+----
+1
+
+# Shift Left
+
+query I
+SELECT (64::uint2 << 1::uint4)::numeric
+----
+128
+
+query I
+SELECT (64::uint4 << 1::uint4)::numeric
+----
+128
+
+query I
+SELECT (64::uint8 << 1::uint4)::numeric
+----
+128
+
+# Shift Right
+
+query I
+SELECT (64::uint2 >> 1::uint4)::numeric
+----
+32
+
+query I
+SELECT (64::uint4 >> 1::uint4)::numeric
+----
+32
+
+query I
+SELECT (64::uint8 >> 1::uint4)::numeric
+----
+32
