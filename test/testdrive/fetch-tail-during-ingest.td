@@ -19,9 +19,9 @@ $ kafka-create-topic topic=tail-fetch-during-ingest
 
 > CREATE SOURCE fetch_during_ingest
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tail-fetch-during-ingest-${testdrive.seed}'
-  LEGACYWITH( timestamp_frequency_ms = 100 )
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+  WITH (TIMESTAMP GRANULARITY '100ms')
 
 > BEGIN
 

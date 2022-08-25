@@ -19,9 +19,9 @@ $ kafka-create-topic topic=fetch-concurrent-same-source
 
 > CREATE SOURCE fetch_concurrent_same_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}'
-  LEGACYWITH( timestamp_frequency_ms = 10 )
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+  WITH (TIMESTAMP GRANULARITY '10ms')
 
 $ kafka-ingest format=avro topic=fetch-concurrent-same-source schema=${int} timestamp=1
 {"f1": 123}

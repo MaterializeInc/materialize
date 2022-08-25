@@ -1704,12 +1704,10 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
             let schema = self.parse_schema()?;
-            // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
-            // accept `WITH (...)` here.
-            let with_options = if self.peek_keyword(WITH)
-                && self.peek_nth_token(1) != Some(Token::Keyword(SNAPSHOT))
-            {
-                self.parse_kw_options(Parser::parse_avro_schema_options)?
+            let with_options = if self.consume_token(&Token::LParen) {
+                let with_options = self.parse_comma_separated(Parser::parse_avro_schema_options)?;
+                self.expect_token(&Token::RParen)?;
+                with_options
             } else {
                 vec![]
             };
@@ -2297,10 +2295,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[REMOTE, SIZE, TIMELINE])? {
+        let name = match self.expect_one_of_keywords(&[REMOTE, SIZE, TIMELINE, TIMESTAMP])? {
             REMOTE => CreateSourceOptionName::Remote,
             SIZE => CreateSourceOptionName::Size,
             TIMELINE => CreateSourceOptionName::Timeline,
+            TIMESTAMP => {
+                self.expect_keyword(GRANULARITY)?;
+                CreateSourceOptionName::TimestampGranularity
+            }
             _ => unreachable!(),
         };
         Ok(name)

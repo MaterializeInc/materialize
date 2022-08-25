@@ -50,13 +50,13 @@ $ kafka-ingest format=avro topic=data partition=3 schema=${schema}
 
 > CREATE SOURCE direct_source1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  LEGACYWITH (timestamp_frequency_ms = 90)
-  FORMAT AVRO USING SCHEMA '${schema}';
+  FORMAT AVRO USING SCHEMA '${schema}'
+  WITH (TIMESTAMP GRANULARITY '90ms');
 
 > CREATE SOURCE direct_source2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  LEGACYWITH (timestamp_frequency_ms = 100)
-  FORMAT AVRO USING SCHEMA '${schema}';
+  FORMAT AVRO USING SCHEMA '${schema}'
+  WITH (TIMESTAMP GRANULARITY '100ms');
 
 $ kafka-ingest format=avro topic=data partition=4 schema=${schema}
 {"a": 5}

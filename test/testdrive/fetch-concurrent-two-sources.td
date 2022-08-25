@@ -19,15 +19,15 @@ $ kafka-create-topic topic=fetch-concurrent-two-sources
 
 > CREATE SOURCE fetch_concurrent_two_sources1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}'
-  LEGACYWITH( timestamp_frequency_ms = 100 )
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+  WITH (TIMESTAMP GRANULARITY '100ms')
 
 > CREATE SOURCE fetch_concurrent_two_sources2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}'
-  LEGACYWITH( timestamp_frequency_ms = 100 )
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+  WITH (TIMESTAMP GRANULARITY '100ms')
 
 > CREATE MATERIALIZED VIEW fetch_concurrent_two_sources1_view AS SELECT * FROM fetch_concurrent_two_sources1 ORDER BY f1;
 

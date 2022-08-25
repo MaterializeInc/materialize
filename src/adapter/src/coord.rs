@@ -745,7 +745,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // For non-realtime timelines, nothing pushes the timestamps forward, so we must do
         // it manually.
         let mut advance_timelines_interval =
-            tokio::time::interval(self.catalog.config().timestamp_frequency);
+            tokio::time::interval(self.catalog.config().timestamp_granularity);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
 
