@@ -545,7 +545,7 @@ pub struct StorageControllerState<
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T: Timestamp + Lattice + Codec64 + Unpin> {
+pub struct Controller<T: Timestamp + Lattice + Codec64> {
     state: StorageControllerState<T>,
     /// Storage host provisioning and storage object assignment.
     hosts: StorageHosts<T>,
@@ -672,9 +672,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
-    <T as TryInto<i64>>::Error: std::fmt::Debug,
-    <T as TryFrom<i64>>::Error: std::fmt::Debug,
+    T: Timestamp + Lattice + TotalOrder + Codec64,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1182,9 +1180,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
-    <T as TryInto<i64>>::Error: std::fmt::Debug,
-    <T as TryFrom<i64>>::Error: std::fmt::Debug,
+    T: Timestamp + Lattice + TotalOrder + Codec64,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1220,9 +1216,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
-    <T as TryInto<i64>>::Error: std::fmt::Debug,
-    <T as TryFrom<i64>>::Error: std::fmt::Debug,
+    T: Timestamp + Lattice + TotalOrder + Codec64,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
