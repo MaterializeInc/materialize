@@ -178,11 +178,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
     };
 
-    let (_server, client) = mz_compute::server::serve(config)?;
+    let (_server, client_builder) = mz_compute::server::serve(config)?;
     GrpcServer::serve(
         args.controller_listen_addr,
         BUILD_INFO.semver_version(),
-        client,
+        client_builder,
         ProtoComputeServer::new,
     )
     .await
