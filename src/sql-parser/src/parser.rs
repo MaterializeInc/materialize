@@ -2291,7 +2291,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[REMOTE, SIZE, TIMELINE])? {
+        let name = match self.expect_one_of_keywords(&[EPOCH, REMOTE, SIZE, TIMELINE])? {
+            EPOCH => {
+                self.expect_keywords(&[MS, TIMELINE])?;
+                CreateSourceOptionName::EpochMsTimeline
+            }
             REMOTE => CreateSourceOptionName::Remote,
             SIZE => CreateSourceOptionName::Size,
             TIMELINE => CreateSourceOptionName::Timeline,

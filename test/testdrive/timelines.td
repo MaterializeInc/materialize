@@ -116,25 +116,24 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 
 ! CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=false)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-contains:unsupported epoch_ms_timeline value
+  WITH (EPOCH MS TIMELINE false)
+contains:unsupported EPOCH MS TIMELINE value
 
 # Can't specify epoch_ms_timeline and timeline.
 ! CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=false)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'user')
-contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
+  WITH (TIMELINE 'user', EPOCH MS TIMELINE)
+contains:only one of TIMELINE and EPOCH MS TIMELINE can be set
 
 > CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=true)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (EPOCH MS TIMELINE)
 
 > CREATE SOURCE source_cdcv2_user
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'

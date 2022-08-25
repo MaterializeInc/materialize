@@ -311,6 +311,7 @@ pub fn describe_create_source(
 
 generate_extracted_config!(
     CreateSourceOption,
+    (EpochMsTimeline, bool),
     (Remote, String),
     (Size, String),
     (Timeline, String)
@@ -848,10 +849,11 @@ pub fn plan_create_source(
     }
 
     let CreateSourceOptionExtracted {
+        seen: _,
+        epoch_ms_timeline,
         remote,
         size,
         timeline,
-        ..
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     let host_config = match (remote, size) {
@@ -867,15 +869,23 @@ pub fn plan_create_source(
 
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
     let timeline = if let Some(timeline) = timeline {
+        if epoch_ms_timeline.is_some() {
+            sql_bail!("only one of TIMELINE and EPOCH MS TIMELINE can be set")
+        }
         Timeline::User(timeline)
     } else {
         match envelope {
-            SourceEnvelope::CdcV2 => match legacy_with_options.remove("epoch_ms_timeline") {
+            SourceEnvelope::CdcV2 => match epoch_ms_timeline {
+                Some(true) => Timeline::EpochMilliseconds,
                 None => Timeline::External(name.to_string()),
-                Some(SqlValueOrSecret::Value(Value::Boolean(true))) => Timeline::EpochMilliseconds,
-                Some(v) => sql_bail!("unsupported epoch_ms_timeline value {}", v),
+                Some(v) => sql_bail!("unsupported EPOCH MS TIMELINE value {v}"),
             },
-            _ => Timeline::EpochMilliseconds,
+            _ => {
+                if epoch_ms_timeline.is_some() {
+                    sql_bail!("unexpected EPOCH MS TIMELINE for non-CDCv2 source")
+                }
+                Timeline::EpochMilliseconds
+            }
         }
     };
     let source = Source {
@@ -3763,13 +3773,23 @@ pub fn plan_alter_source(
 
     let mut size = AlterSourceItem::Unchanged;
     let mut remote = AlterSourceItem::Unchanged;
+    const INVALID_ALTER_OPTIONS: &[CreateSourceOptionName] = &[
+        CreateSourceOptionName::EpochMsTimeline,
+        CreateSourceOptionName::Timeline,
+    ];
     match action {
         AlterSourceAction::SetOptions(options) => {
+            if let Some(invalid) = options
+                .iter()
+                .filter(|o| INVALID_ALTER_OPTIONS.contains(&o.name))
+                .next()
+            {
+                sql_bail!("can't update source option {invalid}");
+            };
             let CreateSourceOptionExtracted {
-                seen: _,
                 remote: remote_opt,
                 size: size_opt,
-                timeline: timeline_opt,
+                ..
             } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(value) = remote_opt {
@@ -3777,9 +3797,6 @@ pub fn plan_alter_source(
             }
             if let Some(value) = size_opt {
                 size = AlterSourceItem::Set(value);
-            }
-            if let Some(_) = timeline_opt {
-                sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
             }
         }
         AlterSourceAction::ResetOptions(reset) => {
@@ -3791,8 +3808,8 @@ pub fn plan_alter_source(
                     CreateSourceOptionName::Size => {
                         size = AlterSourceItem::Reset;
                     }
-                    CreateSourceOptionName::Timeline => {
-                        sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
+                    invalid => {
+                        sql_bail!("can't reset source option {invalid}")
                     }
                 }
             }
