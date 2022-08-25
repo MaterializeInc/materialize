@@ -122,7 +122,7 @@ As long as the `.proto` schema definition changes in a [compatible way](https://
 
 ##### Supported types
 
-Materialize supports all [well-known](https://developers.google.com/protocol-buffers/docs/reference/google.protobuf) Protobuf types from the `proto2` and `proto3` specs, _except for_ recursive `Struct` values {{% gh 5803 %}}.
+Materialize supports all [well-known](https://developers.google.com/protocol-buffers/docs/reference/google.protobuf) Protobuf types from the `proto2` and `proto3` specs, _except for_ recursive `Struct` values {{% gh 5803 %}} and map types.
 
 ##### Multiple message schemas
 

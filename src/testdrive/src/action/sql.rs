@@ -556,7 +556,7 @@ impl<'a> FromSql<'a> for Uint4 {
     }
 
     fn accepts(ty: &Type) -> bool {
-        ty.oid() == mz_pgrepr::oid::TYPE_UINT8_OID
+        ty.oid() == mz_pgrepr::oid::TYPE_UINT4_OID
     }
 }
 
