@@ -629,7 +629,18 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
             Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
             Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
             Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
-            _ => bail!("unsupported SQL type in testdrive: {:?}", ty),
+            _ => match ty.oid() {
+                mz_pgrepr::oid::TYPE_UINT2_OID => {
+                    row.get::<_, Option<Uint2>>(i).map(|x| x.0.to_string())
+                }
+                mz_pgrepr::oid::TYPE_UINT4_OID => {
+                    row.get::<_, Option<Uint4>>(i).map(|x| x.0.to_string())
+                }
+                mz_pgrepr::oid::TYPE_UINT8_OID => {
+                    row.get::<_, Option<Uint8>>(i).map(|x| x.0.to_string())
+                }
+                _ => bail!("unsupported SQL type in testdrive: {:?}", ty),
+            },
         }
         .unwrap_or_else(|| "<null>".into());
 
@@ -642,6 +653,42 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
         out.push(value);
     }
     Ok(out)
+}
+
+struct Uint2(u16);
+
+impl<'a> FromSql<'a> for Uint2 {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Uint2, Box<dyn Error + Sync + Send>> {
+        Ok(Uint2(u16::from_be_bytes(raw.try_into()?)))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == mz_pgrepr::oid::TYPE_UINT2_OID
+    }
+}
+
+struct Uint4(u32);
+
+impl<'a> FromSql<'a> for Uint4 {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Uint4, Box<dyn Error + Sync + Send>> {
+        Ok(Uint4(u32::from_be_bytes(raw.try_into()?)))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == mz_pgrepr::oid::TYPE_UINT8_OID
+    }
+}
+
+struct Uint8(u64);
+
+impl<'a> FromSql<'a> for Uint8 {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Uint8, Box<dyn Error + Sync + Send>> {
+        Ok(Uint8(u64::from_be_bytes(raw.try_into()?)))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == mz_pgrepr::oid::TYPE_UINT8_OID
+    }
 }
 
 struct TestdriveRow<'a>(&'a Vec<String>);
