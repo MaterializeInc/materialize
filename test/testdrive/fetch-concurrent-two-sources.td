@@ -19,13 +19,13 @@ $ kafka-create-topic topic=fetch-concurrent-two-sources
 
 > CREATE SOURCE fetch_concurrent_two_sources1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}'
-  WITH( timestamp_frequency_ms = 100 )
+  LEGACYWITH( timestamp_frequency_ms = 100 )
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
 
 > CREATE SOURCE fetch_concurrent_two_sources2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}'
-  WITH( timestamp_frequency_ms = 100 )
+  LEGACYWITH( timestamp_frequency_ms = 100 )
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
 

@@ -474,40 +474,40 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")
 
 
 parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SEKRET)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SEKRET)
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = sekret)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = sekret)
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [WithOption { key: Ident("a"), value: Some(Ident(Ident("sekret"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SECRET)
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = secret)
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [WithOption { key: Ident("a"), value: Some(Ident(Ident("secret"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SECRET a)
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SECRET a)
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [WithOption { key: Ident("a"), value: Some(Secret(Name(UnresolvedObjectName([Ident("a")])))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement roundtrip
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SECRET)
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = secret)
 
 parse-statement roundtrip
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SECRET a)
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SECRET a)
 
 parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a.b.c)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SECRET a.b.c)
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a.b.c)
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' LEGACYWITH (a = SECRET a.b.c)
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [WithOption { key: Ident("a"), value: Some(Secret(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
@@ -1357,9 +1357,9 @@ DROP CONNECTION conn1
 DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' LEGACYWITH (consistency = 'lug') FORMAT BYTES
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' LEGACYWITH (consistency = 'lug') FORMAT BYTES
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
@@ -1499,6 +1499,22 @@ CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT 
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE = 'johto:42', SIZE = large)
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }, CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }] })
+
+# Ensure that we can parse REMOTE with pg
+parse-statement
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' with (REMOTE 'johto:42');
+----
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' WITH (REMOTE = 'johto:42')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
+
+# Ensure that we can parse legacy and non-legacy options
+parse-statement
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' legacywith (a = 'hmm') with (REMOTE 'johto:42');
+----
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' LEGACYWITH (a = 'hmm') WITH (REMOTE = 'johto:42')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [WithOption { key: Ident("a"), value: Some(Value(String("hmm"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical

@@ -502,7 +502,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         f.write_str("FROM ");
         f.write_node(&self.connection);
         if !self.legacy_with_options.is_empty() {
-            f.write_str(" WITH (");
+            f.write_str(" LEGACYWITH (");
             f.write_node(&display::comma_separated(&self.legacy_with_options));
             f.write_str(")");
         }

@@ -2209,7 +2209,7 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connection = self.parse_create_source_connection()?;
-        let legacy_with_options = self.parse_opt_with_options()?;
+        let legacy_with_options = self.parse_legacy_with_options()?;
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
                 self.expect_keyword(FORMAT)?;
@@ -3305,6 +3305,14 @@ impl<'a> Parser<'a> {
 
     fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
+            self.parse_with_options(true)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    fn parse_legacy_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
+        if self.parse_keyword(LEGACYWITH) {
             self.parse_with_options(true)
         } else {
             Ok(vec![])

@@ -68,7 +68,7 @@ $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
 ! CREATE SOURCE connector_source
   FROM KAFKA CONNECTION kafka_sasl
   TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     security_protocol = 'sasl_ssl'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl

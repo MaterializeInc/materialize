@@ -110,7 +110,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # We should refuse to create a source with invalid WITH options
 ! CREATE SOURCE invalid_with_option
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (badoption = true)
+  LEGACYWITH (badoption = true)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:unexpected parameters for CREATE SOURCE: badoption
