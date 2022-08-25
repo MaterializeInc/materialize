@@ -1629,12 +1629,13 @@ pub mod plan {
         ///
         /// The `row_builder` is not cleared first, but emptied if the function
         /// returns an iterator with any `Ok(_)` element.
-        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>>(
+        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>, V: Fn(&mz_repr::Timestamp) -> bool>(
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             time: mz_repr::Timestamp,
             diff: Diff,
+            valid_time: V,
             row_builder: &mut Row,
         ) -> impl Iterator<Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>>
         {
@@ -1697,6 +1698,13 @@ pub mod plan {
                 }
             }
 
+            // If the lower bound exceeds our `until` frontier, it should not appear in the output.
+            if let Some(lower) = &mut lower_bound {
+                if !valid_time(lower) {
+                    lower_bound = None;
+                }
+            }
+
             // If the lower bound exceeds `u64::MAX` the update cannot appear in the output.
             if lower_bound.is_none() {
                 return None.into_iter().chain(None.into_iter());
@@ -1745,6 +1753,13 @@ pub mod plan {
                             panic!("Non-decimal value in temporal predicate: {:?}", x);
                         }
                     }
+                }
+            }
+
+            // If the upper bound exceeds our `until` frontier, it should not appear in the output.
+            if let Some(upper) = &mut upper_bound {
+                if !valid_time(upper) {
+                    upper_bound = None;
                 }
             }
 

@@ -185,7 +185,14 @@ where
             move |(row, time, diff)| {
                 let arena = mz_repr::RowArena::new();
                 let mut datums_local = datum_vec.borrow_with(&row);
-                plan.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
+                plan.evaluate(
+                    &mut datums_local,
+                    &arena,
+                    time,
+                    diff,
+                    |_time| true,
+                    &mut row_builder,
+                )
             }
         });
 

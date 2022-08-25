@@ -492,11 +492,16 @@ where
                         collection
                     }
                     mz_compute_client::plan::GetPlan::Arrangement(key, row, mfp) => {
-                        let (oks, errs) = collection.as_collection_core(mfp, Some((key, row)));
+                        let (oks, errs) = collection.as_collection_core(
+                            mfp,
+                            Some((key, row)),
+                            self.until.clone(),
+                        );
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_client::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) = collection.as_collection_core(mfp, None);
+                        let (oks, errs) =
+                            collection.as_collection_core(mfp, None, self.until.clone());
                         CollectionBundle::from_collections(oks, errs)
                     }
                 }
@@ -521,7 +526,8 @@ where
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(mfp, input_key_val);
+                    let (oks, errs) =
+                        input.as_collection_core(mfp, input_key_val, self.until.clone());
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -595,7 +601,7 @@ where
                 input_mfp,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                input.ensure_collections(keys, input_key, input_mfp)
+                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
             }
         }
     }
