@@ -41,7 +41,7 @@ statement ok
 CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235']), r2 (REMOTE ['localhost:1236']))
 
 query TT rowsort
-SELECT CAST(id as NUMERIC), name FROM mz_clusters
+SELECT *, name FROM mz_clusters
 ----
 1 default
 3 foo

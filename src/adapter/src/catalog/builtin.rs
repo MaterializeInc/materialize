@@ -1667,7 +1667,15 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
         WHEN 'unknown' THEN 'X'
     END) AS typcategory,
     0::pg_catalog.oid AS typrelid,
-    NULL::pg_catalog.oid AS typelem,
+    coalesce(
+        (
+            SELECT t.oid
+            FROM mz_catalog.mz_array_types a
+            JOIN mz_catalog.mz_types t ON a.element_id = t.id
+            WHERE a.type_id = mz_types.id
+        ),
+        0
+    ) AS typelem,
     coalesce(
         (
             SELECT
