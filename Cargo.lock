@@ -1070,8 +1070,8 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06c5fd425783d81668ed68ec98408a80498fb4ae2fd607797539e1a9dfa3618f"
 dependencies = [
- "prost",
- "prost-types",
+ "prost 0.10.3",
+ "prost-types 0.10.1",
  "tonic",
  "tracing-core",
 ]
@@ -1088,7 +1088,7 @@ dependencies = [
  "futures",
  "hdrhistogram",
  "humantime",
- "prost-types",
+ "prost-types 0.10.1",
  "serde",
  "serde_json",
  "thread_local",
@@ -2973,7 +2973,7 @@ dependencies = [
  "mz-storage",
  "mz-transform",
  "once_cell",
- "prost",
+ "prost 0.10.3",
  "rand",
  "rdkafka",
  "regex",
@@ -3044,9 +3044,9 @@ dependencies = [
  "hex",
  "mz-ore",
  "mz-test-util",
- "prost",
- "prost-build",
- "prost-types",
+ "prost 0.10.3",
+ "prost-build 0.10.3",
+ "prost-types 0.10.1",
  "rand",
  "rand_distr",
  "tokio",
@@ -3074,7 +3074,7 @@ dependencies = [
  "native-tls",
  "once_cell",
  "openssl",
- "prost-build",
+ "prost-build 0.10.3",
  "reqwest",
  "serde",
  "serde_json",
@@ -3141,14 +3141,14 @@ dependencies = [
  "once_cell",
  "proptest",
  "proptest-derive",
- "prost",
+ "prost 0.10.3",
  "serde",
  "serde_json",
  "timely",
  "tokio",
  "tokio-stream",
  "tonic",
- "tonic-build",
+ "tonic-build 0.8.0",
  "tracing",
  "uuid",
 ]
@@ -3173,7 +3173,7 @@ dependencies = [
  "mz-service",
  "mz-storage",
  "once_cell",
- "prost",
+ "prost 0.10.3",
  "regex",
  "serde",
  "timely",
@@ -3304,8 +3304,8 @@ dependencies = [
  "proc-macro2",
  "proptest",
  "proptest-derive",
- "prost",
- "prost-build",
+ "prost 0.10.3",
+ "prost-build 0.10.3",
  "regex",
  "regex-syntax",
  "serde",
@@ -3382,8 +3382,8 @@ dependencies = [
  "mz-repr",
  "once_cell",
  "ordered-float",
- "prost",
- "prost-build",
+ "prost 0.10.3",
+ "prost-build 0.10.3",
  "prost-reflect",
  "serde_json",
  "timely",
@@ -3407,8 +3407,8 @@ dependencies = [
  "num_cpus",
  "proptest",
  "proptest-derive",
- "prost",
- "prost-build",
+ "prost 0.10.3",
+ "prost-build 0.10.3",
  "rand",
  "rdkafka",
  "serde",
@@ -3640,8 +3640,8 @@ dependencies = [
  "openssl",
  "openssl-sys",
  "postgres-openssl",
- "prost",
- "prost-build",
+ "prost 0.10.3",
+ "prost-build 0.10.3",
  "rand",
  "serde",
  "serde_json",
@@ -3683,8 +3683,8 @@ dependencies = [
  "prometheus",
  "proptest",
  "proptest-derive",
- "prost",
- "prost-build",
+ "prost 0.10.3",
+ "prost-build 0.10.3",
  "semver",
  "serde",
  "serde_json",
@@ -3787,10 +3787,10 @@ dependencies = [
  "openssl",
  "postgres-openssl",
  "proptest",
- "prost",
+ "prost 0.10.3",
  "serde",
  "tokio-postgres",
- "tonic-build",
+ "tonic-build 0.8.0",
 ]
 
 [[package]]
@@ -3827,8 +3827,8 @@ dependencies = [
  "http",
  "mz-ore",
  "proptest",
- "prost",
- "prost-build",
+ "prost 0.10.3",
+ "prost-build 0.10.3",
  "regex",
  "serde",
  "serde_json",
@@ -3863,8 +3863,8 @@ dependencies = [
  "ordered-float",
  "proptest",
  "proptest-derive",
- "prost",
- "prost-build",
+ "prost 0.10.3",
+ "prost-build 0.10.3",
  "rand",
  "regex",
  "ryu",
@@ -3975,7 +3975,7 @@ dependencies = [
  "mz-storage",
  "once_cell",
  "paste",
- "prost",
+ "prost 0.10.3",
  "protobuf-native",
  "rdkafka",
  "regex",
@@ -4123,7 +4123,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "proptest-derive",
- "prost",
+ "prost 0.10.3",
  "rand",
  "rdkafka",
  "regex",
@@ -4138,7 +4138,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tonic",
- "tonic-build",
+ "tonic-build 0.8.0",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4229,7 +4229,7 @@ dependencies = [
  "mz-stash",
  "once_cell",
  "postgres_array",
- "prost",
+ "prost 0.10.3",
  "prost-reflect",
  "protobuf-src",
  "rand",
@@ -4593,11 +4593,11 @@ dependencies = [
  "futures-util",
  "http",
  "opentelemetry",
- "prost",
+ "prost 0.10.3",
  "thiserror",
  "tokio",
  "tonic",
- "tonic-build",
+ "tonic-build 0.7.2",
 ]
 
 [[package]]
@@ -5110,7 +5110,17 @@ version = "0.10.3"
 source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.10.1",
+]
+
+[[package]]
+name = "prost"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "399c3c31cdec40583bb68f0b18403400d01ec4289c383aa047560439952c4dd7"
+dependencies = [
+ "bytes",
+ "prost-derive 0.11.0",
 ]
 
 [[package]]
@@ -5126,9 +5136,29 @@ dependencies = [
  "log",
  "multimap",
  "petgraph",
- "prost",
- "prost-types",
+ "prost 0.10.3",
+ "prost-types 0.10.1",
  "protobuf-src",
+ "regex",
+ "tempfile",
+ "which",
+]
+
+[[package]]
+name = "prost-build"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f835c582e6bd972ba8347313300219fed5bfa52caf175298d860b61ff6069bb"
+dependencies = [
+ "bytes",
+ "heck",
+ "itertools",
+ "lazy_static",
+ "log",
+ "multimap",
+ "petgraph",
+ "prost 0.11.0",
+ "prost-types 0.11.1",
  "regex",
  "tempfile",
  "which",
@@ -5147,14 +5177,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost-derive"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7345d5f0e08c0536d7ac7229952590239e77abf0a0100a1b1d890add6ea96364"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "prost-reflect"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9b5885b76f107151487927cb630854e7fd95ffa394a693116feaa84df1e0274"
 dependencies = [
  "base64",
- "prost",
- "prost-types",
+ "prost 0.10.3",
+ "prost-types 0.10.1",
  "serde",
  "serde-value",
  "time",
@@ -5166,7 +5209,17 @@ version = "0.10.1"
 source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "bytes",
- "prost",
+ "prost 0.10.3",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dfaa718ad76a44b3415e6c4d53b17c8f99160dcb3a99b10470fce8ad43f6e3e"
+dependencies = [
+ "bytes",
+ "prost 0.11.0",
 ]
 
 [[package]]
@@ -6375,8 +6428,8 @@ dependencies = [
  "hyper-timeout",
  "percent-encoding",
  "pin-project",
- "prost",
- "prost-derive",
+ "prost 0.10.3",
+ "prost-derive 0.10.1",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -6395,7 +6448,20 @@ checksum = "d9263bf4c9bfaae7317c1c2faf7f18491d2fe476f70c414b73bf5d445b00ffa1"
 dependencies = [
  "prettyplease",
  "proc-macro2",
- "prost-build",
+ "prost-build 0.10.3",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "tonic-build"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fbcd2800e34e743b9ae795867d5f77b535d3a3be69fd731e39145719752df8c"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "prost-build 0.11.1",
  "quote",
  "syn",
 ]

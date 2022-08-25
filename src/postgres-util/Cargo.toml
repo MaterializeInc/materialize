@@ -18,4 +18,4 @@ serde = { version = "1.0.140", features = ["derive"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 
 [build-dependencies]
-tonic-build = "0.7"
+tonic-build = "0.8"
