@@ -14,16 +14,30 @@ use serde::Deserialize;
 
 use crate::http::AuthedClient;
 
+#[derive(Deserialize, Debug)]
+pub struct SqlRequestParam {
+    value: String,
+    r#type: String,
+}
+
 #[derive(Deserialize)]
 pub struct SqlRequest {
     sql: String,
+    parameters: Option<Vec<SqlRequestParam>>,
 }
 
 pub async fn handle_sql(
     AuthedClient(mut client): AuthedClient,
-    Json(SqlRequest { sql }): Json<SqlRequest>,
+    Json(SqlRequest { sql, parameters }): Json<SqlRequest>,
 ) -> impl IntoResponse {
-    match client.simple_execute(&sql).await {
+    let mut params = vec![];
+    if let Some(p) = &parameters {
+        for SqlRequestParam { value, r#type } in p {
+            params.push((value.as_str(), r#type.as_str()));
+        }
+    }
+
+    match client.simple_execute(&sql, &params).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }

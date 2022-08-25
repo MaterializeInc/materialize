@@ -12,6 +12,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::anyhow;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -19,7 +20,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
-use mz_sql::ast::{Raw, Statement};
+use mz_sql::ast::display;
+use mz_sql::ast::visit_mut::{self, VisitMut};
+use mz_sql::ast::{Expr, Raw, Statement};
 
 use crate::catalog::SYSTEM_USER;
 use crate::command::{
@@ -107,7 +110,7 @@ impl Client {
         let conn_client = self.new_conn()?;
         let session = Session::new(conn_client.conn_id(), SYSTEM_USER.into());
         let (mut session_client, _) = conn_client.startup(session, false).await?;
-        session_client.simple_execute(stmts).await
+        session_client.simple_execute(stmts, &[]).await
     }
 
     /// Like [`Client::system_execute`], but for cases when `stmt` is known to
@@ -397,13 +400,79 @@ impl SessionClient {
     pub async fn simple_execute(
         &mut self,
         stmts: &str,
+        params: &[(&str, &str)],
     ) -> Result<SimpleExecuteResponse, AdapterError> {
+        // To support parameters we do an AST rewrites taking `$x` to
+        // `CAST($params[x-1].0 AS $params[x-1].1)`
+        fn inline_params(
+            params: &[(&str, &str)],
+            stmt: &mut mz_sql::ast::Statement<Raw>,
+        ) -> Result<(), anyhow::Error> {
+            struct ParamInliner<'a> {
+                params: &'a [(&'a str, &'a str)],
+                error: Option<anyhow::Error>,
+            }
+
+            impl<'ast, 'a> VisitMut<'ast, Raw> for ParamInliner<'a> {
+                fn visit_expr_mut(&mut self, node: &'ast mut Expr<Raw>) {
+                    if let Expr::Parameter(i) = node {
+                        let i = *i;
+                        // 1-indexed params make this awk
+                        let vals = match i {
+                            i if i == 0 => None,
+                            i => self.params.get(i - 1),
+                        };
+
+                        let (val, typ) = match vals {
+                            Some(v) => v,
+                            None => {
+                                self.error = Some(anyhow!("there is no parameter ${}", i));
+                                return;
+                            }
+                        };
+
+                        match mz_sql_parser::parser::parse_expr(&format!(
+                            "CAST ('{}' AS {})",
+                            display::escape_single_quote_string(val),
+                            typ
+                        )) {
+                            Ok(cast_expr) => {
+                                *node = cast_expr;
+                                assert!(
+                                    matches!(node, Expr::Cast { .. }),
+                                    "must convert to Expr::Cast"
+                                );
+                            }
+                            Err(_) => {
+                                self.error = Some(anyhow!(
+                                    "invalid parameter: CAST ('<val>' as <type>) must be valid expression"
+                                ));
+                            }
+                        }
+                    }
+                    visit_mut::visit_expr_mut(self, node);
+                }
+            }
+
+            let mut inliner = ParamInliner {
+                params,
+                error: None,
+            };
+            inliner.visit_statement_mut(stmt);
+            match inliner.error {
+                Some(err) => Err(err),
+                None => Ok(()),
+            }
+        }
+
         let stmts =
             mz_sql::parse::parse(&stmts).map_err(|e| AdapterError::Unstructured(e.into()))?;
         let num_stmts = stmts.len();
         const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
-        for stmt in stmts {
+        for mut stmt in stmts {
+            inline_params(&params, &mut stmt).map_err(AdapterError::Unstructured)?;
+
             // Mirror the behavior of the PostgreSQL simple query protocol.
             // See the pgwire::protocol::StateMachine::query method for details.
             self.start_transaction(Some(num_stmts)).await?;
@@ -419,10 +488,11 @@ impl SessionClient {
                 .get_portal_unverified(EMPTY_PORTAL)
                 .map(|portal| portal.desc.clone())
                 .expect("unnamed portal should be present");
-            if !desc.param_types.is_empty() {
-                results.push(SimpleResult::err("query parameters are not supported"));
-                continue;
-            }
+
+            assert!(
+                desc.param_types.is_empty(),
+                "all parameters replaced by inlining"
+            );
 
             let res = match self.execute(EMPTY_PORTAL.into()).await {
                 Ok(res) => res,

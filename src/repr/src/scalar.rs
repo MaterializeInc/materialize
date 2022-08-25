@@ -1057,7 +1057,7 @@ impl From<&Datum<'_>> for serde_json::Value {
             Datum::Float64(n) => float_to_json(n.into_inner()),
             Datum::Numeric(d) => {
                 // serde_json requires floats to be finite
-                if d.0.is_infinite() {
+                if !d.0.is_finite() {
                     serde_json::Value::String(d.0.to_string())
                 } else {
                     serde_json::Value::Number(

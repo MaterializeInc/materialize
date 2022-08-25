@@ -132,62 +132,236 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
 
     struct TestCase {
         query: &'static str,
+        params: Option<Vec<(&'static str, &'static str)>>,
         status: StatusCode,
         body: &'static str,
     }
 
-    let tests = vec![
+    let tests = [
         // Regular query works.
         TestCase {
             query: "select 1+2 as col",
+            params: None,
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
         },
         // Multiple queries are ok.
         TestCase {
             query: "select 1; select 2",
+            params: None,
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"rows":[[2]],"col_names":["?column?"]}]}"#,
         },
         // Arrays + lists work
         TestCase {
             query: "select array[1], list[2]",
+            params: None,
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[[1],[2]]],"col_names":["array","list"]}]}"#,
         },
         // Succeeding and failing queries can mix and match.
         TestCase {
             query: "select 1; select * from noexist;",
+            params: None,
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"error":"unknown catalog item 'noexist'"}]}"#,
         },
         // CREATEs should work when provided alone.
         TestCase {
             query: "create view v as select 1",
+            params: None,
             status: StatusCode::OK,
             body: r#"{"results":[null]}"#,
         },
         // Multiple CREATEs do not work.
         TestCase {
             query: "create view v1 as select 1; create view v2 as select 1",
+            params: None,
             status: StatusCode::OK,
             body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block"},{"error":"CREATE VIEW v2 AS SELECT 1 cannot be run inside a transaction block"}]}"#,
         },
         // Syntax errors fail the request.
         TestCase {
             query: "'",
+            params: None,
             status: StatusCode::BAD_REQUEST,
             body: r#"unterminated quoted string"#,
+        },
+        // Parameterized queries work
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("1", "int"), ("2", "int8")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
+        },
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![
+                ("1", "pg_catalog.int4"),
+                ("2", "materialize.pg_catalog.int8"),
+            ]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
+        },
+        // Parameters can be present and empty
+        TestCase {
+            query: "select 3 as col",
+            params: Some(vec![]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
+        },
+        // Ininity, NaN
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("infinity", "numeric"), ("2", "int8")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"invalid input syntax for type numeric: \"infinity\""}]}"#,
+        },
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("nan", "numeric"), ("2", "int8")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[["NaN"]],"col_names":["col"]}]}"#,
+        },
+        // Quotes escaped
+        TestCase {
+            query: "select length($1), length($2)",
+            params: Some(vec![("abc", "text"), ("'abc'", "text")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3,5]],"col_names":["length","length"]}]}"#,
+        },
+        // Various forms of SQL injection fail
+        TestCase {
+            query: "select length($1)",
+            params: Some(vec![("'abc'); DELETE FROM users; SELECT version(", "text")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[42]],"col_names":["length"]}]}"#,
+        },
+        TestCase {
+            query: "select length($1)",
+            params: Some(vec![(
+                "abc' AS text); DELETE FROM users; SELECT CAST('abc",
+                "text",
+            )]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[50]],"col_names":["length"]}]}"#,
+        },
+        TestCase {
+            query: "select length($1)",
+            params: Some(vec![("1", "text); DELETE * FROM t; SELECT version(")]),
+            status: StatusCode::BAD_REQUEST,
+            body: r#"invalid parameter: CAST ('<val>' as <type>) must be valid expression"#,
+        },
+        // All parameters values treated as strings
+        TestCase {
+            query: "select length($1), length($2)",
+            params: Some(vec![("sum(a)", "text"), ("SELECT * FROM t;", "text")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[6,16]],"col_names":["length","length"]}]}"#,
+        },
+        // Too many parameters (OK)
+        TestCase {
+            query: "select $1 as col",
+            params: Some(vec![("1", "int"), ("2", "int8")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]}]}"#,
+        },
+        // Too few parameters (FAIL)
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("1", "int")]),
+            status: StatusCode::BAD_REQUEST,
+            body: r#"there is no parameter $2"#,
+        },
+        // Parameters of wrong type
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("1", "int"), ("1s", "interval")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"no overload for integer + interval: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts"}]}"#,
+        },
+        // Parameters with invalid input for type
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("1", "int"), ("abc", "int8")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"invalid input syntax for type bigint: invalid digit found in string: \"abc\""}]}"#,
+        },
+        // Null string value parameters
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("null", "int"), ("2", "int")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"invalid input syntax for type integer: invalid digit found in string: \"null\""}]}"#,
+        },
+        // Parameters with invalid type name
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("1", "int"), ("2", "abc")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"unknown catalog item 'abc'"}]}"#,
+        },
+        // Null type parameters
+        TestCase {
+            query: "select $1+$2 as col",
+            params: Some(vec![("1", "null"), ("2", "int")]),
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"unknown catalog item 'null'"}]}"#,
         },
     ];
 
     for tc in tests {
         let res = Client::new()
             .post(url.clone())
-            .json(&json!({"sql": tc.query}))
+            .json(&json!({"sql": tc.query, "parameters": tc.params}))
             .send()?;
         assert_eq!(res.status(), tc.status);
         assert_eq!(res.text()?, tc.body);
+    }
+
+    struct TestCaseJSON {
+        json: serde_json::Value,
+        status: StatusCode,
+        body_contains: &'static str,
+    }
+
+    let json_tests = [
+        // null values invalid in params
+        TestCaseJSON {
+            json: json!({"sql": "select 1 as col", "parameters": vec![(None::<Option<&str>>, "int")]}),
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body_contains: "Failed to deserialize the JSON body into the target type",
+        },
+        // JSON numbers invalid in params
+        TestCaseJSON {
+            json: json!({"sql": "select 1 as col", "parameters": vec![(1, "int")]}),
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body_contains: "Failed to deserialize the JSON body into the target type",
+        },
+        // 0 param elements invalid in params
+        TestCaseJSON {
+            json: json!({"sql": "select 1 as col", "parameters": vec![()]}),
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body_contains: "Failed to deserialize the JSON body into the target type",
+        },
+        // 1 element invalid in params
+        TestCaseJSON {
+            json: json!({"sql": "select $1 as col", "parameters": vec![("1")]}),
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body_contains: "Failed to deserialize the JSON body into the target type",
+        },
+        // > 2 elements invalid in params
+        TestCaseJSON {
+            json: json!({"sql": "select $1 as col", "parameters": vec![("1", "int", "int")]}),
+            status: StatusCode::BAD_REQUEST,
+            body_contains: "Failed to parse the request body as JSON",
+        },
+    ];
+
+    for tc in json_tests {
+        let res = Client::new().post(url.clone()).json(&tc.json).send()?;
+        assert_eq!(res.status(), tc.status);
+        assert!(res.text()?.contains(tc.body_contains));
     }
 
     Ok(())
