@@ -1066,13 +1066,13 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
     ) -> Result<State, io::Error> {
+        let tag = response.tag();
         macro_rules! command_complete {
-            ($($arg:tt)*) => {{
-                // N.B.: the output of format! must be stored into a
-                // variable, or rustc barfs out a completely inscrutable
-                // error: https://github.com/rust-lang/rust/issues/64960.
-                let tag = format!($($arg)*);
-                self.send(BackendMessage::CommandComplete { tag }).await?;
+            () => {{
+                self.send(BackendMessage::CommandComplete {
+                    tag: tag.expect("command_complete only called on tag-generating results"),
+                })
+                .await?;
                 Ok(State::Ready)
             }};
         }
@@ -1084,7 +1084,7 @@ where
                         ErrorResponse::notice($code, concat!($type, " already exists, skipping"));
                     self.send(msg).await?;
                 }
-                command_complete!("CREATE {}", $type.to_uppercase())
+                command_complete!()
             }};
         }
 
@@ -1099,7 +1099,7 @@ where
             }
             ExecuteResponse::ClosedCursor => {
                 self.complete_portal(&portal_name);
-                command_complete!("CLOSE CURSOR")
+                command_complete!()
             }
             ExecuteResponse::CreatedConnection { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "connection")
@@ -1132,7 +1132,7 @@ where
             ExecuteResponse::CreatedSource { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "source")
             }
-            ExecuteResponse::CreatedSources => command_complete!("CREATE SOURCES"),
+            ExecuteResponse::CreatedSources => command_complete!(),
             ExecuteResponse::CreatedSink { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "sink")
             }
@@ -1142,30 +1142,10 @@ where
             ExecuteResponse::CreatedMaterializedView { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "materialized view")
             }
-            ExecuteResponse::CreatedType => command_complete!("CREATE TYPE"),
             ExecuteResponse::DeclaredCursor => {
                 self.complete_portal(&portal_name);
-                command_complete!("DECLARE CURSOR")
+                command_complete!()
             }
-            ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
-            ExecuteResponse::DiscardedTemp => command_complete!("DISCARD TEMP"),
-            ExecuteResponse::DiscardedAll => command_complete!("DISCARD ALL"),
-            ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
-            ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
-            ExecuteResponse::DroppedRole => command_complete!("DROP ROLE"),
-            ExecuteResponse::DroppedComputeInstance => command_complete!("DROP CLUSTER"),
-            ExecuteResponse::DroppedComputeInstanceReplicas => {
-                command_complete!("DROP CLUSTER REPLICA")
-            }
-            ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
-            ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
-            ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
-            ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
-            ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
-            ExecuteResponse::DroppedMaterializedView => command_complete!("DROP MATERIALIZED VIEW"),
-            ExecuteResponse::DroppedType => command_complete!("DROP TYPE"),
-            ExecuteResponse::DroppedSecret => command_complete!("DROP SECRET"),
-            ExecuteResponse::DroppedConnection => command_complete!("DROP CONNECTION"),
             ExecuteResponse::EmptyQuery => {
                 self.send(BackendMessage::EmptyQueryResponse).await?;
                 Ok(State::Ready)
@@ -1183,16 +1163,6 @@ where
                     timeout,
                 )
                 .await
-            }
-            ExecuteResponse::Inserted(n) => {
-                // "On successful completion, an INSERT command returns a
-                // command tag of the form `INSERT <oid> <count>`."
-                //     -- https://www.postgresql.org/docs/11/sql-insert.html
-                //
-                // OIDs are a PostgreSQL-specific historical quirk, but we
-                // can return a 0 OID to indicate that the table does not
-                // have OIDs.
-                command_complete!("INSERT 0 {}", n)
             }
             ExecuteResponse::SendingRows { future: rx, span } => {
                 let row_desc =
@@ -1212,7 +1182,7 @@ where
                 .instrument(span)
                 .await
             }
-            ExecuteResponse::SetVariable { name, tag } => {
+            ExecuteResponse::SetVariable { name, .. } => {
                 // This code is somewhat awkwardly structured because we
                 // can't hold `var` across an await point.
                 let qn = name.to_string();
@@ -1230,7 +1200,7 @@ where
                 if let Some(msg) = msg {
                     self.send(msg).await?;
                 }
-                command_complete!("{}", tag)
+                command_complete!()
             }
             ExecuteResponse::StartedTransaction { duplicated } => {
                 if duplicated {
@@ -1240,9 +1210,9 @@ where
                     );
                     self.send(msg).await?;
                 }
-                command_complete!("BEGIN")
+                command_complete!()
             }
-            ExecuteResponse::TransactionExited { tag, was_implicit } => {
+            ExecuteResponse::TransactionExited { was_implicit, .. } => {
                 // In Postgres, if a user sends a COMMIT or ROLLBACK in an implicit
                 // transaction, a warning is sent warning them. (The transaction is still closed
                 // and a new implicit transaction started, though.)
@@ -1253,7 +1223,7 @@ where
                     );
                     self.send(msg).await?;
                 }
-                command_complete!("{}", tag)
+                command_complete!()
             }
             ExecuteResponse::Tailing { rx } => {
                 if fetch_portal_name.is_none() {
@@ -1310,14 +1280,6 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
                 self.copy_from(id, columns, params, row_desc).await
             }
-            ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
-            ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
-            ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
-            ExecuteResponse::AlteredSystemConfiguraion => command_complete!("ALTER SYSTEM"),
-            ExecuteResponse::Prepare => command_complete!("PREPARE"),
-            ExecuteResponse::Deallocate { all } => {
-                command_complete!("DEALLOCATE{}", if all { " ALL" } else { "" })
-            }
             ExecuteResponse::Raise { severity } => {
                 let msg = match severity {
                     NoticeSeverity::Debug => {
@@ -1337,7 +1299,35 @@ where
                     }
                 };
                 self.send(msg).await?;
-                command_complete!("RAISE")
+                command_complete!()
+            }
+
+            ExecuteResponse::CreatedType
+            | ExecuteResponse::Deleted(..)
+            | ExecuteResponse::DiscardedTemp
+            | ExecuteResponse::DiscardedAll
+            | ExecuteResponse::DroppedDatabase
+            | ExecuteResponse::DroppedSchema
+            | ExecuteResponse::DroppedRole
+            | ExecuteResponse::DroppedComputeInstance
+            | ExecuteResponse::DroppedComputeInstanceReplicas
+            | ExecuteResponse::DroppedSource
+            | ExecuteResponse::DroppedIndex
+            | ExecuteResponse::DroppedSink
+            | ExecuteResponse::DroppedTable
+            | ExecuteResponse::DroppedView
+            | ExecuteResponse::DroppedMaterializedView
+            | ExecuteResponse::DroppedType
+            | ExecuteResponse::DroppedSecret
+            | ExecuteResponse::DroppedConnection
+            | ExecuteResponse::Updated(..)
+            | ExecuteResponse::AlteredObject(..)
+            | ExecuteResponse::AlteredIndexLogicalCompaction
+            | ExecuteResponse::AlteredSystemConfiguraion
+            | ExecuteResponse::Prepare
+            | ExecuteResponse::Deallocate { .. }
+            | ExecuteResponse::Inserted(..) => {
+                command_complete!()
             }
         }
     }
