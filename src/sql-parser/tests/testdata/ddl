@@ -1027,7 +1027,7 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected one of SIZE or REMOTE, found identifier "property"
+error: Expected one of REMOTE or SIZE or TIMELINE, found identifier "property"
 ALTER SOURCE name SET (property = true)
                        ^
 
@@ -1423,14 +1423,14 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), 
 parse-statement
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH ()
 ----
-error: Expected one of SIZE or REMOTE, found right parenthesis
+error: Expected one of REMOTE or SIZE or TIMELINE, found right parenthesis
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH ()
                                                                                                                                   ^
 
 parse-statement
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (A = 2)
 ----
-error: Expected one of SIZE or REMOTE, found identifier "a"
+error: Expected one of REMOTE or SIZE or TIMELINE, found identifier "a"
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (A = 2)
                                                                                                                                   ^
 

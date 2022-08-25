@@ -309,7 +309,12 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSourceOption, (Size, String), (Remote, String));
+generate_extracted_config!(
+    CreateSourceOption,
+    (Remote, String),
+    (Size, String),
+    (Timeline, String)
+);
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -842,8 +847,12 @@ pub fn plan_create_source(
         }
     }
 
-    let CreateSourceOptionExtracted { size, remote, .. } =
-        CreateSourceOptionExtracted::try_from(with_options.clone())?;
+    let CreateSourceOptionExtracted {
+        remote,
+        size,
+        timeline,
+        ..
+    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     let host_config = match (remote, size) {
         (None, None) => StorageHostConfig::Undefined,
@@ -857,12 +866,8 @@ pub fn plan_create_source(
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
-    let timeline = if let Some(timeline) = legacy_with_options.remove("timeline") {
-        match timeline.into() {
-            Some(Value::String(timeline)) => Timeline::User(timeline),
-            Some(v) => sql_bail!("unsupported timeline value {}", v.to_ast_string()),
-            None => sql_bail!("unsupported timeline value: secret"),
-        }
+    let timeline = if let Some(timeline) = timeline {
+        Timeline::User(timeline)
     } else {
         match envelope {
             SourceEnvelope::CdcV2 => match legacy_with_options.remove("epoch_ms_timeline") {
@@ -3761,27 +3766,33 @@ pub fn plan_alter_source(
     match action {
         AlterSourceAction::SetOptions(options) => {
             let CreateSourceOptionExtracted {
-                size: size_opt,
+                seen: _,
                 remote: remote_opt,
-                ..
+                size: size_opt,
+                timeline: timeline_opt,
             } = CreateSourceOptionExtracted::try_from(options)?;
-
-            if let Some(value) = size_opt {
-                size = AlterSourceItem::Set(value);
-            }
 
             if let Some(value) = remote_opt {
                 remote = AlterSourceItem::Set(value);
+            }
+            if let Some(value) = size_opt {
+                size = AlterSourceItem::Set(value);
+            }
+            if let Some(_) = timeline_opt {
+                sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
             }
         }
         AlterSourceAction::ResetOptions(reset) => {
             for name in reset {
                 match name {
+                    CreateSourceOptionName::Remote => {
+                        remote = AlterSourceItem::Reset;
+                    }
                     CreateSourceOptionName::Size => {
                         size = AlterSourceItem::Reset;
                     }
-                    CreateSourceOptionName::Remote => {
-                        remote = AlterSourceItem::Reset;
+                    CreateSourceOptionName::Timeline => {
+                        sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
                     }
                 }
             }
