@@ -759,244 +759,244 @@ SELECT 15445::uint8::text
 # Addition
 
 query I
-SELECT (10::uint2 + 3::uint2)::numeric
+SELECT 10::uint2 + 3::uint2
 ----
 13
 
 query error uint2 out of range
-SELECT (65535::uint2 + 1::uint2)::numeric
+SELECT 65535::uint2 + 1::uint2
 
 query I
-SELECT (10::uint4 + 3::uint4)::numeric
+SELECT 10::uint4 + 3::uint4
 ----
 13
 
 query I
-SELECT (32767::uint4 + 1::uint4)::numeric
+SELECT 32767::uint4 + 1::uint4
 ----
 32768
 
 query error uint4 out of range
-SELECT (4294967295::uint4 + 1::uint4)::numeric
+SELECT 4294967295::uint4 + 1::uint4
 
 query I
-SELECT (10::uint8 + 3::uint8)::numeric
+SELECT 10::uint8 + 3::uint8
 ----
 13
 
 query I
-SELECT (32767::uint8 + 1::uint8)::numeric
+SELECT 32767::uint8 + 1::uint8
 ----
 32768
 
 query I
-SELECT (4294967295::uint8 + 1::uint8)::numeric
+SELECT 4294967295::uint8 + 1::uint8
 ----
 4294967296
 
 query error uint8 out of range
-SELECT (18446744073709551615::uint8 + 1::uint8)::numeric
+SELECT 18446744073709551615::uint8 + 1::uint8
 
 # Subtraction
 
 query I
-SELECT (45::uint2 - 3::uint2)::numeric
+SELECT 45::uint2 - 3::uint2
 ----
 42
 
 query error uint2 out of range
-SELECT (45::uint2 - 50::uint2)::numeric
+SELECT 45::uint2 - 50::uint2
 
 query I
-SELECT (45::uint4 - 3::uint4)::numeric
+SELECT 45::uint4 - 3::uint4
 ----
 42
 
 query error uint4 out of range
-SELECT (45::uint4 - 50::uint4)::numeric
+SELECT 45::uint4 - 50::uint4
 
 query I
-SELECT (45::uint8 - 3::uint8)::numeric
+SELECT 45::uint8 - 3::uint8
 ----
 42
 
 query error uint8 out of range
-SELECT (45::uint8 - 50::uint8)::numeric
+SELECT 45::uint8 - 50::uint8
 
 # Multiplication
 
 query I
-SELECT (10::uint2 * 3::uint2)::numeric
+SELECT 10::uint2 * 3::uint2
 ----
 30
 
 query error uint2 out of range
-SELECT (65535::uint2 * 2::uint2)::numeric
+SELECT 65535::uint2 * 2::uint2
 
 query I
-SELECT (10::uint4 * 3::uint4)::numeric
+SELECT 10::uint4 * 3::uint4
 ----
 30
 
 query I
-SELECT (32767::uint4 * 2::uint4)::numeric
+SELECT 32767::uint4 * 2::uint4
 ----
 65534
 
 query error uint4 out of range
-SELECT (4294967295::uint4 * 2::uint4)::numeric
+SELECT 4294967295::uint4 * 2::uint4
 
 query I
-SELECT (10::uint8 * 3::uint8)::numeric
+SELECT 10::uint8 * 3::uint8
 ----
 30
 
 query I
-SELECT (32767::uint8 * 2::uint8)::numeric
+SELECT 32767::uint8 * 2::uint8
 ----
 65534
 
 query I
-SELECT (4294967295::uint8 * 2::uint8)::numeric
+SELECT 4294967295::uint8 * 2::uint8
 ----
 8589934590
 
 query error uint8 out of range
-SELECT (18446744073709551615::uint8 * 2::uint8)::numeric
+SELECT 18446744073709551615::uint8 * 2::uint8
 
 # Division
 
 query I
-SELECT (20::uint2 / 2::uint2)::numeric
+SELECT 20::uint2 / 2::uint2
 ----
 10
 
 query error division by zero
-SELECT (20::uint2 / 0::uint2)::numeric
+SELECT 20::uint2 / 0::uint2
 
 query I
-SELECT (20::uint4 / 2::uint4)::numeric
+SELECT 20::uint4 / 2::uint4
 ----
 10
 
 query error division by zero
-SELECT (20::uint4 / 0::uint4)::numeric
+SELECT 20::uint4 / 0::uint4
 
 query I
-SELECT (20::uint8 / 2::uint8)::numeric
+SELECT 20::uint8 / 2::uint8
 ----
 10
 
 query error division by zero
-SELECT (20::uint8 / 0::uint8)::numeric
+SELECT 20::uint8 / 0::uint8
 
 # Modulo
 
 query I
-SELECT (13::uint2 % 5::uint2)::numeric
+SELECT 13::uint2 % 5::uint2
 ----
 3
 
 query error division by zero
-SELECT (66::uint2 % 0::uint2)::numeric
+SELECT 66::uint2 % 0::uint2
 
 query I
-SELECT (13::uint4 % 5::uint4)::numeric
+SELECT 13::uint4 % 5::uint4
 ----
 3
 
 query error division by zero
-SELECT (66::uint4 % 0::uint4)::numeric
+SELECT 66::uint4 % 0::uint4
 
 query I
-SELECT (13::uint8 % 5::uint8)::numeric
+SELECT 13::uint8 % 5::uint8
 ----
 3
 
 query error division by zero
-SELECT (66::uint8 % 0::uint8)::numeric
+SELECT 66::uint8 % 0::uint8
 
 # And
 
 query I
-SELECT (4::uint2 & 5::uint2)::numeric
+SELECT 4::uint2 & 5::uint2
 ----
 4
 
 query I
-SELECT (4::uint4 & 5::uint4)::numeric
+SELECT 4::uint4 & 5::uint4
 ----
 4
 
 query I
-SELECT (4::uint8 & 5::uint8)::numeric
+SELECT 4::uint8 & 5::uint8
 ----
 4
 
 # Or
 
 query I
-SELECT (4::uint2 | 5::uint2)::numeric
+SELECT 4::uint2 | 5::uint2
 ----
 5
 
 query I
-SELECT (4::uint4 | 5::uint4)::numeric
+SELECT 4::uint4 | 5::uint4
 ----
 5
 
 query I
-SELECT (4::uint8 | 5::uint8)::numeric
+SELECT 4::uint8 | 5::uint8
 ----
 5
 
 # Xor
 
 query I
-SELECT (4::uint2 # 5::uint2)::numeric
+SELECT 4::uint2 # 5::uint2
 ----
 1
 
 query I
-SELECT (4::uint4 # 5::uint4)::numeric
+SELECT 4::uint4 # 5::uint4
 ----
 1
 
 query I
-SELECT (4::uint8 # 5::uint8)::numeric
+SELECT 4::uint8 # 5::uint8
 ----
 1
 
 # Shift Left
 
 query I
-SELECT (64::uint2 << 1::uint4)::numeric
+SELECT 64::uint2 << 1::uint4
 ----
 128
 
 query I
-SELECT (64::uint4 << 1::uint4)::numeric
+SELECT 64::uint4 << 1::uint4
 ----
 128
 
 query I
-SELECT (64::uint8 << 1::uint4)::numeric
+SELECT 64::uint8 << 1::uint4
 ----
 128
 
 # Shift Right
 
 query I
-SELECT (64::uint2 >> 1::uint4)::numeric
+SELECT 64::uint2 >> 1::uint4
 ----
 32
 
 query I
-SELECT (64::uint4 >> 1::uint4)::numeric
+SELECT 64::uint4 >> 1::uint4
 ----
 32
 
 query I
-SELECT (64::uint8 >> 1::uint4)::numeric
+SELECT 64::uint8 >> 1::uint4
 ----
 32
