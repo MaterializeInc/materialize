@@ -214,7 +214,6 @@ where
                             as_of: dataflow.as_of.clone(),
                             until: dataflow.until.clone(),
                             debug_name: dataflow.debug_name.clone(),
-                            id: dataflow.id,
                         });
                     }
                 }

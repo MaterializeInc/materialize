@@ -399,13 +399,6 @@ impl<T> ReplicaState<T> {
             // Set replica id
             config.replica_id = replica_id;
         }
-
-        // Replace dataflow identifiers with new unique ids.
-        if let ComputeCommand::CreateDataflows(dataflows) = command {
-            for dataflow in dataflows.iter_mut() {
-                dataflow.id = uuid::Uuid::new_v4();
-            }
-        }
     }
 }
 

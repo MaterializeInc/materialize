@@ -470,7 +470,6 @@ where
                 as_of: d.as_of,
                 until: d.until,
                 debug_name: d.debug_name,
-                id: d.id,
             });
         }
 
