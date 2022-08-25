@@ -77,9 +77,9 @@ use crate::ast::{
     CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
     CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
-    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
+    KafkaConnectionOption, KafkaConnectionOptionName, KafkaConsistency, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
     PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
@@ -87,7 +87,7 @@ use crate::ast::{
     Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
-use crate::kafka_util::{self, KafkaConfigOptionExtracted};
+use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
     ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
@@ -376,7 +376,7 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
-            let (kafka_connection, options) = match &kafka.connection {
+            let (kafka_connection, options, optional_start_offset) = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
                     scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
                     let mut options = BTreeMap::new();
@@ -388,7 +388,7 @@ pub fn plan_create_source(
                             .into(),
                     );
                     let connection = KafkaConnection::try_from(&mut options)?;
-                    (connection, options)
+                    (connection, options, None)
                 }
                 mz_sql_parser::ast::KafkaConnection::Reference {
                     connection,
@@ -400,15 +400,23 @@ pub fn plan_create_source(
                         _ => sql_bail!("{} is not a kafka connection", item.name()),
                     };
 
-                    if !with_options.is_empty() {
+                    // Starting offsets are allowed out unsafe mode, as they are a simple,
+                    // useful way to specify where to start reading a topic.
+                    if with_options.iter().any(|opt| {
+                        opt.name != KafkaConfigOptionName::StartOffset
+                            && opt.name != KafkaConfigOptionName::StartTimestamp
+                    }) {
                         scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
                     }
 
                     let with_options: KafkaConfigOptionExtracted =
                         with_options.clone().try_into()?;
-                    let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
+                    let (optional_start_offset, with_options): (
+                        _,
+                        BTreeMap<String, StringOrSecret>,
+                    ) = with_options.try_into()?;
 
-                    (connection, with_options)
+                    (connection, with_options, optional_start_offset)
                 }
             };
 
@@ -418,44 +426,40 @@ pub fn plan_create_source(
                 Some(_) => sql_bail!("group_id_prefix must be a string"),
             };
 
-            let parse_offset = |s: &str| match s.parse::<i64>() {
+            let parse_offset = |s: i64| {
                 // we parse an i64 here, because we don't yet support u64's in
                 // sql, but put it into an internal MzOffset that holds a u64
                 // TODO: make this an native u64 when
                 // https://github.com/MaterializeInc/materialize/issues/7629 is
                 // resolved.
-                Ok(n) if n >= 0 => Ok(MzOffset {
-                    offset: n.try_into().unwrap(),
-                }),
-                _ => sql_bail!("start_offset must be a nonnegative integer"),
+                if s >= 0 {
+                    Ok(MzOffset {
+                        offset: s.try_into().unwrap(),
+                    })
+                } else {
+                    sql_bail!("START OFFSET must be a nonnegative integer")
+                }
             };
 
             let mut start_offsets = HashMap::new();
-            let has_nontrivial_start_offsets = match legacy_with_options.remove("start_offset") {
+            let has_nontrivial_start_offsets = match optional_start_offset {
                 None => {
                     start_offsets.insert(0, MzOffset::from(0));
                     false
                 }
-                Some(SqlValueOrSecret::Value(Value::Number(n))) => {
-                    start_offsets.insert(0, parse_offset(&n)?);
-                    true
-                }
-                Some(SqlValueOrSecret::Value(Value::Array(vs))) => {
+                Some(KafkaStartOffsetType::StartOffset(vs)) => {
                     for (i, v) in vs.iter().enumerate() {
-                        match v {
-                            Value::Number(n) => {
-                                start_offsets.insert(i32::try_from(i)?, parse_offset(n)?);
-                            }
-                            _ => sql_bail!("start_offset value must be a number: {}", v),
-                        }
+                        start_offsets.insert(i32::try_from(i)?, parse_offset(*v)?);
                     }
                     true
                 }
-                Some(v) => sql_bail!("invalid start_offset value: {}", v),
+                Some(KafkaStartOffsetType::StartTimestamp(_)) => {
+                    unreachable!("time offsets should be converted in purification")
+                }
             };
 
             if has_nontrivial_start_offsets && envelope.requires_all_input() {
-                sql_bail!("start_offset is not supported with ENVELOPE {}", envelope)
+                sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
             }
 
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
@@ -1876,12 +1880,22 @@ fn kafka_sink_builder(
                 _ => sql_bail!("{} is not a kafka connection", item.name()),
             };
 
+            for option in with_options.iter() {
+                if matches!(
+                    option.name,
+                    KafkaConfigOptionName::StartOffset | KafkaConfigOptionName::StartTimestamp
+                ) {
+                    sql_bail!("Sinks do not support {}", option.name.to_ast_string());
+                }
+            }
+
             if !with_options.is_empty() {
                 scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
             }
 
             let with_options: KafkaConfigOptionExtracted = with_options.try_into()?;
-            let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
+            let (_, with_options): (_, BTreeMap<String, StringOrSecret>) =
+                with_options.try_into()?;
             (connection, with_options)
         }
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),

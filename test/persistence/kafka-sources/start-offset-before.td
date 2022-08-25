@@ -30,6 +30,9 @@ $ set schema={
         ]
     }
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 $ kafka-create-topic topic=offset
 
 $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count} timestamp=1
@@ -42,14 +45,16 @@ $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} 
 {"f1": "c${kafka-ingest.iteration}"} {"f2": "c${kafka-ingest.iteration}"}
 
 > CREATE SOURCE start_offset
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-offset-${testdrive.seed}'
-  WITH (start_offset = 100)
+  FROM KAFKA CONNECTION kafka_conn
+  WITH (START OFFSET = [100])
+  TOPIC 'testdrive-offset-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 
 > CREATE SOURCE kafka_time_offset
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-offset-${testdrive.seed}'
-  WITH (kafka_time_offset=2)
+  FROM KAFKA CONNECTION kafka_conn
+  WITH (START TIMESTAMP=2)
+  TOPIC 'testdrive-offset-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 

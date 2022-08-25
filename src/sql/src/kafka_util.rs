@@ -10,7 +10,6 @@
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
 use std::collections::{BTreeMap, HashSet};
-use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 
 use rdkafka::client::ClientContext;
@@ -23,7 +22,7 @@ use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName, Value};
+use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName};
 use mz_storage::types::connections::{
     CsrConnection, CsrConnectionHttpAuth, KafkaConnection, StringOrSecret, TlsIdentity,
 };
@@ -47,10 +46,26 @@ generate_extracted_config!(
     ),
     (StatisticsIntervalMs, i32, Default(1_000)),
     (TopicMetadataRefreshIntervalMs, i32),
-    (TransactionTimeoutMs, i32)
+    (TransactionTimeoutMs, i32),
+    (StartTimestamp, i64),
+    (StartOffset, Vec<i64>)
 );
 
-impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
+/// An enum that represents start offsets for a kafka consumer.
+#[derive(Debug)]
+pub enum KafkaStartOffsetType {
+    /// Fully specified, either by the user or generated.
+    StartOffset(Vec<i64>),
+    /// Specified by the user.
+    StartTimestamp(i64),
+}
+
+impl TryFrom<KafkaConfigOptionExtracted>
+    for (
+        Option<KafkaStartOffsetType>,
+        BTreeMap<String, StringOrSecret>,
+    )
+{
     type Error = PlanError;
     fn try_from(
         KafkaConfigOptionExtracted {
@@ -63,9 +78,17 @@ impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
             statistics_interval_ms,
             topic_metadata_refresh_interval_ms,
             transaction_timeout_ms,
+            start_offset,
+            start_timestamp,
             seen: _,
         }: KafkaConfigOptionExtracted,
-    ) -> Result<BTreeMap<String, StringOrSecret>, Self::Error> {
+    ) -> Result<
+        (
+            Option<KafkaStartOffsetType>,
+            BTreeMap<String, StringOrSecret>,
+        ),
+        Self::Error,
+    > {
         let mut o = BTreeMap::new();
 
         macro_rules! fill_options {
@@ -117,7 +140,16 @@ impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
             "FETCH MESSAGE MAX BYTES must be within [0, 1,000,000,000]"
         );
 
-        Ok(o)
+        let offset = match (start_offset, start_timestamp) {
+            (Some(_), Some(_)) => {
+                sql_bail!("cannot specify START TIMESTAMP and START OFFSET at same time")
+            }
+            (Some(so), _) => Some(KafkaStartOffsetType::StartOffset(so)),
+            (_, Some(sto)) => Some(KafkaStartOffsetType::StartTimestamp(sto)),
+            _ => None,
+        };
+
+        Ok((offset, o))
     }
 }
 
@@ -254,51 +286,41 @@ pub async fn create_consumer(
 }
 
 /// Returns start offsets for the partitions of `topic` and the provided
-/// `kafka_time_offset` option.
+/// `START TIMESTAMP` option.
 ///
 /// For each partition, the returned offset is the earliest offset whose
 /// timestamp is greater than or equal to the given timestamp for the
 /// partition. If no such message exists (or the Kafka broker is before
 /// 0.10.0), the current end offset is returned for the partition.
 ///
-/// The provided `kafka_time_offset` option must be a non-zero number:
+/// The provided `START TIMESTAMP` option must be a non-zero number:
 /// * Non-Negative numbers will used as is (e.g. `1622659034343`)
 /// * Negative numbers will be translated to a timestamp in millis
 ///   before now (e.g. `-10` means 10 millis ago)
 ///
-/// If `kafka_time_offset` has not been configured, an empty Option is
+/// If `START TIMESTAMP` has not been configured, an empty Option is
 /// returned.
 pub async fn lookup_start_offsets(
     consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
     topic: &str,
-    with_options: &BTreeMap<String, SqlValueOrSecret>,
+    offsets: KafkaStartOffsetType,
     now: u64,
 ) -> Result<Option<Vec<i64>>, PlanError> {
-    let time_offset = match with_options.get("kafka_time_offset").cloned() {
-        None => return Ok(None),
-        Some(_) if with_options.contains_key("start_offset") => {
-            sql_bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
-        }
-        Some(offset) => offset,
+    let time_offset = match offsets {
+        KafkaStartOffsetType::StartTimestamp(time) => time,
+        _ => return Ok(None),
     };
 
-    // Validate and resolve `kafka_time_offset`.
-    let time_offset = match time_offset.into() {
-        Some(Value::Number(s)) => match s.parse::<i64>() {
-            // Timestamp in millis *before* now (e.g. -10 means 10 millis ago)
-            Ok(ts) if ts < 0 => {
-                let now: i64 = now.try_into()?;
-                let ts = now - ts.abs();
-                if ts <= 0 {
-                    sql_bail!("Relative `kafka_time_offset` must be smaller than current system timestamp")
-                }
-                ts
-            }
-            // Timestamp in millis (e.g. 1622659034343)
-            Ok(ts) => ts,
-            _ => sql_bail!("`kafka_time_offset` must be a number"),
-        },
-        _ => sql_bail!("`kafka_time_offset` must be a number"),
+    let time_offset = if time_offset < 0 {
+        let now: i64 = now.try_into()?;
+        let ts = now - time_offset.abs();
+
+        if ts <= 0 {
+            sql_bail!("Relative START TIMESTAMP must be smaller than current system timestamp")
+        }
+        ts
+    } else {
+        time_offset
     };
 
     // Lookup offsets
