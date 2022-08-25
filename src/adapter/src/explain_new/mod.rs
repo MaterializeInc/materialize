@@ -87,7 +87,7 @@ pub struct Attributes {
     non_negative: Option<bool>,
     subtree_size: Option<usize>,
     arity: Option<usize>,
-    column_types: Option<Vec<String>>,
+    types: Option<String>,
 }
 
 impl fmt::Display for Attributes {
@@ -102,8 +102,8 @@ impl fmt::Display for Attributes {
         if let Some(arity) = &self.arity {
             builder.field("arity", arity);
         }
-        if let Some(column_types) = &self.column_types {
-            builder.field("column_types", column_types);
+        if let Some(types) = &self.types {
+            builder.field("types", types);
         }
         builder.finish()
     }

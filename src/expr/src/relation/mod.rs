@@ -291,7 +291,7 @@ impl MirRelationExpr {
     /// Reports the schema of the relation given the schema of the input relations.
     ///
     /// `input_types` is required to contain the schemas for the input relations of
-    /// the current relation in the same order as they are visited by `try_visit1`
+    /// the current relation in the same order as they are visited by `try_visit_children`
     /// method, even though not all may be used for computing the schema of the
     /// current relation. For example, `Let` expects two input types, one for the
     /// value relation and one for the body, in that order, but only the one for the
@@ -311,7 +311,7 @@ impl MirRelationExpr {
     /// Reports the column types of the relation given the column types of the input relations.
     ///
     /// `input_types` is required to contain the column types for the input relations of
-    /// the current relation in the same order as they are visited by `try_visit1`
+    /// the current relation in the same order as they are visited by `try_visit_children`
     /// method, even though not all may be used for computing the schema of the
     /// current relation. For example, `Let` expects two input types, one for the
     /// value relation and one for the body, in that order, but only the one for the
@@ -420,7 +420,7 @@ impl MirRelationExpr {
     ///
     /// `input_arities` and `input_keys` are required to contain the
     /// corresponding info for the input relations of
-    /// the current relation in the same order as they are visited by `try_visit1`
+    /// the current relation in the same order as they are visited by `try_visit_children`
     /// method, even though not all may be used for computing the schema of the
     /// current relation. For example, `Let` expects two input types, one for the
     /// value relation and one for the body, in that order, but only the one for the
@@ -822,7 +822,7 @@ impl MirRelationExpr {
     /// Reports the arity of the relation given the schema of the input relations.
     ///
     /// `input_arities` is required to contain the arities for the input relations of
-    /// the current relation in the same order as they are visited by `try_visit1`
+    /// the current relation in the same order as they are visited by `try_visit_children`
     /// method, even though not all may be used for computing the schema of the
     /// current relation. For example, `Let` expects two input types, one for the
     /// value relation and one for the body, in that order, but only the one for the

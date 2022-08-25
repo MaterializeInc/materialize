@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Definition and helper structs for the [`ColumnTypes`] attribute.
+//! Definition and helper structs for the [`RelationType`] attribute.
 
 use mz_expr::MirRelationExpr;
 use mz_repr::ColumnType;
@@ -19,13 +19,13 @@ use super::Attribute;
 /// bottom-up.
 #[derive(Default)]
 #[allow(missing_debug_implementations)]
-pub struct ColumnTypes {
+pub struct RelationType {
     /// A vector of results for all nodes in the visited tree in
     /// post-visit order.
     pub results: Vec<Vec<ColumnType>>,
 }
 
-impl Attribute for ColumnTypes {
+impl Attribute for RelationType {
     type Value = Vec<ColumnType>;
     type Dependencies = SubtreeSize;
 
